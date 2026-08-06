@@ -30,6 +30,13 @@ export type WebTenderListRow = {
   source_url: string | null;
   download_status: string;
   qualification_status: string | null;
+  prescreen_status: string | null;
+  prescreen_reason_code: string | null;
+  prescreen_reason: string | null;
+  chatgpt_eligible: boolean | null;
+  decision_source: string | null;
+  prescreened_at: string | null;
+  prescreen_rules_version: string | null;
   decision_label: string | null;
   verdict: string | null;
   reason: string | null;
@@ -69,6 +76,13 @@ export const WEB_TENDER_LIST_SELECT = [
   "source_url",
   "download_status",
   "qualification_status",
+  "prescreen_status",
+  "prescreen_reason_code",
+  "prescreen_reason",
+  "chatgpt_eligible",
+  "decision_source",
+  "prescreened_at",
+  "prescreen_rules_version",
   "decision_label",
   "verdict",
   "reason",

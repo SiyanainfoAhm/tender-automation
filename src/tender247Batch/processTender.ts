@@ -31,6 +31,10 @@ import {
   fetchTender247Metadata,
   upsertTender247Metadata,
 } from "../supabase/tenderMetadataStore.js";
+import {
+  buildTender247PrescreenInput,
+  runAndPersistPrescreen,
+} from "../prescreen/runPrescreen.js";
 import type {
   ArtifactStepStatus,
   ProcessTenderResult,
@@ -655,6 +659,16 @@ async function persistTender247Metadata(options: {
     error: result.error,
   });
   if (result.ok) {
+    if (result.id) {
+      await runAndPersistPrescreen({
+        tenderId: result.id,
+        sourcePortal: "TENDER247",
+        sourceTenderId: metadata.t247Id,
+        input: buildTender247PrescreenInput(metadata),
+        metadataHash: result.contentHash,
+        logger,
+      });
+    }
     const keepLocal =
       process.env.KEEP_LOCAL_METADATA_JSON?.trim().toLowerCase() === "true" ||
       process.env.KEEP_LOCAL_METADATA_JSON?.trim() === "1";

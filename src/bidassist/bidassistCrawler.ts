@@ -42,6 +42,10 @@ import {
   verifyBidassistMetadataRow,
 } from "../supabase/tenderMetadataStore.js";
 import {
+  buildBidassistPrescreenInput,
+  runAndPersistPrescreen,
+} from "../prescreen/runPrescreen.js";
+import {
   getCurrentPaginationPage,
   moveToNextBidAssistPage,
   remainingSlots,
@@ -766,6 +770,19 @@ export async function processBidassistTender(options: {
     });
 
     if (sync.ok) {
+      if (sync.id) {
+        await runAndPersistPrescreen({
+          tenderId: sync.id,
+          sourcePortal: "BIDASSIST",
+          sourceTenderId: ids.bidassistId,
+          input: buildBidassistPrescreenInput(
+            metadata,
+            Boolean(originalZipFile) && documents.length > 0,
+          ),
+          metadataHash: sync.contentHash,
+          logger,
+        });
+      }
       const verified = await verifyBidassistMetadataRow(ids.bidassistId);
       if (verified.ok) {
         logger.info(`SUPABASE_TENDER_VERIFIED=BA-${ids.bidassistId}`);

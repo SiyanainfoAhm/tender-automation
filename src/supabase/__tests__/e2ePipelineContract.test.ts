@@ -198,6 +198,13 @@ test("9. Parent tender qualification_status sync trigger exists in migration", (
   );
   assert.match(sql, /agenttender_sync_qualification_status/);
   assert.match(sql, /set qualification_status = new\.status/);
+
+  const prescreenSql = fs.readFileSync(
+    "supabase/migrations/202608060007_create_agenttender_prescreening.sql",
+    "utf8",
+  );
+  assert.match(prescreenSql, /agenttender_prescreen_results/);
+  assert.match(prescreenSql, /decision_source = 'CHATGPT'/);
 });
 
 test("10. Supabase failure preserves raw response for retry (state contract)", () => {

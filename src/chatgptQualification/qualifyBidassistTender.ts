@@ -40,6 +40,7 @@ import {
 } from "./qualificationSchema.js";
 import type { QualifyTenderOutcome } from "./processTenderQualification.js";
 import { resolveQualificationFiles } from "./sourceDocumentResolver.js";
+import { assertPrescreenAllowsChatgpt } from "../prescreen/chatgptGate.js";
 
 export async function qualifyBidassistTender(options: {
   page: Page;
@@ -101,13 +102,9 @@ export async function qualifyBidassistTender(options: {
           t247Id: sourceTenderId,
           chatUrl: loadChatGptTenderState(tenderFolder)?.chatUrl ?? null,
           status: "completed",
-          submissionConfirmed: true,
-          requiredAttachmentsConfirmed: true,
-          phase: "COMPLETED",
           updatedAt: new Date().toISOString(),
-          error: null,
+          submissionConfirmed: true,
         });
-        logger.info("CHATGPT_QUALIFICATION_COMPLETE");
         return {
           t247Id: sourceTenderId,
           status: "completed",
@@ -118,19 +115,24 @@ export async function qualifyBidassistTender(options: {
           error: null,
         };
       }
-      logger.warn(
-        `CHATGPT_DB_SYNC_FAILED — raw response retained for retry: ${db.error}`,
-      );
-      return {
-        t247Id: sourceTenderId,
-        status: "response_pending",
-        resultPath,
-        responsePath,
-        qualification: parsed.result,
-        chatUrl: loadChatGptTenderState(tenderFolder)?.chatUrl ?? null,
-        error: db.error,
-      };
     }
+  }
+
+  const prescreenGate = await assertPrescreenAllowsChatgpt({
+    sourcePortal: "BIDASSIST",
+    sourceTenderId,
+    logger,
+  });
+  if (!prescreenGate.allowed) {
+    return {
+      t247Id: sourceTenderId,
+      status: "skipped",
+      resultPath: null,
+      responsePath: null,
+      qualification: null,
+      chatUrl: null,
+      error: `prescreen:${prescreenGate.reasonCode ?? "BLOCKED"}`,
+    };
   }
 
   const existingState = loadChatGptTenderState(tenderFolder);

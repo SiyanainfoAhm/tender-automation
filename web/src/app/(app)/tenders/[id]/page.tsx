@@ -117,6 +117,7 @@ export default async function TenderDetailPage({
       <Tabs defaultValue="overview">
         <TabsList className="flex h-auto flex-wrap gap-1">
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="prescreen">Pre-screen</TabsTrigger>
           <TabsTrigger value="qualification">Qualification</TabsTrigger>
           <TabsTrigger value="criteria">Criteria</TabsTrigger>
           <TabsTrigger value="conditions">Conditions</TabsTrigger>
@@ -158,6 +159,60 @@ export default async function TenderDetailPage({
                 </p>
               </DetailCard>
             ) : null}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="prescreen">
+          <div className="grid gap-6 lg:grid-cols-2">
+            <DetailCard title="Pre-screen status">
+              <DetailGrid
+                rows={[
+                  ["Status", str(tender.prescreen_status)],
+                  ["Reason code", str(tender.prescreen_reason_code)],
+                  ["ChatGPT eligible", tender.chatgpt_eligible == null ? "—" : tender.chatgpt_eligible ? "Yes" : "No"],
+                  ["Decision source", str(tender.decision_source)],
+                  ["Rules version", str(tender.prescreen_rules_version)],
+                  [
+                    "Evaluated",
+                    tender.prescreened_at
+                      ? formatDate(tender.prescreened_at as string)
+                      : "—",
+                  ],
+                ]}
+              />
+              {tender.prescreen_reason ? (
+                <p className="mt-4 text-sm leading-relaxed text-text-secondary">
+                  {str(tender.prescreen_reason)}
+                </p>
+              ) : null}
+            </DetailCard>
+            <DetailCard title="Scope handling">
+              {sourcePortal === "BIDASSIST" ? (
+                <div className="space-y-3 text-sm text-text-secondary">
+                  <p>
+                    <span className="font-medium text-text-primary">
+                      Category gate:
+                    </span>{" "}
+                    Software and IT Solutions filter applied by crawler
+                  </p>
+                  <p>
+                    Scope category was already restricted to Software and IT
+                    Solutions during source crawling.
+                  </p>
+                  <p className="text-text-muted">
+                    IT-relevance classification is not re-run for BidAssist
+                    tenders.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3 text-sm text-text-secondary">
+                  <p>
+                    Scope relevance was checked during deterministic
+                    pre-screening.
+                  </p>
+                </div>
+              )}
+            </DetailCard>
           </div>
         </TabsContent>
 

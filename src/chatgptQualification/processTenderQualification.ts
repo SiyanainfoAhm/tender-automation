@@ -49,6 +49,7 @@ import {
   getMissingPhase1Files,
   tryResolvePhase1TenderUploadFiles,
 } from "./readiness.js";
+import { assertPrescreenAllowsChatgpt } from "../prescreen/chatgptGate.js";
 import type { QualificationResult } from "./types.js";
 import { persistValidatedQualificationToSupabase } from "../supabase/persistQualification.js";
 import { resolveQualificationFiles } from "./sourceDocumentResolver.js";
@@ -141,6 +142,38 @@ export async function qualifySingleTender(options: {
   });
   if (localRecovery) {
     return localRecovery;
+  }
+
+  const prescreenGate = await assertPrescreenAllowsChatgpt({
+    sourcePortal: "TENDER247",
+    sourceTenderId: t247Id,
+    logger,
+  });
+  if (!prescreenGate.allowed) {
+    upsertQualificationManifestEntry(
+      dateFolder,
+      dateIso,
+      {
+        t247Id,
+        status: "skipped",
+        qualificationStatus: null,
+        chatUrl: null,
+        resultPath: null,
+        responsePath: null,
+        updatedAt: new Date().toISOString(),
+        error: `prescreen:${prescreenGate.reasonCode ?? "BLOCKED"}`,
+      },
+      totals,
+    );
+    return {
+      t247Id,
+      status: "skipped",
+      resultPath: null,
+      responsePath: null,
+      qualification: null,
+      chatUrl: null,
+      error: `prescreen:${prescreenGate.reasonCode ?? "BLOCKED"}`,
+    };
   }
 
   const existingState = loadChatGptTenderState(tenderFolder);

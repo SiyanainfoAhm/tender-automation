@@ -23,6 +23,7 @@
     "test:supabase:tender247": "tsx src/supabase/testTender247Connection.ts",
     "backfill:tender247:supabase": "tsx src/supabase/backfillTender247Metadata.ts",
     "backfill:bidassist:supabase": "tsx src/supabase/backfillBidAssistDocumentMetadata.ts",
+    "backfill:prescreen": "tsx src/prescreen/backfillPrescreenResults.ts",
     "e2e:tender247": "tsx src/pipeline/runSourceEndToEnd.ts --source=tender247",
     "e2e:bidassist": "tsx src/pipeline/runSourceEndToEnd.ts --source=bidassist",
     "e2e:complete-test": "tsx src/pipeline/runCompleteEndToEndTest.ts",
