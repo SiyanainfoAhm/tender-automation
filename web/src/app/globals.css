@@ -1,0 +1,206 @@
+@import "tailwindcss";
+
+/* Match AppShell theme toggle: dark: utilities apply only with .dark on html */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --background: #f4f7fb;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --surface: #ffffff;
+  --surface-secondary: #f8fafc;
+  --surface-muted: #f1f5f9;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+  --text-subtle: #94a3b8;
+  --primary: #2563eb;
+  --primary-hover: #1d4ed8;
+  --primary-muted: #eff6ff;
+  --accent-indigo: #4f46e5;
+  --accent-cyan: #0891b2;
+  --ring: #2563eb33;
+  --navy: #0f172a;
+  --sidebar-width: 252px;
+  --sidebar-collapsed-width: 76px;
+  --topbar-height: 64px;
+
+  --status-go: #059669;
+  --status-go-bg: #ecfdf5;
+  --status-conditional: #d97706;
+  --status-conditional-bg: #fffbeb;
+  --status-partner: #0284c7;
+  --status-partner-bg: #f0f9ff;
+  --status-verify: #ea580c;
+  --status-verify-bg: #fff7ed;
+  --status-nogo: #dc2626;
+  --status-nogo-bg: #fef2f2;
+  --status-neutral: #64748b;
+  --status-neutral-bg: #f1f5f9;
+
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+}
+
+.dark {
+  --background: #080d18;
+  --foreground: #f8fafc;
+  --card: #111827;
+  --card-foreground: #f8fafc;
+  --muted: #1e293b;
+  --muted-foreground: #94a3b8;
+  --surface: #111827;
+  --surface-secondary: #172033;
+  --surface-muted: #1e293b;
+  --border: #273449;
+  --border-strong: #334155;
+  --text-primary: #f8fafc;
+  --text-secondary: #cbd5e1;
+  --text-muted: #94a3b8;
+  --text-subtle: #64748b;
+  --primary: #3b82f6;
+  --primary-hover: #2563eb;
+  --primary-muted: #172554;
+  --ring: #3b82f633;
+  --navy: #020617;
+
+  --status-go-bg: #064e3b40;
+  --status-conditional-bg: #78350f40;
+  --status-partner-bg: #0c4a6e40;
+  --status-verify-bg: #7c2d1240;
+  --status-nogo-bg: #7f1d1d40;
+  --status-neutral-bg: #33415540;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-surface: var(--surface);
+  --color-surface-secondary: var(--surface-secondary);
+  --color-surface-muted: var(--surface-muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-text-subtle: var(--text-subtle);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-muted: var(--primary-muted);
+  --color-accent-indigo: var(--accent-indigo);
+  --color-accent-cyan: var(--accent-cyan);
+  --color-navy: var(--navy);
+  --color-status-go: var(--status-go);
+  --color-status-go-bg: var(--status-go-bg);
+  --color-status-conditional: var(--status-conditional);
+  --color-status-conditional-bg: var(--status-conditional-bg);
+  --color-status-partner: var(--status-partner);
+  --color-status-partner-bg: var(--status-partner-bg);
+  --color-status-verify: var(--status-verify);
+  --color-status-verify-bg: var(--status-verify-bg);
+  --color-status-nogo: var(--status-nogo);
+  --color-status-nogo-bg: var(--status-nogo-bg);
+  --color-status-neutral: var(--status-neutral);
+  --color-status-neutral-bg: var(--status-neutral-bg);
+  --font-sans: var(--font-sans);
+  --font-heading: var(--font-heading);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    border-color: var(--border);
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans), system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-heading), system-ui, sans-serif;
+    color: var(--text-primary);
+  }
+}
+
+@layer utilities {
+  .font-heading {
+    font-family: var(--font-heading), system-ui, sans-serif;
+  }
+
+  .gutter {
+    @apply px-4 md:px-5 lg:px-7;
+  }
+
+  .page-title {
+    @apply font-heading text-[23px] font-bold tracking-tight text-text-primary sm:text-[26px] lg:text-[30px];
+  }
+
+  .section-title {
+    @apply font-heading text-lg font-semibold text-text-primary;
+  }
+
+  .kpi-value {
+    color: #0f172a;
+  }
+
+  .dark .kpi-value {
+    color: #f8fafc;
+  }
+
+  .kpi-label {
+    color: #334155;
+  }
+
+  .dark .kpi-label {
+    color: #e2e8f0;
+  }
+
+  .kpi-hint {
+    color: #64748b;
+  }
+
+  .dark .kpi-hint {
+    color: #94a3b8;
+  }
+
+  .metric-card {
+    background-color: #ffffff;
+    border-color: #e2e8f0;
+    color: #0f172a;
+  }
+
+  .dark .metric-card {
+    background-color: #0f172a;
+    border-color: #1e293b;
+    color: #f8fafc;
+  }
+}

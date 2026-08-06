@@ -1,0 +1,61 @@
+{
+  "name": "tender-automation",
+  "version": "1.0.0",
+  "description": "Windows-based tender Excel download automation (Phase 1)",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "npx playwright install chromium",
+    "auth:tender247": "tsx src/setupTender247Auth.ts",
+    "test:tender247": "tsx src/run.ts --source=tender247",
+    "start": "tsx src/run.ts",
+    "convert:tender247": "tsx src/excel/generateImportWorkbook.ts --source=tender247",
+    "convert:all": "tsx src/excel/generateImportWorkbook.ts --source=all",
+    "crawl:tender247": "tsx src/crawlTender247.ts",
+    "crawl:tender247:one": "tsx src/crawlTender247.ts",
+    "discover:tender247": "tsx src/discoverTender247Network.ts",
+    "batch:tender247": "tsx src/tender247Batch/runDailyBatch.ts",
+    "auth:chatgpt": "tsx src/setupChatGptAuth.ts",
+    "qualify:chatgpt": "tsx src/chatgptQualification/runQualificationBatch.ts",
+    "daily:tender-pipeline": "tsx src/runDailyTenderPipeline.ts",
+    "auth:bidassist": "tsx src/bidassist/bidassistAuth.ts",
+    "crawl:bidassist": "tsx src/bidassist/runBidassistCrawler.ts",
+    "test:supabase:tender247": "tsx src/supabase/testTender247Connection.ts",
+    "backfill:tender247:supabase": "tsx src/supabase/backfillTender247Metadata.ts",
+    "backfill:bidassist:supabase": "tsx src/supabase/backfillBidAssistDocumentMetadata.ts",
+    "e2e:tender247": "tsx src/pipeline/runSourceEndToEnd.ts --source=tender247",
+    "e2e:bidassist": "tsx src/pipeline/runSourceEndToEnd.ts --source=bidassist",
+    "e2e:complete-test": "tsx src/pipeline/runCompleteEndToEndTest.ts",
+    "verify:supabase:e2e": "tsx src/supabase/verifyEndToEndRows.ts",
+    "web:dev": "npm --prefix web run dev",
+    "web:build": "npm --prefix web run build",
+    "web:start": "npm --prefix web run start",
+    "web:lint": "npm --prefix web run lint",
+    "web:test": "npm --prefix web run test",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"src/**/__tests__/**/*.test.ts\""
+  },
+  "keywords": [
+    "tender",
+    "automation",
+    "playwright"
+  ],
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.1",
+    "archiver": "^8.0.0",
+    "cheerio": "^1.2.0",
+    "dotenv": "^16.4.7",
+    "jsonrepair": "^3.15.0",
+    "pdf-parse": "^2.4.5",
+    "playwright": "^1.50.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/archiver": "^8.0.0",
+    "@types/node": "^22.20.1",
+    "@types/pdf-parse": "^1.1.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
