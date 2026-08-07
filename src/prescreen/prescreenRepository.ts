@@ -116,68 +116,164 @@ export async function getTenderPrescreenGate(options: {
   };
 }
 
+import { asiaKolkataDayBounds } from "./prescreenDayBounds.js";
+
+export type PrescreenBackfillListRow = {
+  id: string;
+  source_portal: PrescreenSourcePortal;
+  source_tender_id: string;
+  title: string;
+  category: string | null;
+  description: string | null;
+  closing_date: string | null;
+  tender_value: number | null;
+  tender_value_text: string | null;
+  emd_amount: number | null;
+  emd_text: string | null;
+  document_archive_available: boolean;
+  content_hash: string | null;
+};
+
+type RawBackfillRow = PrescreenBackfillListRow & {
+  crawled_at?: string | null;
+  first_seen_at?: string | null;
+  created_at?: string | null;
+};
+
 export async function listTendersForPrescreenBackfill(options: {
   dateIso: string;
   sourcePortal?: PrescreenSourcePortal | null;
+  sourceTenderId?: string | null;
 }): Promise<{
   ok: boolean;
-  rows: Array<{
-    id: string;
-    source_portal: PrescreenSourcePortal;
-    source_tender_id: string;
-    title: string;
-    category: string | null;
-    description: string | null;
-    closing_date: string | null;
-    tender_value: number | null;
-    tender_value_text: string | null;
-    emd_amount: number | null;
-    emd_text: string | null;
-    document_archive_available: boolean;
-    content_hash: string | null;
-  }>;
+  rows: PrescreenBackfillListRow[];
   error: string | null;
+  code?: string | null;
+  details?: string | null;
+  hint?: string | null;
 }> {
   if (!isSupabaseConfigured()) {
-    return { ok: false, rows: [], error: "Supabase is not configured" };
+    return {
+      ok: false,
+      rows: [],
+      error: "Supabase is not configured",
+      code: "SUPABASE_NOT_CONFIGURED",
+      details: null,
+      hint: "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY",
+    };
   }
   const client = getSupabaseAdminClient();
-  const dayStart = `${options.dateIso}T00:00:00.000Z`;
-  const dayEnd = `${options.dateIso}T23:59:59.999Z`;
+  const { startUtc, endUtcExclusive } = asiaKolkataDayBounds(options.dateIso);
 
-  let query = client
-    .from("agenttender_tenders")
-    .select(
-      "id, source_portal, source_tender_id, title, category, description, closing_date, tender_value, tender_value_text, emd_amount, emd_text, document_archive_available, content_hash",
-    )
-    .gte("crawled_at", dayStart)
-    .lte("crawled_at", dayEnd);
+  const selectCols =
+    "id, source_portal, source_tender_id, title, category, description, closing_date, tender_value, tender_value_text, emd_amount, emd_text, document_archive_available, content_hash, crawled_at, first_seen_at, created_at";
 
-  if (options.sourcePortal) {
-    query = query.eq("source_portal", options.sourcePortal);
+  const queryColumn = async (
+    column: "crawled_at" | "first_seen_at" | "created_at",
+  ): Promise<{
+    ok: boolean;
+    rows: RawBackfillRow[];
+    error: string | null;
+    code?: string | null;
+    details?: string | null;
+    hint?: string | null;
+  }> => {
+    let query = client
+      .from("agenttender_tenders")
+      .select(selectCols)
+      .gte(column, startUtc)
+      .lt(column, endUtcExclusive);
+
+    if (options.sourcePortal) {
+      query = query.eq("source_portal", options.sourcePortal);
+    }
+    if (options.sourceTenderId) {
+      query = query.eq("source_tender_id", options.sourceTenderId);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      return {
+        ok: false,
+        rows: [],
+        error: error.message,
+        code: error.code ?? null,
+        details: error.details ?? null,
+        hint: error.hint ?? null,
+      };
+    }
+    return {
+      ok: true,
+      rows: (data || []) as RawBackfillRow[],
+      error: null,
+    };
+  };
+
+  // Prefer crawled_at, then first_seen_at, then created_at (query all, coalesce filter below).
+  const crawled = await queryColumn("crawled_at");
+  if (!crawled.ok) {
+    return {
+      ok: false,
+      rows: [],
+      error: crawled.error,
+      code: crawled.code,
+      details: crawled.details,
+      hint: crawled.hint,
+    };
+  }
+  const firstSeen = await queryColumn("first_seen_at");
+  if (!firstSeen.ok) {
+    return {
+      ok: false,
+      rows: [],
+      error: firstSeen.error,
+      code: firstSeen.code,
+      details: firstSeen.details,
+      hint: firstSeen.hint,
+    };
+  }
+  const created = await queryColumn("created_at");
+  if (!created.ok) {
+    return {
+      ok: false,
+      rows: [],
+      error: created.error,
+      code: created.code,
+      details: created.details,
+      hint: created.hint,
+    };
   }
 
-  const { data, error } = await query;
-  if (error) {
-    return { ok: false, rows: [], error: error.message };
+  const startMs = new Date(startUtc).getTime();
+  const endMs = new Date(endUtcExclusive).getTime();
+  const byId = new Map<string, PrescreenBackfillListRow>();
+
+  for (const row of [...crawled.rows, ...firstSeen.rows, ...created.rows]) {
+    const stamp = row.crawled_at || row.first_seen_at || row.created_at || null;
+    if (!stamp) continue;
+    const t = new Date(stamp).getTime();
+    if (t < startMs || t >= endMs) continue;
+    if (byId.has(row.id)) continue;
+    byId.set(row.id, {
+      id: row.id,
+      source_portal: row.source_portal,
+      source_tender_id: row.source_tender_id,
+      title: row.title,
+      category: row.category,
+      description: row.description,
+      closing_date: row.closing_date,
+      tender_value: row.tender_value,
+      tender_value_text: row.tender_value_text,
+      emd_amount: row.emd_amount,
+      emd_text: row.emd_text,
+      document_archive_available: row.document_archive_available,
+      content_hash: row.content_hash,
+    });
   }
+
   return {
     ok: true,
-    rows: (data || []) as Array<{
-      id: string;
-      source_portal: PrescreenSourcePortal;
-      source_tender_id: string;
-      title: string;
-      category: string | null;
-      description: string | null;
-      closing_date: string | null;
-      tender_value: number | null;
-      tender_value_text: string | null;
-      emd_amount: number | null;
-      emd_text: string | null;
-      document_archive_available: boolean;
-      content_hash: string | null;
-    }>,
+    rows: [...byId.values()],
     error: null,
   };
 }

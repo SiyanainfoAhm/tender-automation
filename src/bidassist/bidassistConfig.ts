@@ -125,7 +125,7 @@ export function loadBidassistConfig(): BidassistConfig {
       process.env.BIDASSIST_CATEGORY?.trim() || "Software and IT Solutions",
     openingDateFrom: parseOpeningDateFromEnv(openingFromRaw),
     openingDateTo: openingToRaw || null,
-    maxTenders: Math.max(0, parseIntEnv(process.env.MAX_BIDASSIST_TENDERS, 5)),
+    maxTenders: Math.max(0, parseIntEnv(process.env.MAX_BIDASSIST_TENDERS, 0)),
     downloadTimeoutMs: Math.max(
       30_000,
       parseIntEnv(process.env.BIDASSIST_DOWNLOAD_TIMEOUT_MS, 300_000),

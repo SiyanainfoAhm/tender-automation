@@ -71,7 +71,7 @@ async function OperationalListPanel({
 
 export async function DashboardOperationalSection() {
   return (
-    <div className="grid gap-6 lg:grid-cols-2 xl:grid-cols-2">
+    <div className="grid items-stretch gap-4 grid-cols-1 xl:grid-cols-2">
       {LIST_CONFIG.map((config) => (
         <OperationalListPanel key={config.key} config={config} />
       ))}

@@ -30,16 +30,43 @@ import {
 import { verifySourceTenderMetadataRow } from "../supabase/tenderMetadataStore.js";
 import { verifySourceEndToEndRows } from "../supabase/verifyEndToEndRows.js";
 import { bidassistDayRoot, loadBidassistConfig } from "../bidassist/bidassistConfig.js";
+import { selectPassedForChatgpt } from "../prescreen/selectPassedForChatgpt.js";
+import { loadPrescreenConfig } from "../prescreen/prescreenConfig.js";
 
 export type SourceEndToEndOptions = {
   source: "tender247" | "bidassist";
+  /** Max ChatGPT qualifications per source (typically 1 for E2E). */
   limit: number;
   date?: string;
+  /** Max crawl candidates before selecting PASSED for ChatGPT. */
+  crawlMax?: number;
+  /** When true, exhaust crawlMax looking for an eligible tender (never force REJECTED). */
+  requireChatgptPath?: boolean;
+};
+
+export type SourceE2EOutcome =
+  | "SUCCESS"
+  | "NO_ELIGIBLE_TEST_TENDER"
+  | "FAILED"
+  | "RATE_LIMITED";
+
+export type SourceEndToEndPrescreenStats = {
+  candidatesCrawled: number;
+  metadataVerifiedCount: number;
+  prescreenRejected: number;
+  prescreenManualReview: number;
+  prescreenPassed: number;
+  chatgptRequestsAvoided: number;
+  crawlMaxPerSource: number;
+  chatgptMaxPerSource: number;
 };
 
 export type SourceEndToEndResult = {
   source: "TENDER247" | "BIDASSIST";
+  /** ChatGPT path completed successfully */
   success: boolean;
+  /** Source-level outcome (prescreen exhaustion is not FAILED) */
+  outcome: SourceE2EOutcome;
   rateLimited: boolean;
   sourceTenderId: string | null;
   folderId: string | null;
@@ -60,15 +87,35 @@ export type SourceEndToEndResult = {
   statusSyncVerified: boolean;
   chatUrl: string | null;
   error: string | null;
+  stats: SourceEndToEndPrescreenStats;
 };
+
+function emptyStats(
+  crawlMax: number,
+  chatgptMax: number,
+): SourceEndToEndPrescreenStats {
+  return {
+    candidatesCrawled: 0,
+    metadataVerifiedCount: 0,
+    prescreenRejected: 0,
+    prescreenManualReview: 0,
+    prescreenPassed: 0,
+    chatgptRequestsAvoided: 0,
+    crawlMaxPerSource: crawlMax,
+    chatgptMaxPerSource: chatgptMax,
+  };
+}
 
 function emptyResult(
   source: "TENDER247" | "BIDASSIST",
   error: string | null = null,
+  crawlMax = 0,
+  chatgptMax = 0,
 ): SourceEndToEndResult {
   return {
     source,
     success: false,
+    outcome: "FAILED",
     rateLimited: false,
     sourceTenderId: null,
     folderId: null,
@@ -83,6 +130,7 @@ function emptyResult(
     statusSyncVerified: false,
     chatUrl: null,
     error,
+    stats: emptyStats(crawlMax, chatgptMax),
   };
 }
 
@@ -225,12 +273,51 @@ export async function runSourceEndToEnd(
   const config = loadConfig();
   const logger = new Logger(config.logRoot, `E2E-${source}`);
   const dateIso = options.date?.trim() || getTodayIsoDate();
+  const prescreenCfg = loadPrescreenConfig();
+  const crawlCandidatesEnv = Number.parseInt(
+    process.env.E2E_CRAWL_CANDIDATES?.trim() || "0",
+    10,
+  );
+  const explicitCrawl =
+    typeof options.crawlMax === "number" &&
+    Number.isFinite(options.crawlMax) &&
+    options.crawlMax > 0
+      ? options.crawlMax
+      : null;
+  // Crawl enough candidates so we can find the first PASSED for ChatGPT.
+  const crawlLimit = Math.max(
+    limit,
+    explicitCrawl ??
+      (Number.isFinite(crawlCandidatesEnv) && crawlCandidatesEnv > 0
+        ? crawlCandidatesEnv
+        : prescreenCfg.enabled
+          ? Math.max(limit, 5)
+          : limit),
+  );
+  const requireChatgptPath = options.requireChatgptPath !== false;
+  logger.info(`E2E_SOURCE=${source}`);
+  logger.info(`E2E_QUALIFY_LIMIT=${limit}`);
+  logger.info(`E2E_CRAWL_CANDIDATES=${crawlLimit}`);
+  if (source === "BIDASSIST") {
+    logger.info("PRESCREEN_EMD_RULE_APPLIED=false");
+    logger.info("PRESCREEN_IT_RELEVANCE_RULE_APPLIED=false");
+    logger.info(
+      "BIDASSIST_CATEGORY_FILTER_ASSUMED=Software and IT Solutions",
+    );
+  } else {
+    logger.info("PRESCREEN_EMD_RULE_APPLIED=true");
+    logger.info("PRESCREEN_IT_RELEVANCE_RULE_APPLIED=true");
+  }
   const dateFolder = path.resolve(config.downloadRoot, dateIso);
   ensureDir(dateFolder);
 
-  const result = emptyResult(source);
+  const result = emptyResult(source, null, crawlLimit, limit);
+  result.stats.crawlMaxPerSource = crawlLimit;
+  result.stats.chatgptMaxPerSource = limit;
   console.log(`E2E_SOURCE=${source}`);
-  console.log(`E2E_LIMIT=${limit}`);
+  console.log(`E2E_QUALIFY_LIMIT=${limit}`);
+  console.log(`E2E_CRAWL_CANDIDATES=${crawlLimit}`);
+  console.log(`E2E_REQUIRE_CHATGPT_PATH=${requireChatgptPath ? "true" : "false"}`);
   console.log(`E2E_DATE=${dateIso}`);
 
   const runId = createPipelineRunId(source);
@@ -245,7 +332,7 @@ export async function runSourceEndToEnd(
       const code = await runCommand(
         "npx",
         ["tsx", "src/tender247Batch/runDailyBatch.ts"],
-        { MAX_TENDERS: String(limit) },
+        { MAX_TENDERS: String(crawlLimit) },
       );
       if (code !== 0) {
         throw new Error(`Tender247 crawler exited with code ${code}`);
@@ -255,8 +342,12 @@ export async function runSourceEndToEnd(
       console.log("BIDASSIST_CRAWLER_START");
       const code = await runCommand(
         "npx",
-        ["tsx", "src/bidassist/runBidassistCrawler.ts", `--limit=${limit}`],
-        { MAX_BIDASSIST_TENDERS: String(limit) },
+        [
+          "tsx",
+          "src/bidassist/runBidassistCrawler.ts",
+          `--limit=${crawlLimit}`,
+        ],
+        { MAX_BIDASSIST_TENDERS: String(crawlLimit) },
       );
       if (code !== 0) {
         throw new Error(`BidAssist crawler exited with code ${code}`);
@@ -275,36 +366,16 @@ export async function runSourceEndToEnd(
     if (completedIds.length === 0) {
       completedIds =
         source === "TENDER247"
-          ? afterT247.slice(-limit)
-          : afterBa.slice(-limit);
+          ? afterT247.slice(-crawlLimit)
+          : afterBa.slice(-crawlLimit);
     }
-    completedIds = completedIds.slice(0, limit);
-
-    const manifest: PipelineManifest = {
-      runId,
-      sourcePortal: source,
-      startedAt: new Date().toISOString(),
-      selectedTenderIds: [...completedIds],
-      completedCrawlerTenderIds: [...completedIds],
-      failedCrawlerTenderIds: [],
-      qualifiedTenderIds: [],
-      failedQualificationTenderIds: [],
-    };
-    result.manifestPath = writePipelineManifest(
-      resolveProjectPath(config.downloadRoot),
-      manifest,
-      dateIso,
-    );
+    completedIds = completedIds.slice(0, crawlLimit);
 
     if (completedIds.length === 0) {
       throw new Error(
         "No completed crawler tenders available for e2e qualification",
       );
     }
-
-    const primaryId = completedIds[0]!;
-    result.sourceTenderId = primaryId;
-    result.folderId = folderLabel(source, primaryId);
 
     for (const id of completedIds) {
       const verified = await verifySourceTenderMetadataRow(source, id);
@@ -316,19 +387,107 @@ export async function runSourceEndToEnd(
       }
       console.log(`SUPABASE_TENDER_VERIFIED=${label}`);
       result.metadataVerified = true;
+      result.stats.metadataVerifiedCount += 1;
+    }
+    result.stats.candidatesCrawled = completedIds.length;
+
+    // Pre-screen already ran during crawl upsert. Filter to PASSED only.
+    console.log("E2E_PRESCREEN_FILTER_START");
+    const selection = await selectPassedForChatgpt({
+      sourcePortal: source,
+      sourceTenderIds: completedIds,
+      logger,
+      limit,
+    });
+    console.log(
+      `E2E_PRESCREEN_SKIPPED_WITHOUT_CHATGPT=${selection.skipped.length}`,
+    );
+    console.log(
+      `E2E_PRESCREEN_PASSED_FOR_CHATGPT=${selection.passedIds.length}`,
+    );
+
+    result.stats.prescreenPassed = selection.passedIds.length;
+    result.stats.prescreenRejected = selection.skipped.filter(
+      (s) => s.status === "REJECTED",
+    ).length;
+    result.stats.prescreenManualReview = selection.skipped.filter(
+      (s) => s.status === "MANUAL_REVIEW",
+    ).length;
+    result.stats.chatgptRequestsAvoided = selection.skipped.length;
+
+    const qualifyIds = selection.passedIds;
+    if (qualifyIds.length === 0) {
+      const skippedSummary = selection.skipped
+        .map(
+          (s) =>
+            `${folderLabel(source, s.sourceTenderId)}:${s.status ?? "null"}:${s.reasonCode ?? "null"}`,
+        )
+        .join(",");
+      logger.info(
+        `E2E_NO_ELIGIBLE_TEST_TENDER=${source} crawled=${completedIds.length} skipped=${skippedSummary}`,
+      );
+      console.log(`E2E_NO_ELIGIBLE_TEST_TENDER=${source}`);
+      console.log(`E2E_SOURCE_TECHNICAL_SUCCESS=${source}`);
+      console.log("E2E_CHATGPT_SKIPPED_NO_PASSED_TENDER");
+      result.sourceTenderId = null;
+      result.folderId = null;
+      result.error = null;
+      result.success = false;
+      result.outcome = "NO_ELIGIBLE_TEST_TENDER";
+      result.stats.chatgptRequestsAvoided = completedIds.length;
+      const emptyManifest: PipelineManifest = {
+        runId,
+        sourcePortal: source,
+        startedAt: new Date().toISOString(),
+        selectedTenderIds: [...completedIds],
+        completedCrawlerTenderIds: [...completedIds],
+        failedCrawlerTenderIds: [],
+        qualifiedTenderIds: [],
+        failedQualificationTenderIds: [],
+        finishedAt: new Date().toISOString(),
+      };
+      result.manifestPath = writePipelineManifest(
+        resolveProjectPath(config.downloadRoot),
+        emptyManifest,
+        dateIso,
+      );
+      return result;
     }
 
-    const qualifyIds = selectManifestQualificationIds(manifest);
-    if (qualifyIds.length !== completedIds.length) {
+    const primaryId = qualifyIds[0]!;
+    result.sourceTenderId = primaryId;
+    result.folderId = folderLabel(source, primaryId);
+
+    const manifest: PipelineManifest = {
+      runId,
+      sourcePortal: source,
+      startedAt: new Date().toISOString(),
+      selectedTenderIds: [...qualifyIds],
+      completedCrawlerTenderIds: [...completedIds],
+      failedCrawlerTenderIds: [],
+      qualifiedTenderIds: [],
+      failedQualificationTenderIds: selection.skipped.map(
+        (s) => s.sourceTenderId,
+      ),
+    };
+    result.manifestPath = writePipelineManifest(
+      resolveProjectPath(config.downloadRoot),
+      manifest,
+      dateIso,
+    );
+
+    const manifestQualifyIds = selectManifestQualificationIds(manifest);
+    if (manifestQualifyIds.length !== qualifyIds.length) {
       throw new Error("Manifest qualification ID selection mismatch");
     }
     if (qualifyIds.length > limit) {
       throw new Error(`E2E limit ${limit} exceeded by ${qualifyIds.length} IDs`);
     }
-    // Process only current-run manifest IDs (never unrelated ready folders).
+    // Process only current-run PASSED IDs (never rejected / manual-review).
     console.log(
       `E2E_MANIFEST_QUALIFY_IDS=${qualifyIds.join(",")}`,
     );
+    console.log(`E2E_FIRST_PASSED=${folderLabel(source, primaryId)}`);
 
     let session:
       | Awaited<ReturnType<typeof launchChatGptPersistentSession>>
@@ -463,12 +622,16 @@ export async function runSourceEndToEnd(
 
     if (result.rateLimited) {
       result.success = false;
+      result.outcome = "RATE_LIMITED";
       return result;
     }
 
-    const failed = (manifest.failedQualificationTenderIds || []).length;
+    const failed = (manifest.failedQualificationTenderIds || []).filter(
+      (id) => qualifyIds.includes(id),
+    ).length;
     if (failed > 0 || !result.sourceTenderId) {
       result.success = false;
+      result.outcome = "FAILED";
       result.error =
         result.error ||
         `Qualification failed for ${(manifest.failedQualificationTenderIds || []).join(",")}`;
@@ -487,6 +650,7 @@ export async function runSourceEndToEnd(
       verification.qualificationStatus ?? result.qualificationStatus;
     result.chatUrl = verification.chatUrl ?? result.chatUrl;
     result.success = verification.ok;
+    result.outcome = verification.ok ? "SUCCESS" : "FAILED";
     if (!verification.ok) {
       result.error = verification.error;
     }
@@ -494,12 +658,11 @@ export async function runSourceEndToEnd(
     console.log("==================================");
     console.log("Source End-To-End");
     console.log(`Source: ${source}`);
-    console.log(`Limit: ${limit}`);
-    console.log(
-      `Crawler completed: ${manifest.completedCrawlerTenderIds.length}`,
-    );
-    console.log(`Qualified: ${(manifest.qualifiedTenderIds || []).length}`);
-    console.log(`Failed: ${failed}`);
+    console.log(`Crawl max: ${crawlLimit}`);
+    console.log(`ChatGPT max: ${limit}`);
+    console.log(`Candidates crawled: ${result.stats.candidatesCrawled}`);
+    console.log(`Prescreen passed: ${result.stats.prescreenPassed}`);
+    console.log(`Outcome: ${result.outcome}`);
     console.log(`Success: ${result.success}`);
     console.log("==================================");
 
@@ -508,6 +671,7 @@ export async function runSourceEndToEnd(
     const message = error instanceof Error ? error.message : String(error);
     result.error = message;
     result.success = false;
+    result.outcome = "FAILED";
     logger.error(`E2E_SOURCE_FAILED=${source} ${message}`);
     return result;
   }
@@ -528,6 +692,9 @@ async function main(): Promise<void> {
   );
   if (result.rateLimited) {
     process.exit(2);
+  }
+  if (result.outcome === "NO_ELIGIBLE_TEST_TENDER") {
+    process.exit(0);
   }
   if (!result.success) {
     process.exit(1);

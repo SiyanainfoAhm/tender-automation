@@ -22,7 +22,7 @@ export function PageHeader({
   className,
 }: PageHeaderProps) {
   return (
-    <div className={cn("mb-6 space-y-3", className)}>
+    <div className={cn("mb-5 space-y-2", className)}>
       {breadcrumbs && breadcrumbs.length > 0 ? (
         <nav
           aria-label="Breadcrumb"
@@ -47,11 +47,11 @@ export function PageHeader({
           ))}
         </nav>
       ) : null}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0 space-y-1.5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 space-y-1">
           <h1 className="page-title">{title}</h1>
           {subtitle ? (
-            <p className="max-w-2xl text-sm text-text-secondary sm:text-[15px]">
+            <p className="max-w-2xl text-sm text-text-secondary">
               {subtitle}
             </p>
           ) : null}

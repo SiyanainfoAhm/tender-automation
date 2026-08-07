@@ -66,9 +66,9 @@ export function AppShell({ user, preferences, children }: AppShellProps) {
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="flex h-16 items-center gap-2 border-b border-border bg-surface px-4 lg:hidden">
+        <div className="flex h-[60px] items-center gap-2 border-b border-border bg-surface px-4 lg:hidden">
           <MobileNav userRole={user.role} />
-          <span className="font-heading text-sm font-bold text-text-primary">
+          <span className="font-heading text-sm font-semibold text-text-primary">
             Siyana STI
           </span>
         </div>
@@ -89,7 +89,7 @@ export function AppShell({ user, preferences, children }: AppShellProps) {
         />
 
         <main className="flex-1 overflow-y-auto overflow-x-hidden">
-          <PageContainer className="gutter py-6">{children}</PageContainer>
+          <PageContainer className="gutter py-5">{children}</PageContainer>
         </main>
       </div>
 

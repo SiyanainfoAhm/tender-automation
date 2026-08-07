@@ -24,6 +24,10 @@ import { loadConfig, type AppConfig } from "./config.js";
 import { getTodayIsoDate } from "./dateUtils.js";
 import { downloadDirForToday, ensureDir, resolveProjectPath } from "./fileUtils.js";
 import { Logger, safeErrorMessage } from "./logger.js";
+import {
+  formatProductionLimit,
+} from "./productionLimit.js";
+import { loadBidassistConfig } from "./bidassist/bidassistConfig.js";
 
 export interface DailyPipelineSummary {
   date: string;
@@ -348,6 +352,18 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
   acquirePipelineLock(config.dailyPipelineLockFilePath);
   logger.info(
     `DAILY_PIPELINE_LOCK_ACQUIRED=${config.dailyPipelineLockFilePath}`,
+  );
+
+  const bidassistConfig = loadBidassistConfig();
+  logger.info(`TENDER247_LIMIT=${formatProductionLimit(config.maxTenders)}`);
+  logger.info(
+    `BIDASSIST_LIMIT=${formatProductionLimit(bidassistConfig.maxTenders)}`,
+  );
+  logger.info(
+    `CHATGPT_QUALIFICATION_LIMIT=${formatProductionLimit(config.maxGptTenders)}`,
+  );
+  logger.info(
+    `CHATGPT_MIN_SUBMISSION_INTERVAL_MS=${config.chatgptMinSubmissionIntervalMs}`,
   );
 
   const onSignal = (signal: string): void => {

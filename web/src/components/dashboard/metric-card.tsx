@@ -68,31 +68,33 @@ export function MetricCard({
   return (
     <div
       className={cn(
-        "metric-card overflow-hidden rounded-2xl p-6",
+        "metric-card flex h-full min-h-[104px] flex-col overflow-hidden rounded-xl px-4 pb-4 pt-3.5",
         "border border-slate-200 bg-white text-slate-950 shadow-sm",
         "dark:border-slate-800 dark:bg-slate-900 dark:text-slate-50",
         "opacity-100",
         className,
       )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div
-          className={cn(
-            "mb-5 flex size-12 items-center justify-center rounded-2xl",
-            metricIconVariants[variant],
-          )}
-        >
-          <Icon className="size-5" aria-hidden />
+      <div className="flex h-full flex-col">
+        <div className="mb-2 flex items-start justify-between gap-2">
+          <div
+            className={cn(
+              "flex size-8 shrink-0 items-center justify-center rounded-lg",
+              metricIconVariants[variant],
+            )}
+          >
+            <Icon className="size-4" aria-hidden />
+          </div>
+          {trend ? (
+            <span className="kpi-hint text-xs font-medium opacity-100">
+              {trend}
+            </span>
+          ) : null}
         </div>
-        {trend ? (
-          <span className="kpi-hint text-xs font-medium opacity-100">{trend}</span>
-        ) : null}
-      </div>
 
-      <div className="space-y-1">
         <div
           className={cn(
-            "kpi-value text-3xl font-semibold tracking-tight text-slate-950 opacity-100 dark:text-slate-50",
+            "kpi-value text-2xl font-semibold leading-none tracking-tight text-slate-950 opacity-100 dark:text-slate-50",
             loading &&
               "animate-pulse text-slate-300 dark:text-slate-700",
           )}
@@ -100,12 +102,12 @@ export function MetricCard({
           {displayValue}
         </div>
 
-        <div className="kpi-label text-sm font-semibold text-slate-700 opacity-100 dark:text-slate-200">
+        <div className="kpi-label mt-1 text-sm font-medium leading-5 text-slate-700 opacity-100 dark:text-slate-200">
           {label}
         </div>
 
         {hint ? (
-          <div className="kpi-hint text-sm text-slate-500 opacity-100 dark:text-slate-400">
+          <div className="kpi-hint mt-0.5 text-xs leading-4 text-slate-500 opacity-100 dark:text-slate-400">
             {hint}
           </div>
         ) : null}

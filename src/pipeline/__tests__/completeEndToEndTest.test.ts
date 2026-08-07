@@ -23,6 +23,8 @@ import {
 } from "../pipelineManifest.js";
 import {
   buildCompleteE2ESummary,
+  deriveCompleteStatus,
+  formatCompleteE2EConsoleSummary,
   parseCompleteE2EArgs,
   runCompleteEndToEndTest,
   shouldRunBidassistAfterTender247,
@@ -31,6 +33,7 @@ import {
 } from "../runCompleteEndToEndTest.js";
 import type {
   SourceEndToEndOptions,
+  SourceEndToEndPrescreenStats,
   SourceEndToEndResult,
 } from "../runSourceEndToEnd.js";
 import {
@@ -43,6 +46,22 @@ function makeTempDir(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
 
+function defaultStats(
+  overrides: Partial<SourceEndToEndPrescreenStats> = {},
+): SourceEndToEndPrescreenStats {
+  return {
+    candidatesCrawled: 1,
+    metadataVerifiedCount: 1,
+    prescreenRejected: 0,
+    prescreenManualReview: 0,
+    prescreenPassed: 1,
+    chatgptRequestsAvoided: 0,
+    crawlMaxPerSource: 5,
+    chatgptMaxPerSource: 1,
+    ...overrides,
+  };
+}
+
 function okResult(
   source: "TENDER247" | "BIDASSIST",
   id: string,
@@ -50,6 +69,7 @@ function okResult(
   return {
     source,
     success: true,
+    outcome: "SUCCESS",
     rateLimited: false,
     sourceTenderId: id,
     folderId: source === "TENDER247" ? `T247-${id}` : `BA-${id}`,
@@ -64,6 +84,7 @@ function okResult(
     statusSyncVerified: true,
     chatUrl: "https://chatgpt.com/c/abc-123",
     error: null,
+    stats: defaultStats(),
   };
 }
 
@@ -74,6 +95,7 @@ function failedResult(
   return {
     ...okResult(source, "0"),
     success: false,
+    outcome: "FAILED",
     sourceTenderId: null,
     folderId: null,
     metadataVerified: false,
@@ -85,24 +107,80 @@ function failedResult(
     statusSyncVerified: false,
     chatUrl: null,
     error,
+    stats: defaultStats({
+      candidatesCrawled: 0,
+      metadataVerifiedCount: 0,
+      prescreenPassed: 0,
+    }),
   };
 }
 
-test("12. Limit greater than one is rejected", () => {
+function noEligibleResult(
+  source: "TENDER247" | "BIDASSIST",
+  stats?: Partial<SourceEndToEndPrescreenStats>,
+): SourceEndToEndResult {
+  return {
+    ...okResult(source, "0"),
+    success: false,
+    outcome: "NO_ELIGIBLE_TEST_TENDER",
+    sourceTenderId: null,
+    folderId: null,
+    attachmentsConfirmed: false,
+    promptSubmitted: false,
+    responseCompleted: false,
+    qualificationStatus: null,
+    qualificationVerified: false,
+    statusSyncVerified: false,
+    chatUrl: null,
+    error: null,
+    metadataVerified: true,
+    stats: defaultStats({
+      candidatesCrawled: 5,
+      metadataVerifiedCount: 5,
+      prescreenRejected: 4,
+      prescreenManualReview: 1,
+      prescreenPassed: 0,
+      chatgptRequestsAvoided: 5,
+      ...stats,
+    }),
+  };
+}
+
+const defaultCompleteOpts = {
+  crawlMaxPerSource: 5,
+  chatgptMaxPerSource: 1,
+  requireChatgptPath: true,
+  date: "2026-08-06",
+  continueOnSourceError: false,
+};
+
+test("12. ChatGPT max greater than one is rejected", () => {
+  assert.throws(
+    () => parseCompleteE2EArgs(["--chatgpt-max-per-source=2"]),
+    /COMPLETE_E2E_TEST_CHATGPT_MAX_MUST_BE_ONE/,
+  );
   assert.throws(
     () => parseCompleteE2EArgs(["--limit-per-source=2"]),
-    /COMPLETE_E2E_TEST_LIMIT_MUST_BE_ONE/,
+    /COMPLETE_E2E_TEST_CHATGPT_MAX_MUST_BE_ONE/,
   );
+});
+
+test("parseCompleteE2EArgs reads crawl/ChatGPT max flags", () => {
+  const opts = parseCompleteE2EArgs([
+    "--crawl-max-per-source=5",
+    "--chatgpt-max-per-source=1",
+    "--require-chatgpt-path=true",
+    "--date=2026-08-06",
+  ]);
+  assert.equal(opts.crawlMaxPerSource, 5);
+  assert.equal(opts.chatgptMaxPerSource, 1);
+  assert.equal(opts.requireChatgptPath, true);
 });
 
 test("1. Tender247 completes before BidAssist begins", async () => {
   const order: string[] = [];
   const { summary, exitCode } = await runCompleteEndToEndTest(
-    {
-      limitPerSource: 1,
-      date: "2026-08-06",
-      continueOnSourceError: false,
-    },
+    { ...defaultCompleteOpts },
     {
       runSource: async (opts: SourceEndToEndOptions) => {
         order.push(`start:${opts.source}`);
@@ -131,14 +209,10 @@ test("1. Tender247 completes before BidAssist begins", async () => {
   assert.equal(exitCode, 0);
 });
 
-test("2. Tender247 failure prevents BidAssist by default", async () => {
+test("2. Tender247 technical failure prevents BidAssist by default", async () => {
   let bidassistCalled = false;
   const { summary, exitCode } = await runCompleteEndToEndTest(
-    {
-      limitPerSource: 1,
-      date: "2026-08-06",
-      continueOnSourceError: false,
-    },
+    { ...defaultCompleteOpts },
     {
       runSource: async (opts: SourceEndToEndOptions) => {
         if (opts.source === "bidassist") {
@@ -202,17 +276,14 @@ test("4. Rate limit prevents the second source", async () => {
   const rateLimited: SourceEndToEndResult = {
     ...okResult("TENDER247", "111"),
     success: false,
+    outcome: "RATE_LIMITED",
     rateLimited: true,
     error: "Too many requests",
     qualificationVerified: false,
     statusSyncVerified: false,
   };
   const { summary, exitCode } = await runCompleteEndToEndTest(
-    {
-      limitPerSource: 1,
-      date: "2026-08-06",
-      continueOnSourceError: true,
-    },
+    { ...defaultCompleteOpts, continueOnSourceError: true },
     {
       runSource: async (opts: SourceEndToEndOptions) => {
         if (opts.source === "bidassist") {
@@ -321,11 +392,7 @@ test("7. Each source processes only its current manifest ID", () => {
 
 test("8. Both Supabase rows are verified in combined success", async () => {
   const { summary } = await runCompleteEndToEndTest(
-    {
-      limitPerSource: 1,
-      date: "2026-08-06",
-      continueOnSourceError: false,
-    },
+    { ...defaultCompleteOpts },
     {
       runSource: async (opts: SourceEndToEndOptions) =>
         okResult(
@@ -354,7 +421,9 @@ test("9. Combined summary contains both results", () => {
     date: "2026-08-06",
     startedAt: "2026-08-06T00:00:00.000Z",
     finishedAt: "2026-08-06T00:20:00.000Z",
-    limitPerSource: 1,
+    crawlMaxPerSource: 5,
+    chatgptMaxPerSource: 1,
+    requireChatgptPath: true,
     tender247: okResult("TENDER247", "111"),
     bidassist: okResult("BIDASSIST", "222"),
     bidassistRan: true,
@@ -364,10 +433,14 @@ test("9. Combined summary contains both results", () => {
     tender247: { sourceTenderId: string };
     bidassist: { sourceTenderId: string };
     status: string;
+    crawlMaxPerSource: number;
+    chatgptMaxPerSource: number;
   };
   assert.equal(saved.status, "SUCCESS");
   assert.equal(saved.tender247.sourceTenderId, "111");
   assert.equal(saved.bidassist.sourceTenderId, "222");
+  assert.equal(saved.crawlMaxPerSource, 5);
+  assert.equal(saved.chatgptMaxPerSource, 1);
 });
 
 test("10. Lock prevents simultaneous combined tests", () => {
@@ -397,8 +470,156 @@ test("11. Ctrl+C releases the lock", () => {
     alreadyRunningCode: "COMPLETE_E2E_TEST_ALREADY_RUNNING",
   });
   assert.equal(fs.existsSync(lockPath), true);
-  // Simulate interrupt finally/handler path
   releasePipelineLock(lockPath);
   assert.equal(fs.existsSync(lockPath), false);
   assert.ok(completeE2ELockPath("runtime").endsWith("complete-e2e-test.lock"));
+});
+
+test("13. Five rejected Tender247 candidates → NO_ELIGIBLE_TEST_TENDER not FAILED", () => {
+  const t247 = noEligibleResult("TENDER247");
+  assert.equal(t247.outcome, "NO_ELIGIBLE_TEST_TENDER");
+  assert.notEqual(t247.outcome, "FAILED");
+  assert.equal(t247.stats.prescreenPassed, 0);
+  assert.equal(t247.stats.candidatesCrawled, 5);
+  assert.equal(
+    shouldRunBidassistAfterTender247({
+      tender247: t247,
+      continueOnSourceError: false,
+    }).run,
+    true,
+  );
+});
+
+test("14. NO_ELIGIBLE_TEST_TENDER from Tender247 does not skip BidAssist", async () => {
+  let bidassistCalled = false;
+  const { summary, exitCode } = await runCompleteEndToEndTest(
+    { ...defaultCompleteOpts },
+    {
+      runSource: async (opts: SourceEndToEndOptions) => {
+        if (opts.source === "bidassist") {
+          bidassistCalled = true;
+          return okResult("BIDASSIST", "222");
+        }
+        return noEligibleResult("TENDER247");
+      },
+      waitBetweenSources: async () => ({
+        waitedMs: 0,
+        elapsedMs: 0,
+        remainingMs: 0,
+      }),
+    },
+  );
+  assert.equal(bidassistCalled, true);
+  assert.equal(summary.bidassist.ran, true);
+  assert.equal(summary.tender247.outcome, "NO_ELIGIBLE_TEST_TENDER");
+  assert.equal(summary.status, "PARTIAL_SUCCESS");
+  assert.equal(exitCode, 0);
+  assert.equal(
+    shouldRunBidassistAfterTender247({
+      tender247: noEligibleResult("TENDER247"),
+      continueOnSourceError: false,
+    }).reason,
+    "tender247_no_eligible_test_tender",
+  );
+});
+
+test("15. Tender247 technical crawler failure may produce FAILED", async () => {
+  const { summary, exitCode } = await runCompleteEndToEndTest(
+    { ...defaultCompleteOpts },
+    {
+      runSource: async (opts: SourceEndToEndOptions) => {
+        if (opts.source === "bidassist") {
+          return okResult("BIDASSIST", "222");
+        }
+        return failedResult("TENDER247", "Tender247 crawler exited with code 1");
+      },
+      waitBetweenSources: async () => ({
+        waitedMs: 0,
+        elapsedMs: 0,
+        remainingMs: 0,
+      }),
+    },
+  );
+  assert.equal(summary.tender247.outcome, "FAILED");
+  assert.equal(summary.bidassist.ran, false);
+  assert.equal(summary.status, "FAILED");
+  assert.equal(exitCode, 1);
+});
+
+test("16. BidAssist still executes after Tender247 has no eligible tender", async () => {
+  const order: string[] = [];
+  const { summary } = await runCompleteEndToEndTest(
+    { ...defaultCompleteOpts },
+    {
+      runSource: async (opts: SourceEndToEndOptions) => {
+        order.push(opts.source);
+        assert.equal(opts.crawlMax, 5);
+        assert.equal(opts.limit, 1);
+        if (opts.source === "tender247") {
+          return noEligibleResult("TENDER247");
+        }
+        return noEligibleResult("BIDASSIST", {
+          candidatesCrawled: 5,
+          metadataVerifiedCount: 5,
+          prescreenRejected: 5,
+          prescreenManualReview: 0,
+          chatgptRequestsAvoided: 5,
+        });
+      },
+      waitBetweenSources: async () => ({
+        waitedMs: 0,
+        elapsedMs: 0,
+        remainingMs: 0,
+      }),
+    },
+  );
+  assert.deepEqual(order, ["tender247", "bidassist"]);
+  assert.equal(summary.bidassist.ran, true);
+  assert.equal(summary.bidassist.outcome, "NO_ELIGIBLE_TEST_TENDER");
+});
+
+test("17. Both sources having no eligible tender → overall NO_ELIGIBLE_TEST_TENDER", () => {
+  const status = deriveCompleteStatus({
+    tender247: noEligibleResult("TENDER247"),
+    bidassist: noEligibleResult("BIDASSIST"),
+    bidassistRan: true,
+  });
+  assert.equal(status, "NO_ELIGIBLE_TEST_TENDER");
+
+  const mixed = deriveCompleteStatus({
+    tender247: noEligibleResult("TENDER247"),
+    bidassist: okResult("BIDASSIST", "9"),
+    bidassistRan: true,
+  });
+  assert.equal(mixed, "PARTIAL_SUCCESS");
+});
+
+test("18. Summary uses crawlMaxPerSource and chatgptMaxPerSource correctly", () => {
+  const summary = buildCompleteE2ESummary({
+    runId: "run-2",
+    date: "2026-08-06",
+    startedAt: "2026-08-06T00:00:00.000Z",
+    finishedAt: "2026-08-06T00:20:00.000Z",
+    crawlMaxPerSource: 5,
+    chatgptMaxPerSource: 1,
+    requireChatgptPath: true,
+    tender247: noEligibleResult("TENDER247"),
+    bidassist: okResult("BIDASSIST", "222"),
+    bidassistRan: true,
+  });
+  const text = formatCompleteE2EConsoleSummary(summary, "/tmp/summary.json");
+  assert.match(text, /Crawl max per source: 5/);
+  assert.match(text, /ChatGPT max per source: 1/);
+  assert.match(text, /Require ChatGPT path: YES/);
+  assert.doesNotMatch(text, /Limit per source/);
+  assert.match(text, /Candidates crawled: 5/);
+  assert.match(text, /Prescreen rejected: 4/);
+  assert.match(text, /Manual review: 1/);
+  assert.match(text, /Prescreen passed: 0/);
+  assert.match(text, /ChatGPT requests avoided: 5/);
+  assert.match(text, /ChatGPT candidate: NONE/);
+  assert.match(text, /Source outcome: NO_ELIGIBLE_TEST_TENDER/);
+  assert.match(text, /Overall: PARTIAL_SUCCESS/);
+  assert.equal(summary.crawlMaxPerSource, 5);
+  assert.equal(summary.chatgptMaxPerSource, 1);
 });

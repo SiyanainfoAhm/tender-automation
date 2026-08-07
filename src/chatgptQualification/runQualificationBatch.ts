@@ -12,6 +12,10 @@ import { getTodayIsoDate } from "../dateUtils.js";
 import { downloadDirForToday, ensureDir } from "../fileUtils.js";
 import { Logger, safeErrorMessage } from "../logger.js";
 import {
+  chatgptSelectionLimit,
+  formatProductionLimit,
+} from "../productionLimit.js";
+import {
   loadQualificationManifest,
   upsertQualificationManifestEntry,
   writeQualificationManifest,
@@ -38,6 +42,7 @@ import {
   tryRecoverFromExistingRawResponse,
   type QualifyTenderOutcome,
 } from "./processTenderQualification.js";
+import { selectPassedForChatgpt } from "../prescreen/selectPassedForChatgpt.js";
 import {
   isValidSavedQualificationResult,
   migrateLegacyResultsInDateFolder,
@@ -84,7 +89,12 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
 
   logger.info("=== ChatGPT qualification Phase 1 batch started ===");
   logger.info(`DATE=${dateIso}`);
-  logger.info(`MAX_GPT_TENDERS=${config.maxGptTenders || "ALL"}`);
+  logger.info(
+    `CHATGPT_QUALIFICATION_LIMIT=${formatProductionLimit(config.maxGptTenders)}`,
+  );
+  logger.info(
+    `MAX_GPT_TENDERS=${formatProductionLimit(config.maxGptTenders)}`,
+  );
   logger.info(
     `CHATGPT_PROCESS_READY_ONLY=${config.chatgptProcessReadyOnly}`,
   );
@@ -149,9 +159,17 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
     selectedIds = [...readiness.readyTenderIds];
   }
 
-  if (config.maxGptTenders > 0) {
-    selectedIds = selectedIds.slice(0, config.maxGptTenders);
-  }
+  // Keep only pre-screen PASSED tenders before opening ChatGPT.
+  const passedSelection = await selectPassedForChatgpt({
+    sourcePortal: "TENDER247",
+    sourceTenderIds: selectedIds,
+    logger,
+    limit: chatgptSelectionLimit(config.maxGptTenders),
+  });
+  logger.info(
+    `CHATGPT_PRESCREEN_PASSED=${passedSelection.passedIds.length} skipped=${passedSelection.skipped.length}`,
+  );
+  selectedIds = passedSelection.passedIds;
 
   logger.info(
     `CHATGPT_READY_ONLY_BATCH expected=${readiness.expected} ready=${readiness.ready} selected=${selectedIds.length}`,

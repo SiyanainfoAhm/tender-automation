@@ -210,7 +210,7 @@ describe("Metric icon variants", () => {
         variant="go"
       />,
     );
-    const iconWrap = container.querySelector(".size-12.rounded-2xl");
+    const iconWrap = container.querySelector(".size-8.rounded-lg");
     expect(iconWrap?.className).toContain("bg-emerald-100");
     const value = container.querySelector(".kpi-value");
     expect(value?.className).not.toContain("bg-emerald");

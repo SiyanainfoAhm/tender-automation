@@ -1,4 +1,3 @@
-import { Card, CardContent } from "@/components/ui/card";
 import { formatIndianCurrency } from "@/lib/format";
 import { requireSession } from "@/server/auth/session";
 import {
@@ -52,27 +51,32 @@ export default async function AnalyticsPage({
   ];
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
       <div>
-        <h1 className="font-heading text-2xl font-bold text-text-primary">
-          Analytics
-        </h1>
-        <p className="mt-1 text-sm text-text-muted">
+        <h1 className="page-title">Analytics</h1>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
           Pipeline insights across sources, statuses and value bands.
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid grid-cols-1 items-stretch gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         {metrics.map((m) => (
-          <Card key={m.label}>
-            <CardContent className="p-5">
-              <p className="text-2xl font-bold text-text-primary">{m.value}</p>
-              <p className="text-sm text-text-muted">{m.label}</p>
-              {m.sub ? (
-                <p className="mt-1 text-xs text-text-subtle">{m.sub}</p>
-              ) : null}
-            </CardContent>
-          </Card>
+          <div
+            key={m.label}
+            className="flex h-full min-h-[104px] max-h-[112px] flex-col justify-center rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+          >
+            <p className="text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-50">
+              {m.value}
+            </p>
+            <p className="mt-0.5 text-sm font-medium text-slate-700 dark:text-slate-200">
+              {m.label}
+            </p>
+            {m.sub ? (
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                {m.sub}
+              </p>
+            ) : null}
+          </div>
         ))}
       </div>
 

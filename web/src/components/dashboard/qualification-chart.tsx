@@ -8,9 +8,10 @@ import {
   Tooltip,
 } from "recharts";
 
+import { ChartTooltipContent } from "@/components/charts/chart-tooltip";
+import { formatDecisionStatus } from "@/lib/analytics/category-display";
 import {
   DECISION_CHART_COLORS,
-  STATUS_DISPLAY_LABELS,
   TENDER_STATUSES,
   type TenderStatus,
 } from "@/lib/tender-status";
@@ -24,12 +25,8 @@ export function QualificationChart({ byStatus }: QualificationChartProps) {
     .filter(([, count]) => count > 0)
     .map(([status, count]) => ({
       status,
-      label:
-        status in STATUS_DISPLAY_LABELS
-          ? STATUS_DISPLAY_LABELS[status as TenderStatus]
-          : status === "NOT_EVALUATED"
-            ? "Not evaluated"
-            : status.replace(/_/g, " "),
+      label: formatDecisionStatus(status),
+      fullName: formatDecisionStatus(status),
       count,
       fill:
         DECISION_CHART_COLORS[status as TenderStatus | "NOT_EVALUATED"] ??
@@ -40,7 +37,7 @@ export function QualificationChart({ byStatus }: QualificationChartProps) {
 
   if (total === 0) {
     return (
-      <p className="py-12 text-center text-sm text-text-muted">
+      <p className="py-8 text-center text-sm text-text-muted">
         No decision data yet. Evaluated tenders will appear here.
       </p>
     );
@@ -48,7 +45,7 @@ export function QualificationChart({ byStatus }: QualificationChartProps) {
 
   if (total <= 5) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-3">
         {data.map((item) => (
           <div key={item.status} className="space-y-1.5">
             <div className="flex items-center justify-between text-sm">
@@ -57,7 +54,7 @@ export function QualificationChart({ byStatus }: QualificationChartProps) {
                 {item.count}
               </span>
             </div>
-            <div className="h-2.5 overflow-hidden rounded-full bg-surface-muted">
+            <div className="h-2 overflow-hidden rounded-full bg-surface-muted">
               <div
                 className="h-full rounded-full transition-all"
                 style={{
@@ -68,7 +65,7 @@ export function QualificationChart({ byStatus }: QualificationChartProps) {
             </div>
           </div>
         ))}
-        <p className="pt-2 text-center text-xs text-text-muted">
+        <p className="pt-1 text-center text-xs text-text-muted">
           {total} evaluated tender{total === 1 ? "" : "s"}
         </p>
       </div>
@@ -76,46 +73,45 @@ export function QualificationChart({ byStatus }: QualificationChartProps) {
   }
 
   return (
-    <div className="h-[280px]">
-      <ResponsiveContainer width="100%" height="100%">
-        <PieChart>
-          <Pie
-            data={data}
-            dataKey="count"
-            nameKey="label"
-            cx="50%"
-            cy="50%"
-            innerRadius={68}
-            outerRadius={96}
-            paddingAngle={2}
-          >
-            {data.map((entry) => (
-              <Cell key={entry.status} fill={entry.fill} />
-            ))}
-          </Pie>
-          <Tooltip
-            contentStyle={{
-              borderRadius: 10,
-              border: "1px solid var(--border)",
-              fontSize: 13,
-            }}
-          />
-          <text
-            x="50%"
-            y="50%"
-            textAnchor="middle"
-            dominantBaseline="middle"
-            className="fill-slate-950 font-heading text-2xl font-bold dark:fill-slate-50"
-          >
-            {total}
-          </text>
-        </PieChart>
-      </ResponsiveContainer>
-      <div className="mt-4 flex flex-wrap justify-center gap-3">
+    <div className="flex flex-col">
+      <div className="mx-auto h-[230px] w-full max-w-[260px]">
+        <ResponsiveContainer width="100%" height={230}>
+          <PieChart>
+            <Pie
+              data={data}
+              dataKey="count"
+              nameKey="label"
+              cx="50%"
+              cy="50%"
+              innerRadius={50}
+              outerRadius={74}
+              paddingAngle={2}
+            >
+              {data.map((entry) => (
+                <Cell key={entry.status} fill={entry.fill} />
+              ))}
+            </Pie>
+            <Tooltip content={<ChartTooltipContent />} />
+            <text
+              x="50%"
+              y="50%"
+              textAnchor="middle"
+              dominantBaseline="middle"
+              className="fill-slate-950 font-heading text-lg font-semibold dark:fill-slate-50"
+            >
+              {total}
+            </text>
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="mt-2 flex flex-wrap justify-center gap-x-4 gap-y-1.5 px-1 pb-1">
         {data.map((item) => (
-          <div key={item.status} className="flex items-center gap-1.5 text-xs">
+          <div
+            key={item.status}
+            className="flex items-center gap-1.5 text-[12px] leading-tight"
+          >
             <span
-              className="size-2.5 rounded-full"
+              className="size-2 shrink-0 rounded-full"
               style={{ backgroundColor: item.fill }}
             />
             <span className="text-text-secondary">{item.label}</span>

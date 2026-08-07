@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { AutomationError } from "../browserUtils.js";
 import { ensureDir } from "../fileUtils.js";
 import { Logger, safeErrorMessage } from "../logger.js";
+import { formatProductionLimit } from "../productionLimit.js";
 import {
   closeBidassistSession,
   ensureBidassistLoggedIn,
@@ -32,7 +33,10 @@ export async function runBidassistCrawlerMain(): Promise<void> {
   logger.info(`BIDASSIST_CATEGORY=${config.category}`);
   logger.info(`BIDASSIST_OPENING_DATE_FROM=${config.openingDateFrom}`);
   logger.info(`BIDASSIST_OPENING_DATE_TO=${config.openingDateTo ?? ""}`);
-  logger.info(`MAX_BIDASSIST_TENDERS=${limit === 0 ? "ALL" : limit}`);
+  logger.info(`BIDASSIST_LIMIT=${formatProductionLimit(limit)}`);
+  logger.info(
+    `MAX_BIDASSIST_TENDERS=${formatProductionLimit(limit)}`,
+  );
 
   const dayRoot = bidassistDayRoot(config);
   ensureDir(dayRoot);

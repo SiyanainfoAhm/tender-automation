@@ -26,9 +26,9 @@
   --accent-cyan: #0891b2;
   --ring: #2563eb33;
   --navy: #0f172a;
-  --sidebar-width: 252px;
-  --sidebar-collapsed-width: 76px;
-  --topbar-height: 64px;
+  --sidebar-width: 228px;
+  --sidebar-collapsed-width: 58px;
+  --topbar-height: 60px;
 
   --status-go: #059669;
   --status-go-bg: #ecfdf5;
@@ -157,15 +157,15 @@
   }
 
   .gutter {
-    @apply px-4 md:px-5 lg:px-7;
+    @apply px-4 lg:px-5 xl:px-6;
   }
 
   .page-title {
-    @apply font-heading text-[23px] font-bold tracking-tight text-text-primary sm:text-[26px] lg:text-[30px];
+    @apply font-heading text-2xl font-semibold tracking-tight text-text-primary;
   }
 
   .section-title {
-    @apply font-heading text-lg font-semibold text-text-primary;
+    @apply font-heading text-base font-semibold text-text-primary;
   }
 
   .kpi-value {

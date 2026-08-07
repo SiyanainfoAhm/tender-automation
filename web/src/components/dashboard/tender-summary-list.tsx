@@ -7,6 +7,7 @@ import { SourceBadge } from "@/components/status/source-badge";
 import type { TenderSource } from "@/components/tenders/tender-status-styles";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatDate, formatIndianCurrency } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 type TenderSummaryListProps = {
   title: string;
@@ -24,9 +25,11 @@ export function TenderSummaryList({
   emptyDescription,
 }: TenderSummaryListProps) {
   return (
-    <div className="flex h-full flex-col rounded-[14px] border border-border bg-surface shadow-sm">
-      <div className="flex items-center justify-between border-b border-border px-5 py-4">
-        <h3 className="section-title text-base">{title}</h3>
+    <div className="flex h-full min-h-0 flex-col rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+      <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3 dark:border-slate-800">
+        <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
+          {title}
+        </h3>
         <Link
           href={href}
           className="flex items-center gap-1 text-xs font-medium text-primary hover:underline"
@@ -40,7 +43,9 @@ export function TenderSummaryList({
             icon={Inbox}
             title={emptyTitle}
             description={emptyDescription}
-            className="border-0 bg-transparent py-6"
+            className={cn(
+              "min-h-[160px] max-h-[180px] justify-center border-0 bg-transparent py-5",
+            )}
           />
         ) : (
           <div className="space-y-2">
@@ -54,10 +59,10 @@ export function TenderSummaryList({
                 <Link
                   key={id}
                   href={`/tenders/${id}`}
-                  className="block rounded-[10px] border border-border bg-surface-secondary px-4 py-3 transition-colors hover:border-primary/30 hover:bg-primary-muted/30"
+                  className="block rounded-lg border border-slate-200 bg-slate-50/80 px-3.5 py-2.5 transition-colors hover:border-primary/30 hover:bg-primary-muted/30 dark:border-slate-800 dark:bg-slate-950/40"
                 >
                   <div className="flex items-start justify-between gap-3">
-                    <p className="line-clamp-2 text-sm font-medium text-text-primary">
+                    <p className="line-clamp-1 text-sm font-medium text-slate-900 dark:text-slate-50">
                       {String(item.title || "Untitled tender")}
                     </p>
                     {item.source_portal ? (
@@ -67,7 +72,7 @@ export function TenderSummaryList({
                       />
                     ) : null}
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-muted">
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
                     {status ? (
                       <StatusBadge status={status} size="sm" />
                     ) : (

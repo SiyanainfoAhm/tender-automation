@@ -13,9 +13,9 @@ const AnalyticsCharts = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         {Array.from({ length: 4 }).map((_, i) => (
-          <Skeleton key={i} className="h-[360px] rounded-[14px]" />
+          <Skeleton key={i} className="h-[300px] rounded-xl" />
         ))}
       </div>
     ),

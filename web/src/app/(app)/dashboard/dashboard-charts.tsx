@@ -3,9 +3,7 @@
 import {
   Bar,
   BarChart,
-  CartesianGrid,
   Cell,
-  Legend,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -14,48 +12,45 @@ import {
   YAxis,
 } from "recharts";
 
+import { ChartTooltipContent } from "@/components/charts/chart-tooltip";
+import { formatDecisionStatus } from "@/lib/analytics/category-display";
+import { DECISION_CHART_COLORS, type TenderStatus } from "@/lib/tender-status";
 import type { DashboardMetrics } from "@/server/repositories/analyticsRepository";
-
-const STATUS_COLORS: Record<string, string> = {
-  GO: "#059669",
-  CONDITIONAL_GO: "#d97706",
-  PARTNER_BID: "#0284c7",
-  VERIFY: "#ea580c",
-  NO_GO: "#dc2626",
-  NOT_EVALUATED: "#94a3b8",
-};
 
 const SOURCE_COLORS: Record<string, string> = {
   TENDER247: "#2563eb",
-  BIDASSIST: "#64748b",
+  BIDASSIST: "#0891b2",
 };
 
 type DashboardChartsProps = {
   metrics: DashboardMetrics;
 };
 
+/** Legacy combined charts — kept compact for any remaining callers. */
 export function DashboardCharts({ metrics }: DashboardChartsProps) {
   const statusData = Object.entries(metrics.byStatus)
     .filter(([, count]) => count > 0)
     .map(([status, count]) => ({
-      name: status.replace(/_/g, " "),
+      name: formatDecisionStatus(status),
+      fullName: formatDecisionStatus(status),
       value: count,
       key: status,
     }));
 
   const sourceData = Object.entries(metrics.bySource).map(([source, count]) => ({
     name: source,
+    fullName: source,
     count,
   }));
 
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
-      <div className="rounded-[14px] border border-border bg-surface p-6 shadow-sm">
-        <h3 className="font-heading mb-4 text-base font-semibold text-text-primary">
+    <div className="grid grid-cols-1 items-stretch gap-5 xl:grid-cols-2">
+      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <h3 className="mb-3 text-base font-semibold text-slate-900 dark:text-slate-50">
           Qualification status
         </h3>
-        <div className="h-[280px]">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="h-[210px]">
+          <ResponsiveContainer width="100%" height={210}>
             <PieChart>
               <Pie
                 data={statusData}
@@ -63,36 +58,41 @@ export function DashboardCharts({ metrics }: DashboardChartsProps) {
                 nameKey="name"
                 cx="50%"
                 cy="50%"
-                innerRadius={60}
-                outerRadius={100}
+                innerRadius={50}
+                outerRadius={74}
                 paddingAngle={2}
               >
                 {statusData.map((entry) => (
                   <Cell
                     key={entry.key}
-                    fill={STATUS_COLORS[entry.key] ?? "#94a3b8"}
+                    fill={
+                      DECISION_CHART_COLORS[
+                        entry.key as TenderStatus | "NOT_EVALUATED"
+                      ] ?? "#94a3b8"
+                    }
                   />
                 ))}
               </Pie>
-              <Tooltip />
-              <Legend />
+              <Tooltip content={<ChartTooltipContent />} />
             </PieChart>
           </ResponsiveContainer>
         </div>
       </div>
 
-      <div className="rounded-[14px] border border-border bg-surface p-6 shadow-sm">
-        <h3 className="font-heading mb-4 text-base font-semibold text-text-primary">
+      <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <h3 className="mb-3 text-base font-semibold text-slate-900 dark:text-slate-50">
           By source portal
         </h3>
-        <div className="h-[280px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={sourceData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-              <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} />
-              <Tooltip />
-              <Bar dataKey="count" radius={[6, 6, 0, 0]}>
+        <div className="h-[220px]">
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart
+              data={sourceData}
+              margin={{ top: 8, right: 8, left: 0, bottom: 4 }}
+            >
+              <XAxis dataKey="name" tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis allowDecimals={false} width={28} tick={{ fontSize: 11 }} axisLine={false} tickLine={false} />
+              <Tooltip content={<ChartTooltipContent />} />
+              <Bar dataKey="count" radius={[6, 6, 0, 0]} maxBarSize={56}>
                 {sourceData.map((entry) => (
                   <Cell
                     key={entry.name}

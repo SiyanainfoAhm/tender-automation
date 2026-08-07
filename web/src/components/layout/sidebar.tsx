@@ -71,13 +71,13 @@ export function AppSidebar({ user, collapsed, onToggle }: AppSidebarProps) {
       <aside
         className={cn(
           "flex h-full flex-col border-r border-border bg-surface transition-[width] duration-200",
-          collapsed ? "w-[76px]" : "w-[252px]",
+          collapsed ? "w-[58px]" : "w-[228px]",
         )}
       >
         <div
           className={cn(
-            "flex h-16 items-center border-b border-border px-4",
-            collapsed ? "justify-center" : "gap-3",
+            "flex h-[60px] items-center border-b border-border px-3",
+            collapsed ? "justify-center" : "gap-2.5",
           )}
         >
           <div className="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-br from-primary to-accent-indigo font-heading text-xs font-bold text-white">
@@ -85,7 +85,7 @@ export function AppSidebar({ user, collapsed, onToggle }: AppSidebarProps) {
           </div>
           {!collapsed ? (
             <div className="min-w-0">
-              <p className="truncate font-heading text-sm font-bold text-text-primary">
+              <p className="truncate font-heading text-sm font-semibold text-text-primary">
                 Siyana Tender Intelligence
               </p>
               <p className="truncate text-xs text-text-muted">Workspace</p>
@@ -93,7 +93,7 @@ export function AppSidebar({ user, collapsed, onToggle }: AppSidebarProps) {
           ) : null}
         </div>
 
-        <nav className="flex-1 space-y-1 p-3">
+        <nav className="flex-1 space-y-0.5 p-2">
           {visibleItems.map((item) => {
             const Icon = item.icon;
             const isActive =
@@ -103,7 +103,7 @@ export function AppSidebar({ user, collapsed, onToggle }: AppSidebarProps) {
               <Link
                 href={item.href}
                 className={cn(
-                  "flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-sm font-medium transition-colors",
+                  "flex h-11 items-center gap-2.5 rounded-[10px] px-2.5 text-sm font-medium transition-colors",
                   isActive
                     ? "bg-primary-muted text-primary"
                     : "text-text-secondary hover:bg-surface-secondary hover:text-text-primary",
@@ -128,14 +128,14 @@ export function AppSidebar({ user, collapsed, onToggle }: AppSidebarProps) {
           })}
         </nav>
 
-        <div className="border-t border-border p-3">
+        <div className="border-t border-border p-2">
           <div
             className={cn(
-              "mb-3 flex items-center gap-3 rounded-[10px] bg-surface-secondary p-2.5",
-              collapsed && "justify-center px-2",
+              "mb-2 flex items-center gap-2.5 rounded-[10px] bg-surface-secondary p-2",
+              collapsed && "justify-center px-1.5",
             )}
           >
-            <Avatar className="size-9">
+            <Avatar className="size-8">
               <AvatarFallback className="bg-primary-muted text-xs font-semibold text-primary">
                 {getInitials(user.fullName)}
               </AvatarFallback>
@@ -152,9 +152,12 @@ export function AppSidebar({ user, collapsed, onToggle }: AppSidebarProps) {
 
           <Button
             variant="ghost"
-            size={collapsed ? "icon" : "default"}
+            size={collapsed ? "icon" : "sm"}
             onClick={onToggle}
-            className={cn("w-full text-text-secondary", !collapsed && "justify-start")}
+            className={cn(
+              "h-10 w-full text-text-secondary",
+              !collapsed && "justify-start",
+            )}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
             <ChevronLeft

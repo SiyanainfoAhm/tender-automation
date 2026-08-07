@@ -61,7 +61,7 @@ export async function DashboardKpiSection() {
     ];
 
     return (
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+      <div className="grid items-stretch gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
         {kpis.map((kpi) => (
           <MetricCard key={kpi.label} {...kpi} />
         ))}

@@ -1,5 +1,6 @@
 /**
- * Combined Tender247 + BidAssist end-to-end test (sequential, limit 1 each).
+ * Combined Tender247 + BidAssist end-to-end test (sequential).
+ * Zero PASSED after successful crawl/prescreen is NO_ELIGIBLE_TEST_TENDER, not FAILED.
  */
 import "dotenv/config";
 import fs from "node:fs";
@@ -17,13 +18,16 @@ import {
 } from "../runDailyTenderPipeline.js";
 import {
   runSourceEndToEnd,
+  type SourceE2EOutcome,
+  type SourceEndToEndPrescreenStats,
   type SourceEndToEndResult,
 } from "./runSourceEndToEnd.js";
 
 export type CompleteE2EStatus =
   | "SUCCESS"
+  | "PARTIAL_SUCCESS"
+  | "NO_ELIGIBLE_TEST_TENDER"
   | "FAILED"
-  | "PARTIAL"
   | "RATE_LIMITED";
 
 export type CompleteE2ESourceSummary = {
@@ -40,6 +44,8 @@ export type CompleteE2ESourceSummary = {
   chatUrl: string | null;
   error: string | null;
   ran: boolean;
+  outcome: SourceE2EOutcome | null;
+  stats: SourceEndToEndPrescreenStats | null;
 };
 
 export type CompleteE2ESummary = {
@@ -48,18 +54,40 @@ export type CompleteE2ESummary = {
   startedAt: string;
   finishedAt: string;
   status: CompleteE2EStatus;
-  limitPerSource: number;
+  crawlMaxPerSource: number;
+  chatgptMaxPerSource: number;
+  requireChatgptPath: boolean;
   tender247: CompleteE2ESourceSummary;
   bidassist: CompleteE2ESourceSummary;
 };
 
 export type CompleteE2EOptions = {
-  limitPerSource: number;
+  crawlMaxPerSource: number;
+  chatgptMaxPerSource: number;
+  requireChatgptPath: boolean;
   date: string;
   continueOnSourceError: boolean;
 };
 
 const COMPLETE_E2E_LOCK_NAME = "complete-e2e-test.lock";
+
+function defaultCrawlMaxPerSource(): number {
+  const fromEnv = Number.parseInt(
+    process.env.E2E_CRAWL_CANDIDATES?.trim() || "0",
+    10,
+  );
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  return 5;
+}
+
+function defaultChatgptMaxPerSource(): number {
+  const fromEnv = Number.parseInt(
+    process.env.E2E_QUALIFY_LIMIT?.trim() || "0",
+    10,
+  );
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  return 1;
+}
 
 export function completeE2ELockPath(downloadRoot?: string): string {
   const root = downloadRoot
@@ -87,13 +115,29 @@ export function parseCompleteE2EArgs(argv: string[]): CompleteE2EOptions {
     }
   }
 
-  const limitRaw = values.get("limit-per-source");
-  const limitPerSource = limitRaw ? Number.parseInt(limitRaw, 10) : 1;
-  if (!Number.isFinite(limitPerSource) || limitPerSource < 1) {
-    throw new Error("--limit-per-source must be a positive integer");
+  const crawlRaw =
+    values.get("crawl-max-per-source") || values.get("crawl-max");
+  const chatgptRaw =
+    values.get("chatgpt-max-per-source") ||
+    values.get("qualify-limit") ||
+    // Legacy alias — treated as ChatGPT max, not crawl max.
+    values.get("limit-per-source");
+
+  const crawlMaxPerSource = crawlRaw
+    ? Number.parseInt(crawlRaw, 10)
+    : defaultCrawlMaxPerSource();
+  const chatgptMaxPerSource = chatgptRaw
+    ? Number.parseInt(chatgptRaw, 10)
+    : defaultChatgptMaxPerSource();
+
+  if (!Number.isFinite(crawlMaxPerSource) || crawlMaxPerSource < 1) {
+    throw new Error("--crawl-max-per-source must be a positive integer");
   }
-  if (limitPerSource !== 1) {
-    throw new Error("COMPLETE_E2E_TEST_LIMIT_MUST_BE_ONE");
+  if (!Number.isFinite(chatgptMaxPerSource) || chatgptMaxPerSource < 1) {
+    throw new Error("--chatgpt-max-per-source must be a positive integer");
+  }
+  if (chatgptMaxPerSource !== 1) {
+    throw new Error("COMPLETE_E2E_TEST_CHATGPT_MAX_MUST_BE_ONE");
   }
 
   const date = values.get("date")?.trim() || getTodayIsoDate();
@@ -103,7 +147,23 @@ export function parseCompleteE2EArgs(argv: string[]): CompleteE2EOptions {
   const continueOnSourceError =
     continueRaw === "true" || continueRaw === "1" || continueRaw === "yes";
 
-  return { limitPerSource, date, continueOnSourceError };
+  const requireRaw = (values.get("require-chatgpt-path") || "true")
+    .trim()
+    .toLowerCase();
+  const requireChatgptPath =
+    requireRaw === "true" || requireRaw === "1" || requireRaw === "yes";
+
+  return {
+    crawlMaxPerSource,
+    chatgptMaxPerSource,
+    requireChatgptPath,
+    date,
+    continueOnSourceError,
+  };
+}
+
+function isTechnicalFailure(result: SourceEndToEndResult): boolean {
+  return result.outcome === "FAILED";
 }
 
 /** Pure decision: whether BidAssist should run after Tender247. */
@@ -115,16 +175,23 @@ export function shouldRunBidassistAfterTender247(options: {
   if (!t247) {
     return { run: false, reason: "tender247_not_run" };
   }
-  if (t247.rateLimited) {
+  if (t247.rateLimited || t247.outcome === "RATE_LIMITED") {
     return { run: false, reason: "rate_limited" };
   }
-  if (t247.success) {
+  if (t247.outcome === "NO_ELIGIBLE_TEST_TENDER") {
+    return { run: true, reason: "tender247_no_eligible_test_tender" };
+  }
+  if (t247.outcome === "SUCCESS" || t247.success) {
     return { run: true, reason: "tender247_success" };
   }
   if (options.continueOnSourceError) {
     return { run: true, reason: "continue_on_source_error" };
   }
-  return { run: false, reason: "tender247_failed" };
+  if (isTechnicalFailure(t247)) {
+    return { run: false, reason: "tender247_failed" };
+  }
+  // Non-fatal outcomes always continue.
+  return { run: true, reason: "tender247_non_fatal" };
 }
 
 export function sourceResultToSummary(
@@ -146,6 +213,8 @@ export function sourceResultToSummary(
       chatUrl: null,
       error: null,
       ran: false,
+      outcome: null,
+      stats: null,
     };
   }
   return {
@@ -162,6 +231,8 @@ export function sourceResultToSummary(
     chatUrl: result.chatUrl,
     error: result.error,
     ran: true,
+    outcome: result.outcome,
+    stats: result.stats,
   };
 }
 
@@ -170,16 +241,40 @@ export function deriveCompleteStatus(options: {
   bidassist: SourceEndToEndResult | null;
   bidassistRan: boolean;
 }): CompleteE2EStatus {
-  if (options.tender247?.rateLimited || options.bidassist?.rateLimited) {
+  if (
+    options.tender247?.rateLimited ||
+    options.tender247?.outcome === "RATE_LIMITED" ||
+    options.bidassist?.rateLimited ||
+    options.bidassist?.outcome === "RATE_LIMITED"
+  ) {
     return "RATE_LIMITED";
   }
-  const tOk = Boolean(options.tender247?.success);
-  if (!options.bidassistRan) {
-    return tOk ? "PARTIAL" : "FAILED";
+
+  const tOutcome = options.tender247?.outcome ?? null;
+  const bOutcome = options.bidassistRan
+    ? (options.bidassist?.outcome ?? null)
+    : null;
+
+  if (tOutcome === "FAILED" || bOutcome === "FAILED") {
+    return "FAILED";
   }
-  const bOk = Boolean(options.bidassist?.success);
-  if (tOk && bOk) return "SUCCESS";
-  if (tOk || bOk) return "PARTIAL";
+
+  if (!options.bidassistRan) {
+    if (tOutcome === "SUCCESS") return "PARTIAL_SUCCESS";
+    if (tOutcome === "NO_ELIGIBLE_TEST_TENDER") return "NO_ELIGIBLE_TEST_TENDER";
+    return "FAILED";
+  }
+
+  const outcomes = [tOutcome, bOutcome].filter(Boolean) as SourceE2EOutcome[];
+  const allSuccess = outcomes.every((o) => o === "SUCCESS");
+  const allNoEligible = outcomes.every((o) => o === "NO_ELIGIBLE_TEST_TENDER");
+  const anySuccess = outcomes.some((o) => o === "SUCCESS");
+  const anyNoEligible = outcomes.some((o) => o === "NO_ELIGIBLE_TEST_TENDER");
+
+  if (allSuccess) return "SUCCESS";
+  if (allNoEligible) return "NO_ELIGIBLE_TEST_TENDER";
+  if (anySuccess && anyNoEligible) return "PARTIAL_SUCCESS";
+  if (anySuccess) return "PARTIAL_SUCCESS";
   return "FAILED";
 }
 
@@ -188,7 +283,9 @@ export function buildCompleteE2ESummary(options: {
   date: string;
   startedAt: string;
   finishedAt: string;
-  limitPerSource: number;
+  crawlMaxPerSource: number;
+  chatgptMaxPerSource: number;
+  requireChatgptPath: boolean;
   tender247: SourceEndToEndResult | null;
   bidassist: SourceEndToEndResult | null;
   bidassistRan: boolean;
@@ -203,7 +300,9 @@ export function buildCompleteE2ESummary(options: {
       bidassist: options.bidassist,
       bidassistRan: options.bidassistRan,
     }),
-    limitPerSource: options.limitPerSource,
+    crawlMaxPerSource: options.crawlMaxPerSource,
+    chatgptMaxPerSource: options.chatgptMaxPerSource,
+    requireChatgptPath: options.requireChatgptPath,
     tender247: sourceResultToSummary(options.tender247, true),
     bidassist: sourceResultToSummary(
       options.bidassist,
@@ -217,9 +316,40 @@ function yn(value: boolean | null | undefined): string {
   return value ? "YES" : "NO";
 }
 
-function crawlerStatus(summary: CompleteE2ESourceSummary): string {
-  if (!summary.ran) return "NOT_RUN";
-  return summary.sourceTenderId ? "SUCCESS" : "FAILED";
+function formatSourceBlock(
+  title: string,
+  summary: CompleteE2ESourceSummary,
+  extras: string[] = [],
+): string[] {
+  const stats = summary.stats;
+  const lines = [
+    title,
+    `Candidates crawled: ${stats?.candidatesCrawled ?? (summary.ran ? 0 : "N/A")}`,
+    `Metadata verified: ${stats?.metadataVerifiedCount ?? (summary.metadataVerified ? 1 : 0)}`,
+    `Prescreen rejected: ${stats?.prescreenRejected ?? 0}`,
+    `Manual review: ${stats?.prescreenManualReview ?? 0}`,
+    `Prescreen passed: ${stats?.prescreenPassed ?? 0}`,
+    `ChatGPT requests avoided: ${stats?.chatgptRequestsAvoided ?? 0}`,
+    `ChatGPT candidate: ${summary.sourceTenderId || "NONE"}`,
+    `Source outcome: ${summary.outcome || (summary.ran ? "UNKNOWN" : "NOT_RUN")}`,
+  ];
+  if (summary.ran && summary.outcome === "SUCCESS") {
+    lines.push(
+      `Attachments confirmed: ${yn(summary.attachmentsConfirmed)}`,
+      `Prompt submitted: ${yn(summary.promptSubmitted)}`,
+      `Response completed: ${yn(summary.responseCompleted)}`,
+      `Qualification: ${summary.qualificationStatus || "NONE"}`,
+      `Qualification in Supabase: ${yn(summary.qualificationVerified)}`,
+      `Status synchronized: ${yn(summary.statusSyncVerified)}`,
+    );
+  }
+  for (const extra of extras) {
+    lines.push(extra);
+  }
+  if (summary.error && summary.outcome === "FAILED") {
+    lines.push(`Error: ${summary.error}`);
+  }
+  return lines;
 }
 
 export function formatCompleteE2EConsoleSummary(
@@ -232,30 +362,21 @@ export function formatCompleteE2EConsoleSummary(
     "==================================",
     "Complete End-to-End Test",
     `Date: ${summary.date}`,
-    `Limit per source: ${summary.limitPerSource}`,
+    `Crawl max per source: ${summary.crawlMaxPerSource}`,
+    `ChatGPT max per source: ${summary.chatgptMaxPerSource}`,
+    `Require ChatGPT path: ${summary.requireChatgptPath ? "YES" : "NO"}`,
     "",
-    "Tender247",
-    `ID: ${t.sourceTenderId || "NONE"}`,
-    `Crawler: ${crawlerStatus(t)}`,
-    `Metadata in Supabase: ${yn(t.metadataVerified)}`,
-    `Attachments confirmed: ${yn(t.attachmentsConfirmed)}`,
-    `Prompt submitted: ${yn(t.promptSubmitted)}`,
-    `Response completed: ${yn(t.responseCompleted)}`,
-    `Qualification: ${t.qualificationStatus || "NONE"}`,
-    `Qualification in Supabase: ${yn(t.qualificationVerified)}`,
-    `Status synchronized: ${yn(t.statusSyncVerified)}`,
+    ...formatSourceBlock("Tender247", t),
     "",
-    "BidAssist",
-    `ID: ${b.ran ? b.sourceTenderId || "NONE" : "NONE"}`,
-    `Crawler: ${crawlerStatus(b)}`,
-    `Metadata in Supabase: ${yn(b.metadataVerified)}`,
-    `Documents enriched: ${yn(b.documentsEnriched)}`,
-    `Attachments confirmed: ${yn(b.attachmentsConfirmed)}`,
-    `Prompt submitted: ${yn(b.promptSubmitted)}`,
-    `Response completed: ${yn(b.responseCompleted)}`,
-    `Qualification: ${b.qualificationStatus || "NONE"}`,
-    `Qualification in Supabase: ${yn(b.qualificationVerified)}`,
-    `Status synchronized: ${yn(b.statusSyncVerified)}`,
+    ...formatSourceBlock("BidAssist", b, [
+      ...(b.ran
+        ? [
+            `Documents enriched: ${yn(b.documentsEnriched)}`,
+            "PRESCREEN_EMD_RULE_APPLIED=false",
+            "PRESCREEN_IT_RELEVANCE_RULE_APPLIED=false",
+          ]
+        : []),
+    ]),
     "",
     `Overall: ${summary.status}`,
     `Summary: ${summaryPath}`,
@@ -278,7 +399,9 @@ export function writeCompleteE2ESummary(
     startedAt: summary.startedAt,
     finishedAt: summary.finishedAt,
     status: summary.status,
-    limitPerSource: summary.limitPerSource,
+    crawlMaxPerSource: summary.crawlMaxPerSource,
+    chatgptMaxPerSource: summary.chatgptMaxPerSource,
+    requireChatgptPath: summary.requireChatgptPath,
     tender247: {
       sourceTenderId: summary.tender247.sourceTenderId,
       folderId: summary.tender247.folderId,
@@ -291,12 +414,15 @@ export function writeCompleteE2ESummary(
       statusSyncVerified: summary.tender247.statusSyncVerified,
       chatUrl: summary.tender247.chatUrl,
       error: summary.tender247.error,
+      outcome: summary.tender247.outcome,
+      stats: summary.tender247.stats,
     },
     bidassist: summary.bidassist.ran
       ? {
           sourceTenderId: summary.bidassist.sourceTenderId,
           folderId: summary.bidassist.folderId,
           metadataVerified: summary.bidassist.metadataVerified,
+          documentsEnriched: summary.bidassist.documentsEnriched,
           attachmentsConfirmed: summary.bidassist.attachmentsConfirmed,
           promptSubmitted: summary.bidassist.promptSubmitted,
           responseCompleted: summary.bidassist.responseCompleted,
@@ -305,6 +431,8 @@ export function writeCompleteE2ESummary(
           statusSyncVerified: summary.bidassist.statusSyncVerified,
           chatUrl: summary.bidassist.chatUrl,
           error: summary.bidassist.error,
+          outcome: summary.bidassist.outcome,
+          stats: summary.bidassist.stats,
         }
       : {
           sourceTenderId: null,
@@ -318,10 +446,20 @@ export function writeCompleteE2ESummary(
           statusSyncVerified: null,
           chatUrl: null,
           error: null,
+          outcome: null,
+          stats: null,
         },
   };
   fs.writeFileSync(outPath, JSON.stringify(serializable, null, 2), "utf8");
   return outPath;
+}
+
+function exitCodeForStatus(status: CompleteE2EStatus): number {
+  if (status === "SUCCESS") return 0;
+  if (status === "PARTIAL_SUCCESS") return 0;
+  if (status === "NO_ELIGIBLE_TEST_TENDER") return 0;
+  if (status === "RATE_LIMITED") return 2;
+  return 1;
 }
 
 export async function runCompleteEndToEndTest(
@@ -380,14 +518,25 @@ export async function runCompleteEndToEndTest(
     console.log("COMPLETE_E2E_TEST_START");
     logger.info("COMPLETE_E2E_TEST_START");
     console.log(`COMPLETE_E2E_DATE=${options.date}`);
-    console.log(`COMPLETE_E2E_LIMIT_PER_SOURCE=${options.limitPerSource}`);
+    console.log(`COMPLETE_E2E_CRAWL_MAX_PER_SOURCE=${options.crawlMaxPerSource}`);
+    console.log(
+      `COMPLETE_E2E_CHATGPT_MAX_PER_SOURCE=${options.chatgptMaxPerSource}`,
+    );
+    console.log(
+      `COMPLETE_E2E_REQUIRE_CHATGPT_PATH=${options.requireChatgptPath ? "true" : "false"}`,
+    );
+    console.log(`E2E_QUALIFY_LIMIT=${options.chatgptMaxPerSource}`);
+    console.log(`E2E_CRAWL_CANDIDATES=${options.crawlMaxPerSource}`);
 
     console.log("TENDER247_E2E_START");
     tender247 = await runSource({
       source: "tender247",
-      limit: options.limitPerSource,
+      limit: options.chatgptMaxPerSource,
+      crawlMax: options.crawlMaxPerSource,
+      requireChatgptPath: options.requireChatgptPath,
       date: options.date,
     });
+    console.log(`TENDER247_E2E_OUTCOME=${tender247.outcome}`);
     console.log("TENDER247_E2E_COMPLETE");
 
     const decision = shouldRunBidassistAfterTender247({
@@ -411,9 +560,12 @@ export async function runCompleteEndToEndTest(
       bidassistRan = true;
       bidassist = await runSource({
         source: "bidassist",
-        limit: options.limitPerSource,
+        limit: options.chatgptMaxPerSource,
+        crawlMax: options.crawlMaxPerSource,
+        requireChatgptPath: options.requireChatgptPath,
         date: options.date,
       });
+      console.log(`BIDASSIST_E2E_OUTCOME=${bidassist.outcome}`);
       console.log("BIDASSIST_E2E_COMPLETE");
     }
 
@@ -423,7 +575,9 @@ export async function runCompleteEndToEndTest(
       date: options.date,
       startedAt,
       finishedAt,
-      limitPerSource: options.limitPerSource,
+      crawlMaxPerSource: options.crawlMaxPerSource,
+      chatgptMaxPerSource: options.chatgptMaxPerSource,
+      requireChatgptPath: options.requireChatgptPath,
       tender247,
       bidassist,
       bidassistRan,
@@ -438,17 +592,17 @@ export async function runCompleteEndToEndTest(
       console.log("COMPLETE_E2E_TEST_SUCCESS");
     } else if (summary.status === "RATE_LIMITED") {
       console.log("COMPLETE_E2E_TEST_RATE_LIMITED");
+    } else if (summary.status === "NO_ELIGIBLE_TEST_TENDER") {
+      console.log("COMPLETE_E2E_TEST_NO_ELIGIBLE_TEST_TENDER");
+    } else if (summary.status === "PARTIAL_SUCCESS") {
+      console.log("COMPLETE_E2E_TEST_PARTIAL_SUCCESS");
     } else {
-      console.log(`COMPLETE_E2E_TEST_${summary.status}`);
+      console.log("COMPLETE_E2E_TEST_FAILED");
     }
 
     console.log(formatCompleteE2EConsoleSummary(summary, summaryPath));
 
-    let exitCode = 1;
-    if (summary.status === "SUCCESS") exitCode = 0;
-    else if (summary.status === "RATE_LIMITED") exitCode = 2;
-    else exitCode = 1;
-
+    let exitCode = exitCodeForStatus(summary.status);
     if (interrupted) exitCode = 130;
     return { summary, summaryPath, exitCode };
   } finally {

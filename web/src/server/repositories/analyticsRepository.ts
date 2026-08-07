@@ -6,6 +6,10 @@ import {
   aggregateStatusCounts,
 } from "@/lib/analytics/aggregates";
 import {
+  buildTopCategories,
+  resolveAnalyticsCategory,
+} from "@/lib/analytics/category-display";
+import {
   ACTIONABLE_STATUSES,
   QUALIFIED_STATUSES,
 } from "@/lib/tender-status";
@@ -294,7 +298,7 @@ export async function getAnalytics(options: {
   byDay: { date: string; TENDER247: number; BIDASSIST: number }[];
   byStatus: { status: string; count: number }[];
   bySource: { source: string; count: number }[];
-  byCategory: { name: string; count: number }[];
+  byCategory: { name: string; fullName?: string; count: number }[];
   byState: { name: string; count: number }[];
   byOrganization: { name: string; count: number }[];
   valueBands: { band: string; count: number }[];
@@ -303,7 +307,7 @@ export async function getAnalytics(options: {
   let query = supabase
     .from("agenttender_web_tender_list")
     .select(
-      "id, source_portal, effective_qualification_status, category, state, organization, tender_value, emd_amount, crawled_at, first_seen_at, manual_review_required, closing_date",
+      "id, source_portal, effective_qualification_status, category, state, organization, tender_value, emd_amount, crawled_at, first_seen_at, manual_review_required, closing_date, title",
     )
     .limit(5000);
 
@@ -330,7 +334,7 @@ export async function getAnalytics(options: {
   const rows = assertSupabaseOk(await query, {
     queryName: "getAnalytics",
     selectedColumns:
-      "id, source_portal, effective_qualification_status, category, state, organization, tender_value, emd_amount, crawled_at, first_seen_at, manual_review_required, closing_date",
+      "id, source_portal, effective_qualification_status, category, state, organization, tender_value, emd_amount, crawled_at, first_seen_at, manual_review_required, closing_date, title",
     filters: options,
   });
 
@@ -380,9 +384,17 @@ export async function getAnalytics(options: {
       row.source_portal,
       (sourceMap.get(row.source_portal) || 0) + 1,
     );
-    if (row.category) {
-      categoryMap.set(row.category, (categoryMap.get(row.category) || 0) + 1);
-    }
+
+    const categoryLabel = resolveAnalyticsCategory({
+      source_portal: row.source_portal,
+      category: row.category,
+      title: row.title,
+    });
+    categoryMap.set(
+      categoryLabel,
+      (categoryMap.get(categoryLabel) || 0) + 1,
+    );
+
     if (row.state) {
       stateMap.set(row.state, (stateMap.get(row.state) || 0) + 1);
     }
@@ -419,15 +431,17 @@ export async function getAnalytics(options: {
       .sort((a, b) => a[0].localeCompare(b[0]))
       .slice(-30)
       .map(([date, v]) => ({ date, ...v })),
-    byStatus: [...statusMap.entries()].map(([status, count]) => ({
-      status,
-      count,
-    })),
+    byStatus: [...statusMap.entries()]
+      .filter(([, count]) => count > 0)
+      .map(([status, count]) => ({
+        status,
+        count,
+      })),
     bySource: [...sourceMap.entries()].map(([source, count]) => ({
       source,
       count,
     })),
-    byCategory: top(categoryMap),
+    byCategory: buildTopCategories(categoryMap, 6),
     byState: top(stateMap),
     byOrganization: top(orgMap),
     valueBands: Object.entries(bands).map(([band, count]) => ({

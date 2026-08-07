@@ -9,7 +9,7 @@ export async function DashboardChartsSection() {
   try {
     const metrics = await getDashboardMetrics();
     return (
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid items-stretch gap-4 grid-cols-1 xl:grid-cols-2">
         <DashboardSection title="Decision distribution">
           <QualificationChart byStatus={metrics.byStatus} />
         </DashboardSection>

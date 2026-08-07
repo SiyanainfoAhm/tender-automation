@@ -15,6 +15,11 @@ import {
 import { formatDurationMs, getTodayIsoDate } from "./dateUtils.js";
 import { downloadDirForToday, ensureDir } from "./fileUtils.js";
 import { Logger, safeErrorMessage } from "./logger.js";
+import {
+  applyProductionLimitCap,
+  formatProductionLimit,
+  isUnlimitedProductionLimit,
+} from "./productionLimit.js";
 import { collectTodayTenderLinks } from "./tenderDetails/collectTenderLinks.js";
 import {
   loginToTender247,
@@ -204,7 +209,8 @@ async function runCrawl(args: {
   logger.info(`HEADLESS=${config.headless}`);
   logger.info(`TENDER_DETAIL_CONCURRENCY=${config.tenderDetailConcurrency}`);
   logger.info(`TENDER_DETAIL_MAX_RETRIES=${config.tenderDetailMaxRetries}`);
-  logger.info(`MAX_TENDERS=${config.maxTenders}`);
+  logger.info(`MAX_TENDERS=${formatProductionLimit(config.maxTenders)}`);
+  logger.info(`TENDER247_LIMIT=${formatProductionLimit(config.maxTenders)}`);
   logger.info(`DOWNLOAD_ALL_DOCUMENTS_TOO=${config.downloadAllDocumentsToo}`);
 
   if (npmCommand === "crawl:tender247:one" && !requestedT247Id) {
@@ -347,19 +353,23 @@ function applyFilters(
   config: AppConfig,
   logger: Logger,
 ): TenderListItem[] {
-  let filtered = items;
-
   const max =
-    cliOptions.maxTenders && Number.isFinite(cliOptions.maxTenders)
+    cliOptions.maxTenders !== undefined &&
+    Number.isFinite(cliOptions.maxTenders)
       ? cliOptions.maxTenders
       : config.maxTenders;
 
-  if (max > 0 && filtered.length > max) {
-    logger.info(`Applying MAX_TENDERS=${max}`);
-    filtered = filtered.slice(0, max);
+  if (isUnlimitedProductionLimit(max)) {
+    logger.info(`TENDER247_LIMIT=UNLIMITED`);
+    return items;
   }
 
-  return filtered;
+  if (items.length > max) {
+    logger.info(`Applying MAX_TENDERS=${max}`);
+    return applyProductionLimitCap(items, max);
+  }
+
+  return items;
 }
 
 async function main(): Promise<void> {

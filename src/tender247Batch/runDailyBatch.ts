@@ -21,6 +21,10 @@ import { getTodayIsoDate } from "../dateUtils.js";
 import { downloadDirForToday, ensureDir } from "../fileUtils.js";
 import { Logger, safeErrorMessage } from "../logger.js";
 import {
+  formatProductionLimit,
+  resolveProductionLimit,
+} from "../productionLimit.js";
+import {
   loginToTender247,
   persistAuthState,
 } from "../tenderDetails/ensureTender247LoggedIn.js";
@@ -134,7 +138,10 @@ async function runDailyBatch(): Promise<void> {
   try {
     logger.info("=== Tender247 daily batch started (live-list) ===");
     logger.info(`DATE=${dateIso}`);
-    logger.info(`MAX_TENDERS=${config.maxTenders || "ALL"}`);
+    logger.info(`TENDER247_LIMIT=${formatProductionLimit(config.maxTenders)}`);
+    logger.info(
+      `MAX_TENDERS=${formatProductionLimit(config.maxTenders)}`,
+    );
     logger.info(`TENDER_DELAY_MS=${config.tenderDelayMs}`);
     logger.info(`PER_TENDER_TIMEOUT_MS=${config.perTenderTimeoutMs}`);
     logger.info(
@@ -208,7 +215,7 @@ async function runDailyBatch(): Promise<void> {
     }
     saveManifest(manifestPath, manifest);
 
-    const maxTenders = config.maxTenders > 0 ? config.maxTenders : Infinity;
+    const maxTenders = resolveProductionLimit(config.maxTenders);
     let emptyScrolls = 0;
     let lastKnownVisibleIds = new Set<string>();
     let batchIncomplete = false;

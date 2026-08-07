@@ -65,12 +65,12 @@ export function Topbar({
   return (
     <header
       className={cn(
-        "flex h-16 items-center gap-4 border-b border-border bg-surface px-4 lg:px-7",
+        "flex h-[60px] items-center gap-3 border-b border-border bg-surface px-4 lg:px-5 xl:px-6",
         className,
       )}
     >
       <form
-        className="relative hidden flex-1 md:block md:max-w-md lg:max-w-xl"
+        className="relative hidden flex-1 md:block md:max-w-md lg:max-w-lg"
         onSubmit={(event) => {
           event.preventDefault();
           onSearchSubmit?.(searchValue);
@@ -82,18 +82,18 @@ export function Topbar({
           placeholder="Search tenders, authorities, locations…"
           value={searchValue}
           onChange={(event) => onSearchChange?.(event.target.value)}
-          className="h-11 pl-9"
+          className="h-10 pl-9 text-sm"
         />
         <kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-muted lg:inline">
           ⌘K
         </kbd>
       </form>
 
-      <div className="ml-auto flex items-center gap-1">
+      <div className="ml-auto flex items-center gap-0.5">
         <Button
           variant="ghost"
           size="icon"
-          className="text-text-muted"
+          className="size-9 text-text-muted"
           aria-label="Toggle theme"
           onClick={onThemeToggle}
         >
@@ -107,7 +107,7 @@ export function Topbar({
         <Button
           variant="ghost"
           size="icon"
-          className="text-text-muted"
+          className="size-9 text-text-muted"
           aria-label="Notifications"
         >
           <Bell className="size-[18px]" />
@@ -117,14 +117,14 @@ export function Topbar({
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
-              className="h-11 gap-2 rounded-[10px] px-2 hover:bg-surface-secondary"
+              className="h-10 gap-2 rounded-[10px] px-1.5 hover:bg-surface-secondary"
             >
               <Avatar className="size-8">
                 <AvatarFallback className="bg-primary-muted text-xs font-semibold text-primary">
                   {getInitials(user.fullName)}
                 </AvatarFallback>
               </Avatar>
-              <span className="hidden max-w-[140px] truncate text-sm font-medium text-text-primary lg:inline">
+              <span className="hidden max-w-[120px] truncate text-sm font-medium text-text-primary lg:inline">
                 {user.fullName}
               </span>
             </Button>
@@ -132,8 +132,8 @@ export function Topbar({
           <DropdownMenuContent align="end" className="w-[260px]">
             <DropdownMenuLabel className="px-3 py-3 font-normal">
               <div className="flex items-start gap-3">
-                <Avatar className="size-10">
-                  <AvatarFallback className="bg-primary-muted text-sm font-semibold text-primary">
+                <Avatar className="size-9">
+                  <AvatarFallback className="bg-primary-muted text-xs font-semibold text-primary">
                     {getInitials(user.fullName)}
                   </AvatarFallback>
                 </Avatar>

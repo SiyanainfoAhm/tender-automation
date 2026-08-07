@@ -41,7 +41,7 @@ export default async function DashboardPage() {
   const session = await requireSession();
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <PageHeader
         title={`Good ${getGreeting()}, ${firstName(session.user.fullName)}`}
         subtitle="Here is today's tender intelligence overview."
