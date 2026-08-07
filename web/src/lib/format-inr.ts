@@ -23,8 +23,64 @@ function stripNoiseText(raw: string): string {
   return raw.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Recover when DB stored a bare coefficient (e.g. 25) but source text still
+ * carries Lac/Cr units (e.g. "₹25 Lac"). Display must never show "₹25" for lakhs.
+ */
+export function recoverInrAmountFromText(
+  amount: number | null | undefined,
+  text: string | null | undefined,
+): number | null {
+  if (!isFiniteNumber(amount)) return null;
+  if (!text) return amount;
+
+  const source = stripNoiseText(text);
+  const lower = source.toLowerCase();
+
+  const crore = source.match(
+    /(-?\d{1,3}(?:,\d{2,3})*(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*(?:crores?|crs?|cr)\b/i,
+  );
+  if (crore) {
+    const coeff = Number(String(crore[1]).replace(/,/g, ""));
+    if (Number.isFinite(coeff)) {
+      const full = Math.round(coeff * CRORE * 100) / 100;
+      if (amount === coeff || (amount < 1_000 && full >= CRORE / 10)) {
+        return full;
+      }
+    }
+  }
+
+  const lakh = source.match(
+    /(-?\d{1,3}(?:,\d{2,3})*(?:\.\d+)?|-?\d+(?:\.\d+)?)\s*(?:lakhs?|lacs?|l(?![a-z]))\b/i,
+  );
+  if (lakh) {
+    const coeff = Number(String(lakh[1]).replace(/,/g, ""));
+    if (Number.isFinite(coeff)) {
+      const full = Math.round(coeff * LAKH * 100) / 100;
+      if (amount === coeff || (amount < 1_000 && full >= LAKH / 10)) {
+        return full;
+      }
+    }
+  }
+
+  // Tiny stored amount + prose without currency units → treat as non-numeric.
+  if (
+    amount > 0 &&
+    amount < 1_000 &&
+    !/(?:₹|\brs\.?\b|\binr\b|\blakhs?\b|\blacs?\b|\bcrores?\b|\bcr\b)/i.test(
+      lower,
+    )
+  ) {
+    return null;
+  }
+
+  return amount;
+}
+
 /** Title-case source phrases for consistent display. */
-export function normalizeMoneySourceText(raw: string | null | undefined): string | null {
+export function normalizeMoneySourceText(
+  raw: string | null | undefined,
+): string | null {
   if (raw == null) return null;
   const trimmed = stripNoiseText(raw);
   if (!trimmed) return null;
@@ -99,12 +155,12 @@ export function formatTenderValue(options: {
   amount?: number | null;
   text?: string | null;
 }): MoneyDisplay {
-  const amount = options.amount;
-  if (isFiniteNumber(amount)) {
-    const label = formatInrCompactAmount(amount)!;
+  const recovered = recoverInrAmountFromText(options.amount, options.text);
+  if (isFiniteNumber(recovered)) {
+    const label = formatInrCompactAmount(recovered)!;
     return {
       label,
-      tooltip: formatInrFullAmount(amount),
+      tooltip: formatInrFullAmount(recovered),
       isNumeric: true,
     };
   }
@@ -138,12 +194,12 @@ export function formatEmdAmount(options: {
   amount?: number | null;
   text?: string | null;
 }): MoneyDisplay {
-  const amount = options.amount;
-  if (isFiniteNumber(amount)) {
-    const label = formatInrCompactAmount(amount)!;
+  const recovered = recoverInrAmountFromText(options.amount, options.text);
+  if (isFiniteNumber(recovered)) {
+    const label = formatInrCompactAmount(recovered)!;
     return {
       label,
-      tooltip: formatInrFullAmount(amount),
+      tooltip: formatInrFullAmount(recovered),
       isNumeric: true,
     };
   }

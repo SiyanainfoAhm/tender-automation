@@ -316,8 +316,10 @@ async function readCardInfo(
   const sourcePortalMatch = text.match(
     /\b(GEM|GeM|Maha\s*Tender|CPP|eProcure|NIC)\b/i,
   );
+  // Capture full Indian units (Lac/Lacs/Lakh/Cr/Crore). Do not truncate
+  // "Lac" to bare "L" — that previously stored coefficients like 25 INR.
   const amountMatch = text.match(
-    /(?:₹|INR|Rs\.?)\s*[\d,]+(?:\.\d+)?(?:\s*(?:Cr|Lakh|Lakhs|L))?/i,
+    /(?:₹|INR|Rs\.?)\s*[\d,]+(?:\.\d+)?(?:\s*(?:Crores?|Crs?|Cr|Lakhs?|Lacs?|Lac|L(?![a-z])))?/i,
   );
   const dateMatch = text.match(CLOSING_DATE_PATTERN);
 

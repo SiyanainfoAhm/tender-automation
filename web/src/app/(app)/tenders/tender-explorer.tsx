@@ -10,22 +10,21 @@ import {
   type LegacyColumnDef,
 } from "@tanstack/react-table/legacy";
 import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   ChevronLeft,
   ChevronRight,
   Download,
-  ExternalLink,
   FileSearch,
-  SlidersHorizontal,
+  X,
 } from "lucide-react";
 
 import { StatusBadge } from "@/components/status/qualification-badge";
 import type { QualificationStatus } from "@/components/status/qualification-badge";
 import { SourceBadge } from "@/components/status/source-badge";
 import type { TenderSource } from "@/components/tenders/tender-status-styles";
-import {
-  MoneyCell,
-  TruncateWithTooltip,
-} from "@/components/tenders/money-cell";
+import { MoneyCell } from "@/components/tenders/money-cell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -38,21 +37,28 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate } from "@/lib/format";
 import { formatEmdAmount, formatTenderValue } from "@/lib/format-inr";
+import {
+  nextSortState,
+  normalizeSortKeyForUi,
+  type TableSortKey,
+} from "@/lib/tender-sort";
 import { cn } from "@/lib/utils";
 import type { TenderFilters } from "@/lib/validations";
 import type { WebTenderListRow } from "@/server/repositories/tenderRepository";
-
-type Facets = {
-  states: string[];
-  categories: string[];
-  organizations: string[];
-};
 
 type TenderExplorerProps = {
   rows: WebTenderListRow[];
   total: number;
   filters: TenderFilters;
-  facets: Facets;
+};
+
+const COL_WIDTH: Record<string, string> = {
+  title: "w-[50%]",
+  source_portal: "w-[9%]",
+  status: "w-[11%]",
+  closing_date: "w-[10%]",
+  tender_value: "w-[10%]",
+  emd_amount: "w-[10%]",
 };
 
 function buildSearchParams(
@@ -61,7 +67,12 @@ function buildSearchParams(
 ): string {
   const params = new URLSearchParams(current.toString());
   for (const [key, value] of Object.entries(updates)) {
-    if (value === undefined || value === "" || value === "ALL") {
+    if (
+      value === undefined ||
+      value === "" ||
+      value === "ALL" ||
+      value === "__empty"
+    ) {
       params.delete(key);
     } else {
       params.set(key, value);
@@ -74,28 +85,65 @@ function buildSearchParams(
   return qs ? `?${qs}` : "";
 }
 
-const COL_WIDTH: Record<string, string> = {
-  title: "w-[36%]",
-  source_portal: "w-[8%]",
-  status: "w-[8%]",
-  organization: "w-[14%]",
-  state: "w-[10%]",
-  closing_date: "w-[8%]",
-  tender_value: "w-[8%]",
-  emd_amount: "w-[8%]",
-};
+function hasActiveFilters(filters: TenderFilters): boolean {
+  return Boolean(
+    filters.q?.trim() ||
+      (filters.source && filters.source !== "ALL") ||
+      (filters.status && filters.status !== "ALL") ||
+      filters.quickDate ||
+      (filters.closingPreset && filters.closingPreset !== "ALL") ||
+      (filters.valueBand && filters.valueBand !== "ALL") ||
+      (filters.emdBand && filters.emdBand !== "ALL"),
+  );
+}
 
-export function TenderExplorer({
-  rows,
-  total,
-  filters,
-  facets,
-}: TenderExplorerProps) {
+function SortHeader({
+  label,
+  sortKey,
+  activeKey,
+  direction,
+  align = "left",
+  onSort,
+}: {
+  label: string;
+  sortKey: TableSortKey;
+  activeKey: TableSortKey | null;
+  direction: "asc" | "desc";
+  align?: "left" | "right";
+  onSort: (key: TableSortKey) => void;
+}) {
+  const active = activeKey === sortKey;
+  const Icon = !active
+    ? ArrowUpDown
+    : direction === "asc"
+      ? ArrowUp
+      : ArrowDown;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(sortKey)}
+      className={cn(
+        "inline-flex w-full items-center gap-1 text-xs font-semibold uppercase tracking-wide transition-colors",
+        align === "right" ? "justify-end" : "justify-start",
+        active ? "text-primary" : "text-text-muted hover:text-text-primary",
+      )}
+    >
+      {label}
+      <Icon className="size-3.5 shrink-0 opacity-80" aria-hidden />
+    </button>
+  );
+}
+
+export function TenderExplorer({ rows, total, filters }: TenderExplorerProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const [showFilters, setShowFilters] = React.useState(false);
   const [localQ, setLocalQ] = React.useState(filters.q ?? "");
+
+  React.useEffect(() => {
+    setLocalQ(filters.q ?? "");
+  }, [filters.q]);
 
   const navigate = React.useCallback(
     (updates: Record<string, string | undefined>) => {
@@ -105,13 +153,76 @@ export function TenderExplorer({
     [pathname, router, searchParams],
   );
 
+  // Debounced search → URL
+  React.useEffect(() => {
+    const handle = window.setTimeout(() => {
+      const next = localQ.trim();
+      const current = (filters.q ?? "").trim();
+      if (next === current) return;
+      navigate({ q: next || undefined, page: "1" });
+    }, 400);
+    return () => window.clearTimeout(handle);
+  }, [localQ, filters.q, navigate]);
+
   const totalPages = Math.max(1, Math.ceil(total / filters.pageSize));
+  const uiSortKey = normalizeSortKeyForUi(filters.sortBy);
+  const filtersActive = hasActiveFilters(filters);
+
+  const closingPreset =
+    filters.closingPreset && filters.closingPreset !== "ALL"
+      ? filters.closingPreset
+      : filters.quickDate &&
+          [
+            "closing_today",
+            "closing_3",
+            "closing_7",
+            "closing_30",
+            "overdue",
+          ].includes(filters.quickDate)
+        ? filters.quickDate
+        : "ALL";
+
+  const onSort = React.useCallback(
+    (clicked: TableSortKey) => {
+      const next = nextSortState({
+        currentSortBy: filters.sortBy,
+        currentSortDir: filters.sortDir,
+        clicked,
+      });
+      if ("reset" in next) {
+        navigate({
+          sort: undefined,
+          direction: undefined,
+          sortBy: undefined,
+          sortDir: undefined,
+          page: "1",
+        });
+        return;
+      }
+      navigate({
+        sort: next.sortBy,
+        direction: next.sortDir,
+        sortBy: undefined,
+        sortDir: undefined,
+        page: "1",
+      });
+    },
+    [filters.sortBy, filters.sortDir, navigate],
+  );
 
   const columns = React.useMemo<LegacyColumnDef<WebTenderListRow>[]>(
     () => [
       {
         accessorKey: "title",
-        header: "Title",
+        header: () => (
+          <SortHeader
+            label="Title"
+            sortKey="title"
+            activeKey={uiSortKey}
+            direction={filters.sortDir}
+            onSort={onSort}
+          />
+        ),
         cell: ({ row }) => (
           <Link
             href={`/tenders/${row.original.id}`}
@@ -125,7 +236,15 @@ export function TenderExplorer({
       },
       {
         accessorKey: "source_portal",
-        header: "Source",
+        header: () => (
+          <SortHeader
+            label="Source"
+            sortKey="source"
+            activeKey={uiSortKey}
+            direction={filters.sortDir}
+            onSort={onSort}
+          />
+        ),
         cell: ({ row }) => (
           <SourceBadge
             source={row.original.source_portal as TenderSource}
@@ -135,7 +254,15 @@ export function TenderExplorer({
       },
       {
         id: "status",
-        header: "Status",
+        header: () => (
+          <SortHeader
+            label="Status"
+            sortKey="status"
+            activeKey={uiSortKey}
+            direction={filters.sortDir}
+            onSort={onSort}
+          />
+        ),
         cell: ({ row }) => {
           const status = row.original.effective_qualification_status;
           if (!status) {
@@ -149,20 +276,16 @@ export function TenderExplorer({
         },
       },
       {
-        accessorKey: "organization",
-        header: "Organization",
-        cell: ({ row }) => (
-          <TruncateWithTooltip text={row.original.organization} />
-        ),
-      },
-      {
-        accessorKey: "state",
-        header: "State",
-        cell: ({ row }) => <TruncateWithTooltip text={row.original.state} />,
-      },
-      {
         accessorKey: "closing_date",
-        header: "Closing",
+        header: () => (
+          <SortHeader
+            label="Closing"
+            sortKey="closing"
+            activeKey={uiSortKey}
+            direction={filters.sortDir}
+            onSort={onSort}
+          />
+        ),
         cell: ({ row }) => (
           <span className="whitespace-nowrap text-sm text-text-secondary">
             {formatDate(row.original.closing_date)}
@@ -171,7 +294,16 @@ export function TenderExplorer({
       },
       {
         accessorKey: "tender_value",
-        header: () => <span className="block w-full text-right">Value</span>,
+        header: () => (
+          <SortHeader
+            label="Value"
+            sortKey="value"
+            activeKey={uiSortKey}
+            direction={filters.sortDir}
+            align="right"
+            onSort={onSort}
+          />
+        ),
         cell: ({ row }) => (
           <MoneyCell
             display={formatTenderValue({
@@ -183,7 +315,16 @@ export function TenderExplorer({
       },
       {
         accessorKey: "emd_amount",
-        header: () => <span className="block w-full text-right">EMD</span>,
+        header: () => (
+          <SortHeader
+            label="EMD"
+            sortKey="emd"
+            activeKey={uiSortKey}
+            direction={filters.sortDir}
+            align="right"
+            onSort={onSort}
+          />
+        ),
         cell: ({ row }) => (
           <MoneyCell
             display={formatEmdAmount({
@@ -194,7 +335,7 @@ export function TenderExplorer({
         ),
       },
     ],
-    [],
+    [filters.sortDir, onSort, uiSortKey],
   );
 
   const table = useLegacyTable({
@@ -210,8 +351,6 @@ export function TenderExplorer({
       "Title",
       "Source",
       "Status",
-      "Organization",
-      "State",
       "Closing",
       "Value",
       "EMD",
@@ -230,18 +369,15 @@ export function TenderExplorer({
         `"${(r.title || "").replace(/"/g, '""')}"`,
         r.source_portal,
         r.effective_qualification_status ?? "NOT_EVALUATED",
-        `"${(r.organization || "").replace(/"/g, '""')}"`,
-        r.state ?? "",
         r.closing_date ?? "",
         `"${value.replace(/"/g, '""')}"`,
         `"${emd.replace(/"/g, '""')}"`,
         r.source_tender_id,
       ].join(",");
     });
-    const blob = new Blob(
-      [[headers.join(","), ...csvRows].join("\n")],
-      { type: "text/csv;charset=utf-8;" },
-    );
+    const blob = new Blob([[headers.join(","), ...csvRows].join("\n")], {
+      type: "text/csv;charset=utf-8;",
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -250,148 +386,152 @@ export function TenderExplorer({
     URL.revokeObjectURL(url);
   }
 
+  function clearFilters() {
+    setLocalQ("");
+    router.push(pathname);
+  }
+
   return (
     <div className="space-y-4">
-      {/* Filter bar */}
-      <div className="rounded-[14px] border border-border bg-surface p-4 shadow-sm">
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-          <form
-            className="flex flex-1 gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              navigate({ q: localQ || undefined });
-            }}
+      {/* Always-visible Tender247-style filter bar */}
+      <div className="rounded-xl border border-border bg-surface p-3 shadow-sm">
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            placeholder="Search tender title or ID..."
+            value={localQ}
+            onChange={(e) => setLocalQ(e.target.value)}
+            className="h-10 min-w-[200px] flex-1 basis-[220px]"
+          />
+
+          <FilterSelect
+            label="Source"
+            active={filters.source !== "ALL"}
+            value={filters.source}
+            options={[
+              { value: "ALL", label: "All sources" },
+              { value: "TENDER247", label: "Tender247" },
+              { value: "BIDASSIST", label: "BidAssist" },
+            ]}
+            onChange={(v) =>
+              navigate({
+                source:
+                  v === "ALL"
+                    ? undefined
+                    : v === "TENDER247"
+                      ? "tender247"
+                      : "bidassist",
+                page: "1",
+              })
+            }
+          />
+
+          <FilterSelect
+            label="Status"
+            active={filters.status !== "ALL"}
+            value={filters.status}
+            options={[
+              { value: "ALL", label: "All statuses" },
+              { value: "GO", label: "GO" },
+              { value: "CONDITIONAL_GO", label: "Conditional GO" },
+              { value: "PARTNER_BID", label: "Partner Bid" },
+              { value: "VERIFY", label: "Verify" },
+              { value: "NO_GO", label: "No-Go" },
+              { value: "NOT_EVALUATED", label: "Not evaluated" },
+            ]}
+            onChange={(v) => navigate({ status: v, page: "1" })}
+          />
+
+          <FilterSelect
+            label="Closing"
+            active={closingPreset !== "ALL"}
+            value={closingPreset}
+            options={[
+              { value: "ALL", label: "All closing dates" },
+              { value: "closing_today", label: "Today" },
+              { value: "closing_3", label: "Next 3 days" },
+              { value: "closing_7", label: "Next 7 days" },
+              { value: "closing_30", label: "Next 30 days" },
+              { value: "overdue", label: "Expired" },
+            ]}
+            onChange={(v) =>
+              navigate({
+                closingPreset: v === "ALL" ? undefined : v,
+                quickDate: v === "ALL" ? undefined : v,
+                page: "1",
+              })
+            }
+          />
+
+          <FilterSelect
+            label="Value"
+            active={filters.valueBand !== "ALL"}
+            value={filters.valueBand ?? "ALL"}
+            options={[
+              { value: "ALL", label: "All values" },
+              { value: "LT_10L", label: "< ₹10 L" },
+              { value: "L10_1CR", label: "₹10 L – ₹1 Cr" },
+              { value: "CR1_5", label: "₹1 Cr – ₹5 Cr" },
+              { value: "GT_5CR", label: "> ₹5 Cr" },
+              { value: "NOT_DISCLOSED", label: "Not disclosed" },
+            ]}
+            onChange={(v) =>
+              navigate({
+                valueBand: v === "ALL" ? undefined : v,
+                page: "1",
+              })
+            }
+          />
+
+          <FilterSelect
+            label="EMD"
+            active={filters.emdBand !== "ALL"}
+            value={filters.emdBand ?? "ALL"}
+            options={[
+              { value: "ALL", label: "All EMD" },
+              { value: "NOT_REQUIRED", label: "No EMD / Not required" },
+              { value: "LT_1L", label: "< ₹1 L" },
+              { value: "L1_5", label: "₹1 L – ₹5 L" },
+              { value: "L5_15", label: "₹5 L – ₹15 L" },
+              { value: "GT_15L", label: "> ₹15 L" },
+              { value: "NOT_DISCLOSED", label: "Not disclosed" },
+            ]}
+            onChange={(v) =>
+              navigate({
+                emdBand: v === "ALL" ? undefined : v,
+                page: "1",
+              })
+            }
+          />
+
+          {filtersActive ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-10 gap-1.5"
+              onClick={clearFilters}
+            >
+              <X className="size-3.5" />
+              Clear filters
+            </Button>
+          ) : null}
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="ml-auto h-10 gap-1.5"
+            onClick={exportCsv}
+            disabled={rows.length === 0}
           >
-            <Input
-              placeholder="Search tenders, authorities, locations…"
-              value={localQ}
-              onChange={(e) => setLocalQ(e.target.value)}
-              className="flex-1"
-            />
-            <Button type="submit" variant="secondary">
-              Search
-            </Button>
-          </form>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setShowFilters((v) => !v)}
-              className="gap-1.5"
-            >
-              <SlidersHorizontal className="size-4" />
-              Filters
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={exportCsv}
-              disabled={rows.length === 0}
-              className="gap-1.5"
-            >
-              <Download className="size-4" />
-              Export CSV
-            </Button>
-          </div>
+            <Download className="size-4" />
+            Export
+          </Button>
         </div>
-
-        {showFilters ? (
-          <div className="mt-4 grid gap-3 border-t border-border pt-4 sm:grid-cols-2 lg:grid-cols-4">
-            <FilterSelect
-              label="Source"
-              value={filters.source}
-              options={[
-                { value: "ALL", label: "All sources" },
-                { value: "TENDER247", label: "Tender247" },
-                { value: "BIDASSIST", label: "BidAssist" },
-              ]}
-              onChange={(v) => navigate({ source: v })}
-            />
-            <FilterSelect
-              label="Status"
-              value={filters.status}
-              options={[
-                { value: "ALL", label: "All statuses" },
-                { value: "GO", label: "Go" },
-                { value: "CONDITIONAL_GO", label: "Conditional Go" },
-                { value: "PARTNER_BID", label: "Partner Bid" },
-                { value: "VERIFY", label: "Verify" },
-                { value: "NO_GO", label: "No Go" },
-                { value: "NOT_EVALUATED", label: "Not evaluated" },
-              ]}
-              onChange={(v) => navigate({ status: v })}
-            />
-            <FilterSelect
-              label="Quick date"
-              value={filters.quickDate ?? ""}
-              options={[
-                { value: "", label: "Any time" },
-                { value: "today", label: "Crawled today" },
-                { value: "last_7", label: "Last 7 days" },
-                { value: "last_30", label: "Last 30 days" },
-                { value: "closing_today", label: "Closing today" },
-                { value: "closing_3", label: "Closing in 3 days" },
-                { value: "closing_7", label: "Closing in 7 days" },
-                { value: "overdue", label: "Overdue" },
-              ]}
-              onChange={(v) =>
-                navigate({ quickDate: v === "__empty" ? undefined : v || undefined })
-              }
-            />
-            <FilterSelect
-              label="State"
-              value={filters.state ?? ""}
-              options={[
-                { value: "", label: "All states" },
-                ...facets.states.map((s) => ({ value: s, label: s })),
-              ]}
-              onChange={(v) =>
-                navigate({ state: v === "__empty" ? undefined : v || undefined })
-              }
-            />
-            <FilterSelect
-              label="Manual review"
-              value={filters.manualReview ?? ""}
-              options={[
-                { value: "", label: "Any" },
-                { value: "true", label: "Required" },
-                { value: "false", label: "Not required" },
-              ]}
-              onChange={(v) =>
-                navigate({
-                  manualReview: v === "__empty" ? undefined : v || undefined,
-                })
-              }
-            />
-            <FilterSelect
-              label="Sort by"
-              value={filters.sortBy}
-              options={[
-                { value: "updated_at", label: "Updated" },
-                { value: "closing_date", label: "Closing date" },
-                { value: "tender_value", label: "Value" },
-                { value: "emd_amount", label: "EMD" },
-                { value: "crawled_at", label: "Crawled" },
-                { value: "confidence", label: "Confidence" },
-              ]}
-              onChange={(v) => navigate({ sortBy: v })}
-            />
-            <FilterSelect
-              label="Sort direction"
-              value={filters.sortDir}
-              options={[
-                { value: "desc", label: "Descending" },
-                { value: "asc", label: "Ascending" },
-              ]}
-              onChange={(v) => navigate({ sortDir: v })}
-            />
-          </div>
-        ) : null}
       </div>
 
-      {/* Results summary */}
-      <div className="flex items-center justify-between text-sm text-text-muted">
+      {/* Count + page size */}
+      <div className="flex items-center justify-between gap-3 text-sm text-text-muted">
         <span>
           {total.toLocaleString("en-IN")} tender{total !== 1 ? "s" : ""} found
         </span>
@@ -412,9 +552,8 @@ export function TenderExplorer({
         </Select>
       </div>
 
-      {/* Empty state */}
       {rows.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-[14px] border border-dashed border-border bg-surface py-16 text-center">
+        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-surface py-16 text-center">
           <FileSearch className="mb-4 size-12 text-text-subtle" />
           <h3 className="font-heading text-lg font-semibold text-text-primary">
             No tenders found
@@ -422,23 +561,23 @@ export function TenderExplorer({
           <p className="mt-2 max-w-sm text-sm text-text-muted">
             Try adjusting your filters or search query to find matching tenders.
           </p>
-          <Button
-            variant="outline"
-            className="mt-4"
-            onClick={() => router.push("/tenders")}
-          >
-            Clear filters
-          </Button>
+          {filtersActive ? (
+            <Button variant="outline" className="mt-4" onClick={clearFilters}>
+              Clear filters
+            </Button>
+          ) : null}
         </div>
       ) : (
         <>
-          {/* Desktop / tablet table — keep VALUE + EMD; scroll horizontally below xl */}
-          <div className="hidden overflow-hidden rounded-[14px] border border-border bg-surface shadow-sm md:block">
+          <div className="hidden overflow-hidden rounded-xl border border-border bg-surface shadow-sm md:block">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[960px] table-fixed text-sm xl:min-w-0">
+              <table className="w-full min-w-[880px] table-fixed text-sm xl:min-w-0">
                 <thead>
                   {table.getHeaderGroups().map((hg) => (
-                    <tr key={hg.id} className="border-b border-border bg-surface-muted">
+                    <tr
+                      key={hg.id}
+                      className="border-b border-border bg-surface-muted"
+                    >
                       {hg.headers.map((header) => {
                         const key = header.column.id;
                         const isMoney =
@@ -447,7 +586,7 @@ export function TenderExplorer({
                           <th
                             key={header.id}
                             className={cn(
-                              "px-3 py-3 text-xs font-semibold uppercase tracking-wide text-text-muted",
+                              "px-3 py-2.5",
                               COL_WIDTH[key] ?? "",
                               isMoney ? "text-right" : "text-left",
                             )}
@@ -468,7 +607,7 @@ export function TenderExplorer({
                   {table.getRowModel().rows.map((row) => (
                     <tr
                       key={row.id}
-                      className="min-h-[64px] border-b border-border last:border-0 hover:bg-surface-muted/50"
+                      className="border-b border-border last:border-0 hover:bg-surface-muted/50"
                     >
                       {row.getVisibleCells().map((cell) => {
                         const key = cell.column.id;
@@ -512,7 +651,7 @@ export function TenderExplorer({
                 <Link
                   key={row.id}
                   href={`/tenders/${row.id}`}
-                  className="block rounded-[14px] border border-border bg-surface p-4 shadow-sm transition-colors hover:bg-surface-muted/50"
+                  className="block rounded-xl border border-border bg-surface p-4 shadow-sm transition-colors hover:bg-surface-muted/50"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <h3 className="line-clamp-2 whitespace-normal break-words font-medium leading-5 text-text-primary">
@@ -525,9 +664,14 @@ export function TenderExplorer({
                   </div>
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     {status ? (
-                      <StatusBadge status={status as QualificationStatus} size="sm" />
+                      <StatusBadge
+                        status={status as QualificationStatus}
+                        size="sm"
+                      />
                     ) : (
-                      <span className="text-xs text-text-muted">Not evaluated</span>
+                      <span className="text-xs text-text-muted">
+                        Not evaluated
+                      </span>
                     )}
                     {row.closing_date ? (
                       <span className="text-xs text-text-muted">
@@ -535,39 +679,20 @@ export function TenderExplorer({
                       </span>
                     ) : null}
                   </div>
-                  <div className="mt-2 space-y-1 text-xs text-text-muted">
-                    {row.organization ? (
-                      <p className="truncate">
-                        <span className="text-text-subtle">Organization · </span>
-                        {row.organization}
-                      </p>
-                    ) : null}
-                    {row.state ? (
-                      <p className="truncate">
-                        <span className="text-text-subtle">State · </span>
-                        {row.state}
-                      </p>
-                    ) : null}
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1 text-sm text-text-secondary">
-                      <span>
-                        <span className="text-text-subtle">Value · </span>
-                        <span className="font-medium text-text-primary">
-                          {value.label}
-                        </span>
+                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-text-secondary">
+                    <span>
+                      <span className="text-text-subtle">Value · </span>
+                      <span className="font-medium text-text-primary">
+                        {value.label}
                       </span>
-                      <span>
-                        <span className="text-text-subtle">EMD · </span>
-                        <span className="font-medium text-text-primary">
-                          {emd.label}
-                        </span>
-                      </span>
-                    </div>
-                  </div>
-                  {row.source_url ? (
-                    <span className="mt-2 inline-flex items-center gap-1 text-xs text-primary">
-                      View source <ExternalLink className="size-3" />
                     </span>
-                  ) : null}
+                    <span>
+                      <span className="text-text-subtle">EMD · </span>
+                      <span className="font-medium text-text-primary">
+                        {emd.label}
+                      </span>
+                    </span>
+                  </div>
                 </Link>
               );
             })}
@@ -575,7 +700,6 @@ export function TenderExplorer({
         </>
       )}
 
-      {/* Pagination */}
       {totalPages > 1 ? (
         <div className="flex items-center justify-between">
           <p className="text-sm text-text-muted">
@@ -618,22 +742,30 @@ function FilterSelect({
   value,
   options,
   onChange,
+  active,
 }: {
   label: string;
   value: string;
   options: { value: string; label: string }[];
   onChange: (value: string) => void;
+  active?: boolean;
 }) {
   return (
-    <div className="space-y-1">
-      <label className="text-xs font-medium text-text-muted">{label}</label>
-      <Select value={value || ""} onValueChange={onChange}>
-        <SelectTrigger className="h-9">
-          <SelectValue placeholder={`Select ${label.toLowerCase()}`} />
+    <div className="min-w-[140px] flex-1 basis-[140px] sm:flex-none">
+      <Select value={value || "ALL"} onValueChange={onChange}>
+        <SelectTrigger
+          aria-label={label}
+          className={cn(
+            "h-10 text-sm",
+            active &&
+              "border-primary/50 bg-primary-muted/40 ring-1 ring-primary/30",
+          )}
+        >
+          <SelectValue placeholder={label} />
         </SelectTrigger>
         <SelectContent>
           {options.map((opt) => (
-            <SelectItem key={opt.value || "__empty"} value={opt.value || "__empty"}>
+            <SelectItem key={opt.value} value={opt.value}>
               {opt.label}
             </SelectItem>
           ))}
@@ -646,11 +778,11 @@ function FilterSelect({
 export function TenderExplorerSkeleton() {
   return (
     <div className="space-y-4">
-      <Skeleton className="h-20 w-full rounded-[14px]" />
-      <Skeleton className="hidden h-[480px] w-full rounded-[14px] md:block" />
+      <Skeleton className="h-[72px] w-full rounded-xl" />
+      <Skeleton className="hidden h-[480px] w-full rounded-xl md:block" />
       <div className="space-y-3 md:hidden">
         {Array.from({ length: 5 }).map((_, i) => (
-          <Skeleton key={i} className="h-32 w-full rounded-[14px]" />
+          <Skeleton key={i} className="h-32 w-full rounded-xl" />
         ))}
       </div>
     </div>

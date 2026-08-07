@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  DEFAULT_TENDER_SORT_BY,
+  DEFAULT_TENDER_SORT_DIR,
+  isWhitelistedSortKey,
+} from "@/lib/tender-sort";
 
 export const USER_ROLES = [
   "ADMIN",
@@ -83,53 +88,118 @@ export const DATE_TYPES = [
   "first_seen_at",
 ] as const;
 
-export const tenderFiltersSchema = z.object({
-  q: z.string().optional(),
-  source: z.enum(["TENDER247", "BIDASSIST", "ALL"]).optional().default("ALL"),
-  status: z
-    .union([
-      z.enum(QUALIFICATION_STATUSES),
-      z.literal("NOT_EVALUATED"),
-      z.literal("ALL"),
-    ])
-    .optional()
-    .default("ALL"),
-  downloadStatus: z.string().optional(),
-  dateType: z.enum(DATE_TYPES).optional().default("closing_date"),
-  from: z.string().optional(),
-  to: z.string().optional(),
-  quickDate: z
-    .enum([
-      "today",
-      "last_7",
-      "last_30",
-      "closing_today",
-      "closing_3",
-      "closing_7",
-      "overdue",
-    ])
-    .optional(),
-  state: z.string().optional(),
-  city: z.string().optional(),
-  category: z.string().optional(),
-  organization: z.string().optional(),
-  authority: z.string().optional(),
-  tenderValueMin: z.coerce.number().optional(),
-  tenderValueMax: z.coerce.number().optional(),
-  emdMin: z.coerce.number().optional(),
-  emdMax: z.coerce.number().optional(),
-  manualReview: z.enum(["true", "false"]).optional(),
-  qualified: z.enum(["true", "false"]).optional(),
-  page: z.coerce.number().int().min(1).optional().default(1),
-  pageSize: z.coerce
-    .number()
-    .int()
-    .refine((n) => [25, 50, 100].includes(n), "Invalid page size")
-    .optional()
-    .default(25),
-  sortBy: z.string().optional().default("updated_at"),
-  sortDir: z.enum(["asc", "desc"]).optional().default("desc"),
-});
+export const VALUE_BANDS = [
+  "ALL",
+  "LT_10L",
+  "L10_1CR",
+  "CR1_5",
+  "GT_5CR",
+  "NOT_DISCLOSED",
+] as const;
+
+export const EMD_BANDS = [
+  "ALL",
+  "NOT_REQUIRED",
+  "LT_1L",
+  "L1_5",
+  "L5_15",
+  "GT_15L",
+  "NOT_DISCLOSED",
+] as const;
+
+export const CLOSING_PRESETS = [
+  "ALL",
+  "closing_today",
+  "closing_3",
+  "closing_7",
+  "closing_30",
+  "overdue",
+] as const;
+
+function normalizeSource(raw: string | undefined): "TENDER247" | "BIDASSIST" | "ALL" {
+  if (!raw || raw === "ALL" || raw.toLowerCase() === "all") return "ALL";
+  const upper = raw.toUpperCase().replace(/-/g, "");
+  if (upper === "TENDER247") return "TENDER247";
+  if (upper === "BIDASSIST") return "BIDASSIST";
+  return "ALL";
+}
+
+export const tenderFiltersSchema = z
+  .object({
+    q: z.string().optional(),
+    source: z.string().optional().default("ALL"),
+    status: z
+      .union([
+        z.enum(QUALIFICATION_STATUSES),
+        z.literal("NOT_EVALUATED"),
+        z.literal("ALL"),
+      ])
+      .optional()
+      .default("ALL"),
+    downloadStatus: z.string().optional(),
+    dateType: z.enum(DATE_TYPES).optional().default("closing_date"),
+    from: z.string().optional(),
+    to: z.string().optional(),
+    quickDate: z
+      .enum([
+        "today",
+        "last_7",
+        "last_30",
+        "closing_today",
+        "closing_3",
+        "closing_7",
+        "closing_30",
+        "overdue",
+      ])
+      .optional(),
+    closingPreset: z.enum(CLOSING_PRESETS).optional().default("ALL"),
+    valueBand: z.enum(VALUE_BANDS).optional().default("ALL"),
+    emdBand: z.enum(EMD_BANDS).optional().default("ALL"),
+    state: z.string().optional(),
+    city: z.string().optional(),
+    category: z.string().optional(),
+    organization: z.string().optional(),
+    authority: z.string().optional(),
+    tenderValueMin: z.coerce.number().optional(),
+    tenderValueMax: z.coerce.number().optional(),
+    emdMin: z.coerce.number().optional(),
+    emdMax: z.coerce.number().optional(),
+    manualReview: z.enum(["true", "false"]).optional(),
+    qualified: z.enum(["true", "false"]).optional(),
+    page: z.coerce.number().int().min(1).optional().default(1),
+    pageSize: z.coerce
+      .number()
+      .int()
+      .refine((n) => [25, 50, 100].includes(n), "Invalid page size")
+      .optional()
+      .default(25),
+    /** Preferred URL param: sort=value */
+    sort: z.string().optional(),
+    /** Preferred URL param: direction=asc|desc */
+    direction: z.enum(["asc", "desc"]).optional(),
+    /** Legacy aliases */
+    sortBy: z.string().optional(),
+    sortDir: z.enum(["asc", "desc"]).optional(),
+  })
+  .transform((data) => {
+    const requested = data.sort || data.sortBy;
+    const sortBy = isWhitelistedSortKey(requested)
+      ? (requested as string)
+      : DEFAULT_TENDER_SORT_BY;
+    const sortDir =
+      data.direction || data.sortDir || DEFAULT_TENDER_SORT_DIR;
+    let quickDate = data.quickDate;
+    if (!quickDate && data.closingPreset && data.closingPreset !== "ALL") {
+      quickDate = data.closingPreset;
+    }
+    return {
+      ...data,
+      source: normalizeSource(data.source),
+      sortBy,
+      sortDir,
+      quickDate,
+    };
+  });
 
 export type TenderFilters = z.infer<typeof tenderFiltersSchema>;
 

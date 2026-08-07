@@ -69,6 +69,25 @@ export interface QualificationResult {
   evidenceFiles?: string[];
   /** Preserved when migrating from old status enums */
   legacyStatus?: string;
+  /**
+   * Optional structured financial facts from the model.
+   * Never scrape free-text reason/verdict into tender_value/emd_amount.
+   * Used only as null-only high-confidence enrichment with document evidence.
+   */
+  financialFacts?: {
+    tenderValue?: {
+      amountInr?: number | null;
+      sourceText?: string | null;
+      evidenceFile?: string | null;
+      confidence?: string | null;
+    } | null;
+    emd?: {
+      amountInr?: number | null;
+      sourceText?: string | null;
+      evidenceFile?: string | null;
+      confidence?: string | null;
+    } | null;
+  };
 }
 
 export interface GptReadinessReport {

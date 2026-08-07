@@ -8,6 +8,7 @@ import { PDFParse } from "pdf-parse";
 import {
   isMeaninglessCurrencyText,
   parseIndianCurrencyAmount,
+  resolveCanonicalInrAmount,
 } from "./parseIndianCurrencyAmount.js";
 import { parseBidAssistDate } from "./parseBidAssistDate.js";
 
@@ -690,8 +691,11 @@ export async function extractBidAssistDocumentMetadata(input: {
     (result as Record<string, unknown>)[field] = entry.value;
   }
 
-  // Derive numeric amounts from selected text
-  const valueParsed = parseIndianCurrencyAmount(result.tenderValueText);
+  // Derive numeric amounts from selected text (unit-aware; log for audit).
+  const valueParsed = parseIndianCurrencyAmount(result.tenderValueText, {
+    log: true,
+    sourceField: "tenderValueText",
+  });
   if (valueParsed.valid && valueParsed.amount != null) {
     result.tenderValue = valueParsed.amount;
     result.tenderValueText = valueParsed.normalizedText;
@@ -708,7 +712,10 @@ export async function extractBidAssistDocumentMetadata(input: {
     result.tenderValue = null;
   }
 
-  const emdParsed = parseIndianCurrencyAmount(result.emdText);
+  const emdParsed = parseIndianCurrencyAmount(result.emdText, {
+    log: true,
+    sourceField: "emdText",
+  });
   if (emdParsed.valid && emdParsed.amount != null) {
     result.emdAmount = emdParsed.amount;
     result.emdText = emdParsed.normalizedText;
@@ -718,6 +725,7 @@ export async function extractBidAssistDocumentMetadata(input: {
   } else if (result.emdText && /not\s+required|required\s+no/i.test(result.emdText)) {
     result.emdAmount = null;
   } else if (!emdParsed.valid) {
+    // Keep meaningful descriptive EMD text; do not invent a numeric amount.
     result.emdAmount = null;
   }
 
@@ -769,37 +777,60 @@ export function mergeBidAssistMetadata(input: {
     typeof listingMetadata.tenderAmountText === "string"
       ? listingMetadata.tenderAmountText
       : null;
-  const listingAmount = parseIndianCurrencyAmount(listingAmountText);
+  const listingAmount = parseIndianCurrencyAmount(listingAmountText, {
+    log: true,
+    sourceField: "listing.tenderAmountText",
+  });
 
-  const tenderValue = isValidExplicitValue(doc.tenderValue)
-    ? doc.tenderValue
-    : listingAmount.valid
-      ? listingAmount.amount
-      : null;
+  // Re-resolve document amounts so truncated Lac→L coefficients are repaired.
+  const docValueResolved = resolveCanonicalInrAmount({
+    amount: typeof doc.tenderValue === "number" ? doc.tenderValue : null,
+    text: doc.tenderValueText,
+  });
+  const listingResolved = resolveCanonicalInrAmount({
+    amount: listingAmount.valid ? listingAmount.amount : null,
+    text: listingAmountText,
+  });
+
+  // Precedence: reliable document numeric → listing numeric → placeholder text → null.
+  // Never replace a valid number with "Refer Documents".
+  const tenderValue =
+    docValueResolved.amount != null
+      ? docValueResolved.amount
+      : listingResolved.amount;
 
   let tenderValueText: string | null = null;
-  if (isValidExplicitValue(doc.tenderValueText) && !isPlaceholderText(String(doc.tenderValueText))) {
-    tenderValueText = String(doc.tenderValueText);
-  } else if (listingAmount.valid && listingAmount.normalizedText) {
-    tenderValueText = listingAmount.normalizedText;
-  } else if (
-    listingAmountText &&
-    isPlaceholderText(listingAmountText)
+  if (
+    docValueResolved.text &&
+    isValidExplicitValue(docValueResolved.text) &&
+    !isPlaceholderText(docValueResolved.text)
   ) {
+    tenderValueText = docValueResolved.text;
+  } else if (listingResolved.text && listingResolved.amount != null) {
+    tenderValueText = listingResolved.text;
+  } else if (listingAmountText && isPlaceholderText(listingAmountText)) {
     // Preserve meaningful placeholder only when no numeric value
     tenderValueText = tenderValue == null ? listingAmountText : null;
   } else if (listingAmount.reason === "currency_marker_only") {
     tenderValueText = null;
+  } else if (listingResolved.text && tenderValue == null) {
+    tenderValueText = listingResolved.text;
   }
 
   if (isMeaninglessCurrencyText(tenderValueText)) {
     tenderValueText = null;
   }
 
-  const emdAmount = isValidExplicitValue(doc.emdAmount) ? doc.emdAmount : null;
+  const docEmdResolved = resolveCanonicalInrAmount({
+    amount: typeof doc.emdAmount === "number" ? doc.emdAmount : null,
+    text: doc.emdText,
+  });
+  const emdAmount = docEmdResolved.amount;
   let emdText =
-    isValidExplicitValue(doc.emdText) && !isPlaceholderText(String(doc.emdText))
-      ? String(doc.emdText)
+    docEmdResolved.text &&
+    isValidExplicitValue(docEmdResolved.text) &&
+    !isPlaceholderText(docEmdResolved.text)
+      ? docEmdResolved.text
       : null;
   if (isMeaninglessCurrencyText(emdText)) {
     emdText = null;

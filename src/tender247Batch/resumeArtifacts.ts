@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { parseIndianCurrencyAmount } from "../bidassist/parseIndianCurrencyAmount.js";
 import type { Logger } from "../logger.js";
 import { ensureDir } from "../fileUtils.js";
 
@@ -323,6 +324,7 @@ function fileSha256(filePath: string): string | null {
 /**
  * Parse monetary/amount fields safely. Never throws.
  * "Refer Document", N/A, etc. → null.
+ * Delegates to the shared Indian-currency parser so Lac/Cr units are preserved.
  */
 export function parseOptionalMoney(
   value: string | number | null | undefined,
@@ -330,35 +332,6 @@ export function parseOptionalMoney(
   if (value == null) {
     return null;
   }
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : null;
-  }
-
-  const normalized = String(value).trim();
-  if (!normalized) {
-    return null;
-  }
-
-  if (
-    /refer\s+(to\s+)?document/i.test(normalized) ||
-    /not\s+available/i.test(normalized) ||
-    /^n\/?a$/i.test(normalized) ||
-    /see\s+(the\s+)?document/i.test(normalized) ||
-    /as\s+per\s+document/i.test(normalized) ||
-    /-/i.test(normalized) && !/\d/.test(normalized)
-  ) {
-    return null;
-  }
-
-  const cleaned = normalized
-    .replace(/[₹$€£,\s]/g, "")
-    .replace(/\/-$/, "")
-    .replace(/crore|lakh|lac/gi, "");
-
-  const match = cleaned.match(/-?\d+(\.\d+)?/);
-  if (!match) {
-    return null;
-  }
-  const n = Number(match[0]);
-  return Number.isFinite(n) ? n : null;
+  const parsed = parseIndianCurrencyAmount(value);
+  return parsed.valid ? parsed.amount : null;
 }

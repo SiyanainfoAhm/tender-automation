@@ -8,7 +8,7 @@ import {
   mergeBidAssistMetadata,
 } from "../bidassistDocumentMetadataExtractor.js";
 import { parseBidAssistDate } from "../parseBidAssistDate.js";
-import { parseIndianCurrencyAmount } from "../parseIndianCurrencyAmount.js";
+import { parseIndianCurrencyAmount, resolveCanonicalInrAmount } from "../parseIndianCurrencyAmount.js";
 import { buildBidassistSupabaseRow } from "../../supabase/tenderMetadataMap.js";
 import type { BidassistMetadata } from "../bidassistTypes.js";
 
@@ -49,6 +49,48 @@ test("6. rs, → null numeric and null normalized text", () => {
   assert.equal(parsed.amount, null);
   assert.equal(parsed.normalizedText, null);
   assert.equal(parsed.reason, "currency_marker_only");
+});
+
+test("6b. Lac / Lakh / Cr unit variants", () => {
+  assert.equal(parseIndianCurrencyAmount("₹25 Lac").amount, 2_500_000);
+  assert.equal(parseIndianCurrencyAmount("₹5 Lac").amount, 500_000);
+  assert.equal(parseIndianCurrencyAmount("₹1.5 Lac").amount, 150_000);
+  assert.equal(parseIndianCurrencyAmount("25 Lacs").amount, 2_500_000);
+  assert.equal(parseIndianCurrencyAmount("₹15 Lakh").amount, 1_500_000);
+  assert.equal(parseIndianCurrencyAmount("1 Cr").amount, 10_000_000);
+  assert.equal(parseIndianCurrencyAmount("₹2.5 Crore").amount, 25_000_000);
+  assert.equal(parseIndianCurrencyAmount("₹6.20 Cr").amount, 62_000_000);
+  assert.equal(parseIndianCurrencyAmount("25Lac").amount, 2_500_000);
+  assert.equal(parseIndianCurrencyAmount("₹25 L").amount, 2_500_000);
+});
+
+test("6c. reject prose numbers without currency evidence", () => {
+  assert.equal(parseIndianCurrencyAmount("valid for 6 months").amount, null);
+  assert.equal(parseIndianCurrencyAmount("valid for 6 months").reason, "no_currency_evidence");
+  assert.equal(parseIndianCurrencyAmount("3 copies required").amount, null);
+  assert.equal(
+    parseIndianCurrencyAmount(
+      "With Account Payee Demand Draft in favour of the Department",
+    ).amount,
+    null,
+  );
+});
+
+test("6d. resolveCanonical repairs truncated Lac coefficient", () => {
+  const resolved = resolveCanonicalInrAmount({
+    amount: 25,
+    text: "₹25 Lac",
+  });
+  assert.equal(resolved.amount, 2_500_000);
+});
+
+test("6e. resolveCanonical clears prose-derived tiny amounts", () => {
+  const resolved = resolveCanonicalInrAmount({
+    amount: 6.2,
+    text: "c. Any other document in support of contract execution like Third",
+  });
+  assert.equal(resolved.amount, null);
+  assert.equal(resolved.text, null);
 });
 
 test("7. HTML amount extraction", async () => {

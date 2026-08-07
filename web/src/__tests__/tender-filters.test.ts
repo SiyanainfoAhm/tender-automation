@@ -47,6 +47,18 @@ describe("tender repository filter contracts", () => {
     expect(parsed.q).toBe("GEM");
     expect(parsed.page).toBe(2);
     expect(parsed.pageSize).toBe(50);
+    expect(parsed.sortBy).toBe("tender_value");
     expect(parsed.sortDir).toBe("asc");
+  });
+
+  it("prefers sort/direction over legacy aliases", () => {
+    const parsed = tenderFiltersSchema.parse({
+      sort: "emd",
+      direction: "desc",
+      sortBy: "title",
+      sortDir: "asc",
+    });
+    expect(parsed.sortBy).toBe("emd");
+    expect(parsed.sortDir).toBe("desc");
   });
 });

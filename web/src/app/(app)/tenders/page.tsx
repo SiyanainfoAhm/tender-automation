@@ -2,10 +2,7 @@ import { Suspense } from "react";
 
 import { tenderFiltersSchema } from "@/lib/validations";
 import { requireSession } from "@/server/auth/session";
-import {
-  getFilterFacets,
-  listTenders,
-} from "@/server/repositories/tenderRepository";
+import { listTenders } from "@/server/repositories/tenderRepository";
 
 import { TenderExplorer, TenderExplorerSkeleton } from "./tender-explorer";
 
@@ -29,10 +26,7 @@ export default async function TendersPage({ searchParams }: TendersPageProps) {
   const raw = flattenSearchParams(await searchParams);
   const filters = tenderFiltersSchema.parse(raw);
 
-  const [{ rows, total }, facets] = await Promise.all([
-    listTenders(filters),
-    getFilterFacets(),
-  ]);
+  const { rows, total } = await listTenders(filters);
 
   return (
     <div className="space-y-6">
@@ -46,12 +40,7 @@ export default async function TendersPage({ searchParams }: TendersPageProps) {
       </div>
 
       <Suspense fallback={<TenderExplorerSkeleton />}>
-        <TenderExplorer
-          rows={rows}
-          total={total}
-          filters={filters}
-          facets={facets}
-        />
+        <TenderExplorer rows={rows} total={total} filters={filters} />
       </Suspense>
     </div>
   );

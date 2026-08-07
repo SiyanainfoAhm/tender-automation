@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { BidassistMetadata } from "../bidassist/bidassistTypes.js";
 import {
   isMeaninglessCurrencyText,
-  parseIndianCurrencyAmount,
+  resolveCanonicalInrAmount,
 } from "../bidassist/parseIndianCurrencyAmount.js";
 import type { CompleteTenderMetadata } from "../tender247Batch/extractCompleteMetadata.js";
 
@@ -293,29 +293,36 @@ export function buildBidassistSupabaseRow(options: {
     asText(metadata.tenderValueText) ||
     asText(metadata.tenderAmountText);
 
-  if (tenderValue == null && tenderValueText) {
-    const parsed = parseIndianCurrencyAmount(tenderValueText);
-    if (parsed.valid) {
-      tenderValue = parsed.amount;
-      tenderValueText = parsed.normalizedText;
-    } else if (parsed.reason === "currency_marker_only") {
-      tenderValueText = null;
-      console.log("BIDASSIST_INVALID_TENDER_VALUE_TEXT_REJECTED");
-    } else if (!parsed.valid && isMeaninglessCurrencyText(tenderValueText)) {
+  {
+    const resolved = resolveCanonicalInrAmount({
+      amount: tenderValue,
+      text: tenderValueText,
+    });
+    tenderValue = resolved.amount;
+    tenderValueText = resolved.text;
+    if (
+      tenderValueText &&
+      isMeaninglessCurrencyText(tenderValueText)
+    ) {
       tenderValueText = null;
       console.log("BIDASSIST_INVALID_TENDER_VALUE_TEXT_REJECTED");
     }
-  } else if (tenderValueText && isMeaninglessCurrencyText(tenderValueText)) {
-    tenderValueText = null;
-    console.log("BIDASSIST_INVALID_TENDER_VALUE_TEXT_REJECTED");
   }
 
-  const emdAmount =
+  let emdAmount =
     asNumber(normalized.emdAmount) ?? asNumber(metadata.emdAmount) ?? null;
   let emdText =
     asText(normalized.emdText) || asText(metadata.emdText) || null;
-  if (emdText && isMeaninglessCurrencyText(emdText)) {
-    emdText = null;
+  {
+    const resolved = resolveCanonicalInrAmount({
+      amount: emdAmount,
+      text: emdText,
+    });
+    emdAmount = resolved.amount;
+    emdText = resolved.text;
+    if (emdText && isMeaninglessCurrencyText(emdText)) {
+      emdText = null;
+    }
   }
 
   const publishedDate =

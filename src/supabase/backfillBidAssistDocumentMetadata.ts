@@ -172,11 +172,6 @@ async function backfillOne(
 ): Promise<void> {
   const folderId = path.basename(tenderFolder);
   const docs = listExtractedDocuments(tenderFolder);
-  if (docs.length === 0) {
-    console.warn(`SKIP ${folderId}: no extracted HTML/PDF documents`);
-    counters.failed += 1;
-    return;
-  }
 
   let listing = readLocalListingMetadata(tenderFolder);
   const bidassistId =
@@ -236,7 +231,7 @@ async function backfillOne(
   const sync = await upsertBidassistMetadata({
     metadata: merged,
     localFolderPath: tenderFolder,
-    documentArchiveAvailable: Boolean(merged.originalZipFile),
+    documentArchiveAvailable: Boolean(merged.originalZipFile) || docs.length > 0,
     logger: {
       info: (msg) => console.log(msg),
       error: (msg) => console.error(msg),

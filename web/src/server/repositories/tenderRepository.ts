@@ -2,6 +2,7 @@ import "server-only";
 
 import { getServerSupabase } from "@/lib/db/server";
 import { assertSupabaseOk } from "@/lib/errors/db-query";
+import { resolveTenderSortColumn } from "@/lib/tender-sort";
 import type { TenderFilters } from "@/lib/validations";
 import { startOfDay, endOfDay, subDays, addDays, formatISO } from "date-fns";
 
@@ -104,10 +105,17 @@ const SORTABLE: Record<string, string> = {
   emd_amount: "emd_amount",
   updated_at: "updated_at",
   crawled_at: "crawled_at",
+  first_seen_at: "first_seen_at",
   qualification_status: "effective_qualification_status",
   source_portal: "source_portal",
   confidence: "confidence",
   organization: "organization",
+  // URL-friendly keys
+  source: "source_portal",
+  status: "effective_qualification_status",
+  closing: "closing_date",
+  value: "tender_value",
+  emd: "emd_amount",
 };
 
 function applyQuickDate(
@@ -158,6 +166,14 @@ function applyQuickDate(
         from: formatISO(startOfDay(today), { representation: "date" }),
         to: formatISO(endOfDay(addDays(today, 7)), { representation: "date" }),
       };
+    case "closing_30":
+      return {
+        dateType: "closing_date",
+        from: formatISO(startOfDay(today), { representation: "date" }),
+        to: formatISO(endOfDay(addDays(today, 30)), {
+          representation: "date",
+        }),
+      };
     case "overdue":
       return {
         dateType: "closing_date",
@@ -186,7 +202,8 @@ export async function listTenders(filters: TenderFilters): Promise<{
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
 
-  const sortCol = SORTABLE[filters.sortBy] || "updated_at";
+  const sortCol =
+    SORTABLE[filters.sortBy] || resolveTenderSortColumn(filters.sortBy);
   const ascending = filters.sortDir === "asc";
   const dateBounds = applyQuickDate(filters);
 
@@ -222,17 +239,96 @@ export async function listTenders(filters: TenderFilters): Promise<{
     query = query.ilike("authority", `%${filters.authority}%`);
   }
 
-  if (filters.tenderValueMin != null) {
-    query = query.gte("tender_value", filters.tenderValueMin);
+  // Explicit min/max still supported; valueBand shortcuts override when set.
+  let tenderValueMin = filters.tenderValueMin;
+  let tenderValueMax = filters.tenderValueMax;
+  let tenderValueNullOnly = false;
+  switch (filters.valueBand) {
+    case "LT_10L":
+      tenderValueMin = undefined;
+      tenderValueMax = 999_999.999;
+      break;
+    case "L10_1CR":
+      tenderValueMin = 1_000_000;
+      tenderValueMax = 9_999_999.999;
+      break;
+    case "CR1_5":
+      tenderValueMin = 10_000_000;
+      tenderValueMax = 50_000_000;
+      break;
+    case "GT_5CR":
+      tenderValueMin = 50_000_000.001;
+      tenderValueMax = undefined;
+      break;
+    case "NOT_DISCLOSED":
+      tenderValueNullOnly = true;
+      tenderValueMin = undefined;
+      tenderValueMax = undefined;
+      break;
+    default:
+      break;
   }
-  if (filters.tenderValueMax != null) {
-    query = query.lte("tender_value", filters.tenderValueMax);
+
+  if (tenderValueNullOnly) {
+    query = query.is("tender_value", null);
+  } else {
+    if (tenderValueMin != null) {
+      query = query.gte("tender_value", tenderValueMin);
+    }
+    if (tenderValueMax != null) {
+      query = query.lte("tender_value", tenderValueMax);
+    }
   }
-  if (filters.emdMin != null) {
-    query = query.gte("emd_amount", filters.emdMin);
+
+  let emdMin = filters.emdMin;
+  let emdMax = filters.emdMax;
+  let emdNullOnly = false;
+  let emdNotRequired = false;
+  switch (filters.emdBand) {
+    case "LT_1L":
+      emdMin = undefined;
+      emdMax = 99_999.999;
+      break;
+    case "L1_5":
+      emdMin = 100_000;
+      emdMax = 499_999.999;
+      break;
+    case "L5_15":
+      emdMin = 500_000;
+      emdMax = 1_500_000;
+      break;
+    case "GT_15L":
+      emdMin = 1_500_000.001;
+      emdMax = undefined;
+      break;
+    case "NOT_DISCLOSED":
+      emdNullOnly = true;
+      break;
+    case "NOT_REQUIRED":
+      emdNotRequired = true;
+      break;
+    default:
+      break;
   }
-  if (filters.emdMax != null) {
-    query = query.lte("emd_amount", filters.emdMax);
+
+  if (emdNotRequired) {
+    query = query.or(
+      [
+        "emd_amount.eq.0",
+        "emd_text.ilike.%not required%",
+        "emd_text.ilike.%nil%",
+        "emd_text.ilike.%exempt%",
+      ].join(","),
+    );
+  } else if (emdNullOnly) {
+    query = query.is("emd_amount", null);
+  } else {
+    if (emdMin != null) {
+      query = query.gte("emd_amount", emdMin);
+    }
+    if (emdMax != null) {
+      query = query.lte("emd_amount", emdMax);
+    }
   }
 
   if (filters.manualReview === "true") {
@@ -272,7 +368,14 @@ export async function listTenders(filters: TenderFilters): Promise<{
     );
   }
 
+  // Sort entire filtered set, then paginate (nulls last for ASC/DESC).
+  // Status uses DB lexical order on effective_qualification_status (stable,
+  // deterministic). Custom business rank (GO → … → NOT_EVALUATED) would need
+  // a generated column / RPC — not applied here to keep queries simple.
   query = query.order(sortCol, { ascending, nullsFirst: false });
+  if (sortCol !== "id") {
+    query = query.order("id", { ascending: true });
+  }
   query = query.range(from, to);
 
   const result = await query;

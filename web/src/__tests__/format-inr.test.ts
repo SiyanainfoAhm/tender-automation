@@ -4,6 +4,7 @@ import {
   formatEmdAmount,
   formatInrCompactAmount,
   formatTenderValue,
+  recoverInrAmountFromText,
 } from "@/lib/format-inr";
 import { formatIndianCurrency } from "@/lib/format";
 
@@ -17,6 +18,10 @@ describe("formatInrCompactAmount", () => {
     expect(formatInrCompactAmount(1_500_000)).toBe("₹15.00 L");
     expect(formatInrCompactAmount(120_000)).toBe("₹1.20 L");
     expect(formatInrCompactAmount(250_000)).toBe("₹2.50 L");
+    expect(formatInrCompactAmount(2_500_000)).toBe("₹25.00 L");
+    expect(formatInrCompactAmount(500_000)).toBe("₹5.00 L");
+    expect(formatInrCompactAmount(600_000)).toBe("₹6.00 L");
+    expect(formatInrCompactAmount(300_000)).toBe("₹3.00 L");
   });
 
   it("formats thousands without omitting scale", () => {
@@ -42,9 +47,25 @@ describe("formatInrCompactAmount", () => {
   });
 });
 
+describe("recoverInrAmountFromText", () => {
+  it("repairs bare coefficients when text has Lac/Cr", () => {
+    expect(recoverInrAmountFromText(25, "₹25 Lac")).toBe(2_500_000);
+    expect(recoverInrAmountFromText(5, "₹5 Lac")).toBe(500_000);
+    expect(recoverInrAmountFromText(6.2, "₹6.20 Cr")).toBe(62_000_000);
+  });
+
+  it("rejects prose-derived tiny amounts without currency evidence", () => {
+    expect(recoverInrAmountFromText(6, "valid for 6 months")).toBeNull();
+    expect(recoverInrAmountFromText(3, "3 copies required")).toBeNull();
+  });
+});
+
 describe("formatTenderValue", () => {
   it("prefers numeric amount", () => {
-    const display = formatTenderValue({ amount: 62_000_000, text: "Refer Documents" });
+    const display = formatTenderValue({
+      amount: 62_000_000,
+      text: "Refer Documents",
+    });
     expect(display.label).toBe("₹6.20 Cr");
     expect(display.tooltip).toBe("₹6,20,00,000");
     expect(display.isNumeric).toBe(true);
@@ -69,6 +90,23 @@ describe("formatTenderValue", () => {
     });
     expect(display.label).not.toMatch(/₹0/);
     expect(display.isNumeric).toBe(false);
+  });
+
+  it("recovers Lac coefficient for display", () => {
+    const display = formatTenderValue({
+      amount: 25,
+      text: "₹25 Lac",
+    });
+    expect(display.label).toBe("₹25.00 L");
+  });
+
+  it("falls back to text when amount was mis-parsed from prose", () => {
+    const display = formatTenderValue({
+      amount: 6,
+      text: "valid for 6 months",
+    });
+    expect(display.isNumeric).toBe(false);
+    expect(display.label.toLowerCase()).toContain("valid");
   });
 
   it("shows Not disclosed when both missing", () => {
