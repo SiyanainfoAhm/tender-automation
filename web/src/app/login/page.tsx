@@ -13,7 +13,7 @@ export default function LoginPage() {
           <div className="mb-2 flex size-12 items-center justify-center rounded-[14px] bg-primary font-heading text-lg font-bold">
             STI
           </div>
-          <h1 className="font-heading mt-8 text-3xl font-bold leading-tight tracking-tight xl:text-4xl">
+          <h1 className="font-heading mt-8 text-3xl font-bold leading-tight tracking-tight text-white xl:text-4xl">
             Siyana Tender Intelligence
           </h1>
           <p className="mt-4 max-w-md text-base leading-relaxed text-slate-300">
