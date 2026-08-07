@@ -117,7 +117,7 @@ describe("create user schema", () => {
 describe("indian currency formatting", () => {
   it("formats crore and lakh", () => {
     expect(formatIndianCurrency(48_600_000)).toMatch(/Cr/);
-    expect(formatIndianCurrency(561_000)).toMatch(/Lakh|L/);
+    expect(formatIndianCurrency(561_000)).toMatch(/L/);
     expect(formatIndianCurrency(null)).toBe("—");
   });
 });

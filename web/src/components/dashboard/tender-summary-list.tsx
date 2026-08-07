@@ -6,7 +6,7 @@ import type { QualificationStatus } from "@/components/status/qualification-badg
 import { SourceBadge } from "@/components/status/source-badge";
 import type { TenderSource } from "@/components/tenders/tender-status-styles";
 import { EmptyState } from "@/components/ui/empty-state";
-import { formatDate, formatIndianCurrency } from "@/lib/format";
+import { formatDate, formatTenderValue } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type TenderSummaryListProps = {
@@ -81,8 +81,21 @@ export function TenderSummaryList({
                     {item.closing_date ? (
                       <span>Closes {formatDate(String(item.closing_date))}</span>
                     ) : null}
-                    {item.tender_value != null ? (
-                      <span>{formatIndianCurrency(Number(item.tender_value))}</span>
+                    {item.tender_value != null || item.tender_value_text ? (
+                      <span>
+                        {
+                          formatTenderValue({
+                            amount:
+                              item.tender_value != null
+                                ? Number(item.tender_value)
+                                : null,
+                            text:
+                              typeof item.tender_value_text === "string"
+                                ? item.tender_value_text
+                                : null,
+                          }).label
+                        }
+                      </span>
                     ) : null}
                   </div>
                 </Link>

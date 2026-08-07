@@ -14,8 +14,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   formatConfidence,
   formatDate,
-  formatIndianCurrency,
+  formatEmdAmount,
   formatRelativeTime,
+  formatTenderValue,
 } from "@/lib/format";
 import { requireSession } from "@/server/auth/session";
 import { getTenderById } from "@/server/repositories/tenderRepository";
@@ -147,8 +148,20 @@ export default async function TenderDetailPage({
                   ["Opening", formatDate(tender.opening_date as string)],
                   ["Closing", formatDate(tender.closing_date as string)],
                   ["Bid submission", formatDate(tender.bid_submission_date as string)],
-                  ["Tender value", formatIndianCurrency(tender.tender_value as number)],
-                  ["EMD", formatIndianCurrency(tender.emd_amount as number)],
+                  [
+                    "Tender value",
+                    formatTenderValue({
+                      amount: tender.tender_value as number | null,
+                      text: tender.tender_value_text as string | null,
+                    }).label,
+                  ],
+                  [
+                    "EMD",
+                    formatEmdAmount({
+                      amount: tender.emd_amount as number | null,
+                      text: tender.emd_text as string | null,
+                    }).label,
+                  ],
                 ]}
               />
             </DetailCard>

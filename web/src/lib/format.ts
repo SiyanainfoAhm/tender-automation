@@ -6,36 +6,14 @@ import {
   type Locale,
 } from "date-fns";
 
-const CRORE = 1_00_00_000;
-const LAKH = 1_00_000;
+import { formatInrCompactAmount } from "@/lib/format-inr";
 
-function formatUnitValue(value: number): string {
-  const rounded = Math.round(value * 100) / 100;
-  if (rounded % 1 === 0) {
-    return rounded.toFixed(0);
-  }
-  return rounded.toFixed(2);
-}
-
+/**
+ * Compact INR for KPIs / charts.
+ * null → "—" (aggregates / empty cells). Prefer formatTenderValue for tender rows.
+ */
 export function formatIndianCurrency(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) {
-    return "—";
-  }
-
-  const sign = value < 0 ? "-" : "";
-  const abs = Math.abs(value);
-
-  if (abs >= CRORE) {
-    return `${sign}₹${formatUnitValue(abs / CRORE)} Cr`;
-  }
-
-  if (abs >= LAKH) {
-    return `${sign}₹${formatUnitValue(abs / LAKH)} Lakh`;
-  }
-
-  return `${sign}₹${abs.toLocaleString("en-IN", {
-    maximumFractionDigits: 2,
-  })}`;
+  return formatInrCompactAmount(value) ?? "—";
 }
 
 function toDate(value: string | Date | null | undefined): Date | null {
@@ -79,3 +57,10 @@ export function formatRelativeTime(
     locale: options?.locale,
   });
 }
+
+export {
+  formatEmdAmount,
+  formatInrCompactAmount,
+  formatInrFullAmount,
+  formatTenderValue,
+} from "@/lib/format-inr";

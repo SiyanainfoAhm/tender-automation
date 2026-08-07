@@ -22,6 +22,10 @@ import { StatusBadge } from "@/components/status/qualification-badge";
 import type { QualificationStatus } from "@/components/status/qualification-badge";
 import { SourceBadge } from "@/components/status/source-badge";
 import type { TenderSource } from "@/components/tenders/tender-status-styles";
+import {
+  MoneyCell,
+  TruncateWithTooltip,
+} from "@/components/tenders/money-cell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -32,9 +36,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatDate, formatIndianCurrency } from "@/lib/format";
+import { formatDate } from "@/lib/format";
+import { formatEmdAmount, formatTenderValue } from "@/lib/format-inr";
+import { cn } from "@/lib/utils";
 import type { TenderFilters } from "@/lib/validations";
 import type { WebTenderListRow } from "@/server/repositories/tenderRepository";
+
 type Facets = {
   states: string[];
   categories: string[];
@@ -66,6 +73,17 @@ function buildSearchParams(
   const qs = params.toString();
   return qs ? `?${qs}` : "";
 }
+
+const COL_WIDTH: Record<string, string> = {
+  title: "w-[36%]",
+  source_portal: "w-[8%]",
+  status: "w-[8%]",
+  organization: "w-[14%]",
+  state: "w-[10%]",
+  closing_date: "w-[8%]",
+  tender_value: "w-[8%]",
+  emd_amount: "w-[8%]",
+};
 
 export function TenderExplorer({
   rows,
@@ -99,7 +117,9 @@ export function TenderExplorer({
             href={`/tenders/${row.original.id}`}
             className="font-medium text-text-primary hover:text-primary hover:underline"
           >
-            <span className="line-clamp-2">{row.original.title}</span>
+            <span className="line-clamp-2 whitespace-normal break-words leading-5">
+              {row.original.title}
+            </span>
           </Link>
         ),
       },
@@ -132,25 +152,46 @@ export function TenderExplorer({
         accessorKey: "organization",
         header: "Organization",
         cell: ({ row }) => (
-          <span className="line-clamp-1 text-sm text-text-secondary">
-            {row.original.organization ?? "—"}
-          </span>
+          <TruncateWithTooltip text={row.original.organization} />
         ),
       },
       {
         accessorKey: "state",
         header: "State",
-        cell: ({ row }) => row.original.state ?? "—",
+        cell: ({ row }) => <TruncateWithTooltip text={row.original.state} />,
       },
       {
         accessorKey: "closing_date",
         header: "Closing",
-        cell: ({ row }) => formatDate(row.original.closing_date),
+        cell: ({ row }) => (
+          <span className="whitespace-nowrap text-sm text-text-secondary">
+            {formatDate(row.original.closing_date)}
+          </span>
+        ),
       },
       {
         accessorKey: "tender_value",
-        header: "Value",
-        cell: ({ row }) => formatIndianCurrency(row.original.tender_value),
+        header: () => <span className="block w-full text-right">Value</span>,
+        cell: ({ row }) => (
+          <MoneyCell
+            display={formatTenderValue({
+              amount: row.original.tender_value,
+              text: row.original.tender_value_text,
+            })}
+          />
+        ),
+      },
+      {
+        accessorKey: "emd_amount",
+        header: () => <span className="block w-full text-right">EMD</span>,
+        cell: ({ row }) => (
+          <MoneyCell
+            display={formatEmdAmount({
+              amount: row.original.emd_amount,
+              text: row.original.emd_text,
+            })}
+          />
+        ),
       },
     ],
     [],
@@ -173,20 +214,30 @@ export function TenderExplorer({
       "State",
       "Closing",
       "Value",
+      "EMD",
       "Tender ID",
     ];
-    const csvRows = rows.map((r) =>
-      [
+    const csvRows = rows.map((r) => {
+      const value = formatTenderValue({
+        amount: r.tender_value,
+        text: r.tender_value_text,
+      }).label;
+      const emd = formatEmdAmount({
+        amount: r.emd_amount,
+        text: r.emd_text,
+      }).label;
+      return [
         `"${(r.title || "").replace(/"/g, '""')}"`,
         r.source_portal,
         r.effective_qualification_status ?? "NOT_EVALUATED",
         `"${(r.organization || "").replace(/"/g, '""')}"`,
         r.state ?? "",
         r.closing_date ?? "",
-        r.tender_value ?? "",
+        `"${value.replace(/"/g, '""')}"`,
+        `"${emd.replace(/"/g, '""')}"`,
         r.source_tender_id,
-      ].join(","),
-    );
+      ].join(",");
+    });
     const blob = new Blob(
       [[headers.join(","), ...csvRows].join("\n")],
       { type: "text/csv;charset=utf-8;" },
@@ -320,6 +371,7 @@ export function TenderExplorer({
                 { value: "updated_at", label: "Updated" },
                 { value: "closing_date", label: "Closing date" },
                 { value: "tender_value", label: "Value" },
+                { value: "emd_amount", label: "EMD" },
                 { value: "crawled_at", label: "Crawled" },
                 { value: "confidence", label: "Confidence" },
               ]}
@@ -380,26 +432,35 @@ export function TenderExplorer({
         </div>
       ) : (
         <>
-          {/* Desktop table */}
+          {/* Desktop / tablet table — keep VALUE + EMD; scroll horizontally below xl */}
           <div className="hidden overflow-hidden rounded-[14px] border border-border bg-surface shadow-sm md:block">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[960px] table-fixed text-sm xl:min-w-0">
                 <thead>
                   {table.getHeaderGroups().map((hg) => (
                     <tr key={hg.id} className="border-b border-border bg-surface-muted">
-                      {hg.headers.map((header) => (
-                        <th
-                          key={header.id}
-                          className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-muted"
-                        >
-                          {header.isPlaceholder
-                            ? null
-                            : flexRender(
-                                header.column.columnDef.header,
-                                header.getContext(),
-                              )}
-                        </th>
-                      ))}
+                      {hg.headers.map((header) => {
+                        const key = header.column.id;
+                        const isMoney =
+                          key === "tender_value" || key === "emd_amount";
+                        return (
+                          <th
+                            key={header.id}
+                            className={cn(
+                              "px-3 py-3 text-xs font-semibold uppercase tracking-wide text-text-muted",
+                              COL_WIDTH[key] ?? "",
+                              isMoney ? "text-right" : "text-left",
+                            )}
+                          >
+                            {header.isPlaceholder
+                              ? null
+                              : flexRender(
+                                  header.column.columnDef.header,
+                                  header.getContext(),
+                                )}
+                          </th>
+                        );
+                      })}
                     </tr>
                   ))}
                 </thead>
@@ -407,16 +468,27 @@ export function TenderExplorer({
                   {table.getRowModel().rows.map((row) => (
                     <tr
                       key={row.id}
-                      className="border-b border-border last:border-0 hover:bg-surface-muted/50"
+                      className="min-h-[64px] border-b border-border last:border-0 hover:bg-surface-muted/50"
                     >
-                      {row.getVisibleCells().map((cell) => (
-                        <td key={cell.id} className="px-4 py-3 align-top">
-                          {flexRender(
-                            cell.column.columnDef.cell,
-                            cell.getContext(),
-                          )}
-                        </td>
-                      ))}
+                      {row.getVisibleCells().map((cell) => {
+                        const key = cell.column.id;
+                        const isMoney =
+                          key === "tender_value" || key === "emd_amount";
+                        return (
+                          <td
+                            key={cell.id}
+                            className={cn(
+                              "px-3 py-3 align-middle",
+                              isMoney && "text-right",
+                            )}
+                          >
+                            {flexRender(
+                              cell.column.columnDef.cell,
+                              cell.getContext(),
+                            )}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>
@@ -428,6 +500,14 @@ export function TenderExplorer({
           <div className="space-y-3 md:hidden">
             {rows.map((row) => {
               const status = row.effective_qualification_status;
+              const value = formatTenderValue({
+                amount: row.tender_value,
+                text: row.tender_value_text,
+              });
+              const emd = formatEmdAmount({
+                amount: row.emd_amount,
+                text: row.emd_text,
+              });
               return (
                 <Link
                   key={row.id}
@@ -435,7 +515,7 @@ export function TenderExplorer({
                   className="block rounded-[14px] border border-border bg-surface p-4 shadow-sm transition-colors hover:bg-surface-muted/50"
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <h3 className="line-clamp-2 font-medium text-text-primary">
+                    <h3 className="line-clamp-2 whitespace-normal break-words font-medium leading-5 text-text-primary">
                       {row.title}
                     </h3>
                     <SourceBadge
@@ -455,14 +535,33 @@ export function TenderExplorer({
                       </span>
                     ) : null}
                   </div>
-                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-muted">
-                    {row.organization ? <span>{row.organization}</span> : null}
-                    {row.state ? <span>{row.state}</span> : null}
-                    {row.tender_value != null ? (
-                      <span className="font-medium text-text-secondary">
-                        {formatIndianCurrency(row.tender_value)}
-                      </span>
+                  <div className="mt-2 space-y-1 text-xs text-text-muted">
+                    {row.organization ? (
+                      <p className="truncate">
+                        <span className="text-text-subtle">Organization · </span>
+                        {row.organization}
+                      </p>
                     ) : null}
+                    {row.state ? (
+                      <p className="truncate">
+                        <span className="text-text-subtle">State · </span>
+                        {row.state}
+                      </p>
+                    ) : null}
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1 text-sm text-text-secondary">
+                      <span>
+                        <span className="text-text-subtle">Value · </span>
+                        <span className="font-medium text-text-primary">
+                          {value.label}
+                        </span>
+                      </span>
+                      <span>
+                        <span className="text-text-subtle">EMD · </span>
+                        <span className="font-medium text-text-primary">
+                          {emd.label}
+                        </span>
+                      </span>
+                    </div>
                   </div>
                   {row.source_url ? (
                     <span className="mt-2 inline-flex items-center gap-1 text-xs text-primary">
