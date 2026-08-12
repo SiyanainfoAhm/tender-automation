@@ -1,6 +1,6 @@
 import type { BrowserContext, Page } from "playwright";
 import type { Logger } from "../logger.js";
-import { dismissPageOverlays } from "./collectTenderLinks.js";
+import { dismissTender247Interruptions } from "./dismissTender247Interruptions.js";
 import { clickAndSaveDownload } from "./downloadHelpers.js";
 import type { DownloadedFileRecord } from "./types.js";
 
@@ -21,7 +21,7 @@ export async function downloadAiSummary(
   options: AiSummaryDownloadOptions,
 ): Promise<DownloadedFileRecord | null> {
   const { page, context, destinationDir, timeoutMs, logger } = options;
-  await dismissPageOverlays(page, logger);
+  await dismissTender247Interruptions(page, logger);
 
   const control = page
     .getByRole("link", { name: /AI\s*Summary.*PDF|PDF.*AI\s*Summary|AI\s*Summary.*Download/i })

@@ -5,7 +5,8 @@ import type { AppConfig } from "../config.js";
 import { loadConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import { dismissTender247BlockingOverlays } from "./dismissPromotionalPopups.js";
-import { dismissTender247SupportChat } from "./dismissSupportChat.js";
+import { dismissTender247Interruptions } from "./dismissTender247Interruptions.js";
+import { AutomationError } from "../browserUtils.js";
 import { ensureTodayTendersSelected } from "./ensureTodayTendersSelected.js";
 import type { TenderListItem } from "./types.js";
 
@@ -210,14 +211,23 @@ async function extractVisibleCards(page: Page): Promise<TenderListItem[]> {
 
 /**
  * Close/minimize common overlays that obstruct controls (no CAPTCHA interaction).
- * NEEDS LIVE VERIFICATION for Zendesk / renewal banner selectors.
+ * Includes Set Reminder modal + promo/support nuisances.
  */
 export async function dismissPageOverlays(
   page: Page,
   logger: Logger,
 ): Promise<void> {
-  await dismissTender247BlockingOverlays(page, logger).catch(() => undefined);
-  await dismissTender247SupportChat(page, logger).catch(() => undefined);
+  try {
+    await dismissTender247Interruptions(page, logger);
+  } catch (error) {
+    if (
+      error instanceof AutomationError &&
+      error.code === "TENDER247_REMINDER_MODAL_BLOCKING"
+    ) {
+      throw error;
+    }
+    // Soft-fail other overlay noise; continue with legacy heuristics below.
+  }
 
   const candidates = [
     page.getByRole("button", { name: /close|dismiss|minimize|not now|later/i }),

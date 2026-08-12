@@ -126,7 +126,7 @@ function SortHeader({
       className={cn(
         "inline-flex w-full items-center gap-1 text-xs font-semibold uppercase tracking-wide transition-colors",
         align === "right" ? "justify-end" : "justify-start",
-        active ? "text-primary" : "text-text-muted hover:text-text-primary",
+        active ? "text-primary" : "text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-slate-50",
       )}
     >
       {label}
@@ -553,12 +553,12 @@ export function TenderExplorer({ rows, total, filters }: TenderExplorerProps) {
       </div>
 
       {rows.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-surface py-16 text-center">
-          <FileSearch className="mb-4 size-12 text-text-subtle" />
-          <h3 className="font-heading text-lg font-semibold text-text-primary">
+        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-white py-16 text-center dark:border-slate-700/60 dark:bg-slate-900/70">
+          <FileSearch className="mb-4 size-12 text-slate-400 dark:text-slate-500" />
+          <h3 className="font-heading text-lg font-semibold text-slate-900 dark:text-slate-50">
             No tenders found
           </h3>
-          <p className="mt-2 max-w-sm text-sm text-text-muted">
+          <p className="mt-2 max-w-sm text-sm text-slate-500 dark:text-slate-400">
             Try adjusting your filters or search query to find matching tenders.
           </p>
           {filtersActive ? (
@@ -569,14 +569,14 @@ export function TenderExplorer({ rows, total, filters }: TenderExplorerProps) {
         </div>
       ) : (
         <>
-          <div className="hidden overflow-hidden rounded-xl border border-border bg-surface shadow-sm md:block">
+          <div className="hidden overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-950/20 md:block">
             <div className="overflow-x-auto">
               <table className="w-full min-w-[880px] table-fixed text-sm xl:min-w-0">
                 <thead>
                   {table.getHeaderGroups().map((hg) => (
                     <tr
                       key={hg.id}
-                      className="border-b border-border bg-surface-muted"
+                      className="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900"
                     >
                       {hg.headers.map((header) => {
                         const key = header.column.id;
@@ -607,7 +607,7 @@ export function TenderExplorer({ rows, total, filters }: TenderExplorerProps) {
                   {table.getRowModel().rows.map((row) => (
                     <tr
                       key={row.id}
-                      className="border-b border-border last:border-0 hover:bg-surface-muted/50"
+                      className="border-b border-slate-200 last:border-0 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900"
                     >
                       {row.getVisibleCells().map((cell) => {
                         const key = cell.column.id;
@@ -651,7 +651,7 @@ export function TenderExplorer({ rows, total, filters }: TenderExplorerProps) {
                 <Link
                   key={row.id}
                   href={`/tenders/${row.id}`}
-                  className="block rounded-xl border border-border bg-surface p-4 shadow-sm transition-colors hover:bg-surface-muted/50"
+                  className="block rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700/60 dark:bg-slate-900/70 dark:hover:bg-slate-900"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <h3 className="line-clamp-2 whitespace-normal break-words font-medium leading-5 text-text-primary">

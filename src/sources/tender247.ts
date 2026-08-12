@@ -23,6 +23,10 @@ import {
   dismissTender247BlockingOverlays,
   registerPromotionalPopupHandlers,
 } from "../tenderDetails/dismissPromotionalPopups.js";
+import {
+  assertMailDateReadyForExcel,
+  readCurrentSelectMailDate,
+} from "../tenderDetails/selectTender247MailDate.js";
 
 /** Straight apostrophe and curly apostrophe (U+2019) variants */
 const DONT_SHOW_AGAIN_STRAIGHT = "Don't show again";
@@ -743,13 +747,66 @@ async function expandTenderFiltersIfCollapsed(
   logger.warn("Tender Filters header not found; attempting date field directly");
 }
 
+/**
+ * Download Tender247 Excel from the authenticated filtered list page.
+ * Caller must already select/verify mail date when using a non-default date.
+ * Filename uses dateIso (requested pipeline date), never silently substitutes today.
+ */
+export async function downloadTender247DailyExcel(
+  page: Page,
+  config: AppConfig,
+  dayDir: string,
+  logger: Logger,
+  dateIso?: string,
+): Promise<string> {
+  return downloadExcel(page, config, dayDir, logger, dateIso);
+}
+
 async function downloadExcel(
   page: Page,
   config: AppConfig,
   dayDir: string,
   logger: Logger,
+  dateIso?: string,
 ): Promise<string> {
   await dismissTender247Popups(page, logger);
+
+  if (dateIso && /^\d{4}-\d{2}-\d{2}$/.test(dateIso)) {
+    const current = await readCurrentSelectMailDate(page);
+    const visibleIso = current.iso;
+    const match = visibleIso === dateIso;
+    logger.info(`PRE_XLS_REQUESTED_DATE=${dateIso}`);
+    console.log(`PRE_XLS_REQUESTED_DATE=${dateIso}`);
+    logger.info(
+      `PRE_XLS_VISIBLE_MAIL_DATE=${current.inputValue || visibleIso || "null"}`,
+    );
+    console.log(
+      `PRE_XLS_VISIBLE_MAIL_DATE=${current.inputValue || visibleIso || "null"}`,
+    );
+    logger.info(`PRE_XLS_DATE_MATCH=${match}`);
+    console.log(`PRE_XLS_DATE_MATCH=${match}`);
+
+    if (!match) {
+      throw new AutomationError(
+        "TENDER247_PRE_XLS_DATE_MISMATCH",
+        `TENDER247_PRE_XLS_DATE_MISMATCH requested=${dateIso} visible=${visibleIso || current.inputValue || "null"} TENDER247_EXCEL_DOWNLOAD_BLOCKED=true`,
+      );
+    }
+
+    assertMailDateReadyForExcel(
+      {
+        requestedIso: dateIso,
+        selectedMailDateIso: visibleIso || "",
+        mailDateInputValue: current.inputValue,
+        filteredDateLabel: null,
+        filteredTenderCount: null,
+        listRefreshComplete: true,
+      },
+      dateIso,
+    );
+    logger.info(`TENDER247_EXCEL_REQUESTED_DATE=${dateIso}`);
+    logger.info(`TENDER247_EXCEL_SOURCE_DATE=${visibleIso}`);
+  }
 
   let xlsLocator: Locator;
   try {
@@ -819,8 +876,14 @@ async function downloadExcel(
     );
   }
 
-  const today = getTodayIsoDate();
-  const destination = uniqueDestinationPath(dayDir, `Tender247_${today}`, ".xlsx");
+  const fileDate = dateIso && /^\d{4}-\d{2}-\d{2}$/.test(dateIso)
+    ? dateIso
+    : getTodayIsoDate();
+  const destination = uniqueDestinationPath(
+    dayDir,
+    `Tender247_${fileDate}`,
+    ".xlsx",
+  );
   relocateFile(tempPath, destination);
 
   const finalSize = getFileSizeBytes(destination);

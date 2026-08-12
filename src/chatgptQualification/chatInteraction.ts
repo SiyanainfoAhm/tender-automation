@@ -12,10 +12,24 @@ import {
 } from "./openProject.js";
 import { assertRequiredAttachmentsReady } from "./sourceDocumentResolver.js";
 import {
-  getDefaultMinSubmissionIntervalMs,
-  recordSuccessfulSubmission,
-  waitForSharedSubmissionInterval,
-} from "./submissionThrottle.js";
+  getSharedChatGptSubmissionScheduler,
+} from "../concurrency/chatGptSubmissionScheduler.js";
+import type { Tender247ExpectedManifest } from "./tender247AttachmentManifest.js";
+import {
+  STABLE_ATTACHMENT_POLL_MS,
+  evaluateAttachmentStabilityPoll,
+} from "./tender247AttachmentUploadState.js";
+import {
+  getResponseStallTimeoutMsFromEnv,
+  isResponseActivityStalled,
+  mayNavigateAwayDuringResponseWait,
+  updateLastResponseActivityAt,
+  type ResponseActivitySnapshot,
+} from "./responseWaitPolicy.js";
+
+export const COMPOSER_TOKEN_ATTR = "data-agenttender-composer-token";
+
+const MAX_STALE_ATTACHMENT_REMOVALS = 30;
 
 export function isConversationUrl(url: string): boolean {
   return /\/c\/[^/?#]+/i.test(url);
@@ -24,8 +38,8 @@ export function isConversationUrl(url: string): boolean {
 const RATE_LIMIT_TEXT_RE =
   /Too many requests|temporarily limited access|making requests too quickly/i;
 
-/** Click Got it at most once per modal appearance. */
-let rateLimitModalDismissed = false;
+/** Click Got it at most once per modal appearance (per page). */
+const rateLimitModalDismissedByPage = new WeakMap<object, boolean>();
 
 /**
  * Detect / dismiss ChatGPT "Too many requests" modal.
@@ -53,13 +67,13 @@ export async function handleRateLimitModal(
   }
 
   if (!modalVisible) {
-    rateLimitModalDismissed = false;
+    rateLimitModalDismissedByPage.set(page, false);
     return false;
   }
 
   logger?.warn("CHATGPT_RATE_LIMIT_DETECTED");
 
-  if (!rateLimitModalDismissed) {
+  if (!rateLimitModalDismissedByPage.get(page)) {
     let clicked = false;
 
     if (useDialogScope) {
@@ -93,7 +107,7 @@ export async function handleRateLimitModal(
     }
 
     if (clicked) {
-      rateLimitModalDismissed = true;
+      rateLimitModalDismissedByPage.set(page, true);
       logger?.info("CHATGPT_RATE_LIMIT_MODAL_DISMISSED");
       await page.waitForTimeout(500);
     }
@@ -358,10 +372,24 @@ function sha256File(filePath: string): string {
 export type TenderUploadSession = {
   filesAssigned: boolean;
   uploadAttemptCount: number;
+  attachmentsLocked: boolean;
 };
 
 export function createTenderUploadSession(): TenderUploadSession {
-  return { filesAssigned: false, uploadAttemptCount: 0 };
+  return { filesAssigned: false, uploadAttemptCount: 0, attachmentsLocked: false };
+}
+
+/** Hard guard: after ATTACHMENTS_LOCKED, refuse upload/clear mutations. */
+export function assertAttachmentsUnlocked(
+  session: TenderUploadSession,
+  action: string,
+): void {
+  if (session.attachmentsLocked) {
+    throw new AutomationError(
+      "CHATGPT_UPLOAD_BLOCKED_LOCKED",
+      `CHATGPT_UPLOAD_BLOCKED_LOCKED=true action=${action} — attachmentsLocked=true; refusing ${action}`,
+    );
+  }
 }
 
 export async function uploadFilesToComposer(options: {
@@ -381,6 +409,10 @@ export async function uploadFilesToComposer(options: {
   forceFreshUpload?: boolean;
   /** Archive basename for BidAssist / Tender247 chip matching */
   expectedArchiveFileName?: string;
+  /** Hard cap for Tender247 top-level attachments (metadata + optional AI + zip). */
+  expectedAttachmentCount?: number;
+  composerToken?: string;
+  tender247Manifest?: Tender247ExpectedManifest;
 }): Promise<TenderUploadSession> {
   const { page, logger, t247Id } = options;
   const batchSize = Math.max(1, options.batchSize ?? 10);
@@ -388,18 +420,40 @@ export async function uploadFilesToComposer(options: {
   const session = options.session ?? createTenderUploadSession();
   const forceFreshUpload = options.forceFreshUpload === true;
   const expectedArchiveFileName = options.expectedArchiveFileName;
+  const expectedAttachmentCount = options.expectedAttachmentCount;
 
   await assertNotRateLimited(page, logger);
 
   logger.info("CHATGPT_UPLOAD_START");
 
   const validFiles = await validateUploadFiles(options.filePaths, logger);
+  if (
+    typeof expectedAttachmentCount === "number" &&
+    validFiles.length !== expectedAttachmentCount
+  ) {
+    throw new AutomationError(
+      "CHATGPT_ATTACHMENT_SET_INVALID",
+      `CHATGPT_ATTACHMENT_SET_INVALID=true CHATGPT_ATTACHMENT_COUNT=${validFiles.length} expected=${expectedAttachmentCount}`,
+    );
+  }
+  if (
+    typeof expectedAttachmentCount === "number" &&
+    expectedAttachmentCount > 3
+  ) {
+    throw new AutomationError(
+      "CHATGPT_ATTACHMENT_SET_INVALID",
+      `CHATGPT_ATTACHMENT_SET_INVALID=true CHATGPT_ATTACHMENT_COUNT=${expectedAttachmentCount}`,
+    );
+  }
   logger.info(`CHATGPT_UPLOAD_FILES_COUNT=${validFiles.length}`);
   for (const filePath of validFiles) {
     logger.info(`CHATGPT_UPLOAD_FILE=${path.basename(filePath)}`);
   }
 
   try {
+    if (session.attachmentsLocked) {
+      assertAttachmentsUnlocked(session, "uploadFilesToComposer");
+    }
     if (t247Id && !forceFreshUpload) {
       const draft = await inspectComposerDraft(page, t247Id, logger);
       if (draft.isStaleOtherTender) {
@@ -446,37 +500,54 @@ export async function uploadFilesToComposer(options: {
         await clearComposerDraft(page, logger);
       }
     } else if (forceFreshUpload) {
+      // Pre-upload cleanup is the caller's responsibility — no re-assign here.
       logger.info("CHATGPT_FORCE_FRESH_UPLOAD=true");
-      const draft = t247Id
-        ? await inspectComposerDraft(page, t247Id, logger)
-        : null;
-      if (draft?.hasAttachments || draft?.hasPrompt) {
-        await clearComposerDraft(page, logger);
-      }
     }
 
-    if (!forceFreshUpload && (session.filesAssigned || session.uploadAttemptCount >= 1)) {
+    if (session.attachmentsLocked) {
+      assertAttachmentsUnlocked(session, "setInputFiles");
+    } else if (session.filesAssigned || session.uploadAttemptCount >= 1) {
       logger.info(
-        "CHATGPT_UPLOAD_SKIPPED_ALREADY_ASSIGNED — verifying existing cards",
+        "CHATGPT_UPLOAD_SKIPPED_ALREADY_ASSIGNED — waiting for stable cards",
       );
       await dismissDuplicateUploadDialog(page, logger);
-      await waitForAttachmentChips(page, validFiles, logger, session, t247Id);
-    } else {
-      // Reset session gate so assignFilesToComposer will run setFiles
-      if (forceFreshUpload) {
-        session.filesAssigned = false;
-        session.uploadAttemptCount = 0;
+      if (options.tender247Manifest && options.composerToken) {
+        await waitForStableComposerAttachments(page, {
+          composerToken: options.composerToken,
+          manifest: options.tender247Manifest,
+          logger,
+          timeoutMs: options.timeoutMs ?? 30_000,
+        });
+      } else {
+        await waitForAttachmentChips(page, validFiles, logger, session, t247Id, {
+          composerToken: options.composerToken,
+        });
       }
+    } else {
       const batch = validFiles.slice(0, Math.min(batchSize, validFiles.length));
       logger.info(
         `CHATGPT_UPLOAD_BATCH start=1 end=${batch.length} total=${validFiles.length}`,
       );
       await assignFilesToComposer(page, batch, logger, session, {
-        forceFreshUpload,
         expectedArchiveFileName,
+        composerToken: options.composerToken,
       });
       await dismissDuplicateUploadDialog(page, logger);
-      await waitForAttachmentChips(page, batch, logger, session, t247Id);
+      if (options.tender247Manifest && options.composerToken) {
+        await waitForStableComposerAttachments(page, {
+          composerToken: options.composerToken,
+          manifest: options.tender247Manifest,
+          logger,
+          timeoutMs: options.timeoutMs ?? 30_000,
+        });
+        session.attachmentsLocked = true;
+        logger.info("CHATGPT_ATTACHMENTS_LOCKED=true");
+        console.log("CHATGPT_ATTACHMENTS_LOCKED=true");
+      } else {
+        await waitForAttachmentChips(page, batch, logger, session, t247Id, {
+          composerToken: options.composerToken,
+        });
+      }
       await waitForUploadsSettled(page, logger);
     }
 
@@ -513,6 +584,7 @@ async function validateUploadFiles(
   for (const filePath of filePaths) {
     const absolutePath = path.resolve(filePath);
     const base = path.basename(absolutePath).toLowerCase();
+    const normalized = absolutePath.replace(/\\/g, "/");
     // Never upload company master PDF or outer T247-{ID}.zip
     if (
       base.includes("consolidated siyana") ||
@@ -520,6 +592,21 @@ async function validateUploadFiles(
     ) {
       logger.warn(
         `CHATGPT_UPLOAD_REJECTED_FORBIDDEN=${path.basename(absolutePath)}`,
+      );
+      continue;
+    }
+    if (/\/documents\/extracted\//i.test(normalized)) {
+      logger.warn(
+        `CHATGPT_UPLOAD_REJECTED_ZIP_CONTENT=${path.basename(absolutePath)}`,
+      );
+      continue;
+    }
+    if (
+      /\/documents\//i.test(normalized) &&
+      !/^tender_all_documents/i.test(base)
+    ) {
+      logger.warn(
+        `CHATGPT_UPLOAD_REJECTED_INDIVIDUAL_DOC=${path.basename(absolutePath)}`,
       );
       continue;
     }
@@ -549,16 +636,18 @@ async function assignFilesToComposer(
   files: string[],
   logger: Logger,
   session: TenderUploadSession,
-  options?: {
-    forceFreshUpload?: boolean;
+  _options?: {
     expectedArchiveFileName?: string;
+    composerToken?: string;
   },
 ): Promise<void> {
+  void _options;
+  assertAttachmentsUnlocked(session, "assignFilesToComposer/setInputFiles");
   if (session.filesAssigned || session.uploadAttemptCount >= 1) {
-    logger.warn(
-      "CHATGPT_UPLOAD_BLOCKED_SECOND_ATTEMPT — files already assigned this tender",
+    throw new AutomationError(
+      "CHATGPT_UPLOAD_BLOCKED_SECOND_ATTEMPT",
+      "CHATGPT_UPLOAD_BLOCKED_SECOND_ATTEMPT=true — files already assigned this tender",
     );
-    return;
   }
 
   // Validate paths before clicking the UI
@@ -573,32 +662,8 @@ async function assignFilesToComposer(
     }
   }
 
-  // Never skip setFiles on forceFreshUpload. Otherwise only reuse when
-  // EVERY expected attachment identity is already visible for this tender.
-  if (!options?.forceFreshUpload) {
-    const presence = await detectComposerAttachments(page, {
-      expectedArchiveFileName:
-        options?.expectedArchiveFileName ||
-        path.basename(files.find((f) => /\.zip$/i.test(f)) || ""),
-    });
-    const expectMeta = files.some((f) =>
-      /metadata\.json$/i.test(path.basename(f)),
-    );
-    const expectZip = files.some((f) => /\.zip$/i.test(path.basename(f)));
-    const expectAi = files.some((f) =>
-      /ai[_\s-]*summary\.pdf$/i.test(path.basename(f)),
-    );
-    const allPresent =
-      (!expectMeta || presence.metadataAttached) &&
-      (!expectZip || presence.documentsAttached) &&
-      (!expectAi || presence.aiSummaryAttached);
-    if (allPresent) {
-      logger.info("CHATGPT_EXISTING_DRAFT_DETECTED");
-      logger.info("CHATGPT_EXISTING_ATTACHMENTS_REUSED");
-      session.filesAssigned = true;
-      return;
-    }
-  }
+  logger.info(`CHATGPT_FILES_ASSIGNED_COUNT=${files.length}`);
+  console.log(`CHATGPT_FILES_ASSIGNED_COUNT=${files.length}`);
 
   const plusButton = await findProjectComposerPlusButton(page);
   if (!plusButton) {
@@ -790,12 +855,12 @@ async function dismissDuplicateUploadDialog(
   return dismissed;
 }
 
-/** Strip ChatGPT duplicate suffixes: metadata(3).json → metadata.json */
+/** Strip ChatGPT display suffixes: metadata(3).json / metadata(20260812-084008).json → metadata.json */
 export function normalizeAttachmentName(value: string): string {
   return value
     .trim()
     .replace(/\s+/g, " ")
-    .replace(/\(\d+\)(?=\.[^.]+$)/, "")
+    .replace(/\([^)]*\)(?=\.[^.]+$)/, "")
     .toLowerCase();
 }
 
@@ -852,6 +917,53 @@ async function isVisibleText(page: Page, pattern: RegExp): Promise<boolean> {
   return false;
 }
 
+async function isVisibleTextInLocator(
+  root: Locator,
+  pattern: RegExp,
+): Promise<boolean> {
+  const candidates = root.getByText(pattern);
+  const count = await candidates.count().catch(() => 0);
+  for (let i = count - 1; i >= 0; i -= 1) {
+    if (
+      await candidates
+        .nth(i)
+        .isVisible()
+        .catch(() => false)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function collectAttrCandidatesInLocator(root: Locator): Promise<string[]> {
+  return root
+    .locator("[title], [aria-label]")
+    .evaluateAll((nodes) => {
+      const out: string[] = [];
+      const seen = new Set<string>();
+      for (const node of nodes) {
+        const el = node as HTMLElement;
+        for (const value of [
+          el.getAttribute("title") || "",
+          el.getAttribute("aria-label") || "",
+        ]) {
+          const trimmed = value.replace(/\s+/g, " ").trim();
+          if (!trimmed || seen.has(trimmed)) {
+            continue;
+          }
+          if (/^remove file\b/i.test(trimmed) || /^delete file\b/i.test(trimmed)) {
+            continue;
+          }
+          seen.add(trimmed);
+          out.push(trimmed);
+        }
+      }
+      return out;
+    })
+    .catch(() => [] as string[]);
+}
+
 async function collectPageAttrCandidates(page: Page): Promise<string[]> {
   return page
     .locator("[title], [aria-label]")
@@ -868,6 +980,9 @@ async function collectPageAttrCandidates(page: Page): Promise<string[]> {
           if (!trimmed || seen.has(trimmed)) {
             continue;
           }
+          if (/^remove file\b/i.test(trimmed) || /^delete file\b/i.test(trimmed)) {
+            continue;
+          }
           seen.add(trimmed);
           out.push(trimmed);
         }
@@ -877,21 +992,248 @@ async function collectPageAttrCandidates(page: Page): Promise<string[]> {
     .catch(() => [] as string[]);
 }
 
+const UPLOAD_LIMIT_WARNING_RE =
+  /You can upload up to 20 files at a time/i;
+
+/** Detect ChatGPT's 20-file upload warning in the composer. */
+export async function detectUploadLimitWarning(page: Page): Promise<boolean> {
+  return page
+    .getByText(UPLOAD_LIMIT_WARNING_RE)
+    .first()
+    .isVisible()
+    .catch(() => false);
+}
+
+/** Parse filename from ChatGPT Remove-file button aria-label. */
+export function parseRemoveFileButtonLabel(ariaLabel: string): string | null {
+  const trimmed = ariaLabel.replace(/\s+/g, " ").trim();
+  const match = trimmed.match(
+    /(?:Remove|Delete)\s+file(?:\s+\d+)?:?\s*(.+)$/i,
+  );
+  return match?.[1]?.trim() || null;
+}
+
+/** Drop Remove-file labels from attachment name lists. */
+export function filterComposerAttachmentDisplayNames(names: string[]): string[] {
+  return names
+    .map((name) => name.trim())
+    .filter((name) => name && !/^(?:Remove|Delete)\s+file\b/i.test(name));
+}
+
+export type ComposerAttachmentCountSnapshot = {
+  pageCount: number;
+  composerCount: number;
+  displayedNames: string[];
+};
+
+async function resolveComposerRoot(
+  page: Page,
+  composerToken?: string,
+): Promise<Locator> {
+  if (composerToken) {
+    const marked = page.locator(
+      `[${COMPOSER_TOKEN_ATTR}="${composerToken}"]`,
+    );
+    if ((await marked.count().catch(() => 0)) > 0) {
+      return marked.first();
+    }
+  }
+  return getActiveComposerContainer(page);
+}
+
+/** Page-wide attachment-like controls (debug only — not authoritative). */
+export async function countPageAttachmentCards(page: Page): Promise<number> {
+  return page
+    .locator(
+      'button[aria-label*="Remove file" i], button[aria-label*="Delete file" i]',
+    )
+    .filter({ visible: true })
+    .count()
+    .catch(() => 0);
+}
+
+/**
+ * Count attachment cards scoped to the active/token-marked composer only.
+ * Never falls back to page-wide detection for the authoritative count.
+ */
+export async function countComposerAttachmentCards(
+  page: Page,
+  options?: { composerToken?: string },
+): Promise<ComposerAttachmentCountSnapshot> {
+  const pageCount = await countPageAttachmentCards(page);
+  const shell = await resolveComposerRoot(page, options?.composerToken);
+  const removeButtons = shell
+    .locator(
+      'button[aria-label*="Remove file" i], button[aria-label*="Delete file" i]',
+    )
+    .filter({ visible: true });
+  const buttonCount = await removeButtons.count().catch(() => 0);
+  const displayedNames: string[] = [];
+
+  for (let i = 0; i < buttonCount; i += 1) {
+    const label =
+      (await removeButtons
+        .nth(i)
+        .getAttribute("aria-label")
+        .catch(() => null)) || "";
+    const parsed = parseRemoveFileButtonLabel(label);
+    if (parsed) {
+      displayedNames.push(parsed);
+    }
+  }
+
+  return {
+    pageCount,
+    composerCount: displayedNames.length,
+    displayedNames: filterComposerAttachmentDisplayNames(displayedNames),
+  };
+}
+
+/**
+ * @deprecated Prefer countComposerAttachmentCards — returns composer-scoped count only.
+ */
+export async function countVisibleComposerAttachmentCards(
+  page: Page,
+  options?: { composerToken?: string },
+): Promise<{ count: number; displayedNames: string[] }> {
+  const snapshot = await countComposerAttachmentCards(page, options);
+  return {
+    count: snapshot.composerCount,
+    displayedNames: snapshot.displayedNames,
+  };
+}
+
+function logAttachmentCountSnapshot(
+  snapshot: ComposerAttachmentCountSnapshot,
+  logger: Logger,
+): void {
+  logger.info(`CHATGPT_PAGE_ATTACHMENT_COUNT=${snapshot.pageCount}`);
+  console.log(`CHATGPT_PAGE_ATTACHMENT_COUNT=${snapshot.pageCount}`);
+  logger.info(`CHATGPT_COMPOSER_ATTACHMENT_COUNT=${snapshot.composerCount}`);
+  console.log(`CHATGPT_COMPOSER_ATTACHMENT_COUNT=${snapshot.composerCount}`);
+  // Legacy alias — composer count is authoritative
+  logger.info(`CHATGPT_EXISTING_ATTACHMENT_COUNT=${snapshot.composerCount}`);
+  console.log(`CHATGPT_EXISTING_ATTACHMENT_COUNT=${snapshot.composerCount}`);
+}
+
+/**
+ * Remove stale composer attachment cards before uploading a new tender.
+ */
+export async function clearStaleComposerAttachments(
+  page: Page,
+  logger: Logger,
+  options?: { composerToken?: string },
+): Promise<{
+  existingCount: number;
+  cleared: boolean;
+  pageCount: number;
+}> {
+  const before = await countComposerAttachmentCards(page, options);
+  logAttachmentCountSnapshot(before, logger);
+
+  if (before.composerCount === 0) {
+    return {
+      existingCount: 0,
+      cleared: false,
+      pageCount: before.pageCount,
+    };
+  }
+
+  logger.info(`CHATGPT_STALE_ATTACHMENTS_FOUND=${before.composerCount}`);
+  console.log(`CHATGPT_STALE_ATTACHMENTS_FOUND=${before.composerCount}`);
+  await clearComposerDraft(page, logger, options);
+
+  const after = await countComposerAttachmentCards(page, options);
+  logAttachmentCountSnapshot(after, logger);
+  const cleared = after.composerCount === 0;
+  if (cleared) {
+    logger.info("CHATGPT_STALE_ATTACHMENTS_CLEARED=true");
+    console.log("CHATGPT_STALE_ATTACHMENTS_CLEARED=true");
+  } else {
+    logger.warn(
+      `CHATGPT_STALE_ATTACHMENTS_REMAIN=${after.composerCount} names=${after.displayedNames.join("; ")}`,
+    );
+  }
+
+  return {
+    existingCount: before.composerCount,
+    cleared,
+    pageCount: before.pageCount,
+  };
+}
+
+/**
+ * Hard gate: composer must be empty before assigning new files.
+ */
+export async function ensureComposerCleanBeforeUpload(
+  page: Page,
+  logger: Logger,
+  options: { composerToken: string },
+): Promise<{ beforeCount: number; cleared: boolean; pageCount: number }> {
+  const before = await countComposerAttachmentCards(page, {
+    composerToken: options.composerToken,
+  });
+  logger.info(
+    `CHATGPT_COMPOSER_ATTACHMENT_COUNT_BEFORE_UPLOAD=${before.composerCount}`,
+  );
+  console.log(
+    `CHATGPT_COMPOSER_ATTACHMENT_COUNT_BEFORE_UPLOAD=${before.composerCount}`,
+  );
+  logAttachmentCountSnapshot(before, logger);
+
+  if (before.composerCount === 0) {
+    return {
+      beforeCount: 0,
+      cleared: false,
+      pageCount: before.pageCount,
+    };
+  }
+
+  const cleanup = await clearStaleComposerAttachments(page, logger, {
+    composerToken: options.composerToken,
+  });
+  const after = await countComposerAttachmentCards(page, {
+    composerToken: options.composerToken,
+  });
+
+  if (after.composerCount !== 0) {
+    logger.error("CHATGPT_COMPOSER_NOT_CLEAN=true");
+    logger.error("CHATGPT_UPLOAD_BLOCKED=true");
+    console.log("CHATGPT_COMPOSER_NOT_CLEAN=true");
+    console.log("CHATGPT_UPLOAD_BLOCKED=true");
+    throw new AutomationError(
+      "CHATGPT_COMPOSER_NOT_CLEAN",
+      `Composer still has ${after.composerCount} attachment(s) after cleanup; stale=${cleanup.existingCount}`,
+    );
+  }
+
+  return {
+    beforeCount: before.composerCount,
+    cleared: cleanup.cleared,
+    pageCount: before.pageCount,
+  };
+}
+
 export async function detectComposerAttachments(
   page: Page,
-  options?: { expectedArchiveFileName?: string },
+  options?: { expectedArchiveFileName?: string; composerToken?: string },
 ): Promise<ComposerAttachmentPresence> {
-  // Page-wide detection — attachment strip is often outside editor/form scope
-  const metadataAttached = await isVisibleText(
-    page,
-    /metadata(?:\(\d+\))?\.json/i,
-  );
-  const aiSummaryAttached = await isVisibleText(
-    page,
-    /AI[_\s-]*Summary(?:\(\d+\))?\.pdf/i,
-  );
+  const scope: Locator = options?.composerToken
+    ? await resolveComposerRoot(page, options.composerToken)
+    : getActiveComposerContainer(page);
+  const pageWide = !options?.composerToken;
 
-  const attrCandidates = await collectPageAttrCandidates(page);
+  // Accept timestamped/suffixed display names: metadata(20260812-084008).json etc.
+  const metadataAttached = pageWide
+    ? await isVisibleText(page, /metadata\S*\.json/i)
+    : await isVisibleTextInLocator(scope, /metadata\S*\.json/i);
+  const aiSummaryAttached = pageWide
+    ? await isVisibleText(page, /AI[_\s-]*Summary\S*\.pdf/i)
+    : await isVisibleTextInLocator(scope, /AI[_\s-]*Summary\S*\.pdf/i);
+
+  const attrCandidates = pageWide
+    ? await collectPageAttrCandidates(page)
+    : await collectAttrCandidatesInLocator(scope);
   const expectedZip = options?.expectedArchiveFileName?.trim();
   const attrHasDocuments = attrCandidates.some((value) => {
     if (/Tender[_\s-]*All[_\s-]*Documents/i.test(value)) {
@@ -899,7 +1241,7 @@ export async function detectComposerAttachments(
     }
     if (expectedZip) {
       const stripDup = (name: string): string =>
-        name.replace(/(\(\d+\))(?=\.[^.]+$)/, "");
+        name.replace(/\([^)]*\)(?=\.[^.]+$)/, "");
       return (
         stripDup(value).toLowerCase().includes(
           stripDup(expectedZip).toLowerCase().replace(/\.zip$/i, ""),
@@ -909,28 +1251,38 @@ export async function detectComposerAttachments(
     return false;
   });
 
-  let documentsAttached =
-    (await isVisibleText(
-      page,
-      /Tender[_\s-]*All[_\s-]*Documents(?:\(\d+\))?\.zip/i,
-    )) ||
-    (await isVisibleText(page, /Tender[_\s-]*All[_\s-]*Doc/i)) ||
-    attrHasDocuments;
+  let documentsAttached = pageWide
+    ? (await isVisibleText(
+        page,
+        /Tender[_\s-]*All[_\s-]*Documents\S*\.zip/i,
+      )) ||
+      (await isVisibleText(page, /Tender[_\s-]*All[_\s-]*Doc/i)) ||
+      attrHasDocuments
+    : (await isVisibleTextInLocator(
+        scope,
+        /Tender[_\s-]*All[_\s-]*Documents\S*\.zip/i,
+      )) ||
+      (await isVisibleTextInLocator(scope, /Tender[_\s-]*All[_\s-]*Doc/i)) ||
+      attrHasDocuments;
 
   if (!documentsAttached && expectedZip) {
     const escaped = expectedZip
       .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
       .replace(/\\\.zip$/i, "")
-      .replace(/\\\(\\d\+\\\)/g, "");
-    const zipRe = new RegExp(`${escaped}(?:\\(\\d+\\))?\\.zip`, "i");
-    documentsAttached =
-      (await isVisibleText(page, zipRe)) ||
-      attrCandidates.some((value) => zipRe.test(value));
+      .replace(/\\\([^)]*\\\)/g, "");
+    const zipRe = new RegExp(`${escaped}(?:\\([^)]*\\))?\\.zip`, "i");
+    documentsAttached = pageWide
+      ? (await isVisibleText(page, zipRe)) ||
+        attrCandidates.some((value) => zipRe.test(value))
+      : (await isVisibleTextInLocator(scope, zipRe)) ||
+        attrCandidates.some((value) => zipRe.test(value));
   }
 
   // Truncated ZIP: type label "Zip Archive" plus Tender cue in attrs/text
   if (!documentsAttached) {
-    const zipLabel = await isVisibleText(page, /^Zip Archive$/i);
+    const zipLabel = pageWide
+      ? await isVisibleText(page, /^Zip Archive$/i)
+      : await isVisibleTextInLocator(scope, /^Zip Archive$/i);
     if (zipLabel && (attrHasDocuments || metadataAttached || aiSummaryAttached)) {
       documentsAttached = true;
     }
@@ -1021,9 +1373,13 @@ async function inspectComposerDraft(
   };
 }
 
-async function clearComposerDraft(page: Page, logger: Logger): Promise<void> {
-  const shell = getActiveComposerContainer(page);
-  for (let i = 0; i < 8; i += 1) {
+async function clearComposerDraft(
+  page: Page,
+  logger: Logger,
+  options?: { composerToken?: string },
+): Promise<void> {
+  const shell = await resolveComposerRoot(page, options?.composerToken);
+  for (let i = 0; i < MAX_STALE_ATTACHMENT_REMOVALS; i += 1) {
     const remove = shell
       .locator(
         'button[aria-label*="Remove" i], button[aria-label*="Delete" i], button[aria-label*="Remove file" i]',
@@ -1038,10 +1394,15 @@ async function clearComposerDraft(page: Page, logger: Logger): Promise<void> {
     await page.waitForTimeout(300);
   }
 
-  const editor = getComposerEditor(page);
-  await editor.click({ timeout: 5_000 }).catch(() => undefined);
-  await page.keyboard.press("Control+A").catch(() => undefined);
-  await page.keyboard.press("Backspace").catch(() => undefined);
+  const editor = shell
+    .locator('[contenteditable="true"]')
+    .filter({ visible: true })
+    .last();
+  if ((await editor.count().catch(() => 0)) > 0) {
+    await editor.click({ timeout: 5_000 }).catch(() => undefined);
+    await page.keyboard.press("Control+A").catch(() => undefined);
+    await page.keyboard.press("Backspace").catch(() => undefined);
+  }
   logger.info("CHATGPT_STALE_DRAFT_CLEARED");
 }
 
@@ -1076,6 +1437,124 @@ async function hasVisibleUploadError(page: Page): Promise<boolean> {
 }
 
 /**
+ * Poll composer-scoped attachment cards until count + logical types are stable.
+ */
+export async function waitForStableComposerAttachments(
+  page: Page,
+  options: {
+    composerToken: string;
+    manifest: Tender247ExpectedManifest;
+    logger: Logger;
+    timeoutMs?: number;
+  },
+): Promise<{
+  composerCount: number;
+  displayedNames: string[];
+  validation: ReturnType<typeof evaluateAttachmentStabilityPoll>["validation"];
+}> {
+  const { composerToken, manifest, logger } = options;
+  const timeoutMs = options.timeoutMs ?? 45_000;
+  const deadline = Date.now() + timeoutMs;
+
+  let consecutiveStablePolls = 0;
+  let previousStableCount: number | null = null;
+  let lastSnapshot = await countComposerAttachmentCards(page, { composerToken });
+  let lastValidation = evaluateAttachmentStabilityPoll({
+    composerCount: lastSnapshot.composerCount,
+    displayedNames: lastSnapshot.displayedNames,
+    manifest,
+    previousStableCount,
+    consecutiveStablePolls,
+  }).validation;
+
+  while (Date.now() < deadline) {
+    await dismissDuplicateUploadDialog(page, logger);
+
+    if (await detectUploadLimitWarning(page)) {
+      throw new AutomationError(
+        "CHATGPT_UPLOAD_LIMIT_WARNING",
+        "CHATGPT_UPLOAD_LIMIT_WARNING=true",
+      );
+    }
+    if (await hasVisibleUploadError(page)) {
+      throw new AutomationError(
+        "CHATGPT_UPLOAD_FAILED",
+        "Visible upload error in composer attachment cards",
+      );
+    }
+
+    lastSnapshot = await countComposerAttachmentCards(page, { composerToken });
+    logger.info(
+      `CHATGPT_UPLOAD_STABILITY_POLL composerCount=${lastSnapshot.composerCount} expected=${manifest.expectedCount}`,
+    );
+
+    const poll = evaluateAttachmentStabilityPoll({
+      composerCount: lastSnapshot.composerCount,
+      displayedNames: lastSnapshot.displayedNames,
+      manifest,
+      previousStableCount,
+      consecutiveStablePolls,
+    });
+    lastValidation = poll.validation;
+    consecutiveStablePolls = poll.consecutiveStablePolls;
+    previousStableCount = lastSnapshot.composerCount;
+
+    if (poll.stable) {
+      logger.info(
+        `CHATGPT_LOGICAL_METADATA_PRESENT=${poll.validation.metadataCount === 1}`,
+      );
+      console.log(
+        `CHATGPT_LOGICAL_METADATA_PRESENT=${poll.validation.metadataCount === 1}`,
+      );
+      logger.info(
+        `CHATGPT_LOGICAL_AI_SUMMARY_PRESENT=${poll.validation.aiSummaryCount === 1}`,
+      );
+      console.log(
+        `CHATGPT_LOGICAL_AI_SUMMARY_PRESENT=${poll.validation.aiSummaryCount === 1}`,
+      );
+      logger.info(
+        `CHATGPT_LOGICAL_ZIP_PRESENT=${poll.validation.archiveCount === 1}`,
+      );
+      console.log(
+        `CHATGPT_LOGICAL_ZIP_PRESENT=${poll.validation.archiveCount === 1}`,
+      );
+      logger.info(
+        `CHATGPT_CURRENT_COMPOSER_ATTACHMENT_COUNT=${lastSnapshot.composerCount}`,
+      );
+      console.log(
+        `CHATGPT_CURRENT_COMPOSER_ATTACHMENT_COUNT=${lastSnapshot.composerCount}`,
+      );
+      logger.info("CHATGPT_ATTACHMENT_STATE_STABLE=true");
+      console.log("CHATGPT_ATTACHMENT_STATE_STABLE=true");
+      logger.info(
+        `CHATGPT_COMPOSER_ATTACHMENT_COUNT=${lastSnapshot.composerCount}`,
+      );
+      console.log(
+        `CHATGPT_COMPOSER_ATTACHMENT_COUNT=${lastSnapshot.composerCount}`,
+      );
+      if (lastValidation.ok) {
+        for (const entry of manifest.entries) {
+          logger.info(`CHATGPT_ATTACHMENT_READY=${entry.expectedFileName}`);
+          console.log(`CHATGPT_ATTACHMENT_READY=${entry.expectedFileName}`);
+        }
+      }
+      return {
+        composerCount: lastSnapshot.composerCount,
+        displayedNames: lastSnapshot.displayedNames,
+        validation: lastValidation,
+      };
+    }
+
+    await page.waitForTimeout(STABLE_ATTACHMENT_POLL_MS);
+  }
+
+  throw new AutomationError(
+    "CHATGPT_ATTACHMENT_NOT_VISIBLE",
+    `Attachments not stable within timeout expected=${manifest.expectedCount} lastCount=${lastSnapshot.composerCount} reason=${lastValidation.failureReason || "timeout"}`,
+  );
+}
+
+/**
  * Wait until attachment cards are detected for every expected file.
  * sendEnabled alone is never treated as proof that attachments are ready.
  */
@@ -1085,6 +1564,7 @@ async function waitForAttachmentChips(
   logger: Logger,
   session?: TenderUploadSession,
   _t247Id?: string,
+  options?: { composerToken?: string },
 ): Promise<void> {
   const expectedCount = files.length;
   const expected = {
@@ -1123,6 +1603,7 @@ async function waitForAttachmentChips(
       )
         ? path.basename(files.find((f) => /\.zip$/i.test(path.basename(f)))!)
         : undefined,
+      composerToken: options?.composerToken,
     });
     if (!candidatesLogged && lastPresence.candidates.length > 0) {
       for (const candidate of lastPresence.candidates.slice(0, 12)) {
@@ -1313,13 +1794,30 @@ export async function typeComposerPrompt(
   logger?.info("CHATGPT_PROMPT_ENTERED");
 }
 
+/** Read current composer text length / presence for prompt verification. */
+export async function readComposerPromptPresence(
+  page: Page,
+  expectedSnippet: RegExp = /Evaluate this tender for Siyana/i,
+): Promise<{ present: boolean; length: number; text: string }> {
+  const composer = getProjectComposerLocator(page);
+  const text = (await composer.innerText().catch(() => "")).trim();
+  const length = text.length;
+  const present =
+    expectedSnippet.test(text) &&
+    length >= 80 &&
+    !/^New chat in/i.test(text);
+  return { present, length, text };
+}
+
 const COMPOSER_SEND_BUTTON_SELECTORS = [
   'button[data-testid="send-button"]',
+  '[data-testid="send-button"]',
+  'button[data-testid="fruitjuice-send-button"]',
+  'button[aria-label*="Send message" i]',
+  'button[aria-label^="Send" i]',
   'button[aria-label*="Send" i]',
   'button[aria-label*="Submit" i]',
 ] as const;
-
-const COMPOSER_SEND_BUTTON_SELECTOR = COMPOSER_SEND_BUTTON_SELECTORS.join(", ");
 
 function isExcludedComposerControl(attrs: {
   ariaLabel: string;
@@ -1327,24 +1825,52 @@ function isExcludedComposerControl(attrs: {
   testId: string;
 }): boolean {
   const haystack = `${attrs.ariaLabel} ${attrs.title} ${attrs.testId}`.toLowerCase();
-  return /mic|voice|dictat|speech|listen|model|gpt-|o1|o3|o4|chooser|attach|plus|add files|upload|photo|tool|search|web/i.test(
+  return /mic|voice|dictat|speech|listen|model|gpt-|o1|o3|o4|chooser|attach|plus|add files|upload|photo|tool|search|web|stop|cancel|audio/i.test(
     haystack,
   );
 }
 
+export type ComposerSendButtonDiagnostics = {
+  found: boolean;
+  visible: boolean;
+  enabled: boolean;
+  count: number;
+  locator: Locator | null;
+};
+
 /**
  * Locate the Project composer Send button (including unlabeled upward-arrow).
- * Returns null when nothing suitable is found (caller may use Enter fallback).
+ * Always scoped to the active composer shell — never page-wide nth().
  */
-async function locateComposerSendButton(
+export async function locateComposerSendButton(
   page: Page,
   logger?: Logger,
+  options?: { composerToken?: string },
 ): Promise<Locator | null> {
-  const shell = getActiveComposerContainer(page);
+  const diag = await resolveComposerSendButton(page, logger, options);
+  return diag.locator;
+}
+
+export async function resolveComposerSendButton(
+  page: Page,
+  logger?: Logger,
+  options?: { composerToken?: string },
+): Promise<ComposerSendButtonDiagnostics> {
+  const shell = options?.composerToken
+    ? await resolveComposerRoot(page, options.composerToken)
+    : getActiveComposerContainer(page);
+
+  const allButtons = shell.locator("button");
+  const count = await allButtons.count().catch(() => 0);
 
   for (const selector of COMPOSER_SEND_BUTTON_SELECTORS) {
-    const candidate = shell.locator(selector).filter({ visible: true }).first();
-    if (await candidate.isVisible().catch(() => false)) {
+    const group = shell.locator(selector);
+    const groupCount = await group.count().catch(() => 0);
+    for (let i = 0; i < Math.min(groupCount, 6); i += 1) {
+      const candidate = group.nth(i);
+      if (!(await candidate.isVisible().catch(() => false))) {
+        continue;
+      }
       const ariaLabel =
         (await candidate.getAttribute("aria-label").catch(() => null)) || "";
       const title =
@@ -1360,34 +1886,40 @@ async function locateComposerSendButton(
       ) {
         continue;
       }
-      return candidate;
+      const disabled = await candidate.isDisabled().catch(() => true);
+      return {
+        found: true,
+        visible: true,
+        enabled: !disabled,
+        count,
+        locator: candidate,
+      };
     }
   }
 
-  // Combined selector fallback
-  const combined = shell
-    .locator(COMPOSER_SEND_BUTTON_SELECTOR)
-    .filter({ visible: true })
-    .first();
-  if (await combined.isVisible().catch(() => false)) {
-    return combined;
-  }
-
-  // Bottom-right upward-arrow fallback (may lack a useful aria-label)
+  // Bottom-right upward-arrow / circular Send fallback inside composer only.
   const shellBox = await shell.boundingBox().catch(() => null);
   if (!shellBox) {
     logger?.warn("CHATGPT_SEND_BUTTON_MISSING — composer shell has no box");
-    return null;
+    return {
+      found: false,
+      visible: false,
+      enabled: false,
+      count,
+      locator: null,
+    };
   }
 
-  const buttons = shell.locator("button").filter({ visible: true });
-  const count = await buttons.count().catch(() => 0);
+  const buttons = shell.locator("button");
+  const btnCount = await buttons.count().catch(() => 0);
   type Candidate = {
     index: number;
     ariaLabel: string;
     title: string;
     testId: string;
     disabled: boolean;
+    hasSvg: boolean;
+    circular: boolean;
     x: number;
     y: number;
     width: number;
@@ -1395,8 +1927,11 @@ async function locateComposerSendButton(
   };
   const candidates: Candidate[] = [];
 
-  for (let i = 0; i < count; i += 1) {
+  for (let i = 0; i < btnCount; i += 1) {
     const btn = buttons.nth(i);
+    if (!(await btn.isVisible().catch(() => false))) {
+      continue;
+    }
     const box = await btn.boundingBox().catch(() => null);
     if (!box || box.width <= 0 || box.height <= 0) {
       continue;
@@ -1407,12 +1942,18 @@ async function locateComposerSendButton(
     const title = (await btn.getAttribute("title").catch(() => null)) || "";
     const testId =
       (await btn.getAttribute("data-testid").catch(() => null)) || "";
+    const hasSvg = (await btn.locator("svg").count().catch(() => 0)) > 0;
+    const ratio =
+      Math.min(box.width, box.height) / Math.max(box.width, box.height);
+    const circular = ratio >= 0.75 && box.width <= 72 && box.height <= 72;
     candidates.push({
       index: i,
       ariaLabel,
       title,
       testId,
       disabled,
+      hasSvg,
+      circular,
       x: box.x,
       y: box.y,
       width: box.width,
@@ -1428,14 +1969,16 @@ async function locateComposerSendButton(
         title: c.title,
         testId: c.testId,
         disabled: c.disabled,
+        hasSvg: c.hasSvg,
+        circular: c.circular,
         x: Math.round(c.x),
         y: Math.round(c.y),
       })),
     )}`,
   );
 
-  const rightThreshold = shellBox.x + shellBox.width * 0.75;
-  const bottomThreshold = shellBox.y + shellBox.height * 0.6;
+  const rightThreshold = shellBox.x + shellBox.width * 0.7;
+  const bottomThreshold = shellBox.y + shellBox.height * 0.55;
 
   const ranked = candidates
     .filter((c) => {
@@ -1453,30 +1996,59 @@ async function locateComposerSendButton(
       }
       const cx = c.x + c.width / 2;
       const cy = c.y + c.height / 2;
-      return cx >= rightThreshold && cy >= bottomThreshold;
+      if (!(cx >= rightThreshold && cy >= bottomThreshold)) {
+        return false;
+      }
+      // Prefer icon/circular send; skip wide text buttons.
+      return c.hasSvg || c.circular || /send|submit/i.test(c.ariaLabel);
     })
     .sort((a, b) => {
-      // Prefer rightmost, then bottommost
-      const ax = a.x + a.width / 2;
-      const bx = b.x + b.width / 2;
-      if (bx !== ax) {
-        return bx - ax;
-      }
-      return b.y + b.height / 2 - (a.y + a.height / 2);
+      // Prefer explicit send testid/aria, then circular+svg, then rightmost/bottommost.
+      const score = (c: Candidate): number => {
+        let s = 0;
+        if (/send-button/i.test(c.testId)) s += 100;
+        if (/^send/i.test(c.ariaLabel)) s += 50;
+        if (c.circular && c.hasSvg) s += 30;
+        if (c.hasSvg) s += 10;
+        s += (c.x + c.width / 2) / 1000;
+        s += (c.y + c.height / 2) / 10000;
+        return s;
+      };
+      return score(b) - score(a);
     });
 
   if (ranked.length === 0) {
     logger?.warn(
       "CHATGPT_SEND_BUTTON_MISSING — no bottom-right composer button matched",
     );
-    return null;
+    return {
+      found: false,
+      visible: false,
+      enabled: false,
+      count,
+      locator: null,
+    };
   }
 
   const best = ranked[0]!;
   logger?.info(
-    `CHATGPT_SEND_BUTTON_FALLBACK_ARROW index=${best.index} aria="${best.ariaLabel}" title="${best.title}" testid="${best.testId}"`,
+    `CHATGPT_SEND_BUTTON_FALLBACK_ARROW index=${best.index} aria="${best.ariaLabel}" title="${best.title}" testid="${best.testId}" circular=${best.circular}`,
   );
-  return buttons.nth(best.index);
+  const locator = buttons.nth(best.index);
+  return {
+    found: true,
+    visible: true,
+    enabled: !best.disabled,
+    count,
+    locator,
+  };
+}
+
+function logSendButtonDiagnostics(diag: ComposerSendButtonDiagnostics): void {
+  console.log(`CHATGPT_SEND_BUTTON_FOUND=${diag.found}`);
+  console.log(`CHATGPT_SEND_BUTTON_VISIBLE=${diag.visible}`);
+  console.log(`CHATGPT_SEND_BUTTON_ENABLED=${diag.enabled}`);
+  console.log(`CHATGPT_SEND_BUTTON_COUNT=${diag.count}`);
 }
 
 export type MessageBaseline = {
@@ -1534,6 +2106,12 @@ export async function sendComposerMessage(
       fileNames: string[];
       composerIdentity: string;
     };
+    /**
+     * When true, caller already acquired the shared Send slot
+     * (legacy — prefer letting sendComposerMessage own withGlobalSendSlot).
+     */
+    sendSlotAlreadyHeld?: boolean;
+    workerId?: number;
   },
 ): Promise<SendComposerResult> {
   const requireNewConversation = options?.requireNewConversation ?? true;
@@ -1542,6 +2120,8 @@ export async function sendComposerMessage(
     /Evaluate this tender for Siyana Info Solutions Pvt\. Ltd\./i;
   const expectedT247Id = options?.expectedT247Id;
   const confirmed = options?.confirmedAttachments;
+  const sendSlotAlreadyHeld = options?.sendSlotAlreadyHeld === true;
+  const workerId = options?.workerId;
 
   await assertNotRateLimited(page, logger);
 
@@ -1559,14 +2139,28 @@ export async function sendComposerMessage(
     }
   }
 
-  // Shared cross-source Send throttle (remaining interval only).
-  await waitForSharedSubmissionInterval({
-    minIntervalMs: getDefaultMinSubmissionIntervalMs(),
-    logger,
-  });
+  const scheduler = getSharedChatGptSubmissionScheduler();
 
+  // Global mutex: wait for interval + hold through Send confirmation, then release.
+  // Do NOT hold during response wait (released before return to caller).
+  let sendSlotHeld = sendSlotAlreadyHeld;
+  if (!sendSlotAlreadyHeld) {
+    await scheduler.acquireSendSlot({ logger, workerId });
+    sendSlotHeld = true;
+  }
+
+  const releaseSendSlotSafe = (success: boolean): void => {
+    if (!sendSlotHeld) return;
+    sendSlotHeld = false;
+    if (success) {
+      scheduler.noteSuccess();
+    }
+    scheduler.releaseSendSlot();
+  };
+
+  try {
   // Soft settle only — do not block on decorative spinner DOM
-  const softDeadline = Date.now() + 5_000;
+  const softDeadline = Date.now() + 3_000;
   while (Date.now() < softDeadline) {
     if (await isComposerSendEnabled(page)) {
       break;
@@ -1579,7 +2173,7 @@ export async function sendComposerMessage(
     if (!uploading) {
       break;
     }
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(250);
   }
 
   if (requireNewConversation) {
@@ -1587,6 +2181,7 @@ export async function sendComposerMessage(
       confirmed!.fileNames.find((n) => /\.zip$/i.test(n)) || undefined;
     const presence = await detectComposerAttachments(page, {
       expectedArchiveFileName: archiveName,
+      composerToken: confirmed!.composerIdentity,
     });
     const metadataDetected = presence.metadataAttached;
     const tenderArchiveDetected = presence.documentsAttached;
@@ -1595,6 +2190,10 @@ export async function sendComposerMessage(
       metadataDetected &&
       (tenderArchiveDetected || bidassistArchiveDetected);
     if (!requiredAttachmentsReady) {
+      if (!metadataDetected && tenderArchiveDetected) {
+        console.log("CHATGPT_REQUIRED_ATTACHMENT_MISSING=metadata");
+        logger?.error("CHATGPT_REQUIRED_ATTACHMENT_MISSING=metadata");
+      }
       throw new AutomationError(
         "CHATGPT_PRE_SEND_ATTACHMENT_CHECK_FAILED",
         `Cannot submit: metadata=${presence.metadataAttached} documents=${presence.documentsAttached} cards=${presence.visibleCardCount}`,
@@ -1608,24 +2207,51 @@ export async function sendComposerMessage(
     `CHATGPT_MESSAGE_BASELINE assistants=${baseline.assistantCountBefore} users=${baseline.userCountBefore}`,
   );
 
-  const sendButton = await locateComposerSendButton(page, logger);
+  const sendDiag = await resolveComposerSendButton(page, logger, {
+    composerToken: confirmed?.composerIdentity,
+  });
+  logSendButtonDiagnostics(sendDiag);
+  logger?.info(`CHATGPT_SEND_BUTTON_FOUND=${sendDiag.found}`);
+  logger?.info(`CHATGPT_SEND_BUTTON_VISIBLE=${sendDiag.visible}`);
+  logger?.info(`CHATGPT_SEND_BUTTON_ENABLED=${sendDiag.enabled}`);
+  logger?.info(`CHATGPT_SEND_BUTTON_COUNT=${sendDiag.count}`);
+
+  const sendButton = sendDiag.locator;
   let usedEnterFallback = false;
 
   if (sendButton) {
-    const disabled = await sendButton.isDisabled().catch(() => true);
-    if (disabled) {
-      throw new AutomationError(
-        "CHATGPT_SEND_BUTTON_DISABLED",
-        "Project composer Send button is disabled",
-      );
+    if (!sendDiag.enabled) {
+      // Brief wait for enablement (max ~8s) — do not stall for minutes.
+      const enableDeadline = Date.now() + 8_000;
+      let enabled = false;
+      while (Date.now() < enableDeadline) {
+        const disabled = await sendButton.isDisabled().catch(() => true);
+        if (!disabled) {
+          enabled = true;
+          break;
+        }
+        await page.waitForTimeout(250);
+      }
+      if (!enabled) {
+        throw new AutomationError(
+          "CHATGPT_SEND_BUTTON_DISABLED",
+          "Project composer Send button is disabled",
+        );
+      }
     }
     logger?.info("CHATGPT_SEND_BUTTON_ENABLED");
+    console.log("CHATGPT_SEND_CLICK_START");
+    logger?.info("CHATGPT_SEND_CLICK_START");
     await sendButton.scrollIntoViewIfNeeded().catch(() => undefined);
-    await sendButton.click({ timeout: 10_000 });
+    await sendButton.click({ timeout: 10_000, force: true });
+    console.log("CHATGPT_SEND_CLICKED=true");
+    logger?.info("CHATGPT_SEND_CLICKED=true");
     logger?.info("CHATGPT_SEND_CLICKED");
   } else {
     const promptReady = await composerStillHasPromptText(page);
-    const presence = await detectComposerAttachments(page);
+    const presence = await detectComposerAttachments(page, {
+      composerToken: confirmed?.composerIdentity,
+    });
     const attachmentsReady =
       !requireNewConversation ||
       (presence.metadataAttached && presence.documentsAttached);
@@ -1638,11 +2264,15 @@ export async function sendComposerMessage(
     logger?.warn(
       "CHATGPT_SEND_BUTTON_MISSING — using single Enter keyboard fallback",
     );
+    console.log("CHATGPT_SEND_CLICK_START");
+    logger?.info("CHATGPT_SEND_CLICK_START");
     const composer = getProjectComposerLocator(page);
     await composer.click({ timeout: 5_000 }).catch(() => undefined);
     await page.keyboard.up("Shift").catch(() => undefined);
     await composer.press("Enter");
     usedEnterFallback = true;
+    console.log("CHATGPT_SEND_CLICKED=true");
+    logger?.info("CHATGPT_SEND_CLICKED=true");
     logger?.info("CHATGPT_SEND_CLICKED");
   }
 
@@ -1658,9 +2288,11 @@ export async function sendComposerMessage(
   const submitted = await waitForPromptSubmissionVerified(page, verifyOpts);
 
   if (submitted) {
+    logger?.info("CHATGPT_PROMPT_SUBMITTED=true");
+    console.log("CHATGPT_PROMPT_SUBMITTED=true");
     logger?.info("CHATGPT_PROMPT_SUBMITTED");
     if (confirmed) {
-      recordSuccessfulSubmission({
+      scheduler.markSubmissionSuccess({
         sourcePortal: confirmed.sourcePortal,
         sourceTenderId: confirmed.sourceTenderId,
       });
@@ -1672,11 +2304,14 @@ export async function sendComposerMessage(
         `Submission verified but URL is not a conversation: ${url}`,
       );
     }
+    console.log(`CHATGPT_CONVERSATION_URL=${url}`);
+    logger?.info(`CHATGPT_CONVERSATION_URL=${url}`);
     if (expectedT247Id) {
       logger?.info(
         `CHATGPT_CURRENT_USER_MESSAGE_CONFIRMED=T247-${expectedT247Id}`,
       );
     }
+    releaseSendSlotSafe(true);
     return { chatUrl: url, baseline, submissionConfirmed: true };
   }
 
@@ -1688,18 +2323,23 @@ export async function sendComposerMessage(
     expectedT247Id,
   });
   if (authoritative) {
+    logger?.info("CHATGPT_PROMPT_SUBMITTED=true");
+    console.log("CHATGPT_PROMPT_SUBMITTED=true");
     logger?.info("CHATGPT_PROMPT_SUBMITTED");
     if (confirmed) {
-      recordSuccessfulSubmission({
+      scheduler.markSubmissionSuccess({
         sourcePortal: confirmed.sourcePortal,
         sourceTenderId: confirmed.sourceTenderId,
       });
     }
+    console.log(`CHATGPT_CONVERSATION_URL=${page.url()}`);
+    logger?.info(`CHATGPT_CONVERSATION_URL=${page.url()}`);
     if (expectedT247Id) {
       logger?.info(
         `CHATGPT_CURRENT_USER_MESSAGE_CONFIRMED=T247-${expectedT247Id}`,
       );
     }
+    releaseSendSlotSafe(true);
     return { chatUrl: page.url(), baseline, submissionConfirmed: true };
   }
 
@@ -1733,7 +2373,7 @@ export async function sendComposerMessage(
     }))) {
       logger?.info("CHATGPT_PROMPT_SUBMITTED");
       if (confirmed) {
-        recordSuccessfulSubmission({
+        scheduler.markSubmissionSuccess({
           sourcePortal: confirmed.sourcePortal,
           sourceTenderId: confirmed.sourceTenderId,
         });
@@ -1750,6 +2390,7 @@ export async function sendComposerMessage(
           `CHATGPT_CURRENT_USER_MESSAGE_CONFIRMED=T247-${expectedT247Id}`,
         );
       }
+      releaseSendSlotSafe(true);
       return { chatUrl: url, baseline, submissionConfirmed: true };
     }
   }
@@ -1758,6 +2399,10 @@ export async function sendComposerMessage(
     "CHATGPT_PROMPT_NOT_SUBMITTED",
     "Prompt was not submitted: no new user message and/or no /c/ conversation URL after Send",
   );
+  } catch (error) {
+    releaseSendSlotSafe(false);
+    throw error;
+  }
 }
 
 async function composerStillHasPromptText(page: Page): Promise<boolean> {
@@ -1790,7 +2435,7 @@ async function composerStillHasAttachmentChips(page: Page): Promise<boolean> {
  * Authoritative submission success: new user message (after baseline) + /c/ URL.
  * Composer / attachment clearing is ignored.
  */
-async function isAuthoritativePromptSubmission(
+export async function isAuthoritativePromptSubmission(
   page: Page,
   options: {
     baseline: MessageBaseline;
@@ -1803,6 +2448,42 @@ async function isAuthoritativePromptSubmission(
   }
   const match = await findSubmittedUserMessage(page, options);
   return match !== null;
+}
+
+/** Detect submission without a baseline (post-uncertain Send). */
+export async function detectSubmissionSignals(
+  page: Page,
+  options?: {
+    expectedT247Id?: string;
+    userMessagePattern?: RegExp;
+  },
+): Promise<{
+  conversationUrl: boolean;
+  userPromptVisible: boolean;
+  submitted: boolean;
+  url: string;
+}> {
+  const url = page.url();
+  const conversationUrl = isConversationUrl(url);
+  const pattern =
+    options?.userMessagePattern ??
+    /Evaluate this tender for Siyana Info Solutions Pvt\. Ltd\./i;
+  const match = await findSubmittedUserMessage(page, {
+    baseline: {
+      assistantCountBefore: 0,
+      userCountBefore: 0,
+      capturedAt: new Date(0).toISOString(),
+    },
+    userMessagePattern: pattern,
+    expectedT247Id: options?.expectedT247Id,
+  });
+  const userPromptVisible = match !== null;
+  return {
+    conversationUrl,
+    userPromptVisible,
+    submitted: conversationUrl && userPromptVisible,
+    url,
+  };
 }
 
 async function findSubmittedUserMessage(
@@ -1981,7 +2662,8 @@ export function isLikelyConversationUrl(url: string): boolean {
 
 export type AssistantWaitResult =
   | { status: "complete"; text: string }
-  | { status: "pending_timeout"; text: string; uiState: string };
+  | { status: "pending_timeout"; text: string; uiState: string }
+  | { status: "stalled"; text: string; uiState: string };
 
 export type ResponseBinding = {
   assistantCountBefore: number;
@@ -2227,10 +2909,78 @@ export async function hasActiveGenerationControl(
   return thinkingOnCurrent;
 }
 
+async function captureResponseActivitySnapshot(
+  page: Page,
+  assistantCountBefore: number,
+): Promise<ResponseActivitySnapshot> {
+  const assistantMessages = page.locator(
+    '[data-message-author-role="assistant"]',
+  );
+  const assistantCount = await assistantMessages.count().catch(() => 0);
+  const currentIndex =
+    assistantCount > assistantCountBefore ? assistantCountBefore : -1;
+  const answerText =
+    currentIndex >= 0
+      ? await getAssistantMessageTextAt(page, currentIndex)
+      : "";
+  const stopVisible =
+    (await page
+      .getByRole("button", {
+        name: /stop generating|stop response|^stop$/i,
+      })
+      .filter({ visible: true })
+      .count()
+      .catch(() => 0)) > 0;
+  const active =
+    stopVisible ||
+    (await hasActiveGenerationControl(
+      page,
+      currentIndex >= 0 ? currentIndex : undefined,
+    ));
+  let generationLabel = "idle";
+  if (active) {
+    if (stopVisible) generationLabel = "stop";
+    else if (/thinking/i.test(answerText)) generationLabel = "thinking";
+    else if (/search/i.test(answerText)) generationLabel = "searching";
+    else generationLabel = "generating";
+    // Prefer live status chips on current bubble when present
+    if (currentIndex >= 0) {
+      const current = assistantMessages.nth(currentIndex);
+      const labelText =
+        (await current
+          .getByText(
+            /^(Thinking|Searching|Working|Generating|Reading documents|Analysing|Analyzing)\b/i,
+          )
+          .filter({ visible: true })
+          .first()
+          .innerText()
+          .catch(() => "")) || "";
+      if (/thinking/i.test(labelText)) generationLabel = "thinking";
+      else if (/search/i.test(labelText)) generationLabel = "searching";
+      else if (/generat/i.test(labelText)) generationLabel = "generating";
+      else if (/working|reading|analys/i.test(labelText))
+        generationLabel = "working";
+    }
+  }
+  return {
+    assistantCount,
+    textLength: answerText.length,
+    textFingerprint: crypto
+      .createHash("sha1")
+      .update(answerText.slice(0, 4000))
+      .digest("hex")
+      .slice(0, 12),
+    active,
+    generationLabel,
+    stopVisible,
+  };
+}
+
 /**
  * Wait for the assistant response that belongs to the just-submitted tender prompt.
  * Never treats a prior assistant answer as the current response.
- * Requires a new assistant bubble after assistantCountBefore.
+ * Never refreshes / navigates away while generation may still be active.
+ * Stall = no activity for CHATGPT_RESPONSE_STALL_TIMEOUT_MS (not elapsed since Send).
  */
 export async function waitForAssistantResponse(options: {
   page: Page;
@@ -2239,16 +2989,24 @@ export async function waitForAssistantResponse(options: {
   expectedT247Id: string;
   assistantCountBefore?: number;
   userCountBefore?: number;
+  stallTimeoutMs?: number;
   onProgress?: (info: {
     elapsedSeconds: number;
     assistantCountCurrent: number;
     assistantCountBefore: number;
     processingState: string;
+    lastResponseActivityAtMs: number;
   }) => void;
 }): Promise<AssistantWaitResult> {
   const { page, timeoutMs, logger, expectedT247Id, onProgress } = options;
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
+  const stallTimeoutMs =
+    options.stallTimeoutMs ?? getResponseStallTimeoutMsFromEnv();
+  let lastResponseActivityAt = startedAt;
+  let previousSnap: ResponseActivitySnapshot | null = null;
+  let responseActiveLogged = false;
+  let activityDetectedLogged = false;
 
   if (!isConversationUrl(page.url())) {
     throw new AutomationError(
@@ -2256,6 +3014,15 @@ export async function waitForAssistantResponse(options: {
       `Cannot wait for a response without a /c/ conversation URL: ${page.url()}`,
     );
   }
+
+  // Hard rule: never reload/project-reopen during a normal response wait.
+  void mayNavigateAwayDuringResponseWait({
+    promptSubmitted: true,
+    conversationUrlValid: true,
+    responseActive: true,
+    responseComplete: false,
+    pageBroken: false,
+  });
 
   // Rate-limit modal must be handled before any message locator work
   await assertNotRateLimited(page, logger);
@@ -2291,41 +3058,164 @@ export async function waitForAssistantResponse(options: {
   const { assistantCountBefore } = binding;
 
   logger.info("CHATGPT_RESPONSE_WAIT_START");
+  console.log("CHATGPT_RESPONSE_WAIT_START");
   logger.info(
     `CHATGPT_RESPONSE_BASELINE assistantCountBefore=${assistantCountBefore}`,
   );
+  logger.info(`CHATGPT_CONVERSATION_URL=${page.url()}`);
+  console.log(`CHATGPT_CONVERSATION_URL=${page.url()}`);
+  logger.info(`CHATGPT_RESPONSE_STALL_TIMEOUT_MS=${stallTimeoutMs}`);
+  logger.info(`CHATGPT_RESPONSE_TIMEOUT_MS=${timeoutMs}`);
 
   let previousText = "";
   let stableChecks = 0;
   let textDetectedLogged = false;
   let newMessageLogged = false;
   let lastProcessingLogAt = 0;
+  let stallRecoveryAttempted = false;
 
   while (Date.now() < deadline) {
     await assertNotRateLimited(page, logger);
 
-    const assistantMessages = page.locator(
-      '[data-message-author-role="assistant"]',
+    // Never navigate/reload here — stay on the same /c/ conversation.
+    if (!isConversationUrl(page.url())) {
+      logger.error(
+        `CHATGPT_CONVERSATION_URL_LOST during response wait: ${page.url()}`,
+      );
+      throw new AutomationError(
+        "CHATGPT_CONVERSATION_URL_LOST",
+        `Left conversation URL during response wait: ${page.url()}`,
+      );
+    }
+
+    const snap = await captureResponseActivitySnapshot(
+      page,
+      assistantCountBefore,
     );
-    const assistantCountCurrent = await assistantMessages
-      .count()
-      .catch(() => 0);
+    const activity = updateLastResponseActivityAt({
+      previous: previousSnap,
+      next: snap,
+      lastActivityAtMs: lastResponseActivityAt,
+      nowMs: Date.now(),
+    });
+    lastResponseActivityAt = activity.lastActivityAtMs;
+    if (activity.changed) {
+      if (!activityDetectedLogged || snap.active) {
+        logger.info("CHATGPT_RESPONSE_ACTIVITY_DETECTED=true");
+        console.log("CHATGPT_RESPONSE_ACTIVITY_DETECTED=true");
+        activityDetectedLogged = true;
+      }
+    }
+    previousSnap = snap;
+
+    if (snap.active) {
+      if (!responseActiveLogged) {
+        logger.info("CHATGPT_RESPONSE_ACTIVE=true");
+        console.log("CHATGPT_RESPONSE_ACTIVE=true");
+        responseActiveLogged = true;
+      }
+    }
+
+    const assistantCountCurrent = snap.assistantCount;
     const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
 
+    const stalled = isResponseActivityStalled({
+      lastActivityAtMs: lastResponseActivityAt,
+      nowMs: Date.now(),
+      stallMs: stallTimeoutMs,
+      currentlyActive: snap.active,
+    });
+
+    if (stalled) {
+      // Recovery first: re-detect on the SAME page. Do NOT refresh.
+      logger.warn("CHATGPT_RESPONSE_STALL_RECOVERY_START");
+      console.log("CHATGPT_RESPONSE_STALL_RECOVERY_START");
+      await page.keyboard.press("End").catch(() => undefined);
+      await page
+        .evaluate(() => {
+          window.scrollTo(0, document.body.scrollHeight);
+        })
+        .catch(() => undefined);
+      await page.waitForTimeout(1500);
+
+      const recoveredSnap = await captureResponseActivitySnapshot(
+        page,
+        assistantCountBefore,
+      );
+      if (recoveredSnap.active) {
+        logger.info(
+          "CHATGPT_RESPONSE_STALL_RECOVERY=still_active — continuing wait (no refresh)",
+        );
+        lastResponseActivityAt = Date.now();
+        previousSnap = recoveredSnap;
+        stallRecoveryAttempted = true;
+        await page.waitForTimeout(1000);
+        continue;
+      }
+
+      if (recoveredSnap.assistantCount > assistantCountBefore) {
+        const recoveredText = await getAssistantMessageTextAt(
+          page,
+          assistantCountBefore,
+        );
+        if (recoveredText.trim()) {
+          logger.info(
+            "CHATGPT_RESPONSE_STALL_RECOVERY=found_assistant_text — consuming",
+          );
+          previousText = recoveredText;
+          lastResponseActivityAt = Date.now();
+          previousSnap = recoveredSnap;
+          // Fall through to stability checks below with recovered text.
+        } else if (!stallRecoveryAttempted) {
+          stallRecoveryAttempted = true;
+          lastResponseActivityAt = Date.now();
+          logger.warn(
+            "CHATGPT_RESPONSE_STALL_RECOVERY=empty_assistant — one more wait window",
+          );
+          await page.waitForTimeout(1000);
+          continue;
+        } else {
+          logger.warn("CHATGPT_RESPONSE_STALLED=true");
+          console.log("CHATGPT_RESPONSE_STALLED=true");
+          return {
+            status: "stalled",
+            text: recoveredText,
+            uiState: "stalled_no_activity",
+          };
+        }
+      } else if (!stallRecoveryAttempted) {
+        stallRecoveryAttempted = true;
+        lastResponseActivityAt = Date.now();
+        logger.warn(
+          "CHATGPT_RESPONSE_STALL_RECOVERY=no_assistant_yet — one more wait window",
+        );
+        await page.waitForTimeout(1000);
+        continue;
+      } else {
+        logger.warn("CHATGPT_RESPONSE_STALLED=true");
+        console.log("CHATGPT_RESPONSE_STALLED=true");
+        return {
+          status: "stalled",
+          text: "",
+          uiState: "stalled_no_assistant",
+        };
+      }
+    }
+
     if (assistantCountCurrent <= assistantCountBefore) {
-      const active = await hasActiveGenerationControl(page);
       stableChecks = 0;
       previousText = "";
       if (elapsedSeconds - lastProcessingLogAt >= 30) {
         logger.info(
-          `CHATGPT_RESPONSE_STILL_PROCESSING t247Id=${expectedT247Id} elapsedSeconds=${elapsedSeconds} assistantCountBefore=${assistantCountBefore} assistantCountCurrent=${assistantCountCurrent}`,
+          `CHATGPT_RESPONSE_STILL_PROCESSING t247Id=${expectedT247Id} elapsedSeconds=${elapsedSeconds} assistantCountBefore=${assistantCountBefore} assistantCountCurrent=${assistantCountCurrent} active=${snap.active} lastActivityAgeMs=${Date.now() - lastResponseActivityAt}`,
         );
         lastProcessingLogAt = elapsedSeconds;
         onProgress?.({
           elapsedSeconds,
           assistantCountCurrent,
           assistantCountBefore,
-          processingState: active ? "thinking" : "waiting_for_assistant",
+          processingState: snap.active ? "thinking" : "waiting_for_assistant",
+          lastResponseActivityAtMs: lastResponseActivityAt,
         });
       }
       await page.waitForTimeout(1000);
@@ -2342,10 +3232,7 @@ export async function waitForAssistantResponse(options: {
     // Bind to the message created by this submission — never .last() blindly
     const currentIndex = assistantCountBefore;
     const answerText = await getAssistantMessageTextAt(page, currentIndex);
-    const activeGeneration = await hasActiveGenerationControl(
-      page,
-      currentIndex,
-    );
+    const activeGeneration = snap.active;
     const composerReady = await isComposerAvailableForReply(page);
 
     if (activeGeneration || !answerText.trim()) {
@@ -2357,7 +3244,7 @@ export async function waitForAssistantResponse(options: {
       }
       if (elapsedSeconds - lastProcessingLogAt >= 30) {
         logger.info(
-          `CHATGPT_RESPONSE_STILL_PROCESSING t247Id=${expectedT247Id} elapsedSeconds=${elapsedSeconds} assistantCountBefore=${assistantCountBefore} assistantCountCurrent=${assistantCountCurrent}`,
+          `CHATGPT_RESPONSE_STILL_PROCESSING t247Id=${expectedT247Id} elapsedSeconds=${elapsedSeconds} assistantCountBefore=${assistantCountBefore} assistantCountCurrent=${assistantCountCurrent} active=${activeGeneration}`,
         );
         lastProcessingLogAt = elapsedSeconds;
         onProgress?.({
@@ -2365,6 +3252,7 @@ export async function waitForAssistantResponse(options: {
           assistantCountCurrent,
           assistantCountBefore,
           processingState: activeGeneration ? "thinking" : "streaming_empty",
+          lastResponseActivityAtMs: lastResponseActivityAt,
         });
       }
       await page.waitForTimeout(1000);
@@ -2380,7 +3268,8 @@ export async function waitForAssistantResponse(options: {
       answerText,
       expectedT247Id,
     );
-    const requiredStable = 3;
+    // 2–3 consecutive stable polls (~2–3s) with no active generation
+    const requiredStable = 2;
 
     if (answerText === previousText && !activeGeneration) {
       stableChecks += 1;
@@ -2401,7 +3290,10 @@ export async function waitForAssistantResponse(options: {
       !activeGeneration &&
       (composerReady || jsonComplete)
     ) {
-      logger.info("CHATGPT_RESPONSE_COMPLETE");
+      logger.info("CHATGPT_RESPONSE_COMPLETE=true");
+      console.log("CHATGPT_RESPONSE_COMPLETE=true");
+      logger.info(`CHATGPT_RESPONSE_LENGTH=${answerText.length}`);
+      console.log(`CHATGPT_RESPONSE_LENGTH=${answerText.length}`);
       return { status: "complete", text: answerText };
     }
 
@@ -2412,6 +3304,7 @@ export async function waitForAssistantResponse(options: {
     await page.waitForTimeout(1000);
   }
 
+  // Hard ceiling reached — still no refresh; leave conversation for resume.
   const finalCount = await page
     .locator('[data-message-author-role="assistant"]')
     .count()
@@ -2420,6 +3313,12 @@ export async function waitForAssistantResponse(options: {
     finalCount > assistantCountBefore
       ? await getAssistantMessageTextAt(page, assistantCountBefore)
       : "";
+  const stillActive = await hasActiveGenerationControl(page);
+  if (stillActive) {
+    logger.warn(
+      "CHATGPT_RESPONSE_TIMEOUT_WHILE_ACTIVE — no refresh; leaving conversation for resume",
+    );
+  }
   const uiState = (await describeGenerationUiState(page)) || "timeout";
   logger.warn("CHATGPT_RESPONSE_TIMEOUT_PENDING");
   return { status: "pending_timeout", text, uiState };

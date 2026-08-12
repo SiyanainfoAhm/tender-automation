@@ -8,9 +8,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "../config.js";
-import { getTodayIsoDate } from "../dateUtils.js";
+import { getIndiaTodayIsoDate } from "../dateUtils.js";
 import { ensureDir, resolveProjectPath } from "../fileUtils.js";
 import { Logger } from "../logger.js";
+import { resolveRequestedDate } from "../cli/requestedDate.js";
 import {
   closeChatGptSession,
   ensureChatGptLoggedIn,
@@ -272,7 +273,10 @@ export async function runSourceEndToEnd(
   const limit = options.limit;
   const config = loadConfig();
   const logger = new Logger(config.logRoot, `E2E-${source}`);
-  const dateIso = options.date?.trim() || getTodayIsoDate();
+  const dateIso =
+    options.date?.trim() ||
+    resolveRequestedDate(process.argv.slice(2)).requestedDate ||
+    getIndiaTodayIsoDate();
   const prescreenCfg = loadPrescreenConfig();
   const crawlCandidatesEnv = Number.parseInt(
     process.env.E2E_CRAWL_CANDIDATES?.trim() || "0",
@@ -331,8 +335,15 @@ export async function runSourceEndToEnd(
       console.log("TENDER247_CRAWLER_START");
       const code = await runCommand(
         "npx",
-        ["tsx", "src/tender247Batch/runDailyBatch.ts"],
-        { MAX_TENDERS: String(crawlLimit) },
+        [
+          "tsx",
+          "src/tender247Batch/runDailyBatch.ts",
+          `--date=${dateIso}`,
+        ],
+        {
+          MAX_TENDERS: String(crawlLimit),
+          TENDER247_DATE: dateIso,
+        },
       );
       if (code !== 0) {
         throw new Error(`Tender247 crawler exited with code ${code}`);
@@ -346,8 +357,11 @@ export async function runSourceEndToEnd(
           "tsx",
           "src/bidassist/runBidassistCrawler.ts",
           `--limit=${crawlLimit}`,
+          `--date=${dateIso}`,
         ],
-        { MAX_BIDASSIST_TENDERS: String(crawlLimit) },
+        {
+          MAX_BIDASSIST_TENDERS: String(crawlLimit),
+        },
       );
       if (code !== 0) {
         throw new Error(`BidAssist crawler exited with code ${code}`);

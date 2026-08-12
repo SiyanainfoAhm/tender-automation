@@ -3,9 +3,9 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { AutomationError } from "../browserUtils.js";
 import type { AppConfig } from "../config.js";
-import { getTodayIsoDate } from "../dateUtils.js";
 import { ensureDir } from "../fileUtils.js";
 import type { Logger } from "../logger.js";
+import { requestedDateFromDateFolder } from "../tender247Batch/tender247RunContext.js";
 import {
   isResumablePendingState,
   hasInvalidPendingChatUrl,
@@ -30,7 +30,15 @@ import {
   enterPromptAndSendWithConfirmedAttachments,
   logAttachmentBundle,
   uploadQualificationAttachments,
+  writeAttachmentManifestAuditFile,
 } from "./uploadQualificationAttachments.js";
+import {
+  advanceCandidateStage,
+  createCandidateTxnState,
+  getMaxChatgptCandidateAttempts,
+  type ChatGptCandidateTxnState,
+} from "./candidateTxnState.js";
+import { saveCandidateFailureAudit } from "./candidateFailureAudit.js";
 import crypto from "node:crypto";
 import {
   ensureProjectHome,
@@ -72,6 +80,12 @@ export interface QualifyTenderOutcome {
   retryAfterMs?: number;
   /** Epoch ms when the qualification prompt was successfully submitted (this run). */
   submittedAt?: number;
+  /** Candidate attempt number (1 = first, 2 = controlled retry). */
+  attempt?: number;
+  /** True when another controlled attempt is allowed. */
+  retryable?: boolean;
+  /** Last known transaction stage for failure isolation. */
+  failureStage?: string | null;
 }
 
 /**
@@ -89,16 +103,24 @@ export async function qualifySingleTender(options: {
     readyForChatGpt: number;
     selected: number;
   };
+  /** When true, ignore saved qualification results and rerun ChatGPT from scratch. */
+  forceReprocess?: boolean;
 }): Promise<QualifyTenderOutcome> {
   const { page, dateFolder, t247Id, config, logger } = options;
-  const dateIso = getTodayIsoDate();
+  const forceReprocess = options.forceReprocess === true;
+  // Source/run date comes from the caller's date folder — never system today.
+  const dateIso = requestedDateFromDateFolder(dateFolder);
   const tenderFolder = path.join(dateFolder, `T247-${t247Id}`);
   ensureDir(tenderFolder);
   const resultPath = path.join(tenderFolder, "qualification-result.json");
   const responsePath = path.join(tenderFolder, "qualification-response.txt");
   const totals = options.manifestTotals;
+  const maxAttempts = getMaxChatgptCandidateAttempts();
+  const priorAttempt = loadChatGptTenderState(tenderFolder)?.retryCount ?? 0;
+  const attempt = Math.min(priorAttempt + 1, maxAttempts);
+  const txn: ChatGptCandidateTxnState = createCandidateTxnState(attempt);
 
-  if (isValidSavedQualificationResult(resultPath)) {
+  if (!forceReprocess && isValidSavedQualificationResult(resultPath)) {
     logger.info(`CHATGPT_QUALIFICATION_ALREADY_COMPLETE_SKIP=T247-${t247Id}`);
     const qualification = JSON.parse(
       fs.readFileSync(resultPath, "utf8"),
@@ -130,18 +152,23 @@ export async function qualifySingleTender(options: {
   }
 
   // ---- Local raw-response recovery (no ChatGPT / no re-upload) ----
-  const localRecovery = tryRecoverFromExistingRawResponse({
-    t247Id,
-    tenderFolder,
-    dateFolder,
-    dateIso,
-    resultPath,
-    responsePath,
-    logger,
-    totals,
-  });
-  if (localRecovery) {
-    return localRecovery;
+  if (!forceReprocess) {
+    const localRecovery = tryRecoverFromExistingRawResponse({
+      t247Id,
+      tenderFolder,
+      dateFolder,
+      dateIso,
+      resultPath,
+      responsePath,
+      logger,
+      totals,
+    });
+    if (localRecovery) {
+      return localRecovery;
+    }
+  } else {
+    logger.info(`QUALIFICATION_REPROCESSED=true T247-${t247Id}`);
+    console.log(`QUALIFICATION_REPROCESSED=true T247-${t247Id}`);
   }
 
   const prescreenGate = await assertPrescreenAllowsChatgpt({
@@ -373,6 +400,11 @@ export async function qualifySingleTender(options: {
           aiSummaryAvailable:
             prepared.aiSummaryAvailable || attachmentBundle.aiSummaryAvailable,
         });
+        fs.writeFileSync(
+          path.join(tenderFolder, "qualification-prompt.txt"),
+          prompt,
+          "utf8",
+        );
 
         const confirmed = await uploadQualificationAttachments({
           page,
@@ -386,6 +418,21 @@ export async function qualifySingleTender(options: {
         attachmentFileNames = confirmed.fileNames;
         attachmentHashes = confirmed.attachmentHashes;
         composerIdentity = confirmed.composerIdentity;
+
+        if (confirmed.attachmentManifest) {
+          const keptPipelineAuditDir = path.join(
+            dateFolder,
+            "kept-pipeline-test",
+          );
+          const manifestPath = writeAttachmentManifestAuditFile({
+            tenderFolder,
+            audit: confirmed.attachmentManifest,
+            keptPipelineAuditDir: fs.existsSync(keptPipelineAuditDir)
+              ? keptPipelineAuditDir
+              : null,
+          });
+          logger.info(`CHATGPT_ATTACHMENT_MANIFEST_SAVED=${manifestPath}`);
+        }
 
         saveChatGptTenderState(tenderFolder, {
           t247Id,
@@ -413,11 +460,19 @@ export async function qualifySingleTender(options: {
           uploadedEvidenceFiles: attachmentFileNames,
         });
 
+        Object.assign(
+          txn,
+          advanceCandidateStage(txn, "FILES_LOCKED"),
+        );
+        console.log("CHATGPT_ATTACHMENTS_LOCKED=true");
+        logger.info("CHATGPT_ATTACHMENTS_LOCKED=true");
+
         const submitted = await enterPromptAndSendWithConfirmedAttachments({
           page,
           prompt,
           logger,
           confirmed,
+          txn,
         });
         submissionConfirmed = true;
         const chatUrl = submitted.chatUrl;
@@ -677,7 +732,7 @@ export async function qualifySingleTender(options: {
       logger.error(stack);
     }
     if (
-      /upload|filechooser|attachment|files_assigned|plus_button|add_files|project_home/i.test(
+      /upload|filechooser|attachment|files_assigned|plus_button|add_files|project_home|ATTACHMENT_VALIDATION|UPLOAD_LIMIT/i.test(
         `${code} ${message}`,
       )
     ) {
@@ -707,11 +762,41 @@ export async function qualifySingleTender(options: {
     const chatUrl = chatUrlRaw && isConversationUrl(chatUrlRaw) ? chatUrlRaw : null;
     const errorCode =
       error instanceof AutomationError ? error.code : "CHATGPT_QUALIFICATION_FAILED";
+    const failureStage = txn.stage || "FAILED";
+    const retryable = attempt < maxAttempts;
+    Object.assign(txn, advanceCandidateStage(txn, retryable ? "RETRY_PENDING" : "FAILED_FINAL"));
+    txn.failureReason = message;
+    txn.failureStage = failureStage as typeof txn.failureStage;
+
+    await saveCandidateFailureAudit({
+      dateFolder,
+      tenderId: t247Id,
+      attempt,
+      stage: failureStage,
+      reason: errorCode === "CHATGPT_PROMPT_NOT_SUBMITTED" ? errorCode : message,
+      conversationUrl: chatUrl,
+      promptSubmitted: txn.submitted || Boolean(chatUrl),
+      filesLocked: txn.filesLocked,
+      responseDetected: false,
+      retryable,
+      page,
+      logger,
+      workerEvents: [
+        {
+          stage: failureStage,
+          promptEntryCount: txn.promptEntryCount,
+          uploadAttemptCount: txn.uploadAttemptCount,
+          sendAttemptCount: txn.sendAttemptCount,
+        },
+      ],
+    });
+
     saveChatGptTenderState(tenderFolder, {
       t247Id,
       chatUrl,
       status: "failed",
       updatedAt: new Date().toISOString(),
+      retryCount: attempt,
       error: errorCode === "CHATGPT_PROMPT_NOT_SUBMITTED" ? errorCode : message,
     });
     upsertQualificationManifestEntry(
@@ -729,6 +814,14 @@ export async function qualifySingleTender(options: {
       totals,
     );
 
+    console.log(`CHATGPT_CANDIDATE_FAILED=true`);
+    console.log(`CHATGPT_CANDIDATE_FAILED_TENDER=${t247Id}`);
+    console.log(`CHATGPT_FAILURE_STAGE=${failureStage}`);
+    console.log(
+      `CHATGPT_FAILURE_REASON=${(errorCode === "CHATGPT_PROMPT_NOT_SUBMITTED" ? errorCode : message).slice(0, 300)}`,
+    );
+    logger.info(`CHATGPT_CANDIDATE_FAILED=true tender=${t247Id} stage=${failureStage}`);
+
     return {
       t247Id,
       status: "failed",
@@ -738,6 +831,9 @@ export async function qualifySingleTender(options: {
       chatUrl,
       error:
         errorCode === "CHATGPT_PROMPT_NOT_SUBMITTED" ? errorCode : message,
+      attempt,
+      retryable,
+      failureStage,
     };
   }
 }
@@ -946,6 +1042,7 @@ async function waitParseAndPersist(options: {
     assistantCountCurrent: number;
     assistantCountBefore: number;
     processingState: string;
+    lastResponseActivityAtMs: number;
   }) => {
     saveChatGptTenderState(tenderFolder, {
       ...(loadChatGptTenderState(tenderFolder) || {
@@ -966,6 +1063,15 @@ async function waitParseAndPersist(options: {
     });
   };
 
+  const saveRawResponse = (text: string): void => {
+    fs.writeFileSync(responsePath, text, "utf8");
+    const stagedRaw = path.join(tenderFolder, "04-raw-chatgpt-response.txt");
+    fs.writeFileSync(stagedRaw, text, "utf8");
+    logger.info("CHATGPT_RAW_RESPONSE_SAVED=true");
+    console.log("CHATGPT_RAW_RESPONSE_SAVED=true");
+    logger.info(`CHATGPT_RAW_RESPONSE_PATH=${stagedRaw}`);
+  };
+
   let waitResult = await waitForAssistantResponse({
     page,
     timeoutMs: config.chatgptResponseTimeoutMs,
@@ -975,6 +1081,53 @@ async function waitParseAndPersist(options: {
     userCountBefore,
     onProgress: heartbeat,
   });
+
+  if (waitResult.status === "stalled") {
+    logger.warn("CHATGPT_FAILURE_STAGE=WAITING_RESPONSE");
+    console.log("CHATGPT_FAILURE_STAGE=WAITING_RESPONSE");
+    saveChatGptTenderState(tenderFolder, {
+      t247Id,
+      chatUrl: isConversationUrl(page.url()) ? page.url() : chatUrl,
+      status: "failed",
+      submissionConfirmed: true,
+      phase: "RESPONSE_STALLED",
+      lastObservedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      latestAssistantText: waitResult.text || null,
+      uiState: waitResult.uiState,
+      processingState: "stalled",
+      assistantCountBefore,
+      userCountBefore,
+      uploadedEvidenceFiles,
+      error: "CHATGPT_RESPONSE_STALLED",
+    });
+    upsertQualificationManifestEntry(
+      dateFolder,
+      dateIso,
+      {
+        t247Id,
+        status: "failed",
+        chatUrl: isConversationUrl(page.url()) ? page.url() : chatUrl,
+        resultPath: null,
+        updatedAt: new Date().toISOString(),
+        error: "CHATGPT_RESPONSE_STALLED",
+      },
+      totals,
+    );
+    // Bounded retryable — do not refresh; next tender continues.
+    return {
+      t247Id,
+      status: "failed",
+      resultPath: null,
+      responsePath: fs.existsSync(responsePath) ? responsePath : null,
+      qualification: null,
+      chatUrl: isConversationUrl(page.url()) ? page.url() : chatUrl,
+      error: "CHATGPT_RESPONSE_STALLED",
+      attempt: 1,
+      retryable: true,
+      failureStage: "WAITING_RESPONSE",
+    };
+  }
 
   if (waitResult.status === "pending_timeout") {
     saveChatGptTenderState(tenderFolder, {
@@ -1024,9 +1177,11 @@ async function waitParseAndPersist(options: {
   }
 
   let responseText = waitResult.text;
-  fs.writeFileSync(responsePath, responseText, "utf8");
-  logger.info("CHATGPT_RESPONSE_COMPLETE");
-  logger.info("CHATGPT_RAW_RESPONSE_SAVED");
+  saveRawResponse(responseText);
+  logger.info("CHATGPT_RESPONSE_COMPLETE=true");
+  console.log("CHATGPT_RESPONSE_COMPLETE=true");
+  logger.info(`CHATGPT_RESPONSE_LENGTH=${responseText.length}`);
+  console.log(`CHATGPT_RESPONSE_LENGTH=${responseText.length}`);
 
   let validated = parseAndValidateQualificationResponse(responseText, t247Id);
 
@@ -1089,11 +1244,15 @@ async function waitParseAndPersist(options: {
       onProgress: heartbeat,
     });
 
-    if (waitResult.status === "pending_timeout") {
+    if (
+      waitResult.status === "pending_timeout" ||
+      waitResult.status === "stalled"
+    ) {
       saveChatGptTenderState(tenderFolder, {
         t247Id,
         chatUrl: isConversationUrl(page.url()) ? page.url() : chatUrl,
-        status: "response_pending",
+        status:
+          waitResult.status === "stalled" ? "failed" : "response_pending",
         submissionConfirmed: true,
         updatedAt: new Date().toISOString(),
         lastObservedAt: new Date().toISOString(),
@@ -1102,23 +1261,32 @@ async function waitParseAndPersist(options: {
         assistantCountBefore: correctionSend.baseline.assistantCountBefore,
         userCountBefore: correctionSend.baseline.userCountBefore,
         uploadedEvidenceFiles,
-        error: null,
+        error:
+          waitResult.status === "stalled"
+            ? "CHATGPT_RESPONSE_STALLED"
+            : null,
       });
       logger.info(`CHATGPT_CHAT_CAN_BE_RESUMED=${page.url() || chatUrl}`);
       return {
         t247Id,
-        status: "response_pending",
+        status:
+          waitResult.status === "stalled" ? "failed" : "response_pending",
         resultPath: null,
         responsePath: fs.existsSync(responsePath) ? responsePath : null,
         qualification: null,
         chatUrl: isConversationUrl(page.url()) ? page.url() : chatUrl,
-        error: null,
+        error:
+          waitResult.status === "stalled"
+            ? "CHATGPT_RESPONSE_STALLED"
+            : null,
+        retryable: waitResult.status === "stalled",
+        failureStage:
+          waitResult.status === "stalled" ? "WAITING_RESPONSE" : null,
       };
     }
 
     responseText = waitResult.text;
-    fs.writeFileSync(responsePath, responseText, "utf8");
-    logger.info("CHATGPT_RAW_RESPONSE_SAVED");
+    saveRawResponse(responseText);
     validated = parseAndValidateQualificationResponse(responseText, t247Id);
     if (validated.ok && validated.fallback) {
       validated = {
@@ -1160,8 +1328,7 @@ async function waitParseAndPersist(options: {
 
     if (waitResult.status === "complete" && waitResult.text) {
       responseText = waitResult.text;
-      fs.writeFileSync(responsePath, responseText, "utf8");
-      logger.info("CHATGPT_RAW_RESPONSE_SAVED");
+      saveRawResponse(responseText);
       validated = parseAndValidateQualificationResponse(responseText, t247Id);
       if (validated.ok && validated.fallback) {
         validated = {
@@ -1186,8 +1353,7 @@ async function waitParseAndPersist(options: {
     logger.warn(
       "CHATGPT_FALSE_MISSING_UPLOADS — assistant ignored attached files; requesting one review",
     );
-    fs.writeFileSync(responsePath, responseText, "utf8");
-    logger.info("CHATGPT_RAW_RESPONSE_SAVED");
+    saveRawResponse(responseText);
     const reviewPrompt = [
       `Your previous answer for tender T247-${t247Id} incorrectly claimed tender documents were unavailable.`,
       "The current chat already has these attachments:",
@@ -1213,8 +1379,7 @@ async function waitParseAndPersist(options: {
     });
     if (waitResult.status === "complete" && waitResult.text) {
       responseText = waitResult.text;
-      fs.writeFileSync(responsePath, responseText, "utf8");
-      logger.info("CHATGPT_RAW_RESPONSE_SAVED");
+      saveRawResponse(responseText);
       validated = parseAndValidateQualificationResponse(responseText, t247Id);
       if (validated.ok && validated.fallback) {
         validated = {
@@ -1428,6 +1593,8 @@ async function waitParseAndPersist(options: {
   logger.info(
     `CHATGPT_QUALIFICATION_SAVED=T247-${t247Id} status=${finalResult.status}`,
   );
+  console.log(`CHATGPT_RESULT=${finalResult.status}`);
+  logger.info(`CHATGPT_RESULT=${finalResult.status}`);
 
   saveChatGptTenderState(tenderFolder, {
     t247Id,
@@ -1456,6 +1623,9 @@ async function waitParseAndPersist(options: {
     },
     totals,
   );
+
+  console.log("CHATGPT_CANDIDATE_DONE=true");
+  logger.info("CHATGPT_CANDIDATE_DONE=true");
 
   return {
     t247Id,

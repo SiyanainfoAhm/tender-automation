@@ -8,13 +8,14 @@ import { fileURLToPath } from "node:url";
 import type { Page } from "playwright";
 import { AutomationError } from "../browserUtils.js";
 import { loadConfig, type AppConfig } from "../config.js";
-import { getTodayIsoDate } from "../dateUtils.js";
-import { downloadDirForToday, ensureDir } from "../fileUtils.js";
+import { getIndiaTodayIsoDate } from "../dateUtils.js";
+import { ensureDir, resolveProjectPath } from "../fileUtils.js";
 import { Logger, safeErrorMessage } from "../logger.js";
 import {
   chatgptSelectionLimit,
   formatProductionLimit,
 } from "../productionLimit.js";
+import { resolveRequestedDate } from "../cli/requestedDate.js";
 import {
   loadQualificationManifest,
   upsertQualificationManifestEntry,
@@ -37,11 +38,14 @@ import {
   openChatGptProject,
   assertProjectHomeOpen,
 } from "./openProject.js";
+import { getMaxChatgptCandidateAttempts } from "./candidateTxnState.js";
 import {
   qualifySingleTender,
   tryRecoverFromExistingRawResponse,
   type QualifyTenderOutcome,
 } from "./processTenderQualification.js";
+import { runDualChatGptWorkers } from "./dualChatGptWorkers.js";
+import { loadTender247ConcurrencyConfig } from "../tender247Batch/tender247ConcurrencyConfig.js";
 import { selectPassedForChatgpt } from "../prescreen/selectPassedForChatgpt.js";
 import {
   isValidSavedQualificationResult,
@@ -68,9 +72,24 @@ export interface QualificationBatchSummary {
   remainingQueued: number;
   pendingChatUrl: string | null;
   browserOpened: boolean;
+  dateIso?: string;
+  statusCounts?: Record<string, number>;
+  completedTenderIds?: string[];
+  failedTenderIds?: string[];
+  retryPendingTenderIds?: string[];
+  canonicalStatusCounts?: Record<string, number>;
 }
 
-export async function runQualificationBatch(): Promise<QualificationBatchSummary> {
+export type QualificationBatchOptions = {
+  /** Immutable business date (YYYY-MM-DD). Defaults to Asia/Kolkata today. */
+  dateIso?: string;
+  /** Optional ChatGPT cap override (0/undefined = use config / unlimited). */
+  maxGptTenders?: number;
+};
+
+export async function runQualificationBatch(
+  options: QualificationBatchOptions = {},
+): Promise<QualificationBatchSummary> {
   const config = loadConfig();
   const logger = new Logger(config.logRoot, "ChatGptQualification");
 
@@ -81,19 +100,32 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
     );
   }
 
-  const dateIso = getTodayIsoDate();
-  const dateFolder = downloadDirForToday(config.downloadRoot);
+  const dateIso =
+    options.dateIso?.trim() ||
+    resolveRequestedDate(process.argv.slice(2)).requestedDate ||
+    getIndiaTodayIsoDate();
+  const dateFolder = path.join(
+    resolveProjectPath(config.downloadRoot),
+    dateIso,
+  );
   ensureDir(dateFolder);
+
+  const effectiveMaxGpt =
+    typeof options.maxGptTenders === "number" &&
+    Number.isFinite(options.maxGptTenders)
+      ? options.maxGptTenders
+      : config.maxGptTenders;
 
   cleanupStaleGptUploadFolders(dateFolder, logger);
 
   logger.info("=== ChatGPT qualification Phase 1 batch started ===");
   logger.info(`DATE=${dateIso}`);
+  logger.info(`REQUESTED_DATE=${dateIso}`);
   logger.info(
-    `CHATGPT_QUALIFICATION_LIMIT=${formatProductionLimit(config.maxGptTenders)}`,
+    `CHATGPT_QUALIFICATION_LIMIT=${formatProductionLimit(effectiveMaxGpt)}`,
   );
   logger.info(
-    `MAX_GPT_TENDERS=${formatProductionLimit(config.maxGptTenders)}`,
+    `MAX_GPT_TENDERS=${formatProductionLimit(effectiveMaxGpt)}`,
   );
   logger.info(
     `CHATGPT_PROCESS_READY_ONLY=${config.chatgptProcessReadyOnly}`,
@@ -164,7 +196,7 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
     sourcePortal: "TENDER247",
     sourceTenderIds: selectedIds,
     logger,
-    limit: chatgptSelectionLimit(config.maxGptTenders),
+    limit: chatgptSelectionLimit(effectiveMaxGpt),
   });
   logger.info(
     `CHATGPT_PRESCREEN_PASSED=${passedSelection.passedIds.length} skipped=${passedSelection.skipped.length}`,
@@ -244,6 +276,9 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
   let remainingQueued = 0;
   let lastFailureError: string | null = null;
   let pendingChatUrl: string | null = null;
+  const completedTenderIds: string[] = [];
+  const failedTenderIds: string[] = [];
+  const retryPendingTenderIds: string[] = [];
 
   for (let i = 0; i < selectedIds.length; i += 1) {
     const t247Id = selectedIds[i]!;
@@ -256,6 +291,7 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
         `CHATGPT_QUALIFICATION_ALREADY_COMPLETE_SKIP=T247-${t247Id}`,
       );
       skipped += 1;
+      completedTenderIds.push(t247Id);
       const qualification = JSON.parse(
         fs.readFileSync(resultPath, "utf8"),
       ) as { status?: string };
@@ -288,6 +324,7 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
     });
     if (recovered?.status === "completed") {
       completed += 1;
+      completedTenderIds.push(t247Id);
       logger.info(
         `[local ${i + 1}/${selectedIds.length}] COMPLETE T247-${t247Id} status=completed`,
       );
@@ -366,18 +403,68 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
       assertProjectHomeOpen(page);
       logger.info(`CHATGPT_CURRENT_URL=${page.url()}`);
 
-      const attemptedTenderIds = new Set<string>();
-      let lastSubmissionAt: number | null = null;
+      const concurrencyCfg = loadTender247ConcurrencyConfig();
+      console.log(`CHATGPT_CONCURRENCY=${concurrencyCfg.chatgptConcurrency}`);
+      logger.info(`CHATGPT_CONCURRENCY=${concurrencyCfg.chatgptConcurrency}`);
+      console.log(
+        `CHATGPT_MIN_SUBMISSION_INTERVAL_MS=${concurrencyCfg.chatgptMinSubmissionIntervalMs}`,
+      );
 
-      for (let i = 0; i < needsBrowser.length; i += 1) {
-        const t247Id = needsBrowser[i]!;
-        if (attemptedTenderIds.has(t247Id)) {
+      if (concurrencyCfg.chatgptConcurrency >= 2) {
+        const dual = await runDualChatGptWorkers({
+          context,
+          primaryPage: page,
+          tenderIds: needsBrowser,
+          dateFolder,
+          dateIso,
+          config,
+          logger,
+          stopOnGo: false,
+          manifestTotals,
+        });
+        console.log(`PIPELINE_GPT_SUBMITTED=${dual.outcomes.length}`);
+        for (const row of dual.outcomes) {
+          applyOutcomeCounters(row.outcome, {
+            onCompleted: () => {
+              completed += 1;
+            },
+            onSkipped: () => {
+              skipped += 1;
+            },
+            onPending: (url) => {
+              pending += 1;
+              hasResponsePending = true;
+              pendingChatUrl = url;
+            },
+            onNotReady: () => {
+              notReady += 1;
+            },
+            onFailed: (error) => {
+              failed += 1;
+              lastFailureError = error;
+            },
+            onRateLimited: (url) => {
+              rateLimited += 1;
+              pendingChatUrl = url ?? pendingChatUrl;
+            },
+          });
+        }
+      } else {
+      const attemptCounts = new Map<string, number>();
+      const maxCandidateAttempts = getMaxChatgptCandidateAttempts();
+      let lastSubmissionAt: number | null = null;
+      const queue = [...needsBrowser];
+
+      for (let i = 0; i < queue.length; i += 1) {
+        const t247Id = queue[i]!;
+        const priorAttempts = attemptCounts.get(t247Id) ?? 0;
+        if (priorAttempts >= maxCandidateAttempts) {
           logger.warn(
-            `CHATGPT_DUPLICATE_TENDER_SKIPPED_SAME_RUN=T247-${t247Id}`,
+            `CHATGPT_MAX_ATTEMPTS_REACHED=T247-${t247Id} attempts=${priorAttempts}`,
           );
           continue;
         }
-        attemptedTenderIds.add(t247Id);
+        attemptCounts.set(t247Id, priorAttempts + 1);
 
         // Pace submissions: wait before opening/uploading the next tender
         if (lastSubmissionAt != null) {
@@ -408,7 +495,7 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
         }
 
         logger.info(
-          `[${i + 1}/${needsBrowser.length}] START T247-${t247Id}`,
+          `[${i + 1}/${queue.length}] START T247-${t247Id} attempt=${priorAttempts + 1}/${maxCandidateAttempts}`,
         );
         if (i > 0) {
           logger.info(`CHATGPT_NEXT_TENDER_START=T247-${t247Id}`);
@@ -435,6 +522,7 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
             logger.error(
               `CHATGPT_TENDER_UNCAUGHT=T247-${t247Id}: ${message}`,
             );
+            // Candidate failures must never kill the batch agent.
             outcome = {
               t247Id,
               status: "failed",
@@ -443,10 +531,14 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
               qualification: null,
               chatUrl: null,
               error: message,
+              attempt: priorAttempts + 1,
+              retryable: priorAttempts + 1 < maxCandidateAttempts,
+              failureStage: "FAILED",
             };
-            if (!config.chatgptContinueOnError) {
-              throw error;
-            }
+            console.log("CHATGPT_CANDIDATE_FAILED=true");
+            console.log(`CHATGPT_CANDIDATE_FAILED_TENDER=${t247Id}`);
+            console.log("CHATGPT_FAILURE_STAGE=FAILED");
+            console.log(`CHATGPT_FAILURE_REASON=${message.slice(0, 300)}`);
           }
 
           if (outcome.status !== "rate_limited") {
@@ -472,14 +564,14 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
 
           if (rateLimitRetries >= config.chatgptRateLimitMaxRetries) {
             rateLimited += 1;
-            remainingQueued = needsBrowser.length - i - 1;
+            remainingQueued = queue.length - i - 1;
             hasResponsePending = true;
             pendingChatUrl = outcome.chatUrl;
             logger.error(
               `CHATGPT_RATE_LIMIT_BATCH_EXIT tender=T247-${t247Id} chatUrl=${outcome.chatUrl || "none"} remainingQueued=${remainingQueued}`,
             );
             // Stop the whole queue — do not mark remaining tenders failed
-            i = needsBrowser.length;
+            i = queue.length;
             break;
           }
 
@@ -500,9 +592,11 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
         applyOutcomeCounters(outcome!, {
           onCompleted: () => {
             completed += 1;
+            completedTenderIds.push(t247Id);
           },
           onSkipped: () => {
             skipped += 1;
+            completedTenderIds.push(t247Id);
           },
           onPending: (url) => {
             pending += 1;
@@ -513,8 +607,24 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
             notReady += 1;
           },
           onFailed: (err) => {
-            failed += 1;
-            lastFailureError = err;
+            const canRetry =
+              outcome!.retryable === true ||
+              (attemptCounts.get(t247Id) ?? 0) < maxCandidateAttempts;
+            if (canRetry) {
+              retryPendingTenderIds.push(t247Id);
+              // Controlled one retry later in this batch.
+              if (!queue.slice(i + 1).includes(t247Id)) {
+                queue.push(t247Id);
+                logger.info(
+                  `CHATGPT_REQUEUE_RETRY_PENDING=T247-${t247Id}`,
+                );
+                console.log(`CHATGPT_REQUEUE_RETRY_PENDING=T247-${t247Id}`);
+              }
+            } else {
+              failed += 1;
+              failedTenderIds.push(t247Id);
+              lastFailureError = err;
+            }
             if (err) {
               if (
                 /parse|JSON|control character|SyntaxError|No JSON object/i.test(
@@ -535,23 +645,24 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
         });
 
         logger.info(
-          `[${i + 1}/${needsBrowser.length}] COMPLETE T247-${t247Id} status=${outcome!.status}`,
+          `[${i + 1}/${queue.length}] COMPLETE T247-${t247Id} status=${outcome!.status}`,
         );
 
-        // Return to Project Home between tenders (delay already applied before next start)
+        // Return to Project Home only after candidate is fully done or bounded-failed.
+        // Never leave a live /c/ conversation mid-response (no PROJECT_REOPEN while waiting).
         if (
-          i < needsBrowser.length - 1 &&
-          (outcome!.status === "completed" ||
-            outcome!.status === "failed" ||
-            outcome!.status === "response_pending")
+          i < queue.length - 1 &&
+          (outcome!.status === "completed" || outcome!.status === "failed")
         ) {
+          console.log("CHATGPT_MOVING_TO_NEXT_TENDER=true");
+          logger.info("CHATGPT_MOVING_TO_NEXT_TENDER=true");
           try {
             await returnToProjectHome(page, config, logger);
           } catch (navError) {
             const navCode =
               navError instanceof AutomationError ? navError.code : "";
             if (navCode === "CHATGPT_RATE_LIMITED") {
-              remainingQueued = needsBrowser.length - i - 1;
+              remainingQueued = queue.length - i - 1;
               hasResponsePending = true;
               pendingChatUrl = outcome!.chatUrl;
               logger.error(
@@ -559,10 +670,40 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
               );
               break;
             }
-            throw navError;
+            // Non-fatal: try to recover project home without killing the batch.
+            logger.error(
+              `CHATGPT_PROJECT_HOME_RECOVERY_AFTER_CANDIDATE_FAILURE=${safeErrorMessage(navError)}`,
+            );
+            try {
+              await ensureProjectHome({
+                page,
+                projectName: config.chatgptProjectName,
+                projectMatch: config.chatgptProjectMatch,
+                projectUrl: config.chatgptProjectUrl,
+                config,
+                logger,
+              });
+            } catch (recoverError) {
+              logger.error(
+                `CHATGPT_BROWSER_RECOVERY_FAILED=${safeErrorMessage(recoverError)}`,
+              );
+              // Continue to next candidate; qualifySingleTender will open project again.
+            }
           }
+        } else if (
+          i < queue.length - 1 &&
+          outcome!.status === "response_pending"
+        ) {
+          // Stay on conversation URL — do not refresh/project-reopen before response completes.
+          logger.warn(
+            "CHATGPT_RESPONSE_PENDING_KEEP_CONVERSATION — skipping project home navigation",
+          );
+          console.log("CHATGPT_RESPONSE_PENDING_KEEP_CONVERSATION=true");
+          console.log("CHATGPT_MOVING_TO_NEXT_TENDER=true");
+          logger.info("CHATGPT_MOVING_TO_NEXT_TENDER=true");
         }
       }
+      } // end sequential chatgptConcurrency === 1
     }
 
     // Refresh manifest totals
@@ -593,6 +734,25 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
     if (pendingChatUrl) {
       console.log(`Resume chat: ${pendingChatUrl}`);
     }
+    const finalRetryPending = [
+      ...new Set(
+        retryPendingTenderIds.filter(
+          (id) =>
+            !completedTenderIds.includes(id) && !failedTenderIds.includes(id),
+        ),
+      ),
+    ];
+    const finalFailed = [...new Set(failedTenderIds)];
+    const finalCompleted = [...new Set(completedTenderIds)];
+    console.log(
+      `CHATGPT_FAILED_TENDER_IDS=${JSON.stringify(finalFailed)}`,
+    );
+    console.log(
+      `CHATGPT_RETRY_PENDING_TENDER_IDS=${JSON.stringify(finalRetryPending)}`,
+    );
+    console.log(
+      `CHATGPT_COMPLETED_TENDER_IDS=${JSON.stringify(finalCompleted)}`,
+    );
     console.log("==================================");
     console.log("");
 
@@ -654,6 +814,16 @@ export async function runQualificationBatch(): Promise<QualificationBatchSummary
     remainingQueued,
     pendingChatUrl,
     browserOpened: Boolean(session) || needsBrowser.length > 0,
+    completedTenderIds: [...new Set(completedTenderIds)],
+    failedTenderIds: [...new Set(failedTenderIds)],
+    retryPendingTenderIds: [
+      ...new Set(
+        retryPendingTenderIds.filter(
+          (id) =>
+            !completedTenderIds.includes(id) && !failedTenderIds.includes(id),
+        ),
+      ),
+    ],
   };
 }
 

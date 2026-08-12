@@ -36,15 +36,15 @@ const DialogContent = React.forwardRef<
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border border-[#E2E8F0] bg-white p-6 shadow-xl duration-200",
-        "rounded-[14px]",
+        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border border-slate-200 bg-white p-6 text-slate-900 shadow-xl duration-200",
+        "rounded-xl dark:border-slate-700/60 dark:bg-slate-900 dark:text-slate-100",
         "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95",
         className,
       )}
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-[8px] p-1 text-[#64748B] opacity-70 transition-opacity hover:bg-[#F1F5F9] hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-[#2563EB]/30">
+      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-[8px] p-1 text-slate-500 opacity-70 transition-opacity hover:bg-slate-100 hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-blue-500/30 dark:text-slate-400 dark:hover:bg-slate-800">
         <X className="size-4" />
         <span className="sr-only">Close</span>
       </DialogPrimitive.Close>
@@ -84,7 +84,10 @@ const DialogTitle = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Title
     ref={ref}
-    className={cn("font-heading text-lg font-semibold leading-none text-[#0F172A]", className)}
+    className={cn(
+      "font-heading text-lg font-semibold leading-none text-slate-900 dark:text-slate-50",
+      className,
+    )}
     {...props}
   />
 ));
@@ -96,7 +99,7 @@ const DialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn("text-sm text-[#64748B]", className)}
+    className={cn("text-sm text-slate-500 dark:text-slate-400", className)}
     {...props}
   />
 ));

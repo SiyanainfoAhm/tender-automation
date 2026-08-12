@@ -14,16 +14,49 @@ import type { AppConfig } from "../config.js";
 import type { QualificationAttachmentFile } from "./sourceDocumentResolver.js";
 import { assertRequiredAttachmentsReady } from "./sourceDocumentResolver.js";
 import {
+  COMPOSER_TOKEN_ATTR,
+  captureMessageBaseline,
   createTenderUploadSession,
+  countComposerAttachmentCards,
+  clearStaleComposerAttachments,
   detectComposerAttachments,
+  detectSubmissionSignals,
+  detectUploadLimitWarning,
+  ensureComposerCleanBeforeUpload,
+  readComposerPromptPresence,
+  resolveComposerSendButton,
   sendComposerMessage,
   typeComposerPrompt,
   uploadFilesToComposer,
   type SendComposerResult,
 } from "./chatInteraction.js";
+import { getSharedChatGptSubmissionScheduler } from "../concurrency/chatGptSubmissionScheduler.js";
 import { getProjectComposerLocator } from "./openProject.js";
+import {
+  assertTender247AttachmentCountSafe,
+  assertTender247AttachmentValidationPassed,
+  assertTender247UploadPathsTopLevelOnly,
+  buildAttachmentManifestAudit,
+  buildTender247ExpectedManifest,
+  logTender247ExpectedManifest,
+  validateDisplayedAttachmentNames,
+  type AttachmentManifestAudit,
+  type Tender247ExpectedManifest,
+} from "./tender247AttachmentManifest.js";
+import {
+  advanceCandidateStage,
+  createCandidateTxnState,
+  shouldSkipPromptPaste,
+  shouldSkipSend,
+  type ChatGptCandidateTxnState,
+} from "./candidateTxnState.js";
+import {
+  MAX_UPLOAD_ATTEMPTS,
+  classifyRealUploadFailure,
+  shouldRetryUpload,
+} from "./tender247AttachmentUploadState.js";
 
-export const COMPOSER_TOKEN_ATTR = "data-agenttender-composer-token";
+export { COMPOSER_TOKEN_ATTR } from "./chatInteraction.js";
 
 export type ConfirmedAttachmentState = {
   requiredAttachmentsConfirmed: true;
@@ -35,6 +68,7 @@ export type ConfirmedAttachmentState = {
   urlAtVerification: string;
   aiSummaryRequired: boolean;
   attachmentHashes: string[];
+  attachmentManifest?: AttachmentManifestAudit;
 };
 
 /** Snapshot used by pure continuity checks (no Playwright). */
@@ -257,6 +291,7 @@ export async function verifyComposerContinuity(options: {
 
   const presence = await detectComposerAttachments(page, {
     expectedArchiveFileName,
+    composerToken,
   });
   const editor = getProjectComposerLocator(page);
   const promptEditorVisible = await editor.isVisible().catch(() => false);
@@ -366,6 +401,23 @@ function sha256Sync(filePath: string): string {
     .digest("hex");
 }
 
+export function buildChatGptTransactionId(
+  sourcePortal: "TENDER247" | "BIDASSIST",
+  sourceTenderId: string,
+): string {
+  const now = new Date();
+  const stamp = [
+    now.getUTCFullYear(),
+    String(now.getUTCMonth() + 1).padStart(2, "0"),
+    String(now.getUTCDate()).padStart(2, "0"),
+    "-",
+    String(now.getUTCHours()).padStart(2, "0"),
+    String(now.getUTCMinutes()).padStart(2, "0"),
+  ].join("");
+  const prefix = sourcePortal === "TENDER247" ? "T247" : "BA";
+  return `${prefix}-${sourceTenderId}-${stamp}`;
+}
+
 /** Validate and log absolute paths for every attachment before ChatGPT opens. */
 export function assertAttachmentFilesExistOnDisk(
   files: QualificationAttachmentFile[],
@@ -440,6 +492,58 @@ export function assertBidassistBundleComplete(
   }
 }
 
+export function writeAttachmentManifestAuditFile(options: {
+  tenderFolder: string;
+  audit: AttachmentManifestAudit;
+  keptPipelineAuditDir?: string | null;
+}): string {
+  const tenderPath = path.join(options.tenderFolder, "03-attachment-manifest.json");
+  fs.writeFileSync(tenderPath, JSON.stringify(options.audit, null, 2), "utf8");
+
+  if (options.keptPipelineAuditDir) {
+    const pipelinePath = path.join(
+      options.keptPipelineAuditDir,
+      "03-attachment-manifest.json",
+    );
+    let existing: { generatedAt: string; tenders: AttachmentManifestAudit[] } = {
+      generatedAt: new Date().toISOString(),
+      tenders: [],
+    };
+    if (fs.existsSync(pipelinePath)) {
+      try {
+        const parsed = JSON.parse(
+          fs.readFileSync(pipelinePath, "utf8"),
+        ) as { generatedAt?: string; tenders?: AttachmentManifestAudit[] };
+        existing = {
+          generatedAt: parsed.generatedAt || existing.generatedAt,
+          tenders: Array.isArray(parsed.tenders) ? parsed.tenders : [],
+        };
+      } catch {
+        // overwrite corrupt file
+      }
+    }
+    const withoutCurrent = existing.tenders.filter(
+      (entry) => entry.sourceTenderId !== options.audit.sourceTenderId,
+    );
+    withoutCurrent.push(options.audit);
+    fs.writeFileSync(
+      pipelinePath,
+      JSON.stringify(
+        {
+          generatedAt: new Date().toISOString(),
+          tenders: withoutCurrent,
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    return pipelinePath;
+  }
+
+  return tenderPath;
+}
+
 export function logAttachmentBundle(
   sourcePortal: "TENDER247" | "BIDASSIST",
   sourceTenderId: string,
@@ -456,6 +560,70 @@ export function logAttachmentBundle(
   for (const file of files) {
     log(`E2E_ATTACHMENT_BUNDLE_FILE=${file.fileName}`);
   }
+}
+
+async function prepareComposerBeforeFirstUpload(options: {
+  page: Page;
+  composerToken: string;
+  manifest: Tender247ExpectedManifest | null;
+  logger: Logger;
+}): Promise<{
+  beforeCount: number;
+  cleared: boolean;
+  pageCount: number;
+  reusedValidAttachments: boolean;
+  displayedNames: string[];
+}> {
+  const { page, composerToken, manifest, logger } = options;
+  const snapshot = await countComposerAttachmentCards(page, { composerToken });
+  logger.info(
+    `CHATGPT_COMPOSER_ATTACHMENT_COUNT_BEFORE_UPLOAD=${snapshot.composerCount}`,
+  );
+  console.log(
+    `CHATGPT_COMPOSER_ATTACHMENT_COUNT_BEFORE_UPLOAD=${snapshot.composerCount}`,
+  );
+
+  if (snapshot.composerCount === 0) {
+    return {
+      beforeCount: 0,
+      cleared: false,
+      pageCount: snapshot.pageCount,
+      reusedValidAttachments: false,
+      displayedNames: [],
+    };
+  }
+
+  if (manifest) {
+    const validation = validateDisplayedAttachmentNames({
+      manifest,
+      displayedNames: snapshot.displayedNames,
+    });
+    if (
+      validation.ok &&
+      snapshot.composerCount === manifest.expectedCount
+    ) {
+      logger.info("CHATGPT_EXISTING_VALID_ATTACHMENTS_REUSED");
+      console.log("CHATGPT_EXISTING_VALID_ATTACHMENTS_REUSED");
+      return {
+        beforeCount: snapshot.composerCount,
+        cleared: false,
+        pageCount: snapshot.pageCount,
+        reusedValidAttachments: true,
+        displayedNames: snapshot.displayedNames,
+      };
+    }
+  }
+
+  const cleanup = await ensureComposerCleanBeforeUpload(page, logger, {
+    composerToken,
+  });
+  return {
+    beforeCount: cleanup.beforeCount,
+    cleared: cleanup.cleared,
+    pageCount: cleanup.pageCount,
+    reusedValidAttachments: false,
+    displayedNames: [],
+  };
 }
 
 /**
@@ -482,6 +650,21 @@ export async function uploadQualificationAttachments(options: {
   const aiSummaryRequired =
     sourcePortal === "TENDER247" &&
     files.some((f) => f.kind === "AI_SUMMARY");
+
+  let tender247Manifest:
+    | ReturnType<typeof buildTender247ExpectedManifest>
+    | null = null;
+  if (sourcePortal === "TENDER247") {
+    tender247Manifest = buildTender247ExpectedManifest(files);
+    logTender247ExpectedManifest(tender247Manifest, (message) => {
+      logger.info(message);
+      console.log(message);
+    });
+    assertTender247AttachmentCountSafe(tender247Manifest, sourceTenderId);
+    assertTender247UploadPathsTopLevelOnly(
+      tender247Manifest.expectedPaths,
+    );
+  }
 
   if (sourcePortal === "TENDER247") {
     assertTender247BundleComplete(files, sourceTenderId, aiSummaryRequired);
@@ -515,24 +698,264 @@ export async function uploadQualificationAttachments(options: {
     logger,
   });
 
-  const filePaths = files.map((f) => path.resolve(f.filePath));
+  const transactionId = buildChatGptTransactionId(sourcePortal, sourceTenderId);
+  logger.info(`CHATGPT_TRANSACTION=${transactionId}`);
+  console.log(`CHATGPT_TRANSACTION=${transactionId}`);
+
+  const composerCleanup = await prepareComposerBeforeFirstUpload({
+    page,
+    composerToken,
+    manifest: tender247Manifest,
+    logger,
+  });
+
+  const filePaths = [...files.map((f) => path.resolve(f.filePath))];
+  if (sourcePortal === "TENDER247") {
+    assertTender247UploadPathsTopLevelOnly(filePaths);
+  }
   const archiveName = path.basename(
     files.find((f) => f.kind === "DOCUMENT_ARCHIVE")?.filePath || "",
   );
 
   const session = createTenderUploadSession();
-  await uploadFilesToComposer({
-    page,
-    filePaths,
-    logger,
-    batchSize: filePaths.length,
-    timeoutMs: config.chatgptUploadTimeoutMs,
-    t247Id: sourceTenderId,
-    expectAiSummary: aiSummaryRequired,
-    session,
-    forceFreshUpload: true,
-    expectedArchiveFileName: archiveName || undefined,
-  });
+  let attachmentManifest: AttachmentManifestAudit | undefined;
+  let stableValidation:
+    | ReturnType<typeof validateDisplayedAttachmentNames>
+    | null = null;
+  let uploadLimitWarningSeen = false;
+  let filesAssignedCount = 0;
+
+  if (composerCleanup.reusedValidAttachments && tender247Manifest) {
+    session.filesAssigned = true;
+    session.attachmentsLocked = true;
+    filesAssignedCount = filePaths.length;
+    stableValidation = validateDisplayedAttachmentNames({
+      manifest: tender247Manifest,
+      displayedNames: composerCleanup.displayedNames,
+    });
+    logger.info(
+      `CHATGPT_LOGICAL_METADATA_PRESENT=${stableValidation.metadataCount === 1}`,
+    );
+    console.log(
+      `CHATGPT_LOGICAL_METADATA_PRESENT=${stableValidation.metadataCount === 1}`,
+    );
+    logger.info(
+      `CHATGPT_LOGICAL_AI_SUMMARY_PRESENT=${stableValidation.aiSummaryCount === 1}`,
+    );
+    console.log(
+      `CHATGPT_LOGICAL_AI_SUMMARY_PRESENT=${stableValidation.aiSummaryCount === 1}`,
+    );
+    logger.info(
+      `CHATGPT_LOGICAL_ZIP_PRESENT=${stableValidation.archiveCount === 1}`,
+    );
+    console.log(
+      `CHATGPT_LOGICAL_ZIP_PRESENT=${stableValidation.archiveCount === 1}`,
+    );
+    logger.info(
+      `CHATGPT_CURRENT_COMPOSER_ATTACHMENT_COUNT=${composerCleanup.beforeCount}`,
+    );
+    console.log(
+      `CHATGPT_CURRENT_COMPOSER_ATTACHMENT_COUNT=${composerCleanup.beforeCount}`,
+    );
+    logger.info("CHATGPT_ATTACHMENT_STATE_STABLE=true");
+    console.log("CHATGPT_ATTACHMENT_STATE_STABLE=true");
+    logger.info("CHATGPT_ATTACHMENTS_LOCKED=true");
+    console.log("CHATGPT_ATTACHMENTS_LOCKED=true");
+  } else if (sourcePortal === "TENDER247" && tender247Manifest) {
+    for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt += 1) {
+      logger.info(`CHATGPT_UPLOAD_ATTEMPT=${attempt}`);
+      console.log(`CHATGPT_UPLOAD_ATTEMPT=${attempt}`);
+
+      if (attempt > 1) {
+        logger.warn("UPLOAD_ATTEMPT_1_FAILED=true");
+        console.log("UPLOAD_ATTEMPT_1_FAILED=true");
+        await clearStaleComposerAttachments(page, logger, { composerToken });
+        session.filesAssigned = false;
+        session.uploadAttemptCount = 0;
+        session.attachmentsLocked = false;
+        await page.waitForTimeout(1_000);
+      }
+
+      try {
+        uploadLimitWarningSeen = await detectUploadLimitWarning(page);
+        if (uploadLimitWarningSeen) {
+          throw new AutomationError(
+            "CHATGPT_UPLOAD_LIMIT_WARNING",
+            "CHATGPT_UPLOAD_LIMIT_WARNING=true",
+          );
+        }
+
+        await uploadFilesToComposer({
+          page,
+          filePaths,
+          logger,
+          batchSize: filePaths.length,
+          timeoutMs: config.chatgptUploadTimeoutMs,
+          t247Id: sourceTenderId,
+          expectAiSummary: aiSummaryRequired,
+          session,
+          forceFreshUpload: attempt === 1,
+          expectedArchiveFileName: archiveName || undefined,
+          expectedAttachmentCount: tender247Manifest?.expectedCount,
+          composerToken,
+          tender247Manifest: tender247Manifest ?? undefined,
+        });
+
+        filesAssignedCount = filePaths.length;
+        const visible = await countComposerAttachmentCards(page, { composerToken });
+        stableValidation = validateDisplayedAttachmentNames({
+          manifest: tender247Manifest,
+          displayedNames: visible.displayedNames,
+        });
+        logger.info(
+          `CHATGPT_LOGICAL_METADATA_PRESENT=${stableValidation.metadataCount === 1}`,
+        );
+        console.log(
+          `CHATGPT_LOGICAL_METADATA_PRESENT=${stableValidation.metadataCount === 1}`,
+        );
+        logger.info(
+          `CHATGPT_LOGICAL_AI_SUMMARY_PRESENT=${stableValidation.aiSummaryCount === 1}`,
+        );
+        console.log(
+          `CHATGPT_LOGICAL_AI_SUMMARY_PRESENT=${stableValidation.aiSummaryCount === 1}`,
+        );
+        logger.info(
+          `CHATGPT_LOGICAL_ZIP_PRESENT=${stableValidation.archiveCount === 1}`,
+        );
+        console.log(
+          `CHATGPT_LOGICAL_ZIP_PRESENT=${stableValidation.archiveCount === 1}`,
+        );
+        logger.info(
+          `CHATGPT_CURRENT_COMPOSER_ATTACHMENT_COUNT=${visible.composerCount}`,
+        );
+        console.log(
+          `CHATGPT_CURRENT_COMPOSER_ATTACHMENT_COUNT=${visible.composerCount}`,
+        );
+        if (session.attachmentsLocked) {
+          logger.info("CHATGPT_ATTACHMENTS_LOCKED=true");
+          console.log("CHATGPT_ATTACHMENTS_LOCKED=true");
+        }
+        break;
+      } catch (error) {
+        // After lock: never clear/re-upload — fail the candidate.
+        if (session.attachmentsLocked) {
+          logger.error(
+            "CHATGPT_UPLOAD_BLOCKED_LOCKED=true — post-lock failure must not re-upload",
+          );
+          console.log(
+            "CHATGPT_UPLOAD_BLOCKED_LOCKED=true — post-lock failure must not re-upload",
+          );
+          throw error;
+        }
+
+        uploadLimitWarningSeen =
+          uploadLimitWarningSeen || (await detectUploadLimitWarning(page));
+        const visible = await countComposerAttachmentCards(page, { composerToken });
+        const validation = validateDisplayedAttachmentNames({
+          manifest: tender247Manifest,
+          displayedNames: visible.displayedNames,
+        });
+        const failure = classifyRealUploadFailure({
+          uploadLimitWarning: uploadLimitWarningSeen,
+          uploadErrorVisible:
+            error instanceof AutomationError &&
+            error.code === "CHATGPT_UPLOAD_FAILED",
+          validation,
+          timedOut:
+            error instanceof AutomationError &&
+            error.code === "CHATGPT_ATTACHMENT_NOT_VISIBLE",
+        });
+
+        if (!shouldRetryUpload(attempt, failure)) {
+          logger.error("CHATGPT_UPLOAD_FAILED_FINAL=true");
+          logger.error("CHATGPT_SEND_BLOCKED=true");
+          console.log("CHATGPT_UPLOAD_FAILED_FINAL=true");
+          console.log("CHATGPT_SEND_BLOCKED=true");
+          throw error;
+        }
+      }
+    }
+  } else {
+    await uploadFilesToComposer({
+      page,
+      filePaths,
+      logger,
+      batchSize: filePaths.length,
+      timeoutMs: config.chatgptUploadTimeoutMs,
+      t247Id: sourceTenderId,
+      expectAiSummary: aiSummaryRequired,
+      session,
+      expectedArchiveFileName: archiveName || undefined,
+      composerToken,
+    });
+    filesAssignedCount = filePaths.length;
+  }
+
+  if (!stableValidation?.ok && tender247Manifest) {
+    const visible = await countComposerAttachmentCards(page, { composerToken });
+    stableValidation = validateDisplayedAttachmentNames({
+      manifest: tender247Manifest,
+      displayedNames: visible.displayedNames,
+    });
+  }
+
+  if (filesAssignedCount > 0) {
+    logger.info(`CHATGPT_FILES_ASSIGNED=${filesAssignedCount}`);
+    console.log(`CHATGPT_FILES_ASSIGNED=${filesAssignedCount}`);
+  }
+
+  if (sourcePortal === "TENDER247" && tender247Manifest && stableValidation) {
+    logger.info(
+      `CHATGPT_COMPOSER_ATTACHMENT_COUNT_AFTER_UPLOAD=${stableValidation.visibleCount}`,
+    );
+    console.log(
+      `CHATGPT_COMPOSER_ATTACHMENT_COUNT_AFTER_UPLOAD=${stableValidation.visibleCount}`,
+    );
+
+    if (uploadLimitWarningSeen) {
+      logger.error("CHATGPT_UPLOAD_LIMIT_WARNING=true");
+      console.log("CHATGPT_UPLOAD_LIMIT_WARNING=true");
+    }
+
+    attachmentManifest = buildAttachmentManifestAudit({
+      manifest: tender247Manifest,
+      sourceTenderId,
+      displayedNames: (
+        await countComposerAttachmentCards(page, { composerToken })
+      ).displayedNames,
+      filesAssignedCount,
+      uploadLimitWarningSeen,
+      staleAttachmentsFound: composerCleanup.beforeCount,
+      staleAttachmentsCleared: composerCleanup.cleared,
+      validation: stableValidation,
+      sendBlocked: !stableValidation.ok || uploadLimitWarningSeen,
+    });
+
+    try {
+      assertTender247AttachmentValidationPassed({
+        manifest: tender247Manifest,
+        validation: stableValidation,
+        uploadLimitWarningSeen,
+        sourceTenderId,
+      });
+      logger.info("CHATGPT_ATTACHMENT_VALIDATION_PASSED=true");
+      console.log("CHATGPT_ATTACHMENT_VALIDATION_PASSED=true");
+    } catch (error) {
+      if (
+        stableValidation.failureReason === "duplicate_metadata" ||
+        stableValidation.failureReason === "duplicate_ai_summary" ||
+        stableValidation.failureReason === "duplicate_archive"
+      ) {
+        logger.error("CHATGPT_DUPLICATE_ATTACHMENT_DETECTED=true");
+        console.log("CHATGPT_DUPLICATE_ATTACHMENT_DETECTED=true");
+      }
+      logger.error("CHATGPT_ATTACHMENT_VALIDATION_FAILED=true");
+      logger.error("CHATGPT_SEND_BLOCKED=true");
+      console.log("CHATGPT_ATTACHMENT_VALIDATION_FAILED=true");
+      console.log("CHATGPT_SEND_BLOCKED=true");
+      throw error;
+    }
+  }
 
   await assertPreSendAttachmentCheck({
     page,
@@ -541,6 +964,7 @@ export async function uploadQualificationAttachments(options: {
     aiSummaryRequired,
     expectedArchiveFileName: archiveName,
     logger,
+    composerToken,
   });
 
   await verifyComposerContinuity({
@@ -571,6 +995,7 @@ export async function uploadQualificationAttachments(options: {
     urlAtVerification,
     aiSummaryRequired,
     attachmentHashes,
+    attachmentManifest,
   };
 }
 
@@ -581,6 +1006,7 @@ export async function assertPreSendAttachmentCheck(options: {
   aiSummaryRequired: boolean;
   expectedArchiveFileName: string;
   logger: Logger;
+  composerToken?: string;
 }): Promise<void> {
   const {
     page,
@@ -589,6 +1015,7 @@ export async function assertPreSendAttachmentCheck(options: {
     aiSummaryRequired,
     expectedArchiveFileName,
     logger,
+    composerToken,
   } = options;
 
   logger.info("CHATGPT_PRE_SEND_ATTACHMENT_CHECK_START");
@@ -596,6 +1023,7 @@ export async function assertPreSendAttachmentCheck(options: {
 
   const presence = await detectComposerAttachments(page, {
     expectedArchiveFileName,
+    composerToken,
   });
 
   const metadataPresent = presence.metadataAttached;
@@ -609,12 +1037,21 @@ export async function assertPreSendAttachmentCheck(options: {
   console.log(`CHATGPT_PRE_SEND_ARCHIVE_PRESENT=${archivePresent}`);
   console.log(`CHATGPT_PRE_SEND_AI_SUMMARY_PRESENT=${aiPresent}`);
 
+  if (!metadataPresent && archivePresent) {
+    console.log("CHATGPT_REQUIRED_ATTACHMENT_MISSING=metadata");
+    logger.error("CHATGPT_REQUIRED_ATTACHMENT_MISSING=metadata");
+  }
+
+  // Logical attachment count — do NOT require every card to be visually exposed.
   const count =
     Number(metadataPresent) +
     Number(archivePresent) +
     Number(aiSummaryRequired ? aiPresent : false);
   logger.info(`CHATGPT_PRE_SEND_ATTACHMENT_COUNT=${count}`);
   console.log(`CHATGPT_PRE_SEND_ATTACHMENT_COUNT=${count}`);
+  logger.info(
+    `CHATGPT_PRE_SEND_LOGICAL_ATTACHMENTS=metadata:${metadataPresent};zip:${archivePresent};ai:${aiPresent};aiRequired:${aiSummaryRequired}`,
+  );
 
   try {
     assertRequiredAttachmentsReady({
@@ -638,16 +1075,60 @@ export async function assertPreSendAttachmentCheck(options: {
 }
 
 /**
- * Enter prompt and Send ONLY with a live ConfirmedAttachmentState.
- * Re-verifies cards and composer token continuity immediately before typing.
+ * Prompt entry + Send after attachments are locked.
+ *
+ * Idempotent rules:
+ * - paste prompt at most once per call (PROMPT_ENTRY_COUNT)
+ * - acquire Send slot BEFORE prompt so PROMPT_READY never waits minutes
+ * - if Send fails → retry Send only (never re-paste / re-upload)
+ * - if authoritative submission already detected → do not Send again
  */
+export const PROMPT_ENTRY_TIMEOUT_MS = 90_000;
+
+export function getPromptReadyTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const n = Number.parseInt(env.CHATGPT_PROMPT_READY_TIMEOUT_MS || "30000", 10);
+  return Number.isFinite(n) && n >= 5_000 ? n : 30_000;
+}
+
+async function savePromptStageScreenshot(
+  page: Page,
+  logger: Logger,
+  name: "01-files-ready" | "02-prompt-ready" | "03-send-failure",
+): Promise<void> {
+  try {
+    const dir = path.join(process.cwd(), "screenshots", "chatgpt-prompt-send");
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, `${name}.png`);
+    await page.screenshot({ path: filePath, fullPage: true });
+    logger.info(`CHATGPT_PROMPT_STAGE_SCREENSHOT=${filePath}`);
+    console.log(`CHATGPT_PROMPT_STAGE_SCREENSHOT=${filePath}`);
+  } catch {
+    logger.warn(`CHATGPT_PROMPT_STAGE_SCREENSHOT_FAILED=${name}`);
+  }
+}
+
 export async function enterPromptAndSendWithConfirmedAttachments(options: {
   page: Page;
   prompt: string;
   logger: Logger;
   confirmed: ConfirmedAttachmentState;
+  /** Optional shared transaction state (mutated in place). */
+  txn?: ChatGptCandidateTxnState;
 }): Promise<SendComposerResult> {
   const { page, prompt, logger, confirmed } = options;
+  let txn = options.txn ?? createCandidateTxnState(1);
+  const syncTxn = (next: ChatGptCandidateTxnState) => {
+    txn = next;
+    if (options.txn) Object.assign(options.txn, next);
+  };
+  const promptDeadline = Date.now() + PROMPT_ENTRY_TIMEOUT_MS;
+  const promptReadyTimeoutMs = getPromptReadyTimeoutMs();
+
+  logger.info("CHATGPT_PROMPT_ENTRY_START");
+  console.log("CHATGPT_PROMPT_ENTRY_START");
+  syncTxn(advanceCandidateStage(txn, "PROMPT_ENTERING"));
 
   if (confirmed.requiredAttachmentsConfirmed !== true) {
     throw new AutomationError(
@@ -665,42 +1146,316 @@ export async function enterPromptAndSendWithConfirmedAttachments(options: {
   const archiveName =
     confirmed.fileNames.find((n) => /\.zip$/i.test(n)) || "";
 
-  await verifyComposerContinuity({
-    page,
-    composerToken: confirmed.composerIdentity,
-    urlBefore: confirmed.urlAtVerification,
-    sourcePortal: confirmed.sourcePortal,
-    sourceTenderId: confirmed.sourceTenderId,
-    aiSummaryRequired: confirmed.aiSummaryRequired,
-    expectedArchiveFileName: archiveName,
-    logger,
-  });
+  const failPromptEntry = (reason: string): never => {
+    logger.error("CHATGPT_PROMPT_ENTRY_FAILED=true");
+    console.log("CHATGPT_PROMPT_ENTRY_FAILED=true");
+    throw new AutomationError(
+      "CHATGPT_PROMPT_ENTRY_FAILED",
+      `CHATGPT_PROMPT_ENTRY_FAILED=true reason=${reason}`,
+    );
+  };
 
-  await assertPreSendAttachmentCheck({
-    page,
-    sourcePortal: confirmed.sourcePortal,
-    sourceTenderId: confirmed.sourceTenderId,
-    aiSummaryRequired: confirmed.aiSummaryRequired,
-    expectedArchiveFileName: archiveName,
-    logger,
-  });
+  try {
+    const earlySubmit = await detectSubmissionSignals(page, {
+      expectedT247Id: confirmed.sourceTenderId,
+    });
+    if (earlySubmit.submitted) {
+      logger.info("CHATGPT_ALREADY_SUBMITTED=true");
+      console.log("CHATGPT_ALREADY_SUBMITTED=true");
+      console.log("CHATGPT_PROMPT_SUBMITTED=true");
+      const next = advanceCandidateStage(txn, "SUBMITTED");
+      next.conversationUrl = earlySubmit.url;
+      syncTxn(next);
+      const baseline = await captureMessageBaseline(page);
+      return {
+        chatUrl: earlySubmit.url,
+        baseline,
+        submissionConfirmed: true,
+      };
+    }
 
-  await typeComposerPrompt(page, prompt, logger);
+    if (Date.now() > promptDeadline) {
+      failPromptEntry("timeout_before_continuity");
+    }
 
-  await assertPreSendAttachmentCheck({
-    page,
-    sourcePortal: confirmed.sourcePortal,
-    sourceTenderId: confirmed.sourceTenderId,
-    aiSummaryRequired: confirmed.aiSummaryRequired,
-    expectedArchiveFileName: archiveName,
-    logger,
-  });
+    await verifyComposerContinuity({
+      page,
+      composerToken: confirmed.composerIdentity,
+      urlBefore: confirmed.urlAtVerification,
+      sourcePortal: confirmed.sourcePortal,
+      sourceTenderId: confirmed.sourceTenderId,
+      aiSummaryRequired: confirmed.aiSummaryRequired,
+      expectedArchiveFileName: archiveName,
+      logger,
+    });
 
-  return sendComposerMessage(page, logger, {
-    requireNewConversation: true,
-    expectedT247Id: confirmed.sourceTenderId,
-    userMessagePattern:
-      /Evaluate this tender for Siyana Info Solutions Pvt\. Ltd\./i,
-    confirmedAttachments: confirmed,
-  });
+    await assertPreSendAttachmentCheck({
+      page,
+      sourcePortal: confirmed.sourcePortal,
+      sourceTenderId: confirmed.sourceTenderId,
+      aiSummaryRequired: confirmed.aiSummaryRequired,
+      expectedArchiveFileName: archiveName,
+      logger,
+      composerToken: confirmed.composerIdentity,
+    });
+    console.log("CHATGPT_ATTACHMENT_VALIDATION_PASSED=true");
+    logger.info("CHATGPT_ATTACHMENT_VALIDATION_PASSED=true");
+    await savePromptStageScreenshot(page, logger, "01-files-ready");
+
+    // Prompt entry is NOT under the global Send mutex — workers may prepare in parallel.
+    const alreadyPresent = await readComposerPromptPresence(page);
+    if (shouldSkipPromptPaste(txn) || alreadyPresent.present) {
+      logger.info("CHATGPT_PROMPT_PASTE_SKIPPED=already_ready");
+      console.log("CHATGPT_PROMPT_PASTE_SKIPPED=already_ready");
+      console.log(`CHATGPT_PROMPT_PRESENT=true`);
+      console.log(`CHATGPT_PROMPT_LENGTH=${alreadyPresent.length}`);
+    } else {
+      txn.promptEntryCount += 1;
+      console.log(`CHATGPT_PROMPT_ENTRY_ATTEMPT=${txn.promptEntryCount}`);
+      logger.info(`CHATGPT_PROMPT_ENTRY_ATTEMPT=${txn.promptEntryCount}`);
+      if (txn.promptEntryCount > 1) {
+        failPromptEntry("prompt_paste_blocked_second_attempt");
+      }
+      await typeComposerPrompt(page, prompt, logger);
+    }
+
+    const presence = await readComposerPromptPresence(page);
+    console.log(`CHATGPT_PROMPT_PRESENT=${presence.present}`);
+    console.log(`CHATGPT_PROMPT_LENGTH=${presence.length}`);
+    logger.info(`CHATGPT_PROMPT_PRESENT=${presence.present}`);
+    logger.info(`CHATGPT_PROMPT_LENGTH=${presence.length}`);
+    if (!presence.present) {
+      failPromptEntry("prompt_not_present_after_entry");
+    }
+
+    {
+      const next = advanceCandidateStage(txn, "PROMPT_READY");
+      next.promptReady = true;
+      syncTxn(next);
+    }
+    logger.info("CHATGPT_PROMPT_ENTERED=true");
+    console.log("CHATGPT_PROMPT_ENTERED=true");
+    await savePromptStageScreenshot(page, logger, "02-prompt-ready");
+
+    const promptReadyDeadline = Date.now() + promptReadyTimeoutMs;
+
+    if (
+      confirmed.sourcePortal === "TENDER247" &&
+      confirmed.attachmentManifest &&
+      !confirmed.attachmentManifest.validationPassed
+    ) {
+      logger.error("CHATGPT_ATTACHMENT_VALIDATION_FAILED=true");
+      logger.error("CHATGPT_SEND_BLOCKED=true");
+      throw new AutomationError(
+        "CHATGPT_ATTACHMENT_VALIDATION_FAILED",
+        "CHATGPT_SEND_BLOCKED=true — attachment manifest validation failed before send",
+      );
+    }
+
+    if (confirmed.sourcePortal === "TENDER247") {
+      const uploadLimitWarningSeen = await detectUploadLimitWarning(page);
+      if (uploadLimitWarningSeen) {
+        logger.error("CHATGPT_UPLOAD_LIMIT_WARNING=true");
+        logger.error("CHATGPT_SEND_BLOCKED=true");
+        throw new AutomationError(
+          "CHATGPT_UPLOAD_LIMIT_WARNING",
+          "CHATGPT_UPLOAD_LIMIT_WARNING=true CHATGPT_SEND_BLOCKED=true",
+        );
+      }
+      // Logical attachments only — do NOT require every card visually exposed.
+      const logical = await detectComposerAttachments(page, {
+        expectedArchiveFileName: archiveName,
+        composerToken: confirmed.composerIdentity,
+      });
+      if (!logical.metadataAttached) {
+        console.log("CHATGPT_REQUIRED_ATTACHMENT_MISSING=metadata");
+        logger.error("CHATGPT_REQUIRED_ATTACHMENT_MISSING=metadata");
+        throw new AutomationError(
+          "CHATGPT_ATTACHMENT_VALIDATION_FAILED",
+          "CHATGPT_REQUIRED_ATTACHMENT_MISSING=metadata",
+        );
+      }
+      if (!logical.documentsAttached) {
+        console.log("CHATGPT_REQUIRED_ATTACHMENT_MISSING=documents");
+        logger.error("CHATGPT_REQUIRED_ATTACHMENT_MISSING=documents");
+        throw new AutomationError(
+          "CHATGPT_ATTACHMENT_VALIDATION_FAILED",
+          "CHATGPT_REQUIRED_ATTACHMENT_MISSING=documents",
+        );
+      }
+      if (confirmed.aiSummaryRequired && !logical.aiSummaryAttached) {
+        console.log("CHATGPT_REQUIRED_ATTACHMENT_MISSING=ai_summary");
+        logger.error("CHATGPT_REQUIRED_ATTACHMENT_MISSING=ai_summary");
+        throw new AutomationError(
+          "CHATGPT_ATTACHMENT_VALIDATION_FAILED",
+          "CHATGPT_REQUIRED_ATTACHMENT_MISSING=ai_summary",
+        );
+      }
+      logger.info(
+        `CHATGPT_LOGICAL_ATTACHMENT_OK metadata=${logical.metadataAttached} zip=${logical.documentsAttached} ai=${logical.aiSummaryAttached} aiRequired=${confirmed.aiSummaryRequired}`,
+      );
+    }
+
+    await assertPreSendAttachmentCheck({
+      page,
+      sourcePortal: confirmed.sourcePortal,
+      sourceTenderId: confirmed.sourceTenderId,
+      aiSummaryRequired: confirmed.aiSummaryRequired,
+      expectedArchiveFileName: archiveName,
+      logger,
+      composerToken: confirmed.composerIdentity,
+    });
+
+    if (Date.now() > promptReadyDeadline) {
+      await savePromptStageScreenshot(page, logger, "03-send-failure");
+      failPromptEntry("prompt_ready_timeout_before_send");
+    }
+
+    if (shouldSkipSend(txn)) {
+      const signals = await detectSubmissionSignals(page, {
+        expectedT247Id: confirmed.sourceTenderId,
+      });
+      if (signals.submitted) {
+        const baseline = await captureMessageBaseline(page);
+        return {
+          chatUrl: signals.url,
+          baseline,
+          submissionConfirmed: true,
+        };
+      }
+    }
+
+    {
+      const waitDeadline = Math.min(promptReadyDeadline, Date.now() + 8_000);
+      while (Date.now() < waitDeadline) {
+        const diag = await resolveComposerSendButton(page, logger, {
+          composerToken: confirmed.composerIdentity,
+        });
+        if (diag.found && diag.enabled) {
+          break;
+        }
+        await page.waitForTimeout(250);
+      }
+    }
+
+    if (Date.now() > promptReadyDeadline) {
+      await savePromptStageScreenshot(page, logger, "03-send-failure");
+      const diag = await resolveComposerSendButton(page, logger, {
+        composerToken: confirmed.composerIdentity,
+      });
+      console.log(`CHATGPT_SEND_BUTTON_FOUND=${diag.found}`);
+      console.log(`CHATGPT_SEND_BUTTON_VISIBLE=${diag.visible}`);
+      console.log(`CHATGPT_SEND_BUTTON_ENABLED=${diag.enabled}`);
+      console.log(`CHATGPT_SEND_BUTTON_COUNT=${diag.count}`);
+      failPromptEntry("prompt_ready_timeout_send_not_actionable");
+    }
+
+    // Global Send mutex starts HERE — not during upload/prompt prep.
+    syncTxn(advanceCandidateStage(txn, "WAITING_FOR_SEND_SLOT"));
+    console.log("CHATGPT_WAITING_FOR_SEND_SLOT=true");
+    logger.info("CHATGPT_WAITING_FOR_SEND_SLOT=true");
+
+    {
+      const next = advanceCandidateStage(txn, "SUBMITTING");
+      next.sendAttemptCount += 1;
+      syncTxn(next);
+    }
+    console.log(`CHATGPT_SEND_ATTEMPT=${txn.sendAttemptCount}`);
+
+    try {
+      const result = await sendComposerMessage(page, logger, {
+        requireNewConversation: true,
+        expectedT247Id: confirmed.sourceTenderId,
+        userMessagePattern:
+          /Evaluate this tender for Siyana Info Solutions Pvt\. Ltd\./i,
+        confirmedAttachments: confirmed,
+      });
+      const next = advanceCandidateStage(txn, "SUBMITTED");
+      next.submitted = true;
+      next.conversationUrl = result.chatUrl;
+      syncTxn(next);
+      console.log("CHATGPT_RESPONSE_WAIT_START");
+      logger.info("CHATGPT_RESPONSE_WAIT_START");
+      return result;
+    } catch (sendError) {
+      const signals = await detectSubmissionSignals(page, {
+        expectedT247Id: confirmed.sourceTenderId,
+      });
+      if (signals.submitted) {
+        logger.info("CHATGPT_SUBMITTED=true (detected after uncertain Send)");
+        console.log("CHATGPT_SUBMITTED=true");
+        console.log("CHATGPT_PROMPT_SUBMITTED=true");
+        getSharedChatGptSubmissionScheduler().markSubmissionSuccess({
+          sourcePortal: confirmed.sourcePortal,
+          sourceTenderId: confirmed.sourceTenderId,
+          force: true,
+        });
+        const next = advanceCandidateStage(txn, "SUBMITTED");
+        next.submitted = true;
+        next.conversationUrl = signals.url;
+        syncTxn(next);
+        const baseline = await captureMessageBaseline(page);
+        console.log("CHATGPT_RESPONSE_WAIT_START");
+        return {
+          chatUrl: signals.url,
+          baseline,
+          submissionConfirmed: true,
+        };
+      }
+
+      if (txn.sendAttemptCount < 2) {
+        logger.warn("CHATGPT_SEND_RETRY_ONLY=true");
+        console.log("CHATGPT_SEND_RETRY_ONLY=true");
+        txn.sendAttemptCount += 1;
+        if (options.txn) options.txn.sendAttemptCount = txn.sendAttemptCount;
+        console.log(`CHATGPT_SEND_ATTEMPT=${txn.sendAttemptCount}`);
+        syncTxn(advanceCandidateStage(txn, "WAITING_FOR_SEND_SLOT"));
+        try {
+          const result = await sendComposerMessage(page, logger, {
+            requireNewConversation: true,
+            expectedT247Id: confirmed.sourceTenderId,
+            userMessagePattern:
+              /Evaluate this tender for Siyana Info Solutions Pvt\. Ltd\./i,
+            confirmedAttachments: confirmed,
+          });
+          const next = advanceCandidateStage(txn, "SUBMITTED");
+          next.submitted = true;
+          next.conversationUrl = result.chatUrl;
+          syncTxn(next);
+          console.log("CHATGPT_RESPONSE_WAIT_START");
+          logger.info("CHATGPT_RESPONSE_WAIT_START");
+          return result;
+        } catch (retryError) {
+          await savePromptStageScreenshot(page, logger, "03-send-failure");
+          throw retryError;
+        }
+      }
+      await savePromptStageScreenshot(page, logger, "03-send-failure");
+      throw sendError;
+    }
+  } catch (error) {
+    if (
+      error instanceof AutomationError &&
+      (error.code === "CHATGPT_PROMPT_ENTRY_FAILED" ||
+        error.code === "CHATGPT_ATTACHMENT_VALIDATION_FAILED" ||
+        error.code === "CHATGPT_UPLOAD_LIMIT_WARNING" ||
+        error.code === "CHATGPT_PROMPT_NOT_SUBMITTED" ||
+        error.code === "CHATGPT_SEND_BUTTON_DISABLED" ||
+        error.code === "CHATGPT_SEND_BUTTON_MISSING" ||
+        error.code === "CHATGPT_GLOBAL_THROTTLE_VIOLATION")
+    ) {
+      throw error;
+    }
+    if (
+      error instanceof AutomationError &&
+      /COMPOSER_CHANGED|COMPOSER_MISSING|COMPOSER_DETACHED|PRE_SEND_ATTACHMENT/i.test(
+        error.code,
+      )
+    ) {
+      return failPromptEntry(error.code);
+    }
+    return failPromptEntry(
+      error instanceof Error ? error.message.slice(0, 200) : String(error),
+    );
+  }
 }

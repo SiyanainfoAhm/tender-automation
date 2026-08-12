@@ -75,10 +75,10 @@ export default async function TenderDetailPage({
               </Badge>
             ) : null}
           </div>
-          <h1 className="font-heading max-w-4xl text-2xl font-bold leading-tight text-text-primary">
+          <h1 className="font-heading max-w-4xl text-2xl font-bold leading-tight text-slate-900 dark:text-slate-50">
             {title}
           </h1>
-          <p className="text-sm text-text-muted">
+          <p className="text-sm text-slate-600 dark:text-slate-400">
             {str(tender.organization)}
             {tender.state ? ` · ${str(tender.state)}` : ""}
             {tender.city ? ` · ${str(tender.city)}` : ""}
@@ -387,7 +387,9 @@ function DetailCard({
   return (
     <Card className={className}>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">{title}</CardTitle>
+        <CardTitle className="text-base font-semibold text-slate-900 dark:text-slate-50">
+          {title}
+        </CardTitle>
       </CardHeader>
       <CardContent>{children}</CardContent>
     </Card>
@@ -400,13 +402,22 @@ function DetailGrid({
   rows: [string, React.ReactNode][];
 }) {
   return (
-    <dl className="space-y-3">
-      {rows.map(([label, value]) => (
-        <div key={label} className="flex flex-col gap-0.5 sm:flex-row sm:gap-4">
-          <dt className="min-w-[140px] text-xs font-medium uppercase tracking-wide text-text-muted">
+    <dl>
+      {rows.map(([label, value], index) => (
+        <div
+          key={label}
+          className={
+            index < rows.length - 1
+              ? "flex flex-col gap-0.5 border-b border-slate-100 py-3 sm:flex-row sm:items-baseline sm:gap-4 dark:border-slate-800"
+              : "flex flex-col gap-0.5 py-3 sm:flex-row sm:items-baseline sm:gap-4"
+          }
+        >
+          <dt className="min-w-[140px] text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
             {label}
           </dt>
-          <dd className="text-sm text-text-primary">{value}</dd>
+          <dd className="text-sm font-medium text-slate-900 dark:text-slate-100">
+            {value}
+          </dd>
         </div>
       ))}
     </dl>
@@ -425,31 +436,35 @@ function CriteriaList({
   className?: string;
 }) {
   const colors = {
-    success: "border-emerald-200 bg-emerald-50/50",
-    error: "border-red-200 bg-red-50/50",
-    warning: "border-amber-200 bg-amber-50/50",
-    neutral: "border-border bg-surface-muted/50",
+    success:
+      "border-emerald-200 bg-emerald-50/50 dark:border-emerald-500/30 dark:bg-emerald-500/10",
+    error:
+      "border-red-200 bg-red-50/50 dark:border-red-500/30 dark:bg-red-500/10",
+    warning:
+      "border-amber-200 bg-amber-50/50 dark:border-amber-500/30 dark:bg-amber-500/10",
+    neutral:
+      "border-slate-200 bg-slate-50/50 dark:border-slate-700/60 dark:bg-slate-900/40",
   };
 
   return (
     <Card className={className}>
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">
+        <CardTitle className="text-base font-semibold text-slate-900 dark:text-slate-50">
           {title}{" "}
-          <span className="text-sm font-normal text-text-muted">
+          <span className="text-sm font-normal text-slate-500 dark:text-slate-400">
             ({items.length})
           </span>
         </CardTitle>
       </CardHeader>
       <CardContent>
         {items.length === 0 ? (
-          <p className="text-sm text-text-muted">None</p>
+          <p className="text-sm text-slate-500 dark:text-slate-400">None</p>
         ) : (
           <ul className="space-y-2">
             {items.map((item, i) => (
               <li
                 key={i}
-                className={`rounded-[10px] border p-3 text-sm ${colors[variant]}`}
+                className={`rounded-[10px] border p-3 text-sm text-slate-900 dark:text-slate-100 ${colors[variant]}`}
               >
                 {typeof item === "string" ? (
                   item
@@ -477,17 +492,17 @@ function CollapsibleJson({
   const sanitized = sanitizeForDisplay(data);
 
   return (
-    <details className="group rounded-[14px] border border-border bg-surface">
-      <summary className="cursor-pointer list-none px-4 py-3 font-medium text-text-primary marker:content-none [&::-webkit-details-marker]:hidden">
+    <details className="group rounded-xl border border-slate-200 bg-white dark:border-slate-700/60 dark:bg-slate-900/70">
+      <summary className="cursor-pointer list-none px-4 py-3 font-medium text-slate-900 marker:content-none dark:text-slate-50 [&::-webkit-details-marker]:hidden">
         <span className="flex items-center justify-between">
           {title}
-          <span className="text-xs text-text-muted group-open:hidden">
+          <span className="text-xs text-slate-500 group-open:hidden dark:text-slate-400">
             Click to expand
           </span>
         </span>
       </summary>
       <Separator />
-      <pre className="max-h-[480px] overflow-auto p-4 font-mono text-xs text-text-secondary">
+      <pre className="max-h-[480px] overflow-auto p-4 font-mono text-xs text-slate-700 dark:text-slate-300">
         {JSON.stringify(sanitized, null, 2)}
       </pre>
     </details>
@@ -510,8 +525,8 @@ function sanitizeForDisplay(data: unknown): unknown {
 
 function EmptyTab({ message }: { message: string }) {
   return (
-    <div className="rounded-[14px] border border-dashed border-border py-12 text-center">
-      <p className="text-sm text-text-muted">{message}</p>
+    <div className="rounded-xl border border-dashed border-slate-200 py-12 text-center dark:border-slate-700/60">
+      <p className="text-sm text-slate-500 dark:text-slate-400">{message}</p>
     </div>
   );
 }

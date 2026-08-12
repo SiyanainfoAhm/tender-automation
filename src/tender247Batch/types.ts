@@ -3,7 +3,9 @@ export type TenderBatchStatus =
   | "processing"
   | "completed"
   | "partial"
-  | "failed";
+  | "failed"
+  | "dropped_non_it"
+  | "ambiguous_manual_review";
 
 export type ArtifactStepStatus =
   | "missing"
@@ -114,4 +116,15 @@ export interface ProcessTenderResult {
   lastCompletedStep?: string | null;
   error: string | null;
   failedDocuments: Array<{ name: string; error: string }>;
+  /** Pre-persistence IT relevance gate (Tender247 only) */
+  itRelevance?: "IT_RELEVANT" | "NON_IT" | "AMBIGUOUS" | null;
+  itRelevanceReasonCode?: string | null;
+  itRelevanceMatchedTerms?: string[];
+  itRelevanceNegativeTerms?: string[];
+  itRelevanceEvidenceFields?: string[];
+  itRelevanceExplanation?: string | null;
+  titleForAudit?: string | null;
+  supabaseWriteSkipped?: boolean;
+  documentDownloadSkipped?: boolean;
+  chatgptSkipped?: boolean;
 }

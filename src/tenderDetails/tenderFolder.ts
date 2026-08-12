@@ -1,5 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  ensureTender247DateScopedDir,
+  getActiveTender247RunContext,
+  requestedDateFromDateFolder,
+} from "../tender247Batch/tender247RunContext.js";
 import { ensureDir } from "../fileUtils.js";
 
 export interface TenderFolderPaths {
@@ -13,6 +18,7 @@ export interface TenderFolderPaths {
 /**
  * Create downloads/YYYY-MM-DD/T247-{id}/ with documents/, corrigenda/, screenshots/.
  * Prevents path traversal via sanitized ID.
+ * Uses the active Tender247 run date when set (never invents today).
  */
 export function createTenderFolder(
   dateFolder: string,
@@ -24,12 +30,15 @@ export function createTenderFolder(
     throw new Error(`Refusing unsafe tender folder path for id=${t247Id}`);
   }
 
+  const requestedDate =
+    getActiveTender247RunContext()?.requestedDate ??
+    requestedDateFromDateFolder(dateFolder);
   const documents = path.join(root, "documents");
   const corrigenda = path.join(root, "corrigenda");
   const screenshots = path.join(root, "screenshots");
-  ensureDir(documents);
-  ensureDir(corrigenda);
-  ensureDir(screenshots);
+  ensureTender247DateScopedDir(documents, requestedDate);
+  ensureTender247DateScopedDir(corrigenda, requestedDate);
+  ensureTender247DateScopedDir(screenshots, requestedDate);
 
   return {
     root,

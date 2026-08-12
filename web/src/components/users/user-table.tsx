@@ -24,11 +24,11 @@ type UserTableProps = {
 export function UserTable({ users }: UserTableProps) {
   return (
     <>
-      <div className="hidden overflow-hidden rounded-[14px] border border-border bg-surface shadow-sm md:block">
+      <div className="hidden overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-950/20 md:block">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="sticky top-0 z-10 bg-surface-secondary">
-              <tr className="border-b border-border">
+            <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-slate-900">
+              <tr className="border-b border-slate-200 dark:border-slate-800">
                 {[
                   "User",
                   "Role",
@@ -40,7 +40,7 @@ export function UserTable({ users }: UserTableProps) {
                 ].map((header) => (
                   <th
                     key={header || "actions"}
-                    className="px-4 py-3.5 text-left text-xs font-semibold text-text-secondary"
+                    className="px-4 py-3.5 text-left text-xs font-semibold text-slate-600 dark:text-slate-300"
                   >
                     {header}
                   </th>
@@ -51,7 +51,7 @@ export function UserTable({ users }: UserTableProps) {
               {users.map((user) => (
                 <tr
                   key={user.id}
-                  className="border-b border-border last:border-0 hover:bg-surface-secondary/60"
+                  className="border-b border-slate-200 last:border-0 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900"
                 >
                   <td className="px-4 py-3.5">
                     <div className="flex items-center gap-3">
@@ -104,7 +104,7 @@ export function UserTable({ users }: UserTableProps) {
         {users.map((user) => (
           <div
             key={user.id}
-            className="rounded-[14px] border border-border bg-surface p-4 shadow-sm"
+            className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-900/70"
           >
             <div className="flex items-start justify-between gap-3">
               <div className="flex min-w-0 items-center gap-3">

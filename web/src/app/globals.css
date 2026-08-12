@@ -1,10 +1,14 @@
 @import "tailwindcss";
 
-/* Match AppShell theme toggle: dark: utilities apply only with .dark on html */
-@custom-variant dark (&:where(.dark, .dark *));
+/*
+ * Match AppShell theme toggle: dark: utilities apply under .dark on html.
+ * Use :is() (not :where()) so dark: keeps specificity and can override
+ * data-[state=...] / peer / attribute utilities (e.g. active tabs).
+ */
+@custom-variant dark (&:is(.dark, .dark *));
 
 :root {
-  --background: #f4f7fb;
+  --background: #f8fafc;
   --foreground: #0f172a;
   --card: #ffffff;
   --card-foreground: #0f172a;
@@ -49,32 +53,38 @@
 }
 
 .dark {
-  --background: #080d18;
+  --background: #070d19;
   --foreground: #f8fafc;
-  --card: #111827;
+  --card: #101b2d;
   --card-foreground: #f8fafc;
-  --muted: #1e293b;
+  --muted: #0b1424;
   --muted-foreground: #94a3b8;
-  --surface: #111827;
-  --surface-secondary: #172033;
-  --surface-muted: #1e293b;
-  --border: #273449;
-  --border-strong: #334155;
+  --surface: #0b1424;
+  --surface-secondary: #101b2d;
+  --surface-muted: #172338;
+  --border: #334155;
+  --border-strong: #475569;
   --text-primary: #f8fafc;
   --text-secondary: #cbd5e1;
   --text-muted: #94a3b8;
   --text-subtle: #64748b;
-  --primary: #3b82f6;
-  --primary-hover: #2563eb;
-  --primary-muted: #172554;
+  --primary: #60a5fa;
+  --primary-hover: #3b82f6;
+  --primary-muted: #1e3a8a55;
   --ring: #3b82f633;
-  --navy: #020617;
+  --navy: #070d19;
 
+  --status-go: #34d399;
   --status-go-bg: #064e3b40;
+  --status-conditional: #fbbf24;
   --status-conditional-bg: #78350f40;
+  --status-partner: #38bdf8;
   --status-partner-bg: #0c4a6e40;
+  --status-verify: #fb923c;
   --status-verify-bg: #7c2d1240;
+  --status-nogo: #f87171;
   --status-nogo-bg: #7f1d1d40;
+  --status-neutral: #94a3b8;
   --status-neutral-bg: #33415540;
 }
 

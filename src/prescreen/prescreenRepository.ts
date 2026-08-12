@@ -116,6 +116,42 @@ export async function getTenderPrescreenGate(options: {
   };
 }
 
+/** Count detailed prescreen outcomes for a set of Tender247 IDs (post Excel KEEP). */
+export async function countPrescreenOutcomesForTenderIds(options: {
+  sourcePortal: PrescreenSourcePortal;
+  sourceTenderIds: string[];
+}): Promise<{ rejected: number; manualReview: number; passed: number }> {
+  const empty = { rejected: 0, manualReview: 0, passed: 0 };
+  if (!isSupabaseConfigured() || options.sourceTenderIds.length === 0) {
+    return empty;
+  }
+  try {
+    const client = getSupabaseAdminClient();
+    const { data, error } = await client
+      .from("agenttender_tenders")
+      .select("source_tender_id, prescreen_status")
+      .eq("source_portal", options.sourcePortal)
+      .in("source_tender_id", options.sourceTenderIds);
+
+    if (error || !data) {
+      return empty;
+    }
+
+    let rejected = 0;
+    let manualReview = 0;
+    let passed = 0;
+    for (const row of data) {
+      const status = String(row.prescreen_status || "").toUpperCase();
+      if (status === "REJECTED") rejected += 1;
+      else if (status === "MANUAL_REVIEW") manualReview += 1;
+      else if (status === "PASSED") passed += 1;
+    }
+    return { rejected, manualReview, passed };
+  } catch {
+    return empty;
+  }
+}
+
 import { asiaKolkataDayBounds } from "./prescreenDayBounds.js";
 
 export type PrescreenBackfillListRow = {

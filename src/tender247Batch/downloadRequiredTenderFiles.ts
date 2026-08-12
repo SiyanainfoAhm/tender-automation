@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import type { Logger } from "../logger.js";
-import { dismissTender247BlockingOverlays } from "../tenderDetails/dismissPromotionalPopups.js";
-import { dismissTender247SupportChat } from "../tenderDetails/dismissSupportChat.js";
+import { AutomationError } from "../browserUtils.js";
+import { dismissTender247Interruptions } from "../tenderDetails/dismissTender247Interruptions.js";
 import { clickAndSaveDownload, waitForAllActiveDownloads } from "../tenderDetails/downloadHelpers.js";
 import { ensureDir } from "../fileUtils.js";
 import { extensionFromFilename } from "../tenderDetails/tenderFolder.js";
@@ -63,8 +63,14 @@ export async function downloadRequiredTenderFiles(options: {
   let aiSummarySize = 0;
   let allDocumentsSize = 0;
 
-  await dismissTender247BlockingOverlays(detailPage, logger).catch(() => undefined);
-  await dismissTender247SupportChat(detailPage, logger).catch(() => undefined);
+  await dismissTender247Interruptions(detailPage, logger).catch((error) => {
+    if (
+      error instanceof AutomationError &&
+      error.code === "TENDER247_REMINDER_MODAL_BLOCKING"
+    ) {
+      throw error;
+    }
+  });
 
   // --- AI Summary PDF ---
   const aiCanonical = path.join(tenderFolder, "AI_Summary.pdf");
@@ -190,11 +196,25 @@ async function downloadAiSummaryOnce(options: {
 
       throw new Error(record.error || "AI Summary download failed");
     } catch (error) {
+      if (
+        error instanceof AutomationError &&
+        error.code === "TENDER247_REMINDER_MODAL_BLOCKING"
+      ) {
+        throw error;
+      }
       logger.warn(
         `AI Summary attempt ${attempt}/${attempts}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
+      await dismissTender247Interruptions(detailPage, logger).catch((err) => {
+        if (
+          err instanceof AutomationError &&
+          err.code === "TENDER247_REMINDER_MODAL_BLOCKING"
+        ) {
+          throw err;
+        }
+      });
       if (attempt >= attempts) {
         return null;
       }
@@ -341,11 +361,25 @@ async function downloadAllDocumentsOnce(options: {
       }
       return { path: canonicalPath, size: fs.statSync(canonicalPath).size };
     } catch (error) {
+      if (
+        error instanceof AutomationError &&
+        error.code === "TENDER247_REMINDER_MODAL_BLOCKING"
+      ) {
+        throw error;
+      }
       logger.warn(
         `Download All Documents attempt ${attempt}/${attempts}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
+      await dismissTender247Interruptions(detailPage, logger).catch((err) => {
+        if (
+          err instanceof AutomationError &&
+          err.code === "TENDER247_REMINDER_MODAL_BLOCKING"
+        ) {
+          throw err;
+        }
+      });
       if (attempt >= attempts) {
         return null;
       }

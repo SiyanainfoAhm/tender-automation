@@ -21,13 +21,17 @@ import {
   type QualificationBatchSummary,
 } from "./chatgptQualification/runQualificationBatch.js";
 import { loadConfig, type AppConfig } from "./config.js";
-import { getTodayIsoDate } from "./dateUtils.js";
-import { downloadDirForToday, ensureDir, resolveProjectPath } from "./fileUtils.js";
+import { ensureDir, resolveProjectPath } from "./fileUtils.js";
 import { Logger, safeErrorMessage } from "./logger.js";
 import {
   formatProductionLimit,
 } from "./productionLimit.js";
 import { loadBidassistConfig } from "./bidassist/bidassistConfig.js";
+import { readExcelFilterAudit } from "./tender247Batch/excelFilterAudit.js";
+import {
+  countPrescreenOutcomesForTenderIds,
+} from "./prescreen/prescreenRepository.js";
+import { resolveRequestedDate } from "./cli/requestedDate.js";
 
 export interface DailyPipelineSummary {
   date: string;
@@ -35,6 +39,13 @@ export interface DailyPipelineSummary {
   finishedAt: string;
   tender247: "SUCCESS" | "FAILED" | "SKIPPED";
   tender247ExitCode: number | null;
+  tender247ExcelRows: number;
+  tender247ExcelDropped: number;
+  tender247ExcelKept: number;
+  tender247DetailCrawled: number;
+  tender247SupabaseStored: number;
+  tender247PrescreenRejected: number;
+  tender247ManualReview: number;
   tenderFoldersDiscovered: number;
   gptReady: number;
   gptNotReady: number;
@@ -242,6 +253,7 @@ export async function runScriptProcess(options: {
   env?: NodeJS.ProcessEnv;
   logger: Logger;
   label: string;
+  extraArgs?: string[];
 }): Promise<number> {
   const tsxCli = path.join(
     options.cwd,
@@ -251,7 +263,7 @@ export async function runScriptProcess(options: {
     "cli.mjs",
   );
   const args = fs.existsSync(tsxCli)
-    ? [tsxCli, options.scriptPath]
+    ? [tsxCli, options.scriptPath, ...(options.extraArgs || [])]
     : [];
 
   if (args.length === 0) {
@@ -262,7 +274,7 @@ export async function runScriptProcess(options: {
   }
 
   options.logger.info(
-    `DAILY_PIPELINE_SPAWN=${options.label} script=${options.scriptPath}`,
+    `DAILY_PIPELINE_SPAWN=${options.label} script=${options.scriptPath} args=${(options.extraArgs || []).join(" ")}`,
   );
 
   return new Promise<number>((resolve, reject) => {
@@ -307,10 +319,22 @@ export function printDailyPipelineSummary(summary: DailyPipelineSummary): void {
   console.log("==================================");
   console.log("Daily Tender Pipeline");
   console.log(`Tender247 crawl: ${summary.tender247}`);
+  console.log(`Tender247 Excel rows: ${summary.tender247ExcelRows}`);
+  console.log(`Tender247 early filtered: ${summary.tender247ExcelDropped}`);
+  console.log(`Tender247 detail crawled: ${summary.tender247DetailCrawled}`);
+  console.log(`Tender247 Supabase stored: ${summary.tender247SupabaseStored}`);
+  console.log(
+    `Tender247 detailed prescreen rejected: ${summary.tender247PrescreenRejected}`,
+  );
+  console.log(
+    `Tender247 manual review: ${summary.tender247ManualReview}`,
+  );
+  console.log(
+    `Tender247 ChatGPT submitted: ${summary.qualificationCompleted}`,
+  );
   console.log(`Tender folders discovered: ${summary.tenderFoldersDiscovered}`);
   console.log(`GPT ready: ${summary.gptReady}`);
   console.log(`GPT not ready: ${summary.gptNotReady}`);
-  console.log(`Qualification completed: ${summary.qualificationCompleted}`);
   console.log(`Skipped existing: ${summary.skippedExisting}`);
   console.log(`Pending: ${summary.pending}`);
   console.log(`Rate limited: ${summary.rateLimited}`);
@@ -320,11 +344,15 @@ export function printDailyPipelineSummary(summary: DailyPipelineSummary): void {
   console.log("");
 }
 
+export function parseDailyPipelineDate(argv: string[]): string {
+  return resolveRequestedDate(argv).requestedDate;
+}
+
 export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
   const config = loadConfig();
   const logger = new Logger(config.logRoot, "DailyTenderPipeline");
-  const dateIso = getTodayIsoDate();
-  const dateFolder = downloadDirForToday(config.downloadRoot);
+  const dateIso = parseDailyPipelineDate(process.argv.slice(2));
+  const dateFolder = path.join(config.downloadRoot, dateIso);
   ensureDir(dateFolder);
 
   const startedAt = new Date().toISOString();
@@ -334,6 +362,13 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
     finishedAt: startedAt,
     tender247: "SKIPPED",
     tender247ExitCode: null,
+    tender247ExcelRows: 0,
+    tender247ExcelDropped: 0,
+    tender247ExcelKept: 0,
+    tender247DetailCrawled: 0,
+    tender247SupabaseStored: 0,
+    tender247PrescreenRejected: 0,
+    tender247ManualReview: 0,
     tenderFoldersDiscovered: 0,
     gptReady: 0,
     gptNotReady: 0,
@@ -385,6 +420,7 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
       cwd: config.projectRoot,
       logger,
       label: "tender247-batch",
+      extraArgs: [`--date=${dateIso}`],
     });
     summary.tender247ExitCode = exitCode;
 
@@ -402,6 +438,14 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
     summary.tender247 = "SUCCESS";
     logger.info("DAILY_PIPELINE_TENDER247_COMPLETE");
 
+    const excelAudit = readExcelFilterAudit(dateFolder);
+    if (excelAudit) {
+      summary.tender247ExcelRows = excelAudit.excelRows;
+      summary.tender247ExcelDropped =
+        excelAudit.droppedByTenderValue + excelAudit.droppedByEmd;
+      summary.tender247ExcelKept = excelAudit.detailCrawlsRequired;
+    }
+
     // -------- Wait for crawler locks --------
     await waitForCrawlerLockRelease({
       lockPaths: [config.crawlLockFilePath, config.lockFilePath],
@@ -414,8 +458,17 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
     saveGptReadinessReport(dateFolder, readiness);
     const discovered = listDownloadedTenderIds(dateFolder);
     summary.tenderFoldersDiscovered = discovered.length;
+    summary.tender247DetailCrawled = discovered.length;
+    summary.tender247SupabaseStored = discovered.length;
     summary.gptReady = readiness.ready;
     summary.gptNotReady = readiness.missingTenderIds.length;
+
+    const localPrescreen = await countPrescreenOutcomesForTenderIds({
+      sourcePortal: "TENDER247",
+      sourceTenderIds: discovered,
+    });
+    summary.tender247PrescreenRejected = localPrescreen.rejected;
+    summary.tender247ManualReview = localPrescreen.manualReview;
 
     logger.info(`DAILY_PIPELINE_GPT_READY_COUNT=${readiness.ready}`);
     logger.info(
@@ -459,7 +512,7 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
 
     let chatgptSummary: QualificationBatchSummary;
     try {
-      chatgptSummary = await runQualificationBatch();
+      chatgptSummary = await runQualificationBatch({ dateIso });
     } catch (error) {
       summary.error = safeErrorMessage(error);
       logger.error(`DAILY_PIPELINE_CHATGPT_FAILED=${summary.error}`);

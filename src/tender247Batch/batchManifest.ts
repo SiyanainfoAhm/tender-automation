@@ -48,7 +48,13 @@ export function upsertTenderEntry(
 function recalculateCounts(manifest: CrawlManifest): void {
   const values = Object.values(manifest.tenders);
   manifest.processedCount = values.filter((t) =>
-    ["completed", "partial", "failed"].includes(t.status),
+    [
+      "completed",
+      "partial",
+      "failed",
+      "dropped_non_it",
+      "ambiguous_manual_review",
+    ].includes(t.status),
   ).length;
   manifest.successCount = values.filter((t) => t.status === "completed").length;
   manifest.partialCount = values.filter((t) => t.status === "partial").length;

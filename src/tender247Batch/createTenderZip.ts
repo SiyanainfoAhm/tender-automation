@@ -143,7 +143,9 @@ export function removeDirectoryRecursive(dirPath: string): void {
   fs.rmSync(dirPath, { recursive: true, force: true });
 }
 
-/** Clear Chromium/Playwright temp download leftovers under .playwright-downloads/. */
+/**
+ * Clear Chromium/Playwright temp download leftovers under playwright-downloads/.
+ */
 export function cleanPlaywrightDownloadTemp(
   dayOutputFolder: string,
   logger?: Logger,
@@ -176,9 +178,12 @@ export function cleanPlaywrightDownloadTemp(
   }
 }
 
-/** Dedicated Chromium downloadsPath — never the daily tender output root. */
+/**
+ * Dedicated Chromium downloadsPath — never the daily tender output root.
+ * Always under the requested mail-date folder (not system today).
+ */
 export function playwrightDownloadsDir(dayOutputFolder: string): string {
-  return path.join(dayOutputFolder, ".playwright-downloads");
+  return path.join(dayOutputFolder, "playwright-downloads");
 }
 
 /** Remove UUID-looking leftover files accidentally left in the day folder root. */

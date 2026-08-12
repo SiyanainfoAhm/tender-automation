@@ -316,3 +316,30 @@ test("attachment chip identity accepts ChatGPT duplicate suffixes", () => {
   );
   assert.ok(matchesAttachmentChipName("docs-original(2).zip", "docs-original.zip"));
 });
+
+test("attachment chip identity accepts timestamped display names", () => {
+  assert.ok(
+    matchesAttachmentChipName(
+      "metadata(20260812-084008).json",
+      "metadata.json",
+    ),
+  );
+  assert.ok(
+    matchesAttachmentChipName(
+      "AI_Summary(20260812-084008).pdf",
+      "AI_Summary.pdf",
+    ),
+  );
+  assert.ok(
+    matchesAttachmentChipName(
+      "Tender_All_Documents(20260812-084008).zip",
+      "Tender_All_Documents.zip",
+    ),
+  );
+  assert.ok(
+    matchesAttachmentChipName(
+      "Tender_All_Documents(20260812-084...).zip",
+      "Tender_All_Documents.zip",
+    ),
+  );
+});

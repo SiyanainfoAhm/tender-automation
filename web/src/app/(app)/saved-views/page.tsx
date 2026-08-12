@@ -4,6 +4,7 @@ import { Bookmark, Star, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { requireSession } from "@/server/auth/session";
 import {
   deleteViewAction,
@@ -19,28 +20,25 @@ export default async function SavedViewsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="font-heading text-2xl font-bold text-text-primary">
+        <h1 className="font-heading text-2xl font-bold text-slate-900 dark:text-slate-50">
           Saved views
         </h1>
-        <p className="mt-1 text-sm text-text-muted">
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
           Your saved tender filter configurations.
         </p>
       </div>
 
       {views.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center py-16 text-center">
-            <Bookmark className="mb-4 size-10 text-text-subtle" />
-            <p className="font-medium text-text-primary">No saved views yet</p>
-            <p className="mt-2 max-w-sm text-sm text-text-muted">
-              Save filter configurations from the Tenders page to quickly access
-              them later.
-            </p>
-            <Button asChild className="mt-4">
+        <EmptyState
+          icon={Bookmark}
+          title="No saved views yet"
+          description="Save filter configurations from the Tenders page to access them quickly."
+          action={
+            <Button asChild className="h-10 px-4">
               <Link href="/tenders">Browse tenders</Link>
             </Button>
-          </CardContent>
-        </Card>
+          }
+        />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {views.map((view) => (
@@ -55,7 +53,7 @@ export default async function SavedViewsPage() {
                     </Badge>
                   ) : null}
                 </div>
-                <p className="text-xs text-text-muted">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
                   Updated {formatRelativeTime(view.updatedAt)}
                 </p>
               </CardHeader>
@@ -79,7 +77,7 @@ export default async function SavedViewsPage() {
                     variant="ghost"
                     size="sm"
                     type="submit"
-                    className="text-red-600 hover:text-red-700"
+                    className="text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
                   >
                     <Trash2 className="size-4" />
                   </Button>

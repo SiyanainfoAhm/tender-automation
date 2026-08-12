@@ -70,7 +70,7 @@ export function MetricCard({
       className={cn(
         "metric-card flex h-full min-h-[104px] flex-col overflow-hidden rounded-xl px-4 pb-4 pt-3.5",
         "border border-slate-200 bg-white text-slate-950 shadow-sm",
-        "dark:border-slate-800 dark:bg-slate-900 dark:text-slate-50",
+        "dark:border-slate-700/60 dark:bg-slate-900/70 dark:text-slate-50 dark:shadow-none",
         "opacity-100",
         className,
       )}

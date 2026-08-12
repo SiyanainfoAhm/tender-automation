@@ -152,6 +152,7 @@ const defaultCompleteOpts = {
   requireChatgptPath: true,
   date: "2026-08-06",
   continueOnSourceError: false,
+  sources: ["tender247", "bidassist"] as Array<"tender247" | "bidassist">,
 };
 
 test("12. ChatGPT max greater than one is rejected", () => {

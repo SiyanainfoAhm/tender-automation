@@ -60,11 +60,13 @@ export function MobileNav({ userRole }: MobileNavProps) {
         </Button>
       </SheetTrigger>
       <SheetContent side="left" className="w-[280px] p-0">
-        <SheetHeader className="border-b border-[#E2E8F0] px-6 py-5 text-left">
+        <SheetHeader className="border-b border-slate-200 px-6 py-5 text-left dark:border-slate-700">
           <SheetTitle className="font-heading text-base">
             Siyana STI
           </SheetTitle>
-          <p className="text-xs text-[#64748B]">Tender Intelligence</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Tender Intelligence
+          </p>
         </SheetHeader>
         <nav className="space-y-1 p-4">
           {visibleItems.map((item) => {
@@ -79,8 +81,8 @@ export function MobileNav({ userRole }: MobileNavProps) {
                 className={cn(
                   "flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-sm font-medium transition-colors",
                   isActive
-                    ? "bg-[#EFF6FF] text-[#2563EB]"
-                    : "text-[#475569] hover:bg-[#F8FAFC] hover:text-[#0F172A]",
+                    ? "bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300"
+                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-50",
                 )}
               >
                 <Icon className="size-[18px] shrink-0" />

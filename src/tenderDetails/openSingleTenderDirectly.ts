@@ -278,7 +278,46 @@ async function findEyeByLowerRightGeometry(
 
   logger.info(`TENDER247_LOWER_RIGHT_SVG_CANDIDATES=${lowerRight.length}`);
 
+  // Current Tender247 UI often shows a single lower-right view control
+  // (bordered cursor-pointer box) instead of heart|eye|share trio.
+  if (lowerRight.length === 1) {
+    const only = lowerRight[0]!;
+    logger.info("TENDER247_VIEW_CONTROL_SELECTED_SINGLE_LOWER_RIGHT");
+    return resolveClickableWrapper(only.locator, logger);
+  }
+
+  if (lowerRight.length === 2) {
+    // Prefer the rightmost (typically the view/eye after heart)
+    const sorted = [...lowerRight].sort((a, b) => a.centerX - b.centerX);
+    const eyeSvg = sorted[sorted.length - 1]!;
+    logger.info("TENDER247_VIEW_CONTROL_SELECTED_FROM_PAIR");
+    return resolveClickableWrapper(eyeSvg.locator, logger);
+  }
+
   if (lowerRight.length === 0) {
+    // Fallback: any right-side cursor-pointer SVG in the row (view button)
+    const rightSide = allSvgInfo.filter((c) => c.centerX > rightThreshold);
+    for (const candidate of [...rightSide].sort((a, b) => b.centerY - a.centerY)) {
+      const parentClass =
+        (await candidate.locator
+          .locator("xpath=..")
+          .getAttribute("class")
+          .catch(() => null)) || "";
+      const grandparentClass =
+        (await candidate.locator
+          .locator("xpath=../..")
+          .getAttribute("class")
+          .catch(() => null)) || "";
+      if (
+        /cursor-pointer/i.test(parentClass) ||
+        /cursor-pointer/i.test(grandparentClass) ||
+        /border/.test(grandparentClass)
+      ) {
+        logger.info("TENDER247_VIEW_CONTROL_SELECTED_RIGHT_CURSOR_FALLBACK");
+        return resolveClickableWrapper(candidate.locator, logger);
+      }
+    }
+
     await saveViewControlDebugArtifacts(page, completeTenderRow, id, logger);
     throw new AutomationError(
       "TENDER247_VIEW_CONTROL_NOT_FOUND",
@@ -291,11 +330,13 @@ async function findEyeByLowerRightGeometry(
   }
 
   if (lowerRight.length < 3) {
-    await saveViewControlDebugArtifacts(page, completeTenderRow, id, logger);
-    throw new AutomationError(
-      "TENDER247_VIEW_CONTROL_NOT_FOUND",
-      `Expected 3 lower-right icons (heart|eye|share); found ${lowerRight.length} for T247-${id}`,
+    // Prefer rightmost among remaining lower-right icons
+    const sorted = [...lowerRight].sort((a, b) => a.centerX - b.centerX);
+    const eyeSvg = sorted[sorted.length - 1]!;
+    logger.info(
+      `TENDER247_VIEW_CONTROL_SELECTED_RIGHTMOST_OF_${lowerRight.length}`,
     );
+    return resolveClickableWrapper(eyeSvg.locator, logger);
   }
 
   // Exactly 3 (or reduced to 3): sort left-to-right → index 1 = eye

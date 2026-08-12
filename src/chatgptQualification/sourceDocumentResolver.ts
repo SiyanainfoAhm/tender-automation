@@ -288,7 +288,35 @@ export function assembleQualificationAttachmentBundle(options: {
   };
 }
 
-/** Match ChatGPT attachment chip names including duplicate suffixes like (1). */
+/** ChatGPT display suffixes: (1), (8), (20260812-084008), (20260812-084...). */
+export const CHATGPT_CHIP_DISPLAY_SUFFIX_RE = /\([^)]*\)(?=\.[^.]+$)/;
+
+function attachmentChipBasename(chipText: string): string {
+  const chip = chipText.replace(/\s+/g, " ").trim();
+  return chip.split(/[/\\]/).pop()?.trim() || chip;
+}
+
+/** Logical metadata: starts with "metadata" and ends with ".json". */
+export function isLogicalMetadataAttachmentName(chipText: string): boolean {
+  const base = attachmentChipBasename(chipText);
+  return /^metadata/i.test(base) && /\.json$/i.test(base);
+}
+
+/** Logical AI Summary: starts with "AI_Summary" (flexible separators) and ends with ".pdf". */
+export function isLogicalAiSummaryAttachmentName(chipText: string): boolean {
+  const base = attachmentChipBasename(chipText);
+  return /^AI[_\s-]*Summary/i.test(base) && /\.pdf$/i.test(base);
+}
+
+/** Logical Tender ZIP: starts with "Tender_All_Documents" and ends with ".zip". */
+export function isLogicalTenderZipAttachmentName(chipText: string): boolean {
+  const base = attachmentChipBasename(chipText);
+  return (
+    /^Tender[_\s-]*All[_\s-]*Documents/i.test(base) && /\.zip$/i.test(base)
+  );
+}
+
+/** Match ChatGPT attachment chip names including (1) and timestamped suffixes. */
 export function matchesAttachmentChipName(
   chipText: string,
   expectedFileName: string,
@@ -300,22 +328,22 @@ export function matchesAttachmentChipName(
   }
 
   if (/^metadata\.json$/i.test(base)) {
-    return /metadata(?:\(\d+\))?\.json/i.test(chip);
+    return isLogicalMetadataAttachmentName(chip);
   }
   if (/^AI[_\s-]*Summary\.pdf$/i.test(base)) {
-    return /AI[_\s-]*Summary(?:\(\d+\))?\.pdf/i.test(chip);
+    return isLogicalAiSummaryAttachmentName(chip);
   }
   if (/^Tender[_\s-]*All[_\s-]*Documents.*\.zip$/i.test(base)) {
-    return /Tender[_\s-]*All[_\s-]*Documents(?:\(\d+\))?\.zip/i.test(chip);
+    return isLogicalTenderZipAttachmentName(chip);
   }
 
-  // BidAssist / generic: strip ChatGPT duplicate suffix from chip and compare
+  // BidAssist / generic: strip ChatGPT display suffix from chip and compare
   const stripDup = (name: string): string =>
-    name.replace(/(\(\d+\))(?=\.[^.]+$)/, "");
+    name.replace(CHATGPT_CHIP_DISPLAY_SUFFIX_RE, "");
   return (
     stripDup(chip).toLowerCase() === stripDup(base).toLowerCase() ||
     new RegExp(
-      `^${stripDup(base).replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\ /g, "[\\\\s_-]*")}(?:\\(\\d+\\))?$`,
+      `^${stripDup(base).replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\ /g, "[\\\\s_-]*")}(?:\\([^)]*\\))?$`,
       "i",
     ).test(chip)
   );

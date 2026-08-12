@@ -105,8 +105,8 @@ export function AppSidebar({ user, collapsed, onToggle }: AppSidebarProps) {
                 className={cn(
                   "flex h-11 items-center gap-2.5 rounded-[10px] px-2.5 text-sm font-medium transition-colors",
                   isActive
-                    ? "bg-primary-muted text-primary"
-                    : "text-text-secondary hover:bg-surface-secondary hover:text-text-primary",
+                    ? "bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300"
+                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-50",
                   collapsed && "justify-center px-0",
                 )}
               >

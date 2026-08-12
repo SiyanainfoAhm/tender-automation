@@ -52,6 +52,36 @@ export function getArgOrNpmConfig(
   return getArgValue(args, name) ?? getNpmConfigValue(name, env);
 }
 
+/**
+ * True for bare boolean flags such as `--dry-run-date`.
+ * On Windows PowerShell, npm often exposes these as `npm_config_*=true`
+ * (filtered out by getNpmConfigValue for valued flags).
+ */
+export function hasBooleanFlag(
+  args: string[],
+  name: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (
+    args.some(
+      (token) =>
+        token === `--${name}` ||
+        token === `--${name}=true` ||
+        token === `--${name}=1` ||
+        token === `--${name}=yes`,
+    )
+  ) {
+    return true;
+  }
+  const fromArg = getArgValue(args, name)?.trim().toLowerCase();
+  if (fromArg === "true" || fromArg === "1" || fromArg === "yes") {
+    return true;
+  }
+  const key = `npm_config_${name.replace(/-/g, "_")}`;
+  const fromNpm = env[key]?.trim().toLowerCase();
+  return fromNpm === "true" || fromNpm === "1" || fromNpm === "yes";
+}
+
 export function isValidIsoDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return false;

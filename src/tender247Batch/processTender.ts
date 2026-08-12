@@ -4,6 +4,8 @@ import type { BrowserContext, Page } from "playwright";
 import type { AppConfig } from "../config.js";
 import { ensureDir } from "../fileUtils.js";
 import type { Logger } from "../logger.js";
+import { AutomationError } from "../browserUtils.js";
+import { dismissTender247Interruptions } from "../tenderDetails/dismissTender247Interruptions.js";
 import { dismissTender247BlockingOverlays } from "../tenderDetails/dismissPromotionalPopups.js";
 import { dismissTender247SupportChat } from "../tenderDetails/dismissSupportChat.js";
 import { sanitizeFileName, sanitizeT247Id } from "../tenderDetails/tenderFolder.js";
@@ -15,11 +17,17 @@ import {
 import { createTenderZip, removeDirectoryRecursive } from "./createTenderZip.js";
 import { downloadRequiredTenderFiles } from "./downloadRequiredTenderFiles.js";
 import {
+  ensureTender247DateScopedDir,
+  getActiveTender247RunContext,
+  requestedDateFromDateFolder,
+} from "./tender247RunContext.js";
+import {
   extractCompleteTenderMetadata,
   type CompleteTenderMetadata,
 } from "./extractCompleteMetadata.js";
 import { findVisibleLiveTenderCards } from "./liveListCards.js";
 import { openTenderFromLiveCard } from "./openTenderFromCard.js";
+import { resolveTender247Tender } from "./resolveTender247Tender.js";
 import {
   consolidateAllDocumentsDuplicates,
   inspectTenderResumeState,
@@ -35,6 +43,9 @@ import {
   buildTender247PrescreenInput,
   runAndPersistPrescreen,
 } from "../prescreen/runPrescreen.js";
+import { loadPrescreenConfig } from "../prescreen/prescreenConfig.js";
+import type { Tender247ItRelevanceResult } from "../prescreen/tender247ItRelevanceClassifier.js";
+import { evaluateTender247ItRelevanceFromMetadata } from "./tender247ItRelevanceGate.js";
 import type {
   ArtifactStepStatus,
   ProcessTenderResult,
@@ -52,6 +63,18 @@ export interface ProcessLiveTenderOptions {
   config: AppConfig;
   logger: Logger;
   titleHint?: string | null;
+  excelTenderValue?: number | null;
+  excelEmd?: number | null;
+  /**
+   * When the live Fresh card is not visible, open detail via this captured
+   * security_code (never invent — must come from Tender247 API/UI).
+   */
+  securityCodeOverride?: string | null;
+  /**
+   * Use production single-tender direct open (same as crawl:tender247:one).
+   * Preferred for kept-pipeline — no search-tender API.
+   */
+  openViaSingleTenderDirect?: boolean;
 }
 
 /**
@@ -79,6 +102,7 @@ export async function processLiveTender(
   let allDocumentsPath: string | null = null;
   let zipPath: string | null = null;
   let zipSize = 0;
+  let lastItGate: Tender247ItRelevanceResult | null = null;
 
   logger.info(`[${index}/${total}] START T247-${t247Id}`);
 
@@ -140,6 +164,39 @@ export async function processLiveTender(
     // ZIP repair / create from existing folder — do not reopen Tender247
     if (resume.metadataValid && resume.allDocumentsValid) {
       try {
+        const existingMeta = await loadOrCreateMinimumMetadata({
+          metadataPath: resume.metadataPath,
+          tenderFolder: resume.tenderFolder,
+          t247Id,
+          detailUrl: "",
+          titleHint: options.titleHint ?? null,
+          securityCodeCaptured: true,
+          logger,
+        });
+        const gate = applyItRelevanceGate({
+          metadata: existingMeta,
+          t247Id,
+          logger,
+        });
+        if (gate.relevance !== "IT_RELEVANT") {
+          removeDirectoryRecursive(resume.tenderFolder);
+          if (fs.existsSync(resume.zipPath)) {
+            try {
+              fs.unlinkSync(resume.zipPath);
+            } catch {
+              // ignore
+            }
+          }
+          return buildGateDropResult({
+            t247Id,
+            gate,
+            title:
+              String(existingMeta.normalized?.tenderName ?? options.titleHint ?? "") ||
+              null,
+            securityCodeCaptured: true,
+          });
+        }
+
         if (
           fs.existsSync(resume.zipPath) &&
           fs.statSync(resume.zipPath).size <= 0
@@ -181,6 +238,7 @@ export async function processLiveTender(
           allDocumentsPath: resume.allDocumentsPath,
           lastCompletedStep,
           error: completedOk ? null : "Completion validation failed after ZIP repair",
+          itRelevance: gate,
         });
       } catch (error) {
         hardError = error instanceof Error ? error.message : String(error);
@@ -209,29 +267,71 @@ export async function processLiveTender(
   // Need live detail page for missing steps
   try {
     await listPage.bringToFront().catch(() => undefined);
-    await dismissTender247BlockingOverlays(listPage, logger, config).catch(
-      () => undefined,
-    );
-    await dismissTender247SupportChat(listPage, logger).catch(() => undefined);
+    await dismissForTenderPage(listPage, logger, config);
 
-    const cards = await findVisibleLiveTenderCards(listPage, logger);
-    const card = cards.find((c) => c.t247Id === t247Id);
-    if (!card) {
-      throw new Error(
-        `Live tender row for T247-${t247Id} not found in currently rendered list`,
+    let securityCode: string | null = null;
+    let titleHint = options.titleHint ?? null;
+    let card: Awaited<ReturnType<typeof findVisibleLiveTenderCards>>[number] | undefined;
+
+    if (options.openViaSingleTenderDirect) {
+      const resolved = await resolveTender247Tender({
+        listPage,
+        context,
+        tenderId: t247Id,
+        config,
+        logger,
+      });
+      detailPage = resolved.detailPage;
+      titleHint = options.titleHint ?? resolved.item.listTitle;
+      const fromUrl = detailPage.url().match(
+        /\/auth\/tender\/\d+\/([0-9a-f-]{8,})/i,
       );
+      if (fromUrl?.[1]) {
+        securityCode = fromUrl[1];
+        securityCodeCaptured = true;
+        logger.info("SECURITY_CODE_CAPTURED");
+      }
+    } else {
+      const cards = await findVisibleLiveTenderCards(listPage, logger);
+      card = cards.find((c) => c.t247Id === t247Id);
+      if (card) {
+        const opened = await openTenderFromLiveCard(
+          listPage,
+          context,
+          card,
+          config,
+          logger,
+        );
+        detailPage = opened.detailPage;
+        securityCodeCaptured = opened.securityCodeCaptured;
+        securityCode = opened.securityCode;
+        titleHint = options.titleHint ?? card.titleHint;
+        if (!detailPage || detailPage.isClosed()) {
+          throw new Error(`Detail tab failed to open for T247-${t247Id}`);
+        }
+      } else if (options.securityCodeOverride?.trim()) {
+        securityCode = options.securityCodeOverride.trim();
+        const url = buildDetailPageUrl(t247Id, securityCode, null);
+        logger.info(`TENDER247_OPEN_DETAIL_BY_SECURITY_CODE=T247-${t247Id}`);
+        detailPage = await context.newPage();
+        await detailPage.goto(url, {
+          waitUntil: "domcontentloaded",
+          timeout: config.pageTimeoutMs,
+        });
+        await detailPage
+          .waitForLoadState("networkidle", {
+            timeout: Math.min(config.pageTimeoutMs, 20_000),
+          })
+          .catch(() => undefined);
+        await dismissForTenderPage(detailPage, logger, config);
+        securityCodeCaptured = true;
+        logger.info("SECURITY_CODE_CAPTURED");
+      } else {
+        throw new Error(
+          `Live tender row for T247-${t247Id} not found in currently rendered list`,
+        );
+      }
     }
-
-    const opened = await openTenderFromLiveCard(
-      listPage,
-      context,
-      card,
-      config,
-      logger,
-    );
-    detailPage = opened.detailPage;
-    securityCodeCaptured = opened.securityCodeCaptured;
-    let securityCode = opened.securityCode;
 
     if (!detailPage || detailPage.isClosed()) {
       throw new Error(`Detail tab failed to open for T247-${t247Id}`);
@@ -250,13 +350,13 @@ export async function processLiveTender(
         securityCodeCaptured = true;
         logger.info("SECURITY_CODE_CAPTURED");
       }
-    } else {
+    } else if (card && !options.openViaSingleTenderDirect) {
       logger.info("SECURITY_CODE_CAPTURED");
     }
 
     const portalUrl = securityCode
       ? buildDetailPageUrl(t247Id, securityCode, null)
-      : opened.detailUrl || detailPage.url();
+      : detailPage.url();
 
     // Minimum metadata first (in-memory / Supabase / legacy — never permanent metadata.json)
     let metadata: CompleteTenderMetadata = await loadOrCreateMinimumMetadata({
@@ -264,7 +364,7 @@ export async function processLiveTender(
       tenderFolder: resume.tenderFolder,
       t247Id,
       detailUrl: portalUrl,
-      titleHint: options.titleHint ?? card.titleHint,
+      titleHint,
       securityCodeCaptured,
       logger,
     });
@@ -272,7 +372,7 @@ export async function processLiveTender(
       metadata.metadataExtractionStatus === "complete" ? "complete" : "partial";
     lastCompletedStep = "metadata_min";
 
-    // Optional API enrichment
+    // Optional API enrichment (Playwright request context carries browser cookies)
     let detailRow: Record<string, unknown> = {};
     if (securityCode) {
       try {
@@ -295,19 +395,16 @@ export async function processLiveTender(
     }
 
     await detailPage.bringToFront().catch(() => undefined);
-    await dismissTender247BlockingOverlays(detailPage, logger, config).catch(
-      () => undefined,
-    );
-    await dismissTender247SupportChat(detailPage, logger).catch(() => undefined);
+    await dismissForTenderPage(detailPage, logger, config);
 
-    // ---- METADATA (independent) ----
+    // ---- METADATA extraction (in-memory; no Supabase until docs + IT gate) ----
     if (!resume.metadataValid) {
       try {
         const extracted = await extractCompleteTenderMetadata({
           detailPage,
           t247Id,
           detailUrl: portalUrl,
-          titleHint: options.titleHint ?? card.titleHint,
+          titleHint,
           apiDetailRow: detailRow,
           logger,
           deadlineMs: Date.now() + METADATA_EXTRACTION_TIMEOUT_MS,
@@ -322,15 +419,10 @@ export async function processLiveTender(
           metadataExtractionStatus: "complete",
           metadataExtractionError: null,
         };
-        await persistTender247Metadata({
-          metadata,
-          tenderFolder: resume.tenderFolder,
-          logger,
-        });
         metadataStatus = "complete";
         metadataPath = null;
         lastCompletedStep = "metadata";
-        logger.info("METADATA_SAVED");
+        logger.info("METADATA_EXTRACTED_IN_MEMORY");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         logger.warn("METADATA_EXTRACTION_PARTIAL");
@@ -338,15 +430,9 @@ export async function processLiveTender(
         metadata.metadataExtractionStatus = "partial";
         metadata.metadataExtractionError = message;
         metadata.processedAt = new Date().toISOString();
-        await persistTender247Metadata({
-          metadata,
-          tenderFolder: resume.tenderFolder,
-          logger,
-        });
         metadataStatus = "partial";
         metadataPath = null;
         lastCompletedStep = "metadata_partial";
-        logger.info("METADATA_SAVED");
       }
     } else {
       logger.info("METADATA_ALREADY_PRESENT_SKIP");
@@ -354,7 +440,34 @@ export async function processLiveTender(
       metadataPath = null;
     }
 
-    // ---- DOWNLOADS (independent; skip present artifacts) ----
+    // Preserve Excel financial survivors when detail lacks authoritative amounts
+    applyExcelFinancialsToMetadata(metadata, {
+      excelTenderValue: options.excelTenderValue,
+      excelEmd: options.excelEmd,
+      logger,
+    });
+
+    // ---- IT relevance gate (BEFORE documents / Supabase / ChatGPT) ----
+    const itGate = applyItRelevanceGate({
+      metadata,
+      t247Id,
+      logger,
+    });
+    lastItGate = itGate;
+    if (itGate.relevance !== "IT_RELEVANT") {
+      removeDirectoryRecursive(resume.tenderFolder);
+      return buildGateDropResult({
+        t247Id,
+        gate: itGate,
+        title:
+          String(metadata.normalized?.tenderName ?? titleHint ?? "") ||
+          null,
+        securityCodeCaptured,
+      });
+    }
+
+    // ---- DOWNLOADS first (IT_RELEVANT only) — then Supabase ----
+    logger.info(`TENDER247_DOCUMENT_DOWNLOAD_START=T247-${t247Id}`);
     try {
       const downloads = await downloadRequiredTenderFiles({
         detailPage,
@@ -380,6 +493,10 @@ export async function processLiveTender(
         aiSummaryStatus = resume.aiSummaryValid ? "complete" : "unavailable";
       }
 
+      logger.info(
+        `TENDER247_AI_SUMMARY_AVAILABLE=${aiSummaryStatus === "complete"}`,
+      );
+
       if (downloads.allDocumentsDownloaded) {
         allDocumentsStatus = "complete";
         lastCompletedStep = "all_documents";
@@ -399,6 +516,16 @@ export async function processLiveTender(
         allDocumentsPath = resume.allDocumentsPath;
       }
 
+      if (allDocumentsStatus === "complete" && allDocumentsPath) {
+        logger.info(`TENDER247_DOCUMENT_ARCHIVE_DOWNLOAD_START=T247-${t247Id}`);
+        logger.info(
+          `TENDER247_DOCUMENT_ARCHIVE_DOWNLOADED=${allDocumentsPath}`,
+        );
+        logger.info("TENDER247_DOCUMENT_ARCHIVE_VALID=true");
+      } else {
+        logger.warn(`TENDER247_DOCUMENT_DOWNLOAD_FAILED=T247-${t247Id}`);
+      }
+
       metadata.downloads = {
         aiSummaryDownloaded: aiSummaryStatus === "complete",
         allDocumentsDownloaded: allDocumentsStatus === "complete",
@@ -408,15 +535,24 @@ export async function processLiveTender(
           : null,
       };
       metadata.processedAt = new Date().toISOString();
-      await persistTender247Metadata({
-        metadata,
-        tenderFolder: resume.tenderFolder,
-        logger,
-      });
-      metadataPath = null;
+
+      // Persist only after documents succeed (IT_RELEVANT path)
+      if (allDocumentsStatus === "complete") {
+        await persistTender247Metadata({
+          metadata,
+          tenderFolder: resume.tenderFolder,
+          logger,
+        });
+        metadataPath = null;
+        logger.info("METADATA_SAVED");
+      } else {
+        logger.info("SUPABASE_WRITE_SKIPPED=true");
+        logger.info("CHATGPT_SKIPPED=true");
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.warn(`Downloads step error (continuing): ${message}`);
+      logger.warn(`TENDER247_DOCUMENT_DOWNLOAD_FAILED=T247-${t247Id}`);
       hardError = hardError || message;
       if (allDocumentsStatus !== "complete") {
         allDocumentsStatus = "failed";
@@ -542,7 +678,148 @@ export async function processLiveTender(
     allDocumentsPath: allDocumentsPath || resume.allDocumentsPath,
     lastCompletedStep,
     error: status === "completed" ? null : hardError,
+    itRelevance: lastItGate,
   });
+}
+
+function applyExcelFinancialsToMetadata(
+  metadata: CompleteTenderMetadata,
+  options: {
+    excelTenderValue?: number | null;
+    excelEmd?: number | null;
+    logger: Logger;
+  },
+): void {
+  metadata.normalized = metadata.normalized || {};
+  metadata.raw = metadata.raw || {};
+
+  const unavailable = (text: unknown): boolean => {
+    if (text === null || text === undefined) return true;
+    const s = String(text).trim().toLowerCase();
+    if (!s) return true;
+    return /refer\s+documents?|not\s+disclosed|n\/?a|unavailable|nil/.test(s);
+  };
+
+  const excelValue = options.excelTenderValue;
+  if (typeof excelValue === "number" && Number.isFinite(excelValue)) {
+    const current = metadata.normalized.tenderValue;
+    const rawCost = metadata.raw["Tender Estimated Cost"];
+    const currentMissing =
+      current === null ||
+      current === undefined ||
+      (typeof current === "number" && !Number.isFinite(current)) ||
+      unavailable(rawCost);
+    if (currentMissing) {
+      metadata.normalized.tenderValue = excelValue;
+      if (unavailable(rawCost)) {
+        metadata.raw["Tender Estimated Cost"] = String(excelValue);
+      }
+      options.logger.info(
+        `EXCEL_TENDER_VALUE_APPLIED=${excelValue}`,
+      );
+    }
+  }
+
+  const excelEmd = options.excelEmd;
+  if (typeof excelEmd === "number" && Number.isFinite(excelEmd)) {
+    const current = metadata.normalized.emdAmount;
+    const rawEmd = metadata.raw.EMD;
+    const currentMissing =
+      current === null ||
+      current === undefined ||
+      (typeof current === "number" && !Number.isFinite(current)) ||
+      unavailable(rawEmd);
+    if (currentMissing) {
+      metadata.normalized.emdAmount = excelEmd;
+      if (unavailable(rawEmd)) {
+        metadata.raw.EMD = String(excelEmd);
+      }
+      options.logger.info(`EXCEL_EMD_APPLIED=${excelEmd}`);
+    }
+  }
+}
+
+function applyItRelevanceGate(options: {
+  metadata: CompleteTenderMetadata;
+  t247Id: string;
+  logger: Logger;
+}): Tender247ItRelevanceResult {
+  const requireIt = loadPrescreenConfig().tender247RequireItRelevance;
+  options.logger.info(`TENDER247_IT_RELEVANCE_START=T247-${options.t247Id}`);
+
+  if (!requireIt) {
+    const bypass: Tender247ItRelevanceResult = {
+      relevance: "IT_RELEVANT",
+      reasonCode: "STRONG_IT_TERM_MATCH",
+      matchedTerms: [],
+      negativeTerms: [],
+      evidenceFields: [],
+      explanation: "IT relevance gate disabled (PRESCREEN_TENDER247_REQUIRE_IT_RELEVANCE=false)",
+    };
+    options.logger.info("TENDER247_IT_RELEVANCE=IT_RELEVANT");
+    options.logger.info("TENDER247_IT_RELEVANCE_REASON=GATE_DISABLED");
+    return bypass;
+  }
+
+  const result = evaluateTender247ItRelevanceFromMetadata(options.metadata);
+  options.logger.info(`TENDER247_IT_RELEVANCE=${result.relevance}`);
+  options.logger.info(`TENDER247_IT_RELEVANCE_REASON=${result.reasonCode}`);
+
+  if (result.relevance === "NON_IT") {
+    options.logger.info("TENDER247_DROPPED_BEFORE_SUPABASE=true");
+    options.logger.info("SUPABASE_WRITE_SKIPPED=true");
+    options.logger.info("DOCUMENT_DOWNLOAD_SKIPPED=true");
+    options.logger.info("CHATGPT_SKIPPED=true");
+  } else if (result.relevance === "AMBIGUOUS") {
+    options.logger.info("TENDER247_MANUAL_REVIEW_REQUIRED=true");
+    options.logger.info("SUPABASE_WRITE_SKIPPED=true");
+    options.logger.info("DOCUMENT_DOWNLOAD_SKIPPED=true");
+    options.logger.info("CHATGPT_SKIPPED=true");
+  }
+
+  return result;
+}
+
+function buildGateDropResult(options: {
+  t247Id: string;
+  gate: Tender247ItRelevanceResult;
+  title: string | null;
+  securityCodeCaptured: boolean;
+}): ProcessTenderResult {
+  const status =
+    options.gate.relevance === "NON_IT"
+      ? "dropped_non_it"
+      : "ambiguous_manual_review";
+  return {
+    t247Id: options.t247Id,
+    status,
+    zipPath: null,
+    zipSize: 0,
+    documentsDownloaded: 0,
+    corrigendaDownloaded: 0,
+    aiSummaryDownloaded: false,
+    allDocumentsDownloaded: false,
+    securityCodeCaptured: options.securityCodeCaptured,
+    metadataStatus: "missing",
+    aiSummaryStatus: "missing",
+    allDocumentsStatus: "missing",
+    metadataPath: null,
+    aiSummaryPath: null,
+    allDocumentsPath: null,
+    lastCompletedStep: "it_relevance_gate",
+    error: null,
+    failedDocuments: [],
+    itRelevance: options.gate.relevance,
+    itRelevanceReasonCode: options.gate.reasonCode,
+    itRelevanceMatchedTerms: options.gate.matchedTerms,
+    itRelevanceNegativeTerms: options.gate.negativeTerms,
+    itRelevanceEvidenceFields: options.gate.evidenceFields,
+    itRelevanceExplanation: options.gate.explanation ?? null,
+    titleForAudit: options.title,
+    supabaseWriteSkipped: true,
+    documentDownloadSkipped: true,
+    chatgptSkipped: true,
+  };
 }
 
 function buildResult(input: {
@@ -561,6 +838,7 @@ function buildResult(input: {
   allDocumentsPath: string | null;
   lastCompletedStep: string | null;
   error: string | null;
+  itRelevance?: Tender247ItRelevanceResult | null;
 }): ProcessTenderResult {
   return {
     t247Id: input.t247Id,
@@ -581,6 +859,15 @@ function buildResult(input: {
     lastCompletedStep: input.lastCompletedStep,
     error: input.error,
     failedDocuments: [],
+    itRelevance: input.itRelevance?.relevance ?? null,
+    itRelevanceReasonCode: input.itRelevance?.reasonCode ?? null,
+    itRelevanceMatchedTerms: input.itRelevance?.matchedTerms ?? [],
+    itRelevanceNegativeTerms: input.itRelevance?.negativeTerms ?? [],
+    itRelevanceEvidenceFields: input.itRelevance?.evidenceFields ?? [],
+    itRelevanceExplanation: input.itRelevance?.explanation ?? null,
+    supabaseWriteSkipped: false,
+    documentDownloadSkipped: false,
+    chatgptSkipped: false,
   };
 }
 
@@ -713,6 +1000,27 @@ function folderHasUsefulContent(root: string): boolean {
   return walk(root);
 }
 
+async function dismissForTenderPage(
+  page: Page,
+  logger: Logger,
+  config: AppConfig,
+): Promise<void> {
+  try {
+    await dismissTender247Interruptions(page, logger, config);
+  } catch (error) {
+    if (
+      error instanceof AutomationError &&
+      error.code === "TENDER247_REMINDER_MODAL_BLOCKING"
+    ) {
+      throw error;
+    }
+    await dismissTender247BlockingOverlays(page, logger, config).catch(
+      () => undefined,
+    );
+    await dismissTender247SupportChat(page, logger).catch(() => undefined);
+  }
+}
+
 /** @deprecated */
 export async function processTender(): Promise<never> {
   throw new Error(
@@ -723,7 +1031,10 @@ export async function processTender(): Promise<never> {
 export function ensureTenderWorkspace(dateFolder: string, t247Id: string): string {
   const safe = sanitizeT247Id(t247Id);
   const root = path.join(dateFolder, `T247-${safe}`);
-  ensureDir(root);
+  const requestedDate =
+    getActiveTender247RunContext()?.requestedDate ??
+    requestedDateFromDateFolder(dateFolder);
+  ensureTender247DateScopedDir(root, requestedDate);
   return root;
 }
 

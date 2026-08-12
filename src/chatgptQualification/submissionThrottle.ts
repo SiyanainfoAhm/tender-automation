@@ -64,10 +64,10 @@ export function recordSuccessfulSubmission(options: {
 export function getDefaultMinSubmissionIntervalMs(): number {
   const raw = process.env.CHATGPT_MIN_SUBMISSION_INTERVAL_MS?.trim();
   if (!raw) {
-    return 600_000;
+    return 300_000;
   }
   const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n >= 0 ? n : 600_000;
+  return Number.isFinite(n) && n >= 0 ? n : 300_000;
 }
 
 /** Pure helper — remaining wait before the next Send is allowed. */

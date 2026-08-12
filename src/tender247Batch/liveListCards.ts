@@ -1,5 +1,10 @@
 import type { Locator, Page } from "playwright";
 import type { Logger } from "../logger.js";
+import { readFilteredMailDateTab } from "../tenderDetails/selectTender247MailDate.js";
+import {
+  ensureTender247FreshListForDate,
+  waitForFreshTenderList as waitForFreshTenderListImpl,
+} from "./ensureTender247FreshListForDate.js";
 
 const T247_ID_RE = /T247\s*ID\s*[-:]?\s*(\d+)/i;
 const DETAIL_HREF_RE = /\/auth\/tender\/(\d+)\/([0-9a-f-]{8,})/i;
@@ -13,21 +18,18 @@ export interface LiveTenderCard {
   titleHint: string | null;
 }
 
+export { ensureTender247FreshListForDate };
+
 /**
- * Wait only for Fresh tab + at least one T247 ID.
- * Does NOT inspect Today/Closed/Active dashboard cards.
+ * Wait for the filtered tender list for an optional mail date.
+ * Historical dates never treat today's Fresh badge alone as success.
  */
 export async function waitForFreshTenderList(
   page: Page,
   logger: Logger,
+  dateIso?: string,
 ): Promise<void> {
-  const freshTab = page.getByText(/Fresh\s*\(\s*\d+\s*\)/i).first();
-  await freshTab.waitFor({ state: "visible", timeout: 15_000 });
-
-  const firstTender = page.getByText(/T247\s*ID\s*[-:]?\s*\d+/i).first();
-  await firstTender.waitFor({ state: "visible", timeout: 15_000 });
-
-  logger.info("TENDER247_FRESH_LIST_READY");
+  return waitForFreshTenderListImpl(page, logger, dateIso);
 }
 
 /**
@@ -199,7 +201,15 @@ export async function getLiveRowByMarker(
 export async function readFreshExpectedCount(
   listPage: Page,
   logger: Logger,
+  dateIso?: string,
 ): Promise<number> {
+  if (dateIso && /^\d{4}-\d{2}-\d{2}$/.test(dateIso)) {
+    const filtered = await readFilteredMailDateTab(listPage, dateIso);
+    if (filtered) {
+      return filtered.filteredTenderCount;
+    }
+  }
+
   const fresh = listPage.getByText(/Fresh\s*\(\s*\d+\s*\)/i).first();
   if (!(await fresh.isVisible().catch(() => false))) {
     logger.warn("Fresh (N) badge not visible");

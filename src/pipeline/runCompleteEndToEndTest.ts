@@ -8,7 +8,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AutomationError } from "../browserUtils.js";
 import { loadConfig } from "../config.js";
-import { getTodayIsoDate } from "../dateUtils.js";
+import {
+  getArgOrNpmConfig,
+  logRawArgv,
+  resolveRequestedDate,
+} from "../cli/requestedDate.js";
 import { ensureDir, resolveProjectPath } from "../fileUtils.js";
 import { Logger } from "../logger.js";
 import { waitForSharedSubmissionInterval } from "../chatgptQualification/submissionThrottle.js";
@@ -67,6 +71,8 @@ export type CompleteE2EOptions = {
   requireChatgptPath: boolean;
   date: string;
   continueOnSourceError: boolean;
+  /** Sources to run; default both for legacy e2e, Tender247-only when configured. */
+  sources: Array<"tender247" | "bidassist">;
 };
 
 const COMPLETE_E2E_LOCK_NAME = "complete-e2e-test.lock";
@@ -98,30 +104,18 @@ export function completeE2ELockPath(downloadRoot?: string): string {
 }
 
 export function parseCompleteE2EArgs(argv: string[]): CompleteE2EOptions {
-  const values = new Map<string, string>();
-  for (let i = 0; i < argv.length; i += 1) {
-    const token = argv[i]!;
-    if (!token.startsWith("--")) continue;
-    const body = token.slice(2);
-    const eq = body.indexOf("=");
-    if (eq >= 0) {
-      values.set(body.slice(0, eq), body.slice(eq + 1));
-      continue;
-    }
-    const next = argv[i + 1];
-    if (next && !next.startsWith("--")) {
-      values.set(body, next);
-      i += 1;
-    }
-  }
+  logRawArgv(argv, "COMPLETE_E2E_RAW_ARGV");
 
   const crawlRaw =
-    values.get("crawl-max-per-source") || values.get("crawl-max");
+    getArgOrNpmConfig(argv, "crawl-max-per-source") ||
+    getArgOrNpmConfig(argv, "crawl-max") ||
+    getArgOrNpmConfig(argv, "limit");
   const chatgptRaw =
-    values.get("chatgpt-max-per-source") ||
-    values.get("qualify-limit") ||
+    getArgOrNpmConfig(argv, "chatgpt-max-per-source") ||
+    getArgOrNpmConfig(argv, "chatgpt-limit") ||
+    getArgOrNpmConfig(argv, "qualify-limit") ||
     // Legacy alias — treated as ChatGPT max, not crawl max.
-    values.get("limit-per-source");
+    getArgOrNpmConfig(argv, "limit-per-source");
 
   const crawlMaxPerSource = crawlRaw
     ? Number.parseInt(crawlRaw, 10)
@@ -140,18 +134,34 @@ export function parseCompleteE2EArgs(argv: string[]): CompleteE2EOptions {
     throw new Error("COMPLETE_E2E_TEST_CHATGPT_MAX_MUST_BE_ONE");
   }
 
-  const date = values.get("date")?.trim() || getTodayIsoDate();
-  const continueRaw = (values.get("continue-on-source-error") || "false")
+  const date = resolveRequestedDate(argv).requestedDate;
+  const continueRaw = (
+    getArgOrNpmConfig(argv, "continue-on-source-error") || "false"
+  )
     .trim()
     .toLowerCase();
   const continueOnSourceError =
     continueRaw === "true" || continueRaw === "1" || continueRaw === "yes";
 
-  const requireRaw = (values.get("require-chatgpt-path") || "true")
+  const requireRaw = (getArgOrNpmConfig(argv, "require-chatgpt-path") || "true")
     .trim()
     .toLowerCase();
   const requireChatgptPath =
     requireRaw === "true" || requireRaw === "1" || requireRaw === "yes";
+
+  const sourcesRaw = (
+    getArgOrNpmConfig(argv, "sources") || "tender247,bidassist"
+  )
+    .trim()
+    .toLowerCase();
+  const sources: Array<"tender247" | "bidassist"> = [];
+  for (const part of sourcesRaw.split(/[,+\s]+/)) {
+    if (part === "tender247") sources.push("tender247");
+    else if (part === "bidassist") sources.push("bidassist");
+  }
+  if (sources.length === 0) {
+    sources.push("tender247", "bidassist");
+  }
 
   return {
     crawlMaxPerSource,
@@ -159,6 +169,7 @@ export function parseCompleteE2EArgs(argv: string[]): CompleteE2EOptions {
     requireChatgptPath,
     date,
     continueOnSourceError,
+    sources,
   };
 }
 
@@ -260,8 +271,10 @@ export function deriveCompleteStatus(options: {
   }
 
   if (!options.bidassistRan) {
-    if (tOutcome === "SUCCESS") return "PARTIAL_SUCCESS";
+    if (tOutcome === "SUCCESS") return "SUCCESS";
     if (tOutcome === "NO_ELIGIBLE_TEST_TENDER") return "NO_ELIGIBLE_TEST_TENDER";
+    // Tender247-only complete path: treat technical success without BidAssist as success.
+    if (tOutcome === null) return "FAILED";
     return "FAILED";
   }
 
@@ -529,20 +542,27 @@ export async function runCompleteEndToEndTest(
     console.log(`E2E_CRAWL_CANDIDATES=${options.crawlMaxPerSource}`);
 
     console.log("TENDER247_E2E_START");
-    tender247 = await runSource({
-      source: "tender247",
-      limit: options.chatgptMaxPerSource,
-      crawlMax: options.crawlMaxPerSource,
-      requireChatgptPath: options.requireChatgptPath,
-      date: options.date,
-    });
-    console.log(`TENDER247_E2E_OUTCOME=${tender247.outcome}`);
-    console.log("TENDER247_E2E_COMPLETE");
+    if (options.sources.includes("tender247")) {
+      tender247 = await runSource({
+        source: "tender247",
+        limit: options.chatgptMaxPerSource,
+        crawlMax: options.crawlMaxPerSource,
+        requireChatgptPath: options.requireChatgptPath,
+        date: options.date,
+      });
+      console.log(`TENDER247_E2E_OUTCOME=${tender247.outcome}`);
+      console.log("TENDER247_E2E_COMPLETE");
+    } else {
+      console.log("COMPLETE_E2E_SKIP_TENDER247 reason=not_in_sources");
+    }
 
-    const decision = shouldRunBidassistAfterTender247({
-      tender247,
-      continueOnSourceError: options.continueOnSourceError,
-    });
+    const wantBidassist = options.sources.includes("bidassist");
+    const decision = wantBidassist
+      ? shouldRunBidassistAfterTender247({
+          tender247,
+          continueOnSourceError: options.continueOnSourceError,
+        })
+      : { run: false, reason: "bidassist_not_in_sources" };
 
     if (!decision.run) {
       logger.warn(

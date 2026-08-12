@@ -3,8 +3,8 @@ import path from "node:path";
 import type { BrowserContext, Download, Page } from "playwright";
 import type { Logger } from "../logger.js";
 import { ensureDir } from "../fileUtils.js";
-import { dismissTender247BlockingOverlays } from "./dismissPromotionalPopups.js";
-import { dismissTender247SupportChat } from "./dismissSupportChat.js";
+import { dismissTender247Interruptions } from "./dismissTender247Interruptions.js";
+import { AutomationError } from "../browserUtils.js";
 import {
   assertInside,
   extensionFromFilename,
@@ -78,8 +78,7 @@ export async function clickAndSaveDownload(
     .waitForEvent("page", { timeout: Math.min(timeoutMs, 15_000) })
     .catch(() => null);
 
-  await dismissTender247BlockingOverlays(page, logger).catch(() => undefined);
-  await dismissTender247SupportChat(page, logger).catch(() => undefined);
+  await dismissInterruptionsBeforeClick(page, logger);
   await clickTarget();
 
   const download = await downloadPromise;
@@ -105,7 +104,7 @@ export async function clickAndSaveDownload(
       await popup
         .waitForLoadState("domcontentloaded", { timeout: timeoutMs })
         .catch(() => undefined);
-      await dismissTender247BlockingOverlays(popup, logger).catch(() => undefined);
+      await dismissInterruptionsBeforeClick(popup, logger);
       const popupDownload = await popup
         .waitForEvent("download", { timeout: Math.min(timeoutMs, 30_000) })
         .catch(() => null);
@@ -124,7 +123,7 @@ export async function clickAndSaveDownload(
           }),
         );
         await popup.close().catch(() => undefined);
-        await dismissTender247BlockingOverlays(page, logger).catch(() => undefined);
+        await dismissInterruptionsBeforeClick(page, logger);
         return record;
       }
 
@@ -144,11 +143,18 @@ export async function clickAndSaveDownload(
         }),
       );
       await popup.close().catch(() => undefined);
-      await dismissTender247BlockingOverlays(page, logger).catch(() => undefined);
+      await dismissInterruptionsBeforeClick(page, logger);
       return saved;
     } catch (error) {
       await popup.close().catch(() => undefined);
-      await dismissTender247BlockingOverlays(page, logger).catch(() => undefined);
+      await dismissInterruptionsBeforeClick(page, logger).catch((err) => {
+        if (
+          err instanceof AutomationError &&
+          err.code === "TENDER247_REMINDER_MODAL_BLOCKING"
+        ) {
+          throw err;
+        }
+      });
       const message = error instanceof Error ? error.message : String(error);
       return failedRecord(kind, linkText, message, options);
     }
@@ -420,4 +426,21 @@ export function documentBaseNameFromLinkText(
     return sanitizeFileName(cleaned);
   }
   return `Tender_Document_${index}`;
+}
+
+/** Dismiss interruptions before a click; reminder blocking stays candidate-fatal. */
+async function dismissInterruptionsBeforeClick(
+  page: Page,
+  logger: Logger,
+): Promise<void> {
+  try {
+    await dismissTender247Interruptions(page, logger);
+  } catch (error) {
+    if (
+      error instanceof AutomationError &&
+      error.code === "TENDER247_REMINDER_MODAL_BLOCKING"
+    ) {
+      throw error;
+    }
+  }
 }

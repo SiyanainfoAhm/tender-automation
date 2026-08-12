@@ -25,7 +25,7 @@ export function TenderSummaryList({
   emptyDescription,
 }: TenderSummaryListProps) {
   return (
-    <div className="flex h-full min-h-0 flex-col rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+    <div className="flex h-full min-h-0 flex-col rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-900/70 dark:shadow-none">
       <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3 dark:border-slate-800">
         <h3 className="text-base font-semibold text-slate-900 dark:text-slate-50">
           {title}

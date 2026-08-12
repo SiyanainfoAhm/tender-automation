@@ -6,7 +6,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { AutomationError } from "../browserUtils.js";
 import type { AppConfig } from "../config.js";
-import { getTodayIsoDate } from "../dateUtils.js";
+import { requestedDateFromDateFolder } from "../tender247Batch/tender247RunContext.js";
 import { ensureDir } from "../fileUtils.js";
 import type { Logger } from "../logger.js";
 import { persistValidatedQualificationToSupabase } from "../supabase/persistQualification.js";
@@ -52,7 +52,7 @@ export async function qualifyBidassistTender(options: {
 }): Promise<QualifyTenderOutcome> {
   const { page, dateFolder, sourceTenderId, tenderFolder, config, logger } =
     options;
-  const dateIso = getTodayIsoDate();
+  const dateIso = requestedDateFromDateFolder(dateFolder);
   ensureDir(tenderFolder);
   const resultPath = path.join(tenderFolder, "qualification-result.json");
   const responsePath = path.join(tenderFolder, "qualification-response.txt");

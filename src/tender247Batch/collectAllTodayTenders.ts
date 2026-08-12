@@ -42,9 +42,14 @@ export async function collectAllTodayTenders(options: {
   dateFolder: string;
   config: AppConfig;
   logger: Logger;
+  /** Explicit CLI / pipeline mail date (YYYY-MM-DD). Never invent with new Date() when supplied. */
+  mailDate?: string;
 }): Promise<CollectResult> {
   const { page, context, dateFolder, config, logger } = options;
-  const mailDate = getTodayIsoDate();
+  const mailDate =
+    options.mailDate && /^\d{4}-\d{2}-\d{2}$/.test(options.mailDate)
+      ? options.mailDate
+      : getTodayIsoDate();
   const session = await resolveSessionContext(page, context, mailDate, logger);
 
   await dismissTender247BlockingOverlays(page, logger, config);
