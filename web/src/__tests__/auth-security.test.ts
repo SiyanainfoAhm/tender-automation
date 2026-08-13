@@ -88,7 +88,7 @@ describe("first-login enforcement contract", () => {
 describe("admin safeguards", () => {
   const admins = [
     { id: "a1", role: "ADMIN" as const, isActive: true },
-    { id: "a2", role: "VIEWER" as const, isActive: true },
+    { id: "a2", role: "BID_COORDINATOR" as const, isActive: true },
   ];
 
   it("19. last active ADMIN cannot be demoted", () => {
@@ -96,10 +96,13 @@ describe("admin safeguards", () => {
     const result = assertAdminMutationAllowed({
       actorId: "a1",
       target: onlyAdmin[0]!,
-      patch: { role: "VIEWER" },
+      patch: { role: "BID_COORDINATOR" },
       activeAdminCount: countActiveAdmins(onlyAdmin),
     });
     expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toMatch(/at least one active administrator/i);
+    }
   });
 
   it("19b. cannot disable own account", () => {

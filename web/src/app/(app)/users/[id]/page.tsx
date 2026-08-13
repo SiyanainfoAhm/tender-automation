@@ -9,13 +9,13 @@ import {
 } from "lucide-react";
 
 import { PageHeader } from "@/components/layout/page-header";
+import { RoleBadge } from "@/components/users/role-badge";
 import { UserStatusBadge } from "@/components/users/user-status-badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatDate, formatRelativeTime } from "@/lib/format";
-import { requireRole } from "@/server/auth/session";
+import { requirePermission } from "@/server/auth/permissions";
 import {
   revokeAllSessionsAction,
   unlockUserAction,
@@ -38,10 +38,10 @@ function getInitials(name: string): string {
 }
 
 export default async function UserDetailPage({ params }: UserDetailPageProps) {
-  await requireRole("ADMIN");
+  const session = await requirePermission("users.view");
   const { id } = await params;
   const user = await getUserById(id);
-  if (!user) notFound();
+  if (!user || user.companyId !== session.companyId) notFound();
 
   return (
     <div className="space-y-6">
@@ -57,8 +57,10 @@ export default async function UserDetailPage({ params }: UserDetailPageProps) {
         subtitle={user.email}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">{user.role.replace(/_/g, " ")}</Badge>
-            <UserStatusBadge user={user} />
+            <RoleBadge role={user.role} />
+            <UserStatusBadge
+              status={user.isActive ? "active" : "inactive"}
+            />
           </div>
         }
       />

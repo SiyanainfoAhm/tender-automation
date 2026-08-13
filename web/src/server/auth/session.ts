@@ -11,6 +11,7 @@ export type SessionUser = {
   email: string;
   fullName: string;
   role: UserRole;
+  companyId: string | null;
   mustChangePassword: boolean;
   lastLoginAt: string | null;
 };
@@ -97,6 +98,7 @@ type DbUser = {
   full_name: string;
   password_hash: string;
   role: UserRole;
+  company_id: string | null;
   is_active: boolean;
   must_change_password: boolean;
   failed_login_attempts: number;
@@ -119,7 +121,7 @@ export async function loginWithPassword(
   const { data: user, error } = await supabase
     .from("agenttender_users")
     .select(
-      "id, email, full_name, password_hash, role, is_active, must_change_password, failed_login_attempts, locked_until, last_login_at",
+      "id, email, full_name, password_hash, role, company_id, is_active, must_change_password, failed_login_attempts, locked_until, last_login_at",
     )
     .ilike("email", normalized)
     .maybeSingle();
@@ -262,6 +264,7 @@ export async function loginWithPassword(
     email: row.email,
     fullName: row.full_name,
     role: row.role,
+    companyId: row.company_id ?? null,
     mustChangePassword: row.must_change_password,
     lastLoginAt: row.last_login_at,
   };
@@ -337,7 +340,7 @@ export async function getSession(): Promise<AuthSession | null> {
   const { data: user } = await supabase
     .from("agenttender_users")
     .select(
-      "id, email, full_name, role, is_active, must_change_password, last_login_at",
+      "id, email, full_name, role, company_id, is_active, must_change_password, last_login_at",
     )
     .eq("id", session.user_id)
     .maybeSingle();
@@ -362,6 +365,7 @@ export async function getSession(): Promise<AuthSession | null> {
       email: user.email,
       fullName: user.full_name,
       role: user.role as UserRole,
+      companyId: (user.company_id as string) || null,
       mustChangePassword: user.must_change_password,
       lastLoginAt: user.last_login_at,
     },

@@ -24,20 +24,7 @@ export function PreferencesForm({ preferences }: PreferencesFormProps) {
 
   return (
     <form action={formAction} className="max-w-lg space-y-6">
-      <div className="space-y-2">
-        <Label htmlFor="theme">Theme</Label>
-        <select
-          id="theme"
-          name="theme"
-          defaultValue={preferences.theme}
-          disabled={pending}
-          className="flex h-10 w-full rounded-[10px] border border-border bg-surface px-3 text-sm"
-        >
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-          <option value="system">System</option>
-        </select>
-      </div>
+      <input type="hidden" name="theme" value="light" />
 
       <div className="space-y-2">
         <Label htmlFor="tableDensity">Table density</Label>

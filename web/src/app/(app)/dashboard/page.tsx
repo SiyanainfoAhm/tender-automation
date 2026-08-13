@@ -11,6 +11,7 @@ import { getDashboardMetrics } from "@/server/repositories/analyticsRepository";
 import { DashboardChartsSection } from "./dashboard-charts-section";
 import { DashboardKpiSection } from "./dashboard-kpi-section";
 import { DashboardOperationalSection } from "./dashboard-operational-section";
+import { DashboardDocumentExpiryCard } from "@/components/dashboard/document-expiry-card";
 
 function firstName(fullName: string): string {
   return fullName.split(" ")[0] || fullName;
@@ -41,10 +42,10 @@ export default async function DashboardPage() {
   const session = await requireSession();
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <PageHeader
         title={`Good ${getGreeting()}, ${firstName(session.user.fullName)}`}
-        subtitle="Here is today's tender intelligence overview."
+        subtitle="Overview of your tender pipeline and bid activity"
         actions={
           <>
             <FreshnessChip />
@@ -61,6 +62,7 @@ export default async function DashboardPage() {
         }
       />
 
+      <DashboardDocumentExpiryCard />
       <DashboardKpiSection />
       <DashboardChartsSection />
       <DashboardOperationalSection />

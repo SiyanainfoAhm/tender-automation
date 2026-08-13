@@ -156,26 +156,35 @@ async function navigateToProjectHomeDirect(options: {
 }): Promise<boolean> {
   const { page, projectUrl, projectName, projectMatch, logger } = options;
 
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    logger.info("CHATGPT_PROJECT_DIRECT_NAVIGATION_START");
-    await page.goto(projectUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: 120_000,
-    });
-    logger.info("CHATGPT_PROJECT_DIRECT_NAVIGATION_COMPLETE");
-    await page.waitForTimeout(3000);
+  // ONE goto only — never retry-goto the same page (hydration ≠ failure).
+  logger.info("CHATGPT_PROJECT_DIRECT_NAVIGATION_START");
+  const { chatGptPageGoto, isAtOrPastComposerReady } = await import(
+    "./tenderPageNav.js"
+  );
+  if (isAtOrPastComposerReady(page)) {
+    throw new AutomationError(
+      "CHATGPT_NAVIGATION_FORBIDDEN_AFTER_COMPOSER_READY",
+      "navigateToProjectHomeDirect blocked — composer already ready",
+    );
+  }
+  await chatGptPageGoto(page, projectUrl, {
+    reason: "navigateToProjectHomeDirect",
+    logger,
+    waitUntil: "domcontentloaded",
+    timeout: 120_000,
+    untracked: true,
+  });
+  logger.info("CHATGPT_PROJECT_DIRECT_NAVIGATION_COMPLETE");
 
+  // Read-only wait for hydration (no second goto).
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
     const currentUrl = page.url();
     logger.info(`CHATGPT_CURRENT_URL=${currentUrl}`);
-
     if (isChatGptHomeUrl(currentUrl) || !isProjectHomeUrl(currentUrl)) {
-      logger.warn("CHATGPT_PROJECT_REDIRECTED_TO_HOME");
-      if (attempt < 2) {
-        continue;
-      }
-      return false;
+      await page.waitForTimeout(1_000);
+      continue;
     }
-
     const verified = await verifyProjectHomeContent({
       page,
       projectName,
@@ -188,13 +197,11 @@ async function navigateToProjectHomeDirect(options: {
       persistProjectUrlFromPage(page, projectName, logger);
       return true;
     }
-
-    if (attempt < 2) {
-      logger.warn("CHATGPT_PROJECT_REDIRECTED_TO_HOME");
-    }
+    await page.waitForTimeout(1_000);
   }
 
-  return false;
+  logger.warn("CHATGPT_PROJECT_DIRECT_NAVIGATION_NOT_VERIFIED_AFTER_WAIT");
+  return isProjectHomeUrl(page.url());
 }
 
 async function openProjectViaSidebarFallback(options: {
@@ -290,7 +297,7 @@ async function openProjectViaSidebarFallback(options: {
  * Needs the /project URL plus at least one additional central-page signal
  * (heading / Chats / Sources / project composer) — total ≥ 2 including URL.
  */
-async function verifyProjectHomeContent(options: {
+export async function verifyProjectHomeContent(options: {
   page: Page;
   projectName: string;
   projectMatch: string;
@@ -655,16 +662,42 @@ export async function ensureProjectHome(options: {
     projectName.replace(/\s+Automation$/i, "").trim() ||
     "Siyana Tender Qualification";
 
+  const { isAtOrPastComposerReady } = await import("./tenderPageNav.js");
+
+  // Fresh-tender lifecycle: never re-navigate after COMPOSER_READY.
+  if (isAtOrPastComposerReady(page)) {
+    if (!isProjectHomeUrl(page.url())) {
+      throw new AutomationError(
+        "CHATGPT_NAVIGATION_FORBIDDEN_AFTER_COMPOSER_READY",
+        `ensureProjectHome blocked after COMPOSER_READY url=${page.url()}`,
+      );
+    }
+    logger.info("CHATGPT_PROJECT_HOME_READY_SKIP_NAV=true");
+    assertProjectHomeOpen(page);
+    return getProjectComposerLocator(page);
+  }
+
   if (isProjectHomeUrl(page.url())) {
-    const ready = await verifyProjectHomeContent({
-      page,
-      projectName,
-      projectMatch,
-      logger,
-    });
-    if (ready) {
+    // Already on project URL — poll content read-only; do NOT goto again.
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const ready = await verifyProjectHomeContent({
+        page,
+        projectName,
+        projectMatch,
+        logger,
+      });
+      if (ready) {
+        assertProjectHomeOpen(page);
+        logger.info("CHATGPT_PROJECT_HOME_READY");
+        return getProjectComposerLocator(page);
+      }
+      await page.waitForTimeout(750);
+    }
+    // Soft accept: URL is project home even if decorative UI is slow.
+    if (isProjectHomeUrl(page.url())) {
+      logger.info("CHATGPT_PROJECT_HOME_READY_URL_ONLY=true");
       assertProjectHomeOpen(page);
-      logger.info("CHATGPT_PROJECT_HOME_READY");
       return getProjectComposerLocator(page);
     }
   }
@@ -704,7 +737,10 @@ export async function ensureProjectHome(options: {
   } catch (error) {
     if (
       error instanceof AutomationError &&
-      error.code === "CHATGPT_PROJECT_URL_INVALID"
+      (error.code === "CHATGPT_PROJECT_URL_INVALID" ||
+        error.code === "CHATGPT_NAVIGATION_FORBIDDEN_AFTER_COMPOSER_READY" ||
+        error.code === "CHATGPT_PROJECT_NAVIGATION_LOOP" ||
+        error.code === "CHATGPT_RELOAD_FORBIDDEN")
     ) {
       throw error;
     }

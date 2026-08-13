@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useEffect, useState } from "react";
-import { Eye, EyeOff, Loader2 } from "lucide-react";
+import { ArrowRight, Eye, EyeOff, Loader2, Mail, Lock } from "lucide-react";
 
 import { loginAction } from "@/server/actions/auth";
 import { FieldValidationHint } from "@/components/auth/validation-hints";
@@ -9,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { getEmailValidationStatus } from "@/lib/validations/email-rules";
+import { cn } from "@/lib/utils";
 
 const REMEMBER_EMAIL_KEY = "agenttender_remember_email";
 const REMEMBER_FLAG_KEY = "agenttender_remember_login";
@@ -66,21 +68,25 @@ export function LoginForm() {
   }
 
   return (
-    <form action={handleSubmit} className="space-y-5">
-      <div className="space-y-2">
-        <Label htmlFor="email">Work email</Label>
-        <Input
-          id="email"
-          name="email"
-          type="email"
-          autoComplete="username"
-          placeholder="you@company.com"
-          required
-          disabled={pending || !hydrated}
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          onBlur={() => setEmailTouched(true)}
-        />
+    <form action={handleSubmit} className="space-y-4">
+      <div className="space-y-1.5">
+        <Label htmlFor="email">Email address</Label>
+        <div className="relative">
+          <Mail className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-subtle" />
+          <Input
+            id="email"
+            name="email"
+            type="email"
+            autoComplete="username"
+            placeholder="you@company.com"
+            required
+            disabled={pending || !hydrated}
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            onBlur={() => setEmailTouched(true)}
+            className="pl-9"
+          />
+        </div>
         <FieldValidationHint
           show={emailTouched && emailStatus !== null}
           valid={emailStatus?.valid ?? false}
@@ -89,9 +95,13 @@ export function LoginForm() {
         />
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="password">Password</Label>
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <Label htmlFor="password">Password</Label>
+          <span className="text-xs text-text-muted">Forgot password?</span>
+        </div>
         <div className="relative">
+          <Lock className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-subtle" />
           <Input
             id="password"
             name="password"
@@ -100,7 +110,7 @@ export function LoginForm() {
             placeholder="Enter your password"
             required
             disabled={pending}
-            className="pr-10"
+            className="pl-9 pr-10"
           />
           <button
             type="button"
@@ -119,22 +129,22 @@ export function LoginForm() {
         </div>
       </div>
 
-      <label className="flex cursor-pointer items-center gap-2.5 text-sm text-text-secondary">
+      <label className="flex cursor-pointer items-center gap-2 text-sm text-text-secondary">
         <input
           type="checkbox"
           name="rememberLogin"
           checked={rememberLogin}
           onChange={(event) => setRememberLogin(event.target.checked)}
           disabled={pending}
-          className="size-4 rounded border-border accent-primary"
+          className="size-3.5 rounded border-border accent-primary"
         />
-        Save login info for future
+        Remember email
       </label>
 
       {state?.error ? (
         <div
           role="alert"
-          className="rounded-[10px] border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+          className="rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700"
         >
           {state.error}
         </div>
@@ -147,9 +157,22 @@ export function LoginForm() {
             Signing in…
           </>
         ) : (
-          "Sign in"
+          <>
+            Sign In
+            <ArrowRight className="size-4" />
+          </>
         )}
       </Button>
+
+      <p className={cn("text-center text-sm text-text-muted")}>
+        Don&apos;t have an account?{" "}
+        <Link
+          href="/signup"
+          className="font-medium text-primary hover:text-primary-hover"
+        >
+          Sign up
+        </Link>
+      </p>
     </form>
   );
 }

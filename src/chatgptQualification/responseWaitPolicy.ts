@@ -1,6 +1,10 @@
 /**
- * Response-wait policy: stall = no activity, never refresh while generation is active.
+ * Response-wait policy: stall = no *meaningful* activity.
+ * Sticky Stop button alone is NOT activity and must not block JSON completion.
  */
+import {
+  isMeaningfulResponseActivityChange,
+} from "./canonicalJsonCompletion.js";
 
 export type ResponseActivitySnapshot = {
   assistantCount: number;
@@ -14,19 +18,19 @@ export type ResponseActivitySnapshot = {
 export function fingerprintResponseActivity(
   snap: ResponseActivitySnapshot,
 ): string {
+  // Fingerprint excludes stopVisible — sticky Stop must not look like change.
   return [
     snap.assistantCount,
     snap.textLength,
     snap.textFingerprint,
-    snap.active ? "1" : "0",
     snap.generationLabel,
-    snap.stopVisible ? "1" : "0",
   ].join("|");
 }
 
 /**
- * Update lastResponseActivityAt from snapshot deltas.
- * While generation is active, always treat as activity (even if DOM text is unchanged).
+ * Update lastResponseActivityAt only on meaningful deltas:
+ * assistant count, text hash/length, Thinking/Search/label transitions.
+ * Sticky Stop / active=true with unchanged text does NOT bump activity.
  */
 export function updateLastResponseActivityAt(options: {
   previous: ResponseActivitySnapshot | null;
@@ -39,29 +43,46 @@ export function updateLastResponseActivityAt(options: {
   if (!previous) {
     return { lastActivityAtMs: nowMs, changed: true, fingerprint };
   }
-  if (next.active) {
-    return { lastActivityAtMs: nowMs, changed: true, fingerprint };
-  }
-  const prevFp = fingerprintResponseActivity(previous);
-  const changed = prevFp !== fingerprint;
+
+  const meaningful = isMeaningfulResponseActivityChange({
+    previousAssistantCount: previous.assistantCount,
+    nextAssistantCount: next.assistantCount,
+    previousTextHash: previous.textFingerprint,
+    nextTextHash: next.textFingerprint,
+    previousTextLength: previous.textLength,
+    nextTextLength: next.textLength,
+    previousGenerationLabel: previous.generationLabel,
+    nextGenerationLabel: next.generationLabel,
+  });
+
   return {
-    lastActivityAtMs: changed ? nowMs : lastActivityAtMs,
-    changed,
+    lastActivityAtMs: meaningful ? nowMs : lastActivityAtMs,
+    changed: meaningful,
     fingerprint,
   };
 }
 
 /**
- * Stall means no response activity/change for stallMs — NOT elapsed since Send.
- * Active generation never stalls.
+ * Stall means no meaningful response activity for stallMs.
+ * Active generation with *changing* text is handled via activity bumps.
+ * Sticky Stop alone does NOT prevent stall detection (JSON fast-path owns completion).
  */
 export function isResponseActivityStalled(options: {
   lastActivityAtMs: number;
   nowMs: number;
   stallMs: number;
   currentlyActive: boolean;
+  /** When true, sticky Stop alone does not block stall. */
+  ignoreStickyActive?: boolean;
 }): boolean {
-  if (options.currentlyActive) return false;
+  // Legacy: active generation blocked stall. New default: only block when
+  // caller says generation is meaningfully active (text still changing).
+  if (options.currentlyActive && options.ignoreStickyActive !== true) {
+    // Keep prior semantics for callers that still pass currentlyActive=true
+    // only when generation is truly live — wait loop should pass
+    // currentlyActive=false when only Stop is sticky with unchanged text.
+    return false;
+  }
   return options.nowMs - options.lastActivityAtMs >= options.stallMs;
 }
 
@@ -80,7 +101,6 @@ export function mayNavigateAwayDuringResponseWait(options: {
   if (!options.promptSubmitted) return false;
   if (options.responseActive) return false;
   if (options.conversationUrlValid && !options.pageBroken) return false;
-  // Even when broken: caller must reopen exact /c/ URL — never project home mid-wait.
   return false;
 }
 

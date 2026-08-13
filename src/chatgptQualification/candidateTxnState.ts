@@ -100,6 +100,14 @@ export function advanceCandidateStage(
   ) {
     return state;
   }
+  // Once RESPONSE_COMPLETE, never return to SUBMITTED / WAITING / PROMPT_*.
+  if (
+    stageAtLeast(state.stage, "RESPONSE_COMPLETE") &&
+    stageIndex(next) >= 0 &&
+    stageIndex(next) < stageIndex("RESPONSE_COMPLETE")
+  ) {
+    return state;
+  }
   return {
     ...state,
     stage: next,

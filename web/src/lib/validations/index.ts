@@ -8,11 +8,16 @@ import {
 export const USER_ROLES = [
   "ADMIN",
   "BID_MANAGER",
-  "ANALYST",
-  "VIEWER",
+  "TECHNICAL_LEAD",
+  "FINANCIAL_ANALYST",
+  "BID_COORDINATOR",
+  "DOCUMENT_SPECIALIST",
 ] as const;
 
 export type UserRole = (typeof USER_ROLES)[number];
+
+/** Legacy roles accepted only for migration/read compatibility. */
+export const LEGACY_USER_ROLES = ["ANALYST", "VIEWER"] as const;
 
 const passwordComplexityRules = (schema: z.ZodString) =>
   schema
@@ -65,6 +70,25 @@ export const profileUpdateSchema = z.object({
   email: z.string().email().transform((v) => v.trim().toLowerCase()),
   currentPassword: z.string().optional(),
 });
+
+/** Public self-registration — creates company + ADMIN for the creator. */
+export const signupSchema = z
+  .object({
+    fullName: z.string().trim().min(1, "Full name is required").max(120),
+    email: z.string().email().transform((v) => v.trim().toLowerCase()),
+    password: passwordSchema,
+    confirmPassword: z.string().min(1),
+    companyName: z.string().trim().min(1, "Company name is required").max(160),
+    industry: z.string().trim().max(120).optional().or(z.literal("")),
+    companyType: z.string().trim().max(120).optional().or(z.literal("")),
+    phone: z.string().trim().max(40).optional().or(z.literal("")),
+    website: z.string().trim().max(200).optional().or(z.literal("")),
+    location: z.string().trim().max(160).optional().or(z.literal("")),
+  })
+  .refine((data) => data.password === data.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
 
 export const resetPasswordSchema = z.object({
   userId: z.string().uuid(),

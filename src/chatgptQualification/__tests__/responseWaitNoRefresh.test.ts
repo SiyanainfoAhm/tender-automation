@@ -122,6 +122,24 @@ describe("ChatGPT response wait policy — no refresh while active", () => {
     );
   });
 
+  it("sticky Stop with unchanged text does not bump activity timestamp", () => {
+    const base = snap({
+      textLength: 50,
+      textFingerprint: "same",
+      active: true,
+      stopVisible: true,
+      generationLabel: "stop",
+    });
+    const updated = updateLastResponseActivityAt({
+      previous: base,
+      next: { ...base },
+      lastActivityAtMs: 1000,
+      nowMs: 5000,
+    });
+    assert.equal(updated.changed, false);
+    assert.equal(updated.lastActivityAtMs, 1000);
+  });
+
   it("unchanged idle snapshot does not bump activity timestamp", () => {
     const base = snap({ textLength: 50, textFingerprint: "same" });
     const updated = updateLastResponseActivityAt({

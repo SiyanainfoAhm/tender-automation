@@ -21,7 +21,7 @@ export default function AppError({
     error.correlationId ?? error.digest ?? "unavailable";
 
   return (
-    <div className="flex min-h-[50vh] items-center justify-center px-4 py-10">
+    <div className="flex min-h-[50vh] items-center justify-center py-10">
       <div className="w-full max-w-md rounded-[14px] border border-border bg-surface p-8 text-center shadow-sm">
         <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-full bg-status-nogo-bg text-status-nogo">
           <AlertCircle className="size-5" />

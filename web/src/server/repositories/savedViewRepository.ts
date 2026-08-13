@@ -138,7 +138,7 @@ export async function getUserPreferences(userId: string): Promise<{
       user_id: userId,
     });
     return {
-      theme: "system",
+      theme: "light",
       tableDensity: "comfortable",
       sidebarCollapsed: false,
       defaultDateFilter: null,

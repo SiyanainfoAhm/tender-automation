@@ -19,7 +19,7 @@ export default async function ChangePasswordPage() {
       <header className="flex items-center justify-between border-b border-border px-6 py-4">
         <div>
           <p className="font-heading text-lg font-semibold text-text-primary">
-            Siyana Tender Intelligence
+            TenderFlow
           </p>
           <p className="text-sm text-text-muted">Password change required</p>
         </div>

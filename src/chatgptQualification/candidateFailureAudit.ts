@@ -10,13 +10,19 @@ import type { ChatGptCandidateStage } from "./candidateTxnState.js";
 
 export type CandidateFailureAudit = {
   tenderId: string;
+  sourceTenderId: string;
   attempt: number;
   stage: ChatGptCandidateStage | string;
+  state: ChatGptCandidateStage | string;
   reason: string;
+  failureReason: string;
   conversationUrl: string | null;
   promptSubmitted: boolean;
   filesLocked: boolean;
   responseDetected: boolean;
+  userMessagePresent: boolean;
+  assistantMessagePresent: boolean;
+  validJsonPresent: boolean;
   retryable: boolean;
   timestamp: string;
 };
@@ -38,6 +44,9 @@ export async function saveCandidateFailureAudit(options: {
   promptSubmitted?: boolean;
   filesLocked?: boolean;
   responseDetected?: boolean;
+  userMessagePresent?: boolean;
+  assistantMessagePresent?: boolean;
+  validJsonPresent?: boolean;
   retryable: boolean;
   page?: Page | null;
   logger?: Logger;
@@ -53,6 +62,9 @@ export async function saveCandidateFailureAudit(options: {
     promptSubmitted = false,
     filesLocked = false,
     responseDetected = false,
+    userMessagePresent = false,
+    assistantMessagePresent = false,
+    validJsonPresent = false,
     retryable,
     page,
     logger,
@@ -62,15 +74,22 @@ export async function saveCandidateFailureAudit(options: {
   const auditDir = getCandidateAuditDir(dateFolder, tenderId);
   ensureDir(auditDir);
 
+  const truncatedReason = reason.slice(0, 2000);
   const failure: CandidateFailureAudit = {
     tenderId,
+    sourceTenderId: tenderId,
     attempt,
     stage,
-    reason: reason.slice(0, 2000),
+    state: stage,
+    reason: truncatedReason,
+    failureReason: truncatedReason,
     conversationUrl,
     promptSubmitted,
     filesLocked,
     responseDetected,
+    userMessagePresent,
+    assistantMessagePresent,
+    validJsonPresent,
     retryable,
     timestamp: new Date().toISOString(),
   };

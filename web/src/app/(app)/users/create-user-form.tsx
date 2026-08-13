@@ -31,7 +31,7 @@ export function CreateUserForm({ onSuccess }: CreateUserFormProps = {}) {
   const [password, setPassword] = useState("");
   const [emailTouched, setEmailTouched] = useState(false);
   const [passwordTouched, setPasswordTouched] = useState(false);
-  const [role, setRole] = useState("VIEWER");
+  const [role, setRole] = useState("BID_COORDINATOR");
   const [state, formAction, pending] = useActionState(
     async (_prev: unknown, formData: FormData) => createUserAction(formData),
     {},

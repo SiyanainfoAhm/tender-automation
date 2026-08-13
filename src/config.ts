@@ -243,15 +243,15 @@ export function loadConfig(): AppConfig {
     ),
     chatgptInterTenderDelayMs: Math.max(
       0,
-      parseIntEnv(process.env.CHATGPT_INTER_TENDER_DELAY_MS, 60_000),
+      parseIntEnv(process.env.CHATGPT_INTER_TENDER_DELAY_MS, 0),
     ),
     chatgptInterTenderJitterMs: Math.max(
       0,
-      parseIntEnv(process.env.CHATGPT_INTER_TENDER_JITTER_MS, 15_000),
+      parseIntEnv(process.env.CHATGPT_INTER_TENDER_JITTER_MS, 0),
     ),
     chatgptRateLimitInitialBackoffMs: Math.max(
       30_000,
-      parseIntEnv(process.env.CHATGPT_RATE_LIMIT_INITIAL_BACKOFF_MS, 300_000),
+      parseIntEnv(process.env.CHATGPT_RATE_LIMIT_INITIAL_BACKOFF_MS, 600_000),
     ),
     chatgptRateLimitMaxBackoffMs: Math.max(
       60_000,

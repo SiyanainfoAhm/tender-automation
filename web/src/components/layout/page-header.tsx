@@ -22,7 +22,7 @@ export function PageHeader({
   className,
 }: PageHeaderProps) {
   return (
-    <div className={cn("mb-5 space-y-2", className)}>
+    <div className={cn("space-y-2", className)}>
       {breadcrumbs && breadcrumbs.length > 0 ? (
         <nav
           aria-label="Breadcrumb"

@@ -28,12 +28,20 @@ function mapAdminUser(row: Record<string, unknown>): SafeUser {
   };
 }
 
-export async function listUsers(): Promise<SafeUser[]> {
+export async function listUsers(options?: {
+  companyId?: string;
+}): Promise<SafeUser[]> {
   const supabase = getServerSupabase();
-  const { data, error } = await supabase
+  let query = supabase
     .from("agenttender_users")
     .select(ADMIN_SAFE_USER_SELECT)
     .order("created_at", { ascending: false });
+
+  if (options?.companyId) {
+    query = query.eq("company_id", options.companyId);
+  }
+
+  const { data, error } = await query;
   if (error) throw new Error(error.message);
   return (data || []).map((r) => mapAdminUser(r as Record<string, unknown>));
 }
@@ -69,6 +77,7 @@ export async function createUser(options: {
   password: string;
   role: UserRole;
   createdBy: string;
+  companyId?: string | null;
 }): Promise<SafeUser> {
   const supabase = getServerSupabase();
   const passwordHash = await hashPassword(options.password);
@@ -79,6 +88,7 @@ export async function createUser(options: {
       full_name: options.fullName,
       password_hash: passwordHash,
       role: options.role,
+      company_id: options.companyId ?? null,
       must_change_password: true,
       created_by: options.createdBy,
       password_changed_at: new Date().toISOString(),
@@ -102,6 +112,80 @@ export async function createUser(options: {
   return mapAdminUser(data as Record<string, unknown>);
 }
 
+/**
+ * Public self-registration. Creates a NEW company (never defaults to Siyana),
+ * then an ADMIN user linked to that company (company creator).
+ */
+export async function registerPublicUser(options: {
+  email: string;
+  fullName: string;
+  password: string;
+  company: {
+    name: string;
+    industry?: string;
+    companyType?: string;
+    phone?: string;
+    website?: string;
+    location?: string;
+  };
+}): Promise<SafeUser> {
+  const existing = await getUserByEmail(options.email);
+  if (existing) {
+    throw new Error("An account with this email already exists");
+  }
+
+  const { createCompany } = await import("./companyRepository");
+  const company = await createCompany({
+    name: options.company.name,
+    industryType: options.company.industry || options.company.companyType || null,
+    businessLocation: options.company.location || null,
+    website: options.company.website || null,
+  });
+
+  const supabase = getServerSupabase();
+  const passwordHash = await hashPassword(options.password);
+  const { data, error } = await supabase
+    .from("agenttender_users")
+    .insert({
+      email: options.email.toLowerCase(),
+      full_name: options.fullName,
+      password_hash: passwordHash,
+      role: "ADMIN",
+      company_id: company.id,
+      must_change_password: false,
+      created_by: null,
+      password_changed_at: new Date().toISOString(),
+    })
+    .select(ADMIN_SAFE_USER_SELECT)
+    .single();
+
+  if (error) throw new Error(error.message);
+
+  await supabase.from("agenttender_user_preferences").insert({
+    user_id: data.id,
+    preferences: {
+      companySignup: {
+        phone: options.company.phone || "",
+        companyType: options.company.companyType || "",
+      },
+    },
+  });
+
+  await supabase
+    .from("agenttender_users")
+    .update({ created_by: data.id })
+    .eq("id", data.id);
+
+  await recordAuthEvent({
+    userId: data.id,
+    attemptedEmail: options.email,
+    eventType: "USER_CREATED",
+    success: true,
+  });
+
+  return mapAdminUser(data as Record<string, unknown>);
+}
+
 export async function updateUser(
   id: string,
   patch: {
@@ -117,12 +201,14 @@ export async function updateUser(
   const target = await getUserById(id);
   if (!target) throw new Error("User not found");
 
-  const allUsers = await listUsers();
+  const companyUsers = target.companyId
+    ? await listUsers({ companyId: target.companyId })
+    : await listUsers();
   const guard = assertAdminMutationAllowed({
     actorId,
     target: target as AdminGuardUser,
     patch,
-    activeAdminCount: countActiveAdmins(allUsers as AdminGuardUser[]),
+    activeAdminCount: countActiveAdmins(companyUsers as AdminGuardUser[]),
   });
   if (!guard.ok) throw new Error(guard.message);
 

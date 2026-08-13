@@ -3,15 +3,16 @@
 import { useRouter } from "next/navigation";
 import {
   Bell,
+  CircleHelp,
   LogOut,
-  Moon,
   Search,
   Settings,
   Shield,
-  Sun,
   User,
 } from "lucide-react";
 
+import type { UserRole } from "@/lib/validations";
+import { companyRoleLabel } from "@/lib/company/types";
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -37,8 +38,6 @@ type TopbarProps = {
   searchValue?: string;
   onSearchChange?: (value: string) => void;
   onSearchSubmit?: (value: string) => void;
-  onThemeToggle?: () => void;
-  isDark?: boolean;
   className?: string;
 };
 
@@ -56,8 +55,6 @@ export function Topbar({
   searchValue = "",
   onSearchChange,
   onSearchSubmit,
-  onThemeToggle,
-  isDark = false,
   className,
 }: TopbarProps) {
   const router = useRouter();
@@ -65,7 +62,7 @@ export function Topbar({
   return (
     <header
       className={cn(
-        "flex h-[60px] items-center gap-3 border-b border-border bg-surface px-4 lg:px-5 xl:px-6",
+        "flex h-16 items-center gap-3 border-b border-border bg-white px-4 sm:px-5 lg:px-6",
         className,
       )}
     >
@@ -79,36 +76,33 @@ export function Topbar({
         <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-subtle" />
         <Input
           type="search"
-          placeholder="Search tenders, authorities, locations…"
+          placeholder="Search tenders, documents, users…"
           value={searchValue}
           onChange={(event) => onSearchChange?.(event.target.value)}
-          className="h-10 pl-9 text-sm"
+          className="h-9 pl-9 text-sm"
         />
         <kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-muted lg:inline">
           ⌘K
         </kbd>
       </form>
 
-      <div className="ml-auto flex items-center gap-0.5">
+      <div className="ml-auto flex items-center gap-1">
         <Button
           variant="ghost"
           size="icon"
-          className="size-9 text-text-muted"
-          aria-label="Toggle theme"
-          onClick={onThemeToggle}
+          className="size-8 text-text-muted"
+          aria-label="Help"
+          type="button"
         >
-          {isDark ? (
-            <Sun className="size-[18px]" />
-          ) : (
-            <Moon className="size-[18px]" />
-          )}
+          <CircleHelp className="size-[18px]" />
         </Button>
 
         <Button
           variant="ghost"
           size="icon"
-          className="size-9 text-text-muted"
+          className="size-8 text-text-muted"
           aria-label="Notifications"
+          type="button"
         >
           <Bell className="size-[18px]" />
         </Button>
@@ -117,15 +111,22 @@ export function Topbar({
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
-              className="h-10 gap-2 rounded-[10px] px-1.5 hover:bg-surface-secondary"
+              className="h-9 gap-2 rounded-md px-1.5 hover:bg-surface-secondary"
             >
-              <Avatar className="size-8">
-                <AvatarFallback className="bg-primary-muted text-xs font-semibold text-primary">
+              <Avatar className="size-7">
+                <AvatarFallback className="bg-primary-50 text-[11px] font-semibold text-primary-700">
                   {getInitials(user.fullName)}
                 </AvatarFallback>
               </Avatar>
-              <span className="hidden max-w-[120px] truncate text-sm font-medium text-text-primary lg:inline">
-                {user.fullName}
+              <span className="hidden max-w-[140px] flex-col items-start lg:flex">
+                <span className="max-w-[140px] truncate text-sm font-medium leading-tight text-text-primary">
+                  {user.fullName}
+                </span>
+                {user.role ? (
+                  <span className="text-[11px] leading-tight text-text-muted">
+                    {companyRoleLabel(user.role as UserRole)}
+                  </span>
+                ) : null}
               </span>
             </Button>
           </DropdownMenuTrigger>
@@ -133,7 +134,7 @@ export function Topbar({
             <DropdownMenuLabel className="px-3 py-3 font-normal">
               <div className="flex items-start gap-3">
                 <Avatar className="size-9">
-                  <AvatarFallback className="bg-primary-muted text-xs font-semibold text-primary">
+                  <AvatarFallback className="bg-primary-50 text-xs font-semibold text-primary-700">
                     {getInitials(user.fullName)}
                   </AvatarFallback>
                 </Avatar>
@@ -144,7 +145,7 @@ export function Topbar({
                   <p className="truncate text-xs text-text-muted">{user.email}</p>
                   {user.role ? (
                     <Badge variant="outline" className="text-[10px]">
-                      {user.role.replace(/_/g, " ")}
+                      {companyRoleLabel(user.role as UserRole)}
                     </Badge>
                   ) : null}
                 </div>

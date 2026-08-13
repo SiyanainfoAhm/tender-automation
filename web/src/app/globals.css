@@ -1,91 +1,128 @@
 @import "tailwindcss";
 
 /*
- * Match AppShell theme toggle: dark: utilities apply under .dark on html.
- * Use :is() (not :where()) so dark: keeps specificity and can override
- * data-[state=...] / peer / attribute utilities (e.g. active tabs).
+ * Light mode only. dark: utilities require .dark on an ancestor;
+ * the app never adds that class, so dark: styles stay inactive.
  */
 @custom-variant dark (&:is(.dark, .dark *));
 
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  /* Fonts — Inter owned by root layout via next/font */
+  --font-body: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-label: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+
+  /* Emerald primary (oklch components) */
+  --primary-50: 0.97 0.025 162;
+  --primary-100: 0.94 0.05 162;
+  --primary-200: 0.88 0.09 162;
+  --primary-300: 0.8 0.13 162;
+  --primary-400: 0.7 0.16 162;
+  --primary-500: 0.61 0.17 162;
+  --primary-600: 0.52 0.15 162;
+  --primary-700: 0.44 0.12 162;
+  --primary-800: 0.37 0.095 162;
+  --primary-900: 0.32 0.075 162;
+  --primary-950: 0.22 0.05 162;
+
+  --accent-50: 0.97 0.018 160;
+  --accent-100: 0.94 0.035 160;
+  --accent-200: 0.89 0.06 160;
+  --accent-300: 0.81 0.09 160;
+  --accent-400: 0.72 0.12 160;
+  --accent-500: 0.63 0.14 160;
+  --accent-600: 0.54 0.13 160;
+  --accent-700: 0.46 0.1 160;
+  --accent-800: 0.39 0.08 160;
+  --accent-900: 0.33 0.06 160;
+  --accent-950: 0.23 0.04 160;
+
+  --secondary-50: 0.98 0.004 250;
+  --secondary-100: 0.96 0.006 250;
+  --secondary-200: 0.91 0.009 250;
+  --secondary-300: 0.84 0.012 250;
+  --secondary-400: 0.7 0.018 250;
+  --secondary-500: 0.56 0.022 250;
+  --secondary-600: 0.46 0.022 250;
+  --secondary-700: 0.37 0.02 250;
+  --secondary-800: 0.28 0.018 250;
+  --secondary-900: 0.2 0.015 250;
+  --secondary-950: 0.13 0.012 250;
+
+  --background-50: 0.99 0.004 85;
+  --background-100: 0.98 0.006 85;
+  --background-200: 0.95 0.008 85;
+  --background-300: 0.9 0.01 85;
+  --background-400: 0.79 0.012 85;
+  --background-500: 0.67 0.012 85;
+  --background-600: 0.54 0.011 85;
+  --background-700: 0.42 0.01 85;
+  --background-800: 0.3 0.009 85;
+  --background-900: 0.21 0.008 85;
+  --background-950: 0.14 0.006 85;
+
+  --foreground-50: 0.97 0.003 250;
+  --foreground-100: 0.93 0.004 250;
+  --foreground-200: 0.86 0.006 250;
+  --foreground-300: 0.74 0.009 250;
+  --foreground-400: 0.62 0.012 250;
+  --foreground-500: 0.5 0.014 250;
+  --foreground-600: 0.4 0.014 250;
+  --foreground-700: 0.31 0.013 250;
+  --foreground-800: 0.23 0.011 250;
+  --foreground-900: 0.17 0.009 250;
+  --foreground-950: 0.11 0.007 250;
+
+  --status-success: 0.62 0.16 150;
+  --status-warning: 0.75 0.15 75;
+  --status-danger: 0.6 0.2 25;
+  --status-info: 0.62 0.14 240;
+
+  /* Semantic surfaces — warm off-white SaaS */
+  --background: oklch(var(--background-50));
+  --foreground: oklch(var(--foreground-900));
   --card: #ffffff;
-  --card-foreground: #0f172a;
-  --muted: #f1f5f9;
-  --muted-foreground: #64748b;
+  --card-foreground: oklch(var(--foreground-900));
+  --muted: oklch(var(--background-100));
+  --muted-foreground: oklch(var(--foreground-500));
   --surface: #ffffff;
-  --surface-secondary: #f8fafc;
-  --surface-muted: #f1f5f9;
-  --border: #e2e8f0;
-  --border-strong: #cbd5e1;
-  --text-primary: #0f172a;
-  --text-secondary: #475569;
-  --text-muted: #64748b;
-  --text-subtle: #94a3b8;
-  --primary: #2563eb;
-  --primary-hover: #1d4ed8;
-  --primary-muted: #eff6ff;
-  --accent-indigo: #4f46e5;
-  --accent-cyan: #0891b2;
-  --ring: #2563eb33;
-  --navy: #0f172a;
+  --surface-secondary: oklch(var(--background-50));
+  --surface-muted: oklch(var(--background-100));
+  --border: oklch(var(--secondary-200));
+  --border-strong: oklch(var(--secondary-300));
+  --text-primary: oklch(var(--foreground-900));
+  --text-secondary: oklch(var(--foreground-600));
+  --text-muted: oklch(var(--foreground-500));
+  --text-subtle: oklch(var(--foreground-400));
+  --primary: oklch(var(--primary-600));
+  --primary-hover: oklch(var(--primary-700));
+  --primary-muted: oklch(var(--primary-50));
+  --accent-indigo: oklch(var(--primary-700));
+  --accent-cyan: oklch(var(--accent-600));
+  --ring: oklch(var(--primary-500) / 0.28);
+  --navy: oklch(var(--foreground-950));
+
   --sidebar-width: 228px;
   --sidebar-collapsed-width: 58px;
-  --topbar-height: 60px;
+  --topbar-height: 56px;
 
-  --status-go: #059669;
-  --status-go-bg: #ecfdf5;
-  --status-conditional: #d97706;
-  --status-conditional-bg: #fffbeb;
-  --status-partner: #0284c7;
-  --status-partner-bg: #f0f9ff;
-  --status-verify: #ea580c;
-  --status-verify-bg: #fff7ed;
-  --status-nogo: #dc2626;
-  --status-nogo-bg: #fef2f2;
-  --status-neutral: #64748b;
-  --status-neutral-bg: #f1f5f9;
+  /* Qualification status (domain) */
+  --status-go: oklch(var(--status-success));
+  --status-go-bg: oklch(var(--primary-50));
+  --status-conditional: oklch(var(--status-warning));
+  --status-conditional-bg: oklch(0.97 0.03 85);
+  --status-partner: oklch(var(--status-info));
+  --status-partner-bg: oklch(0.96 0.02 240);
+  --status-verify: oklch(0.68 0.16 55);
+  --status-verify-bg: oklch(0.97 0.03 55);
+  --status-nogo: oklch(var(--status-danger));
+  --status-nogo-bg: oklch(0.97 0.02 25);
+  --status-neutral: oklch(var(--foreground-500));
+  --status-neutral-bg: oklch(var(--secondary-100));
 
-  --radius-sm: 8px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-}
-
-.dark {
-  --background: #070d19;
-  --foreground: #f8fafc;
-  --card: #101b2d;
-  --card-foreground: #f8fafc;
-  --muted: #0b1424;
-  --muted-foreground: #94a3b8;
-  --surface: #0b1424;
-  --surface-secondary: #101b2d;
-  --surface-muted: #172338;
-  --border: #334155;
-  --border-strong: #475569;
-  --text-primary: #f8fafc;
-  --text-secondary: #cbd5e1;
-  --text-muted: #94a3b8;
-  --text-subtle: #64748b;
-  --primary: #60a5fa;
-  --primary-hover: #3b82f6;
-  --primary-muted: #1e3a8a55;
-  --ring: #3b82f633;
-  --navy: #070d19;
-
-  --status-go: #34d399;
-  --status-go-bg: #064e3b40;
-  --status-conditional: #fbbf24;
-  --status-conditional-bg: #78350f40;
-  --status-partner: #38bdf8;
-  --status-partner-bg: #0c4a6e40;
-  --status-verify: #fb923c;
-  --status-verify-bg: #7c2d1240;
-  --status-nogo: #f87171;
-  --status-nogo-bg: #7f1d1d40;
-  --status-neutral: #94a3b8;
-  --status-neutral-bg: #33415540;
+  --radius-sm: 6px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
 }
 
 @theme inline {
@@ -110,6 +147,72 @@
   --color-accent-indigo: var(--accent-indigo);
   --color-accent-cyan: var(--accent-cyan);
   --color-navy: var(--navy);
+
+  --color-primary-50: oklch(var(--primary-50));
+  --color-primary-100: oklch(var(--primary-100));
+  --color-primary-200: oklch(var(--primary-200));
+  --color-primary-300: oklch(var(--primary-300));
+  --color-primary-400: oklch(var(--primary-400));
+  --color-primary-500: oklch(var(--primary-500));
+  --color-primary-600: oklch(var(--primary-600));
+  --color-primary-700: oklch(var(--primary-700));
+  --color-primary-800: oklch(var(--primary-800));
+  --color-primary-900: oklch(var(--primary-900));
+  --color-primary-950: oklch(var(--primary-950));
+
+  --color-accent-50: oklch(var(--accent-50));
+  --color-accent-100: oklch(var(--accent-100));
+  --color-accent-200: oklch(var(--accent-200));
+  --color-accent-300: oklch(var(--accent-300));
+  --color-accent-400: oklch(var(--accent-400));
+  --color-accent-500: oklch(var(--accent-500));
+  --color-accent-600: oklch(var(--accent-600));
+  --color-accent-700: oklch(var(--accent-700));
+  --color-accent-800: oklch(var(--accent-800));
+  --color-accent-900: oklch(var(--accent-900));
+  --color-accent-950: oklch(var(--accent-950));
+
+  --color-secondary-50: oklch(var(--secondary-50));
+  --color-secondary-100: oklch(var(--secondary-100));
+  --color-secondary-200: oklch(var(--secondary-200));
+  --color-secondary-300: oklch(var(--secondary-300));
+  --color-secondary-400: oklch(var(--secondary-400));
+  --color-secondary-500: oklch(var(--secondary-500));
+  --color-secondary-600: oklch(var(--secondary-600));
+  --color-secondary-700: oklch(var(--secondary-700));
+  --color-secondary-800: oklch(var(--secondary-800));
+  --color-secondary-900: oklch(var(--secondary-900));
+  --color-secondary-950: oklch(var(--secondary-950));
+
+  --color-background-50: oklch(var(--background-50));
+  --color-background-100: oklch(var(--background-100));
+  --color-background-200: oklch(var(--background-200));
+  --color-background-300: oklch(var(--background-300));
+  --color-background-400: oklch(var(--background-400));
+  --color-background-500: oklch(var(--background-500));
+  --color-background-600: oklch(var(--background-600));
+  --color-background-700: oklch(var(--background-700));
+  --color-background-800: oklch(var(--background-800));
+  --color-background-900: oklch(var(--background-900));
+  --color-background-950: oklch(var(--background-950));
+
+  --color-foreground-50: oklch(var(--foreground-50));
+  --color-foreground-100: oklch(var(--foreground-100));
+  --color-foreground-200: oklch(var(--foreground-200));
+  --color-foreground-300: oklch(var(--foreground-300));
+  --color-foreground-400: oklch(var(--foreground-400));
+  --color-foreground-500: oklch(var(--foreground-500));
+  --color-foreground-600: oklch(var(--foreground-600));
+  --color-foreground-700: oklch(var(--foreground-700));
+  --color-foreground-800: oklch(var(--foreground-800));
+  --color-foreground-900: oklch(var(--foreground-900));
+  --color-foreground-950: oklch(var(--foreground-950));
+
+  --color-success: oklch(var(--status-success));
+  --color-warning: oklch(var(--status-warning));
+  --color-danger: oklch(var(--status-danger));
+  --color-info: oklch(var(--status-info));
+
   --color-status-go: var(--status-go);
   --color-status-go-bg: var(--status-go-bg);
   --color-status-conditional: var(--status-conditional);
@@ -122,8 +225,13 @@
   --color-status-nogo-bg: var(--status-nogo-bg);
   --color-status-neutral: var(--status-neutral);
   --color-status-neutral-bg: var(--status-neutral-bg);
-  --font-sans: var(--font-sans);
+
+  --font-sans: var(--font-body);
+  --font-body: var(--font-body);
   --font-heading: var(--font-heading);
+  --font-display: var(--font-heading);
+  --font-label: var(--font-label);
+
   --radius-sm: var(--radius-sm);
   --radius-md: var(--radius-md);
   --radius-lg: var(--radius-lg);
@@ -143,7 +251,7 @@
   body {
     background: var(--background);
     color: var(--foreground);
-    font-family: var(--font-sans), system-ui, sans-serif;
+    font-family: var(--font-body);
     font-size: 14px;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
@@ -156,22 +264,63 @@
   h4,
   h5,
   h6 {
-    font-family: var(--font-heading), system-ui, sans-serif;
+    font-family: var(--font-heading);
     color: var(--text-primary);
+  }
+
+  label {
+    font-family: var(--font-label);
+  }
+}
+
+/*
+ * Canonical authenticated page padding (Architecture A).
+ * Owned exclusively by PageContainer via [data-tf-page].
+ * Reinforces Tailwind utilities so padding cannot be lost to cascade/order.
+ *
+ * mobile:  16px x / 20px top / 20px bottom
+ * tablet:  20px x / 24px top / 24px bottom
+ * desktop: 24px x / 32px top / 24px bottom
+ */
+[data-tf-page] {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 1.25rem 1rem !important;
+}
+
+@media (min-width: 640px) {
+  [data-tf-page] {
+    padding: 1.5rem 1.25rem !important;
+  }
+}
+
+@media (min-width: 1024px) {
+  [data-tf-page] {
+    padding: 2rem 1.5rem 1.5rem !important;
   }
 }
 
 @layer utilities {
   .font-heading {
-    font-family: var(--font-heading), system-ui, sans-serif;
+    font-family: var(--font-heading);
+  }
+
+  .font-body {
+    font-family: var(--font-body);
+  }
+
+  .font-label {
+    font-family: var(--font-label);
   }
 
   .gutter {
-    @apply px-4 lg:px-5 xl:px-6;
+    /* Horizontal inset helper only — page rhythm is [data-tf-page] */
+    @apply px-4 sm:px-5 lg:px-6;
   }
 
   .page-title {
-    @apply font-heading text-2xl font-semibold tracking-tight text-text-primary;
+    @apply font-heading text-xl font-semibold tracking-tight text-text-primary sm:text-2xl;
   }
 
   .section-title {
@@ -179,38 +328,20 @@
   }
 
   .kpi-value {
-    color: #0f172a;
-  }
-
-  .dark .kpi-value {
-    color: #f8fafc;
+    color: var(--text-primary);
   }
 
   .kpi-label {
-    color: #334155;
-  }
-
-  .dark .kpi-label {
-    color: #e2e8f0;
+    color: var(--text-secondary);
   }
 
   .kpi-hint {
-    color: #64748b;
-  }
-
-  .dark .kpi-hint {
-    color: #94a3b8;
+    color: var(--text-muted);
   }
 
   .metric-card {
-    background-color: #ffffff;
-    border-color: #e2e8f0;
-    color: #0f172a;
-  }
-
-  .dark .metric-card {
-    background-color: #0f172a;
-    border-color: #1e293b;
-    color: #f8fafc;
+    background-color: var(--card);
+    border-color: var(--border);
+    color: var(--text-primary);
   }
 }

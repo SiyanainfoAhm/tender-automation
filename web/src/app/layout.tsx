@@ -1,14 +1,8 @@
 import type { Metadata } from "next";
-import { Inter, Manrope } from "next/font/google";
+import { Inter } from "next/font/google";
 import { Toaster } from "sonner";
 
 import "./globals.css";
-
-const manrope = Manrope({
-  variable: "--font-heading",
-  subsets: ["latin"],
-  display: "swap",
-});
 
 const inter = Inter({
   variable: "--font-sans",
@@ -17,9 +11,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Siyana Tender Intelligence",
-  description:
-    "Tender discovery, qualification and bid intelligence in one workspace.",
+  title: "TenderFlow",
+  description: "AI-Powered Bid Management",
 };
 
 export default function RootLayout({
@@ -28,9 +21,21 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html
+      lang="en"
+      className="light"
+      data-scroll-behavior="smooth"
+      suppressHydrationWarning
+    >
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `document.documentElement.classList.remove("dark");`,
+          }}
+        />
+      </head>
       <body
-        className={`${manrope.variable} ${inter.variable} min-h-screen bg-background font-sans antialiased`}
+        className={`${inter.variable} min-h-screen bg-background font-sans antialiased`}
       >
         {children}
         <Toaster richColors closeButton position="top-right" />

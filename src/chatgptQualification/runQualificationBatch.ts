@@ -5,9 +5,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Page } from "playwright";
 import { AutomationError } from "../browserUtils.js";
-import { loadConfig, type AppConfig } from "../config.js";
+import { loadConfig } from "../config.js";
 import { getIndiaTodayIsoDate } from "../dateUtils.js";
 import { ensureDir, resolveProjectPath } from "../fileUtils.js";
 import { Logger, safeErrorMessage } from "../logger.js";
@@ -23,8 +22,6 @@ import {
 } from "./chatgptState.js";
 import {
   cleanupStaleGptUploadFolders,
-  handleRateLimitModal,
-  saveUploadFailureDiagnostics,
 } from "./chatInteraction.js";
 import {
   closeChatGptSession,
@@ -32,19 +29,16 @@ import {
   launchChatGptPersistentSession,
   type ChatGptBrowserSession,
 } from "./ensureChatGptLoggedIn.js";
+import { closeUnusedBootstrapPages } from "./freshTenderTab.js";
 import {
-  ensureProjectHome,
-  logProjectHomeDiagnostics,
-  openChatGptProject,
-  assertProjectHomeOpen,
-} from "./openProject.js";
-import { getMaxChatgptCandidateAttempts } from "./candidateTxnState.js";
-import {
-  qualifySingleTender,
   tryRecoverFromExistingRawResponse,
   type QualifyTenderOutcome,
 } from "./processTenderQualification.js";
 import { runDualChatGptWorkers } from "./dualChatGptWorkers.js";
+import {
+  shouldExitBatchWhileQueueRemains,
+  shouldLeaveBrowserOpenSolelyForResponsePending,
+} from "./batchLifecyclePolicy.js";
 import { loadTender247ConcurrencyConfig } from "../tender247Batch/tender247ConcurrencyConfig.js";
 import { selectPassedForChatgpt } from "../prescreen/selectPassedForChatgpt.js";
 import {
@@ -363,45 +357,13 @@ export async function runQualificationBatch(
         }
       }
       session.page = page;
-
-      await openChatGptProject({
-        page,
-        projectName: config.chatgptProjectName,
-        projectUrl: config.chatgptProjectUrl,
-        projectMatch: config.chatgptProjectMatch,
-        config,
-        logger,
-      });
-
-      try {
-        await ensureProjectHome({
-          page,
-          projectName: config.chatgptProjectName,
-          projectMatch: config.chatgptProjectMatch,
-          projectUrl: config.chatgptProjectUrl,
-          config,
-          logger,
-        });
-      } catch (homeError) {
-        const homeMessage =
-          homeError instanceof Error ? homeError.message : String(homeError);
-        await logProjectHomeDiagnostics(
-          page,
-          config.chatgptProjectName,
-          logger,
-        );
-        await saveUploadFailureDiagnostics({
-          page,
-          screenshotRoot: config.screenshotRoot,
-          t247Id: "project-home",
-          logger,
-        });
-        logger.error(`CHATGPT_PROJECT_HOME_FAILED=${homeMessage}`);
-        throw homeError;
-      }
-
-      assertProjectHomeOpen(page);
       logger.info(`CHATGPT_CURRENT_URL=${page.url()}`);
+      logger.info(
+        "CHATGPT_SKIP_ANCHOR_PROJECT_NAV=true — each tender opens its own tab with ONE project goto",
+      );
+
+      // Do NOT openChatGptProject / ensureProjectHome on the bootstrap page.
+      // That created a second project tab + reload loops. Workers own navigation.
 
       const concurrencyCfg = loadTender247ConcurrencyConfig();
       console.log(`CHATGPT_CONCURRENCY=${concurrencyCfg.chatgptConcurrency}`);
@@ -409,301 +371,72 @@ export async function runQualificationBatch(
       console.log(
         `CHATGPT_MIN_SUBMISSION_INTERVAL_MS=${concurrencyCfg.chatgptMinSubmissionIntervalMs}`,
       );
+      console.log(
+        `CHATGPT_INTER_TENDER_DELAY_MS=${config.chatgptInterTenderDelayMs}`,
+      );
+      console.log(
+        `CHATGPT_PROJECT_READY_TIMEOUT_MS=${process.env.CHATGPT_PROJECT_READY_TIMEOUT_MS || "120000"}`,
+      );
 
-      if (concurrencyCfg.chatgptConcurrency >= 2) {
-        const dual = await runDualChatGptWorkers({
-          context,
-          primaryPage: page,
-          tenderIds: needsBrowser,
-          dateFolder,
-          dateIso,
-          config,
-          logger,
-          stopOnGo: false,
-          manifestTotals,
-        });
-        console.log(`PIPELINE_GPT_SUBMITTED=${dual.outcomes.length}`);
-        for (const row of dual.outcomes) {
-          applyOutcomeCounters(row.outcome, {
-            onCompleted: () => {
-              completed += 1;
-            },
-            onSkipped: () => {
-              skipped += 1;
-            },
-            onPending: (url) => {
-              pending += 1;
-              hasResponsePending = true;
-              pendingChatUrl = url;
-            },
-            onNotReady: () => {
-              notReady += 1;
-            },
-            onFailed: (error) => {
-              failed += 1;
-              lastFailureError = error;
-            },
-            onRateLimited: (url) => {
-              rateLimited += 1;
-              pendingChatUrl = url ?? pendingChatUrl;
-            },
-          });
-        }
-      } else {
-      const attemptCounts = new Map<string, number>();
-      const maxCandidateAttempts = getMaxChatgptCandidateAttempts();
-      let lastSubmissionAt: number | null = null;
-      const queue = [...needsBrowser];
+      // Always use the worker runner (concurrency 1 or 2): one new tab per tender,
+      // shared Send scheduler, no batch exit on response_pending / rate_limit.
+      const dual = await runDualChatGptWorkers({
+        context,
+        primaryPage: page,
+        tenderIds: needsBrowser,
+        dateFolder,
+        dateIso,
+        config,
+        logger,
+        stopOnGo: false,
+        manifestTotals,
+      });
 
-      for (let i = 0; i < queue.length; i += 1) {
-        const t247Id = queue[i]!;
-        const priorAttempts = attemptCounts.get(t247Id) ?? 0;
-        if (priorAttempts >= maxCandidateAttempts) {
-          logger.warn(
-            `CHATGPT_MAX_ATTEMPTS_REACHED=T247-${t247Id} attempts=${priorAttempts}`,
-          );
-          continue;
-        }
-        attemptCounts.set(t247Id, priorAttempts + 1);
+      // After workers finish, close leftover non-anchor blanks if any.
+      await closeUnusedBootstrapPages({
+        context,
+        keepPages: context.pages().filter((p) => !p.isClosed()),
+        logger,
+      }).catch(() => undefined);
 
-        // Pace submissions: wait before opening/uploading the next tender
-        if (lastSubmissionAt != null) {
-          const minimumSubmissionIntervalMs =
-            config.chatgptMinSubmissionIntervalMs;
-          const minimumCompletionCooldownMs = config.chatgptInterTenderDelayMs;
-          const jitterMs = Math.floor(
-            Math.random() * config.chatgptInterTenderJitterMs,
-          );
-          const elapsedSinceLastSubmission = Date.now() - lastSubmissionAt;
-          const intervalWait = Math.max(
-            0,
-            minimumSubmissionIntervalMs - elapsedSinceLastSubmission,
-          );
-          const finalWait =
-            Math.max(minimumCompletionCooldownMs, intervalWait) + jitterMs;
-
-          logger.info(`CHATGPT_NEXT_TENDER_DELAY_MS=${finalWait}`);
-          logger.info(
-            `CHATGPT_LAST_SUBMISSION_ELAPSED_MS=${elapsedSinceLastSubmission}`,
-          );
-          if (finalWait > 0) {
-            console.log(
-              `Waiting ${Math.round(finalWait / 1000)}s before next tender (elapsed since last submission ${Math.round(elapsedSinceLastSubmission / 1000)}s)`,
-            );
-            await page.waitForTimeout(finalWait);
-          }
-        }
-
-        logger.info(
-          `[${i + 1}/${queue.length}] START T247-${t247Id} attempt=${priorAttempts + 1}/${maxCandidateAttempts}`,
-        );
-        if (i > 0) {
-          logger.info(`CHATGPT_NEXT_TENDER_START=T247-${t247Id}`);
-        }
-
-        let outcome: QualifyTenderOutcome;
-        let rateLimitRetries = 0;
-
-        // Process this tender, pausing/retrying on rate limit without advancing
-        // eslint-disable-next-line no-constant-condition
-        while (true) {
-          try {
-            outcome = await qualifySingleTender({
-              page,
-              dateFolder,
-              t247Id,
-              config,
-              logger,
-              manifestTotals,
-            });
-          } catch (error) {
-            const message =
-              error instanceof Error ? error.message : String(error);
-            logger.error(
-              `CHATGPT_TENDER_UNCAUGHT=T247-${t247Id}: ${message}`,
-            );
-            // Candidate failures must never kill the batch agent.
-            outcome = {
-              t247Id,
-              status: "failed",
-              resultPath: null,
-              responsePath: null,
-              qualification: null,
-              chatUrl: null,
-              error: message,
-              attempt: priorAttempts + 1,
-              retryable: priorAttempts + 1 < maxCandidateAttempts,
-              failureStage: "FAILED",
-            };
-            console.log("CHATGPT_CANDIDATE_FAILED=true");
-            console.log(`CHATGPT_CANDIDATE_FAILED_TENDER=${t247Id}`);
-            console.log("CHATGPT_FAILURE_STAGE=FAILED");
-            console.log(`CHATGPT_FAILURE_REASON=${message.slice(0, 300)}`);
-          }
-
-          if (outcome.status !== "rate_limited") {
-            break;
-          }
-
-          rateLimitRetries += 1;
-          const backoffMs = Math.min(
-            config.chatgptRateLimitMaxBackoffMs,
-            config.chatgptRateLimitInitialBackoffMs *
-              Math.pow(2, rateLimitRetries - 1),
-          );
-          const jitter = Math.floor(
-            Math.random() * Math.min(30_000, backoffMs * 0.1),
-          );
-          const waitMs = backoffMs + jitter;
-          logger.warn(
-            `CHATGPT_RATE_LIMIT_BACKOFF_SECONDS=${Math.round(waitMs / 1000)} retry=${rateLimitRetries}/${config.chatgptRateLimitMaxRetries}`,
-          );
-          console.log(
-            `Rate limited — pausing batch ${Math.round(waitMs / 1000)}s (retry ${rateLimitRetries}/${config.chatgptRateLimitMaxRetries})`,
-          );
-
-          if (rateLimitRetries >= config.chatgptRateLimitMaxRetries) {
-            rateLimited += 1;
-            remainingQueued = queue.length - i - 1;
-            hasResponsePending = true;
-            pendingChatUrl = outcome.chatUrl;
-            logger.error(
-              `CHATGPT_RATE_LIMIT_BATCH_EXIT tender=T247-${t247Id} chatUrl=${outcome.chatUrl || "none"} remainingQueued=${remainingQueued}`,
-            );
-            // Stop the whole queue — do not mark remaining tenders failed
-            i = queue.length;
-            break;
-          }
-
-          await page.waitForTimeout(waitMs);
-          // Re-open the same chat after backoff (qualifySingleTender will resume)
-          continue;
-        }
-
-        if (typeof outcome!.submittedAt === "number") {
-          lastSubmissionAt = outcome!.submittedAt;
-        }
-
-        if (outcome!.status === "rate_limited") {
-          // Batch exited due to exhausted retries
-          break;
-        }
-
-        applyOutcomeCounters(outcome!, {
+      console.log(`PIPELINE_GPT_SUBMITTED=${dual.outcomes.length}`);
+      remainingQueued = dual.remainingQueued;
+      for (const row of dual.outcomes) {
+        applyOutcomeCounters(row.outcome, {
           onCompleted: () => {
             completed += 1;
-            completedTenderIds.push(t247Id);
+            completedTenderIds.push(row.t247Id);
           },
           onSkipped: () => {
             skipped += 1;
-            completedTenderIds.push(t247Id);
+            completedTenderIds.push(row.t247Id);
           },
           onPending: (url) => {
             pending += 1;
             hasResponsePending = true;
-            pendingChatUrl = url;
+            pendingChatUrl = url ?? pendingChatUrl;
+            retryPendingTenderIds.push(row.t247Id);
           },
           onNotReady: () => {
             notReady += 1;
           },
-          onFailed: (err) => {
-            const canRetry =
-              outcome!.retryable === true ||
-              (attemptCounts.get(t247Id) ?? 0) < maxCandidateAttempts;
-            if (canRetry) {
-              retryPendingTenderIds.push(t247Id);
-              // Controlled one retry later in this batch.
-              if (!queue.slice(i + 1).includes(t247Id)) {
-                queue.push(t247Id);
-                logger.info(
-                  `CHATGPT_REQUEUE_RETRY_PENDING=T247-${t247Id}`,
-                );
-                console.log(`CHATGPT_REQUEUE_RETRY_PENDING=T247-${t247Id}`);
-              }
-            } else {
-              failed += 1;
-              failedTenderIds.push(t247Id);
-              lastFailureError = err;
-            }
-            if (err) {
-              if (
-                /parse|JSON|control character|SyntaxError|No JSON object/i.test(
-                  err,
-                )
-              ) {
-                logger.error(`CHATGPT_RESPONSE_PARSE_ERROR=${err}`);
-              } else {
-                logger.error(`CHATGPT_UPLOAD_OR_QUALIFY_ERROR=${err}`);
-              }
-            }
+          onFailed: (error) => {
+            failed += 1;
+            failedTenderIds.push(row.t247Id);
+            lastFailureError = error;
           },
           onRateLimited: (url) => {
             rateLimited += 1;
-            hasResponsePending = true;
-            pendingChatUrl = url;
+            pendingChatUrl = url ?? pendingChatUrl;
+            retryPendingTenderIds.push(row.t247Id);
           },
         });
-
-        logger.info(
-          `[${i + 1}/${queue.length}] COMPLETE T247-${t247Id} status=${outcome!.status}`,
-        );
-
-        // Return to Project Home only after candidate is fully done or bounded-failed.
-        // Never leave a live /c/ conversation mid-response (no PROJECT_REOPEN while waiting).
-        if (
-          i < queue.length - 1 &&
-          (outcome!.status === "completed" || outcome!.status === "failed")
-        ) {
-          console.log("CHATGPT_MOVING_TO_NEXT_TENDER=true");
-          logger.info("CHATGPT_MOVING_TO_NEXT_TENDER=true");
-          try {
-            await returnToProjectHome(page, config, logger);
-          } catch (navError) {
-            const navCode =
-              navError instanceof AutomationError ? navError.code : "";
-            if (navCode === "CHATGPT_RATE_LIMITED") {
-              remainingQueued = queue.length - i - 1;
-              hasResponsePending = true;
-              pendingChatUrl = outcome!.chatUrl;
-              logger.error(
-                `CHATGPT_RATE_LIMIT_BATCH_EXIT during navigation remainingQueued=${remainingQueued}`,
-              );
-              break;
-            }
-            // Non-fatal: try to recover project home without killing the batch.
-            logger.error(
-              `CHATGPT_PROJECT_HOME_RECOVERY_AFTER_CANDIDATE_FAILURE=${safeErrorMessage(navError)}`,
-            );
-            try {
-              await ensureProjectHome({
-                page,
-                projectName: config.chatgptProjectName,
-                projectMatch: config.chatgptProjectMatch,
-                projectUrl: config.chatgptProjectUrl,
-                config,
-                logger,
-              });
-            } catch (recoverError) {
-              logger.error(
-                `CHATGPT_BROWSER_RECOVERY_FAILED=${safeErrorMessage(recoverError)}`,
-              );
-              // Continue to next candidate; qualifySingleTender will open project again.
-            }
-          }
-        } else if (
-          i < queue.length - 1 &&
-          outcome!.status === "response_pending"
-        ) {
-          // Stay on conversation URL — do not refresh/project-reopen before response completes.
-          logger.warn(
-            "CHATGPT_RESPONSE_PENDING_KEEP_CONVERSATION — skipping project home navigation",
-          );
-          console.log("CHATGPT_RESPONSE_PENDING_KEEP_CONVERSATION=true");
-          console.log("CHATGPT_MOVING_TO_NEXT_TENDER=true");
-          logger.info("CHATGPT_MOVING_TO_NEXT_TENDER=true");
-        }
       }
-      } // end sequential chatgptConcurrency === 1
+      if (remainingQueued > 0) {
+        logger.warn(
+          `CHATGPT_BATCH_REMAINING_QUEUED=${remainingQueued} — workers returned early (fatal/cancel)`,
+        );
+      }
     }
 
     // Refresh manifest totals
@@ -764,15 +497,35 @@ export async function runQualificationBatch(
       process.exitCode = 1;
     }
 
-    if (hasResponsePending) {
+    // RESPONSE_PENDING is candidate-specific recovery — never batch-terminal.
+    // Do NOT leave the browser open / exit early merely because one chat is pending.
+    if (
+      shouldLeaveBrowserOpenSolelyForResponsePending({
+        hasResponsePending,
+        remainingQueued,
+      })
+    ) {
       shouldCloseBrowser = false;
+    }
+    if (hasResponsePending) {
       logger.warn(
-        "CHATGPT_RESPONSE_PENDING — leaving browser open; chat can be resumed",
+        `CHATGPT_RESPONSE_PENDING_RECOVERY_COUNT=${pending} — queue continued; browser will close when batch ends`,
       );
       if (pendingChatUrl) {
         logger.info(`CHATGPT_CHAT_CAN_BE_RESUMED=${pendingChatUrl}`);
-        console.log(`Pending chat URL: ${pendingChatUrl}`);
+        console.log(`Pending chat URL (saved for resume): ${pendingChatUrl}`);
       }
+    }
+    if (
+      !shouldExitBatchWhileQueueRemains({
+        remainingQueued,
+        status: remainingQueued > 0 ? "RUNNING" : "COMPLETE",
+      })
+    ) {
+      logger.error(
+        `CHATGPT_BATCH_INCOMPLETE remainingQueued=${remainingQueued} — not a clean terminal state`,
+      );
+      process.exitCode = process.exitCode || 1;
     } else if (
       failed > 0 &&
       config.chatgptKeepBrowserOpenOnFailure &&
@@ -788,16 +541,15 @@ export async function runQualificationBatch(
       shouldCloseBrowser = true;
     }
   } finally {
-    if (shouldCloseBrowser && !hasResponsePending) {
+    // Close browser at normal batch end (queue drained). Pending recovery
+    // URLs are persisted in tender state — do not keep the whole browser open.
+    if (shouldCloseBrowser && session) {
       await closeChatGptSession(session);
       logger.info("ChatGPT browser closed");
-    } else if (hasResponsePending) {
+    } else if (session && !shouldCloseBrowser) {
       logger.info(
-        "ChatGPT browser left open due to response_pending (close manually when done)",
+        "ChatGPT browser left open (operator keep-open / inspection)",
       );
-    } else if (session) {
-      await closeChatGptSession(session);
-      logger.info("ChatGPT browser closed");
     }
   }
 
@@ -860,56 +612,6 @@ function applyOutcomeCounters(
     default:
       handlers.onFailed(outcome.error);
       break;
-  }
-}
-
-async function returnToProjectHome(
-  page: Page,
-  config: AppConfig,
-  logger: Logger,
-): Promise<void> {
-  // Do not navigate to another tender while rate-limited
-  if (await handleRateLimitModal(page, logger)) {
-    throw new AutomationError(
-      "CHATGPT_RATE_LIMITED",
-      "ChatGPT temporarily limited requests",
-    );
-  }
-
-  const projectUrl = config.chatgptProjectUrl?.trim();
-  try {
-    if (projectUrl) {
-      await page.goto(projectUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: 120_000,
-      });
-      await page.waitForTimeout(1500);
-      logger.info("CHATGPT_PROJECT_DIRECT_NAVIGATION_COMPLETE");
-    }
-    if (await handleRateLimitModal(page, logger)) {
-      throw new AutomationError(
-        "CHATGPT_RATE_LIMITED",
-        "ChatGPT temporarily limited requests",
-      );
-    }
-    await ensureProjectHome({
-      page,
-      projectName: config.chatgptProjectName,
-      projectMatch: config.chatgptProjectMatch,
-      projectUrl: config.chatgptProjectUrl,
-      config,
-      logger,
-    });
-    logger.info("CHATGPT_RETURNED_TO_PROJECT_HOME");
-  } catch (error) {
-    if (error instanceof AutomationError && error.code === "CHATGPT_RATE_LIMITED") {
-      throw error;
-    }
-    logger.warn(
-      `Failed to return to Project Home: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
   }
 }
 

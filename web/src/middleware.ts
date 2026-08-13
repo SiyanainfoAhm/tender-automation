@@ -12,6 +12,8 @@ const PROTECTED_PREFIXES = [
   "/users",
   "/profile",
   "/settings",
+  "/company-profile",
+  "/documents",
 ];
 
 const PASSWORD_CHANGE_PATH = "/change-password";
@@ -38,7 +40,7 @@ export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const hasSession = Boolean(request.cookies.get(COOKIE_NAME)?.value);
 
-  if (pathname === "/login") {
+  if (pathname === "/login" || pathname === "/signup") {
     if (hasSession) {
       const url = request.nextUrl.clone();
       url.pathname = "/dashboard";

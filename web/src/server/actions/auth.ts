@@ -18,6 +18,7 @@ import {
   updateUserSchema,
   resetPasswordSchema,
   profileUpdateSchema,
+  signupSchema,
 } from "@/lib/validations";
 import {
   createUser,
@@ -28,6 +29,7 @@ import {
   revokeAllSessions,
   revokeOtherSessions,
   updateOwnProfile,
+  registerPublicUser,
 } from "@/server/repositories/userRepository";
 import {
   createSavedView,
@@ -84,11 +86,69 @@ export async function logoutAction(): Promise<void> {
   redirect("/login");
 }
 
+export async function signupAction(
+  _prev: unknown,
+  formData: FormData,
+): Promise<{ error?: string }> {
+  const parsed = signupSchema.safeParse({
+    fullName: formData.get("fullName"),
+    email: formData.get("email"),
+    password: formData.get("password"),
+    confirmPassword: formData.get("confirmPassword"),
+    companyName: formData.get("companyName"),
+    industry: formData.get("industry") || "",
+    companyType: formData.get("companyType") || "",
+    phone: formData.get("phone") || "",
+    website: formData.get("website") || "",
+    location: formData.get("location") || "",
+  });
+  if (!parsed.success) {
+    return {
+      error: parsed.error.issues[0]?.message || "Unable to create account",
+    };
+  }
+
+  try {
+    await registerPublicUser({
+      email: parsed.data.email,
+      fullName: parsed.data.fullName,
+      password: parsed.data.password,
+      company: {
+        name: parsed.data.companyName,
+        industry: parsed.data.industry || undefined,
+        companyType: parsed.data.companyType || undefined,
+        phone: parsed.data.phone || undefined,
+        website: parsed.data.website || undefined,
+        location: parsed.data.location || undefined,
+      },
+    });
+
+    const result = await loginWithPassword(
+      parsed.data.email,
+      parsed.data.password,
+    );
+    if (!result.ok) {
+      return {
+        error:
+          "Account created, but automatic sign-in failed. Please sign in manually.",
+      };
+    }
+    redirect("/dashboard");
+  } catch (error) {
+    if (isRedirectError(error)) throw error;
+    return {
+      error:
+        error instanceof Error ? error.message : "Unable to create account",
+    };
+  }
+}
+
 export async function createUserAction(formData: FormData): Promise<{
   error?: string;
   ok?: boolean;
 }> {
-  await requireRole("ADMIN");
+  const { requirePermissionStrict } = await import("@/server/auth/permissions");
+  const session = await requirePermissionStrict("users.invite");
   const parsed = createUserSchema.safeParse({
     email: formData.get("email"),
     fullName: formData.get("fullName"),
@@ -98,11 +158,11 @@ export async function createUserAction(formData: FormData): Promise<{
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message || "Invalid input" };
   }
-  const session = await requireSession();
   try {
     await createUser({
       ...parsed.data,
       createdBy: session.user.id,
+      companyId: session.companyId,
     });
     revalidatePath("/users");
     return { ok: true };
@@ -117,7 +177,10 @@ export async function updateUserAction(
   userId: string,
   formData: FormData,
 ): Promise<{ error?: string; ok?: boolean }> {
-  const session = await requireRole("ADMIN");
+  const { requirePermissionStrict, hasPermission } = await import(
+    "@/server/auth/permissions"
+  );
+  const session = await requirePermissionStrict("users.edit");
   const parsed = updateUserSchema.safeParse({
     fullName: formData.get("fullName") || undefined,
     email: formData.get("email") || undefined,
@@ -134,7 +197,19 @@ export async function updateUserAction(
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message || "Invalid input" };
   }
+  if (
+    parsed.data.role &&
+    !hasPermission(session.user.role, "users.manage_roles")
+  ) {
+    return { error: "You cannot change roles." };
+  }
   try {
+    const target = await import("@/server/repositories/userRepository").then(
+      (m) => m.getUserById(userId),
+    );
+    if (!target || target.companyId !== session.companyId) {
+      return { error: "User not found in your company." };
+    }
     await updateUser(userId, parsed.data, session.user.id);
     revalidatePath("/users");
     revalidatePath(`/users/${userId}`);
@@ -306,7 +381,7 @@ export async function updatePreferencesAction(formData: FormData): Promise<{
 }> {
   const session = await requireSession();
   const parsed = preferencesSchema.safeParse({
-    theme: formData.get("theme") || undefined,
+    theme: "light",
     tableDensity: formData.get("tableDensity") || undefined,
     sidebarCollapsed:
       formData.get("sidebarCollapsed") == null

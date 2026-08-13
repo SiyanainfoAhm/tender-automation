@@ -6,6 +6,7 @@ export type SafeAgentTenderUser = {
   email: string;
   fullName: string;
   role: UserRole;
+  companyId: string | null;
   isActive: boolean;
   mustChangePassword: boolean;
   lastLoginAt: string | null;
@@ -28,6 +29,7 @@ export function mapRowToSafeUser(row: Record<string, unknown>): SafeAgentTenderU
     email: String(row.email),
     fullName: String(row.full_name),
     role: row.role as UserRole,
+    companyId: (row.company_id as string) || null,
     isActive: Boolean(row.is_active),
     mustChangePassword: Boolean(row.must_change_password),
     lastLoginAt: (row.last_login_at as string) || null,
@@ -38,7 +40,7 @@ export function mapRowToSafeUser(row: Record<string, unknown>): SafeAgentTenderU
 }
 
 export const SAFE_USER_SELECT =
-  "id, email, full_name, role, is_active, must_change_password, last_login_at, password_changed_at, created_at, updated_at";
+  "id, email, full_name, role, company_id, is_active, must_change_password, last_login_at, password_changed_at, created_at, updated_at";
 
 export const ADMIN_SAFE_USER_SELECT =
   `${SAFE_USER_SELECT}, failed_login_attempts, locked_until`;

@@ -107,11 +107,11 @@ export function createChatGptSubmissionScheduler(options?: {
   const clock = options?.clock ?? realClock;
   const baseBackoff =
     options?.rateLimitBackoffMs ??
-    Number.parseInt(process.env.CHATGPT_RATE_LIMIT_BACKOFF_MS || "300000", 10);
+    Number.parseInt(process.env.CHATGPT_RATE_LIMIT_BACKOFF_MS || "600000", 10);
   const maxBackoff =
     options?.maxRateLimitBackoffMs ??
     Number.parseInt(
-      process.env.CHATGPT_MAX_RATE_LIMIT_BACKOFF_MS || "600000",
+      process.env.CHATGPT_MAX_RATE_LIMIT_BACKOFF_MS || "1800000",
       10,
     );
   const maxWorkers = Math.min(2, Math.max(1, options?.maxWorkers ?? 2));

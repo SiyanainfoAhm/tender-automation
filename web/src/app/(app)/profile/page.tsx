@@ -142,25 +142,11 @@ export default async function ProfilePage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Appearance preferences</CardTitle>
+          <CardTitle className="text-base">Display preferences</CardTitle>
         </CardHeader>
         <CardContent>
           <form action={saveProfilePreferencesAction} className="grid max-w-md gap-4">
-            <div className="space-y-2">
-              <label htmlFor="theme" className="text-sm font-medium">
-                Theme
-              </label>
-              <select
-                id="theme"
-                name="theme"
-                defaultValue={preferences.theme}
-                className="flex h-10 w-full rounded-[10px] border border-border bg-surface px-3 text-sm"
-              >
-                <option value="system">System</option>
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-              </select>
-            </div>
+            <input type="hidden" name="theme" value="light" />
             <div className="space-y-2">
               <label htmlFor="tableDensity" className="text-sm font-medium">
                 Table density

@@ -18,7 +18,7 @@ if (!url || !key) {
   process.exit(1);
 }
 
-const out = [
+const lines = [
   `SUPABASE_URL=${url}`,
   `SUPABASE_SECRET_KEY=${key}`,
   `SUPABASE_SERVICE_ROLE_KEY=${key}`,
@@ -26,9 +26,17 @@ const out = [
   "AGENTTENDER_SESSION_HOURS=8",
   "AGENTTENDER_LOGIN_MAX_ATTEMPTS=5",
   "AGENTTENDER_LOCK_MINUTES=15",
-  "NEXT_PUBLIC_APP_NAME=Siyana Tender Intelligence",
+  "NEXT_PUBLIC_APP_NAME=TenderFlow",
+  `DOCUMENT_EXPIRY_SOON_DAYS=${get("DOCUMENT_EXPIRY_SOON_DAYS") || "30"}`,
   "",
-].join("\n");
+  "# Azure Blob secrets are Edge Function-only (TENDER_AUTOMATION_AZURE_*).",
+  "# Do not sync them into the Next.js web app.",
+  "",
+];
 
-fs.writeFileSync(path.resolve(import.meta.dirname, "../.env"), out, "utf8");
+fs.writeFileSync(
+  path.resolve(import.meta.dirname, "../.env"),
+  lines.join("\n"),
+  "utf8",
+);
 console.log("web/.env synchronized from root (ok)");

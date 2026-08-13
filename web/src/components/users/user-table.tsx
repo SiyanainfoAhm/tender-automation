@@ -1,10 +1,10 @@
 import Link from "next/link";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
 import { formatRelativeTime } from "@/lib/format";
 import type { SafeUser } from "@/server/repositories/userRepository";
 
+import { RoleBadge } from "./role-badge";
 import { UserActionsMenu } from "./user-actions-menu";
 import { UserStatusBadge } from "./user-status-badge";
 
@@ -21,18 +21,19 @@ type UserTableProps = {
   users: SafeUser[];
 };
 
+/** Legacy table — prefer TeamMemberTable on /users. */
 export function UserTable({ users }: UserTableProps) {
   return (
     <>
-      <div className="hidden overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-950/20 md:block">
+      <div className="hidden overflow-hidden rounded-lg border border-border bg-white md:block">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-slate-900">
-              <tr className="border-b border-slate-200 dark:border-slate-800">
+            <thead>
+              <tr className="border-b border-border bg-surface-muted/60">
                 {[
                   "User",
                   "Role",
-                  "Account status",
+                  "Status",
                   "Password status",
                   "Last login",
                   "Created",
@@ -40,7 +41,7 @@ export function UserTable({ users }: UserTableProps) {
                 ].map((header) => (
                   <th
                     key={header || "actions"}
-                    className="px-4 py-3.5 text-left text-xs font-semibold text-slate-600 dark:text-slate-300"
+                    className="px-3 py-2.5 text-left text-xs font-semibold text-text-muted"
                   >
                     {header}
                   </th>
@@ -51,12 +52,12 @@ export function UserTable({ users }: UserTableProps) {
               {users.map((user) => (
                 <tr
                   key={user.id}
-                  className="border-b border-slate-200 last:border-0 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900"
+                  className="border-b border-border last:border-0 hover:bg-surface-muted/40"
                 >
-                  <td className="px-4 py-3.5">
-                    <div className="flex items-center gap-3">
-                      <Avatar className="size-9">
-                        <AvatarFallback className="bg-primary-muted text-xs font-semibold text-primary">
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center gap-2.5">
+                      <Avatar className="size-8">
+                        <AvatarFallback className="bg-emerald-50 text-xs font-semibold text-emerald-700">
                           {getInitials(user.fullName)}
                         </AvatarFallback>
                       </Avatar>
@@ -73,24 +74,26 @@ export function UserTable({ users }: UserTableProps) {
                       </div>
                     </div>
                   </td>
-                  <td className="px-4 py-3.5">
-                    <Badge variant="outline">{user.role.replace(/_/g, " ")}</Badge>
+                  <td className="px-3 py-2.5">
+                    <RoleBadge role={user.role} />
                   </td>
-                  <td className="px-4 py-3.5">
-                    <UserStatusBadge user={user} />
+                  <td className="px-3 py-2.5">
+                    <UserStatusBadge
+                      status={user.isActive ? "active" : "inactive"}
+                    />
                   </td>
-                  <td className="px-4 py-3.5 text-text-secondary">
+                  <td className="px-3 py-2.5 text-text-secondary">
                     {user.mustChangePassword ? "Change required" : "Up to date"}
                   </td>
-                  <td className="px-4 py-3.5 text-text-muted">
+                  <td className="px-3 py-2.5 text-text-muted">
                     {user.lastLoginAt
                       ? formatRelativeTime(user.lastLoginAt)
-                      : "Never"}
+                      : "—"}
                   </td>
-                  <td className="px-4 py-3.5 text-text-muted">
+                  <td className="px-3 py-2.5 text-text-muted">
                     {formatRelativeTime(user.createdAt)}
                   </td>
-                  <td className="px-4 py-3.5">
+                  <td className="px-3 py-2.5">
                     <UserActionsMenu userId={user.id} />
                   </td>
                 </tr>
@@ -100,16 +103,16 @@ export function UserTable({ users }: UserTableProps) {
         </div>
       </div>
 
-      <div className="space-y-3 md:hidden">
+      <div className="space-y-2 md:hidden">
         {users.map((user) => (
           <div
             key={user.id}
-            className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-900/70"
+            className="rounded-lg border border-border bg-white p-3"
           >
             <div className="flex items-start justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-3">
-                <Avatar className="size-10">
-                  <AvatarFallback className="bg-primary-muted text-sm font-semibold text-primary">
+              <div className="flex min-w-0 items-center gap-2.5">
+                <Avatar className="size-9">
+                  <AvatarFallback className="bg-emerald-50 text-sm font-semibold text-emerald-700">
                     {getInitials(user.fullName)}
                   </AvatarFallback>
                 </Avatar>
@@ -125,9 +128,11 @@ export function UserTable({ users }: UserTableProps) {
               </div>
               <UserActionsMenu userId={user.id} />
             </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <Badge variant="outline">{user.role.replace(/_/g, " ")}</Badge>
-              <UserStatusBadge user={user} />
+            <div className="mt-2 flex flex-wrap gap-2">
+              <RoleBadge role={user.role} />
+              <UserStatusBadge
+                status={user.isActive ? "active" : "inactive"}
+              />
             </div>
           </div>
         ))}

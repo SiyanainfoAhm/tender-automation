@@ -33,7 +33,7 @@ export function assertAdminMutationAllowed(options: {
   if ((demotingAdmin || disablingAdmin) && activeAdminCount <= 1) {
     return {
       ok: false,
-      message: "Cannot demote or disable the last active administrator.",
+      message: "Your company must have at least one active administrator.",
     };
   }
 

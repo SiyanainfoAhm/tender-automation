@@ -10,7 +10,7 @@ export async function saveProfilePreferencesAction(
 ): Promise<void> {
   const session = await requireSession();
   const parsed = preferencesSchema.safeParse({
-    theme: formData.get("theme") || undefined,
+    theme: "light",
     tableDensity: formData.get("tableDensity") || undefined,
     sidebarCollapsed:
       formData.get("sidebarCollapsed") == null

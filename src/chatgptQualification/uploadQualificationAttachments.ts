@@ -14,7 +14,6 @@ import type { AppConfig } from "../config.js";
 import type { QualificationAttachmentFile } from "./sourceDocumentResolver.js";
 import { assertRequiredAttachmentsReady } from "./sourceDocumentResolver.js";
 import {
-  COMPOSER_TOKEN_ATTR,
   captureMessageBaseline,
   createTenderUploadSession,
   countComposerAttachmentCards,
@@ -23,6 +22,7 @@ import {
   detectSubmissionSignals,
   detectUploadLimitWarning,
   ensureComposerCleanBeforeUpload,
+  isConversationUrl,
   readComposerPromptPresence,
   resolveComposerSendButton,
   sendComposerMessage,
@@ -32,6 +32,11 @@ import {
 } from "./chatInteraction.js";
 import { getSharedChatGptSubmissionScheduler } from "../concurrency/chatGptSubmissionScheduler.js";
 import { getProjectComposerLocator } from "./openProject.js";
+import {
+  COMPOSER_TOKEN_ATTR,
+  resolveComposerShell,
+} from "./composerShellAttachments.js";
+export { COMPOSER_TOKEN_ATTR } from "./composerShellAttachments.js";
 import {
   assertTender247AttachmentCountSafe,
   assertTender247AttachmentValidationPassed,
@@ -55,8 +60,6 @@ import {
   classifyRealUploadFailure,
   shouldRetryUpload,
 } from "./tender247AttachmentUploadState.js";
-
-export { COMPOSER_TOKEN_ATTR } from "./chatInteraction.js";
 
 export type ConfirmedAttachmentState = {
   requiredAttachmentsConfirmed: true;
@@ -198,6 +201,10 @@ export function legacyIdentityDiffersOnlyByLayout(
 }
 
 async function locateComposerRoot(page: Page): Promise<Locator> {
+  const resolution = await resolveComposerShell(page);
+  if (resolution.shellFound) {
+    return resolution.shell;
+  }
   const form = page
     .locator("form")
     .filter({
@@ -229,15 +236,26 @@ export async function assignComposerToken(options: {
 }): Promise<string> {
   const { page, sourcePortal, sourceTenderId, logger } = options;
   const composerToken = `agenttender-${sourcePortal}-${sourceTenderId}-${crypto.randomUUID()}`;
-  const root = await locateComposerRoot(page);
+  // Resolve shell first (editor + actions [+ attachments]), then mark SHELL.
+  const resolution = await resolveComposerShell(page);
+  const root = resolution.shellFound
+    ? resolution.shell
+    : await locateComposerRoot(page);
   await root.evaluate(
     (element, token) => {
       element.setAttribute("data-agenttender-composer-token", token);
     },
     composerToken,
   );
+  const rebound = await resolveComposerShell(page, { composerToken });
   logger.info(`CHATGPT_COMPOSER_TOKEN_ASSIGNED=${composerToken}`);
   console.log(`CHATGPT_COMPOSER_TOKEN_ASSIGNED=${composerToken}`);
+  console.log(
+    `CHATGPT_COMPOSER_EDITOR_FOUND=${rebound.editorFound}`,
+  );
+  console.log(`CHATGPT_COMPOSER_SHELL_FOUND=${rebound.shellFound}`);
+  logger.info(`CHATGPT_COMPOSER_EDITOR_FOUND=${rebound.editorFound}`);
+  logger.info(`CHATGPT_COMPOSER_SHELL_FOUND=${rebound.shellFound}`);
   return composerToken;
 }
 
@@ -388,10 +406,12 @@ export async function verifyComposerContinuity(options: {
     );
   }
 
-  logger.info(`CHATGPT_COMPOSER_TOKEN_VERIFIED=${composerToken}`);
-  console.log(`CHATGPT_COMPOSER_TOKEN_VERIFIED=${composerToken}`);
-  logger.info("CHATGPT_COMPOSER_CONTINUITY_CONFIRMED");
-  console.log("CHATGPT_COMPOSER_CONTINUITY_CONFIRMED");
+  logger.info("CHATGPT_COMPOSER_TOKEN_VERIFIED=true");
+  console.log("CHATGPT_COMPOSER_TOKEN_VERIFIED=true");
+  logger.info(`CHATGPT_COMPOSER_TOKEN=${composerToken}`);
+  console.log(`CHATGPT_COMPOSER_TOKEN=${composerToken}`);
+  logger.info("CHATGPT_COMPOSER_CONTINUITY_CONFIRMED=true");
+  console.log("CHATGPT_COMPOSER_CONTINUITY_CONFIRMED=true");
 }
 
 function sha256Sync(filePath: string): string {
@@ -567,6 +587,7 @@ async function prepareComposerBeforeFirstUpload(options: {
   composerToken: string;
   manifest: Tender247ExpectedManifest | null;
   logger: Logger;
+  config: AppConfig;
 }): Promise<{
   beforeCount: number;
   cleared: boolean;
@@ -574,16 +595,32 @@ async function prepareComposerBeforeFirstUpload(options: {
   reusedValidAttachments: boolean;
   displayedNames: string[];
 }> {
-  const { page, composerToken, manifest, logger } = options;
-  const snapshot = await countComposerAttachmentCards(page, { composerToken });
+  const { page, composerToken, logger, config } = options;
+  const snapshot = await countComposerAttachmentCards(page, {
+    composerToken,
+    aiSummaryRequired: options.manifest?.aiSummaryRequired,
+  });
   logger.info(
-    `CHATGPT_COMPOSER_ATTACHMENT_COUNT_BEFORE_UPLOAD=${snapshot.composerCount}`,
+    `CHATGPT_COMPOSER_ATTACHMENT_COUNT_BEFORE_UPLOAD=${snapshot.logicalAttachmentCount}`,
   );
   console.log(
-    `CHATGPT_COMPOSER_ATTACHMENT_COUNT_BEFORE_UPLOAD=${snapshot.composerCount}`,
+    `CHATGPT_COMPOSER_ATTACHMENT_COUNT_BEFORE_UPLOAD=${snapshot.logicalAttachmentCount}`,
   );
 
-  if (snapshot.composerCount === 0) {
+  // Resume / persistent browser may restore stale drafts. Never reuse them —
+  // each tender starts a clean composer transaction.
+  if (snapshot.logicalAttachmentCount > 0) {
+    logger.info(
+      `CHATGPT_STALE_COMPOSER_ATTACHMENTS_IGNORED_FOR_REUSE=${JSON.stringify(snapshot.displayedNames)}`,
+    );
+    console.log(
+      `CHATGPT_STALE_COMPOSER_ATTACHMENTS_IGNORED_FOR_REUSE=${JSON.stringify(snapshot.displayedNames)}`,
+    );
+  }
+
+  if (snapshot.logicalAttachmentCount === 0) {
+    logger.info("CHATGPT_COMPOSER_CLEAN=true");
+    console.log("CHATGPT_COMPOSER_CLEAN=true");
     return {
       beforeCount: 0,
       cleared: false,
@@ -593,29 +630,9 @@ async function prepareComposerBeforeFirstUpload(options: {
     };
   }
 
-  if (manifest) {
-    const validation = validateDisplayedAttachmentNames({
-      manifest,
-      displayedNames: snapshot.displayedNames,
-    });
-    if (
-      validation.ok &&
-      snapshot.composerCount === manifest.expectedCount
-    ) {
-      logger.info("CHATGPT_EXISTING_VALID_ATTACHMENTS_REUSED");
-      console.log("CHATGPT_EXISTING_VALID_ATTACHMENTS_REUSED");
-      return {
-        beforeCount: snapshot.composerCount,
-        cleared: false,
-        pageCount: snapshot.pageCount,
-        reusedValidAttachments: true,
-        displayedNames: snapshot.displayedNames,
-      };
-    }
-  }
-
   const cleanup = await ensureComposerCleanBeforeUpload(page, logger, {
     composerToken,
+    config,
   });
   return {
     beforeCount: cleanup.beforeCount,
@@ -707,6 +724,7 @@ export async function uploadQualificationAttachments(options: {
     composerToken,
     manifest: tender247Manifest,
     logger,
+    config,
   });
 
   const filePaths = [...files.map((f) => path.resolve(f.filePath))];
@@ -769,7 +787,10 @@ export async function uploadQualificationAttachments(options: {
       if (attempt > 1) {
         logger.warn("UPLOAD_ATTEMPT_1_FAILED=true");
         console.log("UPLOAD_ATTEMPT_1_FAILED=true");
-        await clearStaleComposerAttachments(page, logger, { composerToken });
+        await clearStaleComposerAttachments(page, logger, {
+          composerToken,
+          config,
+        });
         session.filesAssigned = false;
         session.uploadAttemptCount = 0;
         session.attachmentsLocked = false;
@@ -802,34 +823,37 @@ export async function uploadQualificationAttachments(options: {
         });
 
         filesAssignedCount = filePaths.length;
-        const visible = await countComposerAttachmentCards(page, { composerToken });
+        const visible = await countComposerAttachmentCards(page, {
+          composerToken,
+          aiSummaryRequired,
+        });
         stableValidation = validateDisplayedAttachmentNames({
           manifest: tender247Manifest,
           displayedNames: visible.displayedNames,
         });
         logger.info(
-          `CHATGPT_LOGICAL_METADATA_PRESENT=${stableValidation.metadataCount === 1}`,
+          `CHATGPT_LOGICAL_METADATA_PRESENT=${visible.logicalMetadata}`,
         );
         console.log(
-          `CHATGPT_LOGICAL_METADATA_PRESENT=${stableValidation.metadataCount === 1}`,
+          `CHATGPT_LOGICAL_METADATA_PRESENT=${visible.logicalMetadata}`,
         );
         logger.info(
-          `CHATGPT_LOGICAL_AI_SUMMARY_PRESENT=${stableValidation.aiSummaryCount === 1}`,
+          `CHATGPT_LOGICAL_AI_SUMMARY_PRESENT=${visible.logicalAiSummary}`,
         );
         console.log(
-          `CHATGPT_LOGICAL_AI_SUMMARY_PRESENT=${stableValidation.aiSummaryCount === 1}`,
+          `CHATGPT_LOGICAL_AI_SUMMARY_PRESENT=${visible.logicalAiSummary}`,
         );
         logger.info(
-          `CHATGPT_LOGICAL_ZIP_PRESENT=${stableValidation.archiveCount === 1}`,
+          `CHATGPT_LOGICAL_DOCUMENTS_ZIP_PRESENT=${visible.logicalDocumentsZip}`,
         );
         console.log(
-          `CHATGPT_LOGICAL_ZIP_PRESENT=${stableValidation.archiveCount === 1}`,
+          `CHATGPT_LOGICAL_DOCUMENTS_ZIP_PRESENT=${visible.logicalDocumentsZip}`,
         );
         logger.info(
-          `CHATGPT_CURRENT_COMPOSER_ATTACHMENT_COUNT=${visible.composerCount}`,
+          `CHATGPT_CURRENT_COMPOSER_ATTACHMENT_COUNT=${visible.logicalAttachmentCount}`,
         );
         console.log(
-          `CHATGPT_CURRENT_COMPOSER_ATTACHMENT_COUNT=${visible.composerCount}`,
+          `CHATGPT_CURRENT_COMPOSER_ATTACHMENT_COUNT=${visible.logicalAttachmentCount}`,
         );
         if (session.attachmentsLocked) {
           logger.info("CHATGPT_ATTACHMENTS_LOCKED=true");
@@ -850,11 +874,30 @@ export async function uploadQualificationAttachments(options: {
 
         uploadLimitWarningSeen =
           uploadLimitWarningSeen || (await detectUploadLimitWarning(page));
-        const visible = await countComposerAttachmentCards(page, { composerToken });
+        const visible = await countComposerAttachmentCards(page, {
+          composerToken,
+          aiSummaryRequired,
+        });
         const validation = validateDisplayedAttachmentNames({
           manifest: tender247Manifest,
           displayedNames: visible.displayedNames,
         });
+        // If logical set is already complete, never treat as upload failure for retry/clear.
+        if (
+          visible.logicalMetadata &&
+          visible.logicalDocumentsZip &&
+          (!aiSummaryRequired || visible.logicalAiSummary)
+        ) {
+          logger.info(
+            "CHATGPT_LOGICAL_ATTACHMENTS_COMPLETE_DESPITE_ERROR — skipping reupload",
+          );
+          console.log(
+            "CHATGPT_LOGICAL_ATTACHMENTS_COMPLETE_DESPITE_ERROR — skipping reupload",
+          );
+          stableValidation = validation;
+          filesAssignedCount = filePaths.length;
+          break;
+        }
         const failure = classifyRealUploadFailure({
           uploadLimitWarning: uploadLimitWarningSeen,
           uploadErrorVisible:
@@ -862,8 +905,10 @@ export async function uploadQualificationAttachments(options: {
             error.code === "CHATGPT_UPLOAD_FAILED",
           validation,
           timedOut:
-            error instanceof AutomationError &&
-            error.code === "CHATGPT_ATTACHMENT_NOT_VISIBLE",
+            (error instanceof AutomationError &&
+              error.code === "CHATGPT_ATTACHMENT_NOT_VISIBLE") ||
+            (error instanceof AutomationError &&
+              error.code === "CHATGPT_ATTACHMENT_VALIDATION_FAILED"),
         });
 
         if (!shouldRetryUpload(attempt, failure)) {
@@ -892,7 +937,10 @@ export async function uploadQualificationAttachments(options: {
   }
 
   if (!stableValidation?.ok && tender247Manifest) {
-    const visible = await countComposerAttachmentCards(page, { composerToken });
+    const visible = await countComposerAttachmentCards(page, {
+      composerToken,
+      aiSummaryRequired,
+    });
     stableValidation = validateDisplayedAttachmentNames({
       manifest: tender247Manifest,
       displayedNames: visible.displayedNames,
@@ -921,7 +969,10 @@ export async function uploadQualificationAttachments(options: {
       manifest: tender247Manifest,
       sourceTenderId,
       displayedNames: (
-        await countComposerAttachmentCards(page, { composerToken })
+        await countComposerAttachmentCards(page, {
+          composerToken,
+          aiSummaryRequired,
+        })
       ).displayedNames,
       filesAssignedCount,
       uploadLimitWarningSeen,
@@ -1079,7 +1130,7 @@ export async function assertPreSendAttachmentCheck(options: {
  *
  * Idempotent rules:
  * - paste prompt at most once per call (PROMPT_ENTRY_COUNT)
- * - acquire Send slot BEFORE prompt so PROMPT_READY never waits minutes
+ * - enter prompt BEFORE waiting on the global Send slot (no 5-min delay before paste)
  * - if Send fails → retry Send only (never re-paste / re-upload)
  * - if authoritative submission already detected → do not Send again
  */
@@ -1156,6 +1207,43 @@ export async function enterPromptAndSendWithConfirmedAttachments(options: {
   };
 
   try {
+    // Absolute gate: never paste/Send if this tender already has a submission
+    // or any assistant response in the current conversation.
+    const { inspectExistingSubmissionAndResponse } = await import(
+      "./inspectExistingSubmission.js"
+    );
+    const existing = await inspectExistingSubmissionAndResponse({
+      page,
+      expectedT247Id: confirmed.sourceTenderId,
+      logger,
+    });
+    if (
+      existing.assistantMessagePresent ||
+      existing.validQualificationJsonPresent ||
+      existing.promptSubmitted
+    ) {
+      logger.info("CHATGPT_DUPLICATE_PROMPT_BLOCKED=true");
+      console.log("CHATGPT_DUPLICATE_PROMPT_BLOCKED=true");
+      if (existing.assistantMessagePresent) {
+        logger.info("CHATGPT_EXISTING_RESPONSE_DETECTED=true");
+        console.log("CHATGPT_EXISTING_RESPONSE_DETECTED=true");
+      }
+      const url =
+        existing.conversationUrl ||
+        (isConversationUrl(page.url()) ? page.url() : "");
+      const next = advanceCandidateStage(txn, "SUBMITTED");
+      next.conversationUrl = url || next.conversationUrl;
+      syncTxn(next);
+      const baseline = await captureMessageBaseline(page);
+      return {
+        chatUrl: url || page.url(),
+        baseline,
+        submissionConfirmed: true,
+        existingResponseText: existing.assistantText || undefined,
+        existingValidJson: existing.validQualificationJsonPresent,
+      };
+    }
+
     const earlySubmit = await detectSubmissionSignals(page, {
       expectedT247Id: confirmed.sourceTenderId,
     });
@@ -1354,6 +1442,8 @@ export async function enterPromptAndSendWithConfirmedAttachments(options: {
     syncTxn(advanceCandidateStage(txn, "WAITING_FOR_SEND_SLOT"));
     console.log("CHATGPT_WAITING_FOR_SEND_SLOT=true");
     logger.info("CHATGPT_WAITING_FOR_SEND_SLOT=true");
+    console.log("CHATGPT_WAITING_FOR_GLOBAL_SEND_SLOT=true");
+    logger.info("CHATGPT_WAITING_FOR_GLOBAL_SEND_SLOT=true");
 
     {
       const next = advanceCandidateStage(txn, "SUBMITTING");
@@ -1404,6 +1494,45 @@ export async function enterPromptAndSendWithConfirmedAttachments(options: {
       }
 
       if (txn.sendAttemptCount < 2) {
+        // Before Send retry: if submission or assistant already exists, do NOT Send again.
+        const { inspectExistingSubmissionAndResponse } = await import(
+          "./inspectExistingSubmission.js"
+        );
+        const preRetry = await inspectExistingSubmissionAndResponse({
+          page,
+          expectedT247Id: confirmed.sourceTenderId,
+          logger,
+        });
+        if (
+          preRetry.assistantMessagePresent ||
+          preRetry.promptSubmitted ||
+          preRetry.validQualificationJsonPresent
+        ) {
+          logger.info("CHATGPT_DUPLICATE_PROMPT_BLOCKED=true");
+          console.log("CHATGPT_DUPLICATE_PROMPT_BLOCKED=true");
+          if (preRetry.assistantMessagePresent) {
+            logger.info("CHATGPT_EXISTING_RESPONSE_DETECTED=true");
+            console.log("CHATGPT_EXISTING_RESPONSE_DETECTED=true");
+          }
+          console.log("CHATGPT_PROMPT_SUBMITTED=true");
+          const url =
+            preRetry.conversationUrl ||
+            (isConversationUrl(page.url()) ? page.url() : signals.url);
+          const next = advanceCandidateStage(txn, "SUBMITTED");
+          next.submitted = true;
+          next.conversationUrl = url;
+          syncTxn(next);
+          const baseline = await captureMessageBaseline(page);
+          console.log("CHATGPT_RESPONSE_WAIT_START");
+          return {
+            chatUrl: url,
+            baseline,
+            submissionConfirmed: true,
+            existingResponseText: preRetry.assistantText || undefined,
+            existingValidJson: preRetry.validQualificationJsonPresent,
+          };
+        }
+
         logger.warn("CHATGPT_SEND_RETRY_ONLY=true");
         console.log("CHATGPT_SEND_RETRY_ONLY=true");
         txn.sendAttemptCount += 1;

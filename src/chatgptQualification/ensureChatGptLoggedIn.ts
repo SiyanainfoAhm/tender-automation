@@ -73,14 +73,12 @@ export async function launchChatGptPersistentSession(options: {
     });
   }
 
-  context.setDefaultTimeout(
-    Math.max(config.pageTimeoutMs, config.chatgptResponseTimeoutMs),
-  );
+  // Response wait uses its own non-blocking poll loop — never set default
+  // locator timeout to CHATGPT_RESPONSE_TIMEOUT_MS (20m) or isVisible/evaluate hang.
+  context.setDefaultTimeout(config.pageTimeoutMs);
 
   const page = context.pages()[0] ?? (await context.newPage());
-  page.setDefaultTimeout(
-    Math.max(config.pageTimeoutMs, config.chatgptResponseTimeoutMs),
-  );
+  page.setDefaultTimeout(config.pageTimeoutMs);
 
   return { context, page, persistent: true };
 }

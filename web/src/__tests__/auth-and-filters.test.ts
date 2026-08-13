@@ -50,13 +50,12 @@ describe("session token hashing", () => {
 });
 
 describe("role authorization contract", () => {
-  const canAccessUsers = (role: string) => role === "ADMIN";
-
-  it("only ADMIN may access user management", () => {
-    expect(canAccessUsers("ADMIN")).toBe(true);
-    expect(canAccessUsers("BID_MANAGER")).toBe(false);
-    expect(canAccessUsers("ANALYST")).toBe(false);
-    expect(canAccessUsers("VIEWER")).toBe(false);
+  it("only roles with users.view may access user management", async () => {
+    const { roleHasPermission } = await import("@/lib/rbac/permissions");
+    expect(roleHasPermission("ADMIN", "users.view")).toBe(true);
+    expect(roleHasPermission("BID_MANAGER", "users.view")).toBe(true);
+    expect(roleHasPermission("FINANCIAL_ANALYST", "users.view")).toBe(false);
+    expect(roleHasPermission("BID_COORDINATOR", "users.view")).toBe(false);
   });
 });
 
@@ -100,7 +99,7 @@ describe("create user schema", () => {
         email: "a@b.com",
         fullName: "A",
         password: "ValidPass123!",
-        role: "VIEWER",
+        role: "BID_COORDINATOR",
       }).success,
     ).toBe(true);
     expect(
@@ -108,7 +107,7 @@ describe("create user schema", () => {
         email: "a@b.com",
         fullName: "A",
         password: "weak",
-        role: "VIEWER",
+        role: "BID_COORDINATOR",
       }).success,
     ).toBe(false);
   });

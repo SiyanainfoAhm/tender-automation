@@ -1,6 +1,9 @@
 node_modules/
 dist/
 .env
+supabase/.env.local
+supabase/functions/.env
+supabase/functions/.env.local
 auth/*.json
 auth/chatgpt-profile/
 !auth/.gitkeep

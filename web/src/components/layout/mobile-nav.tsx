@@ -2,14 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  BarChart3,
-  FileText,
-  LayoutDashboard,
-  Menu,
-  Settings,
-  Users,
-} from "lucide-react";
+import { Layers, LogOut, Menu } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import type { UserRole } from "@/lib/validations";
@@ -21,21 +14,8 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-
-type NavItem = {
-  href: string;
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  adminOnly?: boolean;
-};
-
-const navItems: NavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/tenders", label: "Tenders", icon: FileText },
-  { href: "/analytics", label: "Analytics", icon: BarChart3 },
-  { href: "/users", label: "Users", icon: Users, adminOnly: true },
-  { href: "/settings", label: "Settings", icon: Settings },
-];
+import { APP_BOTTOM_NAV, APP_MAIN_NAV } from "@/components/layout/nav-items";
+import { roleHasPermission, type PermissionKey } from "@/lib/rbac/permissions";
 
 type MobileNavProps = {
   userRole: UserRole;
@@ -43,9 +23,16 @@ type MobileNavProps = {
 
 export function MobileNav({ userRole }: MobileNavProps) {
   const pathname = usePathname();
-  const visibleItems = navItems.filter(
-    (item) => !item.adminOnly || userRole === "ADMIN",
-  );
+  const visibleItems = [
+    ...APP_MAIN_NAV.filter((item) => {
+      if (item.permission) {
+        return roleHasPermission(userRole, item.permission as PermissionKey);
+      }
+      if (item.adminOnly) return userRole === "ADMIN";
+      return true;
+    }),
+    ...APP_BOTTOM_NAV,
+  ];
 
   return (
     <Sheet>
@@ -60,15 +47,20 @@ export function MobileNav({ userRole }: MobileNavProps) {
         </Button>
       </SheetTrigger>
       <SheetContent side="left" className="w-[280px] p-0">
-        <SheetHeader className="border-b border-slate-200 px-6 py-5 text-left dark:border-slate-700">
-          <SheetTitle className="font-heading text-base">
-            Siyana STI
+        <SheetHeader className="border-b border-border px-5 py-4 text-left">
+          <SheetTitle className="flex items-center gap-2.5 font-heading text-base">
+            <span className="flex size-8 items-center justify-center rounded-md bg-primary text-white">
+              <Layers className="size-4" aria-hidden />
+            </span>
+            <span>
+              TenderFlow
+              <span className="mt-0.5 block text-xs font-normal text-text-muted">
+                AI Bid Management
+              </span>
+            </span>
           </SheetTitle>
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            Tender Intelligence
-          </p>
         </SheetHeader>
-        <nav className="space-y-1 p-4">
+        <nav className="space-y-1 p-3">
           {visibleItems.map((item) => {
             const Icon = item.icon;
             const isActive =
@@ -79,10 +71,10 @@ export function MobileNav({ userRole }: MobileNavProps) {
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  "flex items-center gap-3 rounded-[10px] px-3 py-2.5 text-sm font-medium transition-colors",
+                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
                   isActive
-                    ? "bg-blue-50 text-blue-600 dark:bg-blue-500/15 dark:text-blue-300"
-                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-slate-50",
+                    ? "bg-primary-50 text-primary-700"
+                    : "text-text-secondary hover:bg-surface-muted hover:text-text-primary",
                 )}
               >
                 <Icon className="size-[18px] shrink-0" />
@@ -90,6 +82,19 @@ export function MobileNav({ userRole }: MobileNavProps) {
               </Link>
             );
           })}
+          <button
+            type="button"
+            className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-text-secondary hover:bg-surface-muted hover:text-text-primary"
+            onClick={() => {
+              const form = document.getElementById(
+                "logout-form",
+              ) as HTMLFormElement | null;
+              form?.requestSubmit();
+            }}
+          >
+            <LogOut className="size-[18px] shrink-0" />
+            Logout
+          </button>
         </nav>
       </SheetContent>
     </Sheet>

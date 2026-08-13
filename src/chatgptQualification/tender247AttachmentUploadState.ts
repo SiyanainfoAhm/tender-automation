@@ -32,6 +32,8 @@ export function lockAttachments(state: TenderAttachmentUploadState): void {
 
 export type StabilityPollInput = {
   composerCount: number;
+  /** Authoritative logical count when provided (preferred over composerCount). */
+  logicalAttachmentCount?: number;
   displayedNames: string[];
   manifest: Tender247ExpectedManifest;
   previousStableCount: number | null;
@@ -44,7 +46,7 @@ export type StabilityPollResult = {
   stable: boolean;
 };
 
-/** Two consecutive composer polls at expected count with logical file validation. */
+/** Two consecutive composer polls with complete logical file validation. */
 export function evaluateAttachmentStabilityPoll(
   input: StabilityPollInput,
 ): StabilityPollResult {
@@ -53,12 +55,15 @@ export function evaluateAttachmentStabilityPoll(
     displayedNames: input.displayedNames,
   });
 
+  const authoritativeCount =
+    input.logicalAttachmentCount ?? input.composerCount;
+
   let consecutiveStablePolls = 0;
   if (
     validation.ok &&
-    input.composerCount === input.manifest.expectedCount
+    authoritativeCount === input.manifest.expectedCount
   ) {
-    if (input.previousStableCount === input.composerCount) {
+    if (input.previousStableCount === authoritativeCount) {
       consecutiveStablePolls = input.consecutiveStablePolls + 1;
     } else {
       consecutiveStablePolls = 1;
