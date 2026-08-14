@@ -1,18 +1,18 @@
 import { Suspense } from "react";
+import { Clock, FileText, Target, TrendingUp, Wallet } from "lucide-react";
 
-import { PageHeader } from "@/components/layout/page-header";
-import { MetricCard } from "@/components/dashboard/metric-card";
+import { CompactKpiCard } from "@/components/tenders/compact-kpi-card";
+import { TenderPageActions } from "@/components/tenders/tender-page-actions";
+import { formatIndianCurrency } from "@/lib/format";
 import { tenderFiltersSchema } from "@/lib/validations";
+import { sessionHasPermission } from "@/server/auth/permissions";
 import { requireSession } from "@/server/auth/session";
-import { getDashboardMetrics } from "@/server/repositories/analyticsRepository";
-import { listTenders } from "@/server/repositories/tenderRepository";
+import { getTenderManagementKpis } from "@/server/repositories/analyticsRepository";
 import {
-  Clock,
-  FileText,
-  Target,
-  TrendingUp,
-  Wallet,
-} from "lucide-react";
+  getTenderExplorerFacets,
+  listTenders,
+  countVisibleTenders,
+} from "@/server/repositories/tenderRepository";
 
 import { TenderExplorer, TenderExplorerSkeleton } from "./tender-explorer";
 
@@ -33,56 +33,44 @@ type TendersPageProps = {
 
 async function TenderManagementStats() {
   try {
-    const metrics = await getDashboardMetrics();
-    const activePipeline =
-      metrics.goOpportunities +
-      metrics.pendingVerification +
-      (metrics.byStatus.CONDITIONAL_GO || 0) +
-      (metrics.byStatus.PARTNER_BID || 0);
-    const willBid = metrics.goOpportunities;
-
+    const kpis = await getTenderManagementKpis();
     const cards = [
       {
         label: "Total Tenders",
-        value: metrics.totalTenders.toLocaleString("en-IN"),
-        hint: "All sources",
+        value: kpis.totalTenders.toLocaleString("en-IN"),
         icon: FileText,
-        variant: "total" as const,
+        iconClassName: "bg-sky-100 text-sky-700",
       },
       {
         label: "Active Pipeline",
-        value: activePipeline.toLocaleString("en-IN"),
-        hint: "GO + VERIFY + related",
+        value: kpis.activePipeline.toLocaleString("en-IN"),
         icon: TrendingUp,
-        variant: "new" as const,
+        iconClassName: "bg-violet-100 text-violet-700",
       },
       {
         label: "Will Bid",
-        value: willBid.toLocaleString("en-IN"),
-        hint: "Mapped from qualification GO",
+        value: kpis.willBid.toLocaleString("en-IN"),
         icon: Target,
-        variant: "go" as const,
+        iconClassName: "bg-emerald-100 text-emerald-700",
       },
       {
         label: "Closing Soon",
-        value: metrics.closingWithin3Days.toLocaleString("en-IN"),
-        hint: "Within 3 days",
+        value: kpis.closingSoon.toLocaleString("en-IN"),
         icon: Clock,
-        variant: "closing" as const,
+        iconClassName: "bg-rose-100 text-rose-700",
       },
       {
-        label: "Pending Review",
-        value: metrics.pendingVerification.toLocaleString("en-IN"),
-        hint: "Status VERIFY",
+        label: "Pipeline Value",
+        value: formatIndianCurrency(kpis.pipelineValue),
         icon: Wallet,
-        variant: "verify" as const,
+        iconClassName: "bg-amber-100 text-amber-700",
       },
     ];
 
     return (
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
         {cards.map((card) => (
-          <MetricCard key={card.label} {...card} />
+          <CompactKpiCard key={card.label} {...card} />
         ))}
       </div>
     );
@@ -92,25 +80,48 @@ async function TenderManagementStats() {
 }
 
 export default async function TendersPage({ searchParams }: TendersPageProps) {
-  await requireSession();
+  const session = await requireSession();
   const raw = flattenSearchParams(await searchParams);
   const filters = tenderFiltersSchema.parse(raw);
 
-  const { rows, total } = await listTenders(filters);
+  const [{ rows, total }, facets, allCount] = await Promise.all([
+    listTenders(filters),
+    getTenderExplorerFacets().catch(() => ({
+      categories: [],
+      portals: ["TENDER247", "BIDASSIST"] as Array<"TENDER247" | "BIDASSIST">,
+    })),
+    countVisibleTenders().catch(() => 0),
+  ]);
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Tender Management"
-        subtitle="Import, screen and track tenders from all your connected portals"
-      />
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="section-title">Tender Management</h1>
+          <p className="mt-0.5 text-sm text-foreground-500">
+            Import, screen and track tenders from all your connected portals
+          </p>
+        </div>
+        <TenderPageActions
+          rows={rows}
+          page={filters.page}
+          canImport={sessionHasPermission(session, "tenders.import")}
+        />
+      </div>
 
       <Suspense fallback={null}>
         <TenderManagementStats />
       </Suspense>
 
       <Suspense fallback={<TenderExplorerSkeleton />}>
-        <TenderExplorer rows={rows} total={total} filters={filters} />
+        <TenderExplorer
+          rows={rows}
+          total={total}
+          allCount={allCount || total}
+          filters={filters}
+          categories={facets.categories}
+          portals={facets.portals}
+        />
       </Suspense>
     </div>
   );

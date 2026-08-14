@@ -22,12 +22,13 @@ export const MANUAL_REVIEW_STATUSES = ["VERIFY"] as const;
 
 export const REJECTED_STATUSES = ["NO_GO"] as const;
 
+/** Presentation labels only — stored DB values remain GO / CONDITIONAL_GO / etc. */
 export const STATUS_DISPLAY_LABELS: Record<TenderStatus, string> = {
-  GO: "GO",
-  CONDITIONAL_GO: "CONDITIONAL GO",
-  PARTNER_BID: "PARTNER BID",
-  VERIFY: "VERIFY",
-  NO_GO: "NO-GO",
+  GO: "Will Bid",
+  CONDITIONAL_GO: "May Bid",
+  PARTNER_BID: "Partnership",
+  VERIFY: "Screening",
+  NO_GO: "No Bid",
 };
 
 /** Chart colors — decision distribution (not qualification semantics). */

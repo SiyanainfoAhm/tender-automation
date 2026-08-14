@@ -10,6 +10,13 @@ type EdgeJson = {
   error?: string;
   documentId?: string;
   document?: unknown;
+  templateId?: string;
+  companyLogoUrl?: string | null;
+  companySignatoryUrl?: string | null;
+  experienceId?: string;
+  workOrderUrl?: string | null;
+  completionCertificateUrl?: string | null;
+  workspaceDocumentId?: string;
 };
 
 function resolveServiceKey(): string {
@@ -25,24 +32,30 @@ async function getSessionToken(): Promise<string | null> {
   return cookieStore.get(COOKIE_NAME)?.value ?? null;
 }
 
-async function invokeCompanyDocuments(
+async function invokeCompanyDocumentsRaw(
   init: RequestInit,
-): Promise<EdgeJson> {
+): Promise<Response> {
   const base = process.env.SUPABASE_URL?.trim()?.replace(/\/$/, "");
   const key = resolveServiceKey();
   if (!base || !key) {
-    return {
-      success: false,
-      error: "Document storage is not configured correctly.",
-    };
+    return Response.json(
+      {
+        success: false,
+        error: "Document storage is not configured correctly.",
+      },
+      { status: 503 },
+    );
   }
 
   const sessionToken = await getSessionToken();
   if (!sessionToken) {
-    return { success: false, error: "Authentication required." };
+    return Response.json(
+      { success: false, error: "Authentication required." },
+      { status: 401 },
+    );
   }
 
-  const response = await fetch(`${base}/functions/v1/${FUNCTION_NAME}`, {
+  return fetch(`${base}/functions/v1/${FUNCTION_NAME}`, {
     ...init,
     headers: {
       ...(init.headers || {}),
@@ -51,7 +64,12 @@ async function invokeCompanyDocuments(
       "x-agenttender-session": sessionToken,
     },
   });
+}
 
+async function invokeCompanyDocuments(
+  init: RequestInit,
+): Promise<EdgeJson> {
+  const response = await invokeCompanyDocumentsRaw(init);
   return (await response.json().catch(() => ({
     success: false,
     error: "Invalid response from document storage function.",
@@ -72,5 +90,146 @@ export async function invokeDocumentDelete(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action: "delete", documentId }),
+  });
+}
+
+export async function invokeTemplateAssetsSave(options: {
+  templateId: string;
+  templateName: string;
+  companyLogo?: File | null;
+  companySignatory?: File | null;
+}): Promise<EdgeJson> {
+  const formData = new FormData();
+  formData.set("action", "template-assets-save");
+  formData.set("templateId", options.templateId);
+  formData.set("templateName", options.templateName);
+  if (options.companyLogo) formData.set("companyLogo", options.companyLogo);
+  if (options.companySignatory) {
+    formData.set("companySignatory", options.companySignatory);
+  }
+  return invokeCompanyDocuments({ method: "POST", body: formData });
+}
+
+export async function invokeTemplateAssetsDelete(
+  templateId: string,
+): Promise<EdgeJson> {
+  return invokeCompanyDocuments({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "template-assets-delete",
+      templateId,
+    }),
+  });
+}
+
+export async function invokeTemplateAssetRead(
+  templateId: string,
+  assetType: "logo" | "signatory",
+): Promise<Response> {
+  return invokeCompanyDocumentsRaw({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "template-asset-read",
+      templateId,
+      assetType,
+    }),
+  });
+}
+
+export async function invokeExperienceAssetsSave(options: {
+  experienceId: string;
+  projectName: string;
+  workOrder?: File | null;
+  completionCertificate?: File | null;
+  clearCompletionCertificate?: boolean;
+}): Promise<EdgeJson> {
+  const formData = new FormData();
+  formData.set("action", "experience-assets-save");
+  formData.set("experienceId", options.experienceId);
+  formData.set("projectName", options.projectName);
+  if (options.clearCompletionCertificate) {
+    formData.set("clearCompletionCertificate", "true");
+  }
+  if (options.workOrder) formData.set("workOrder", options.workOrder);
+  if (options.completionCertificate) {
+    formData.set("completionCertificate", options.completionCertificate);
+  }
+  return invokeCompanyDocuments({ method: "POST", body: formData });
+}
+
+export async function invokeExperienceAssetsDelete(
+  experienceId: string,
+): Promise<EdgeJson> {
+  return invokeCompanyDocuments({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "experience-assets-delete",
+      experienceId,
+    }),
+  });
+}
+
+export async function invokeExperienceAssetRead(
+  experienceId: string,
+  assetType: "work-order" | "completion-certificate",
+): Promise<Response> {
+  return invokeCompanyDocumentsRaw({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "experience-asset-read",
+      experienceId,
+      assetType,
+    }),
+  });
+}
+
+export async function invokeWorkspaceDocumentSave(options: {
+  workspaceId: string;
+  tenderId: string;
+  tenderReference: string;
+  documentId?: string;
+  documentType: string;
+  title: string;
+  file: File;
+}): Promise<EdgeJson> {
+  const formData = new FormData();
+  formData.set("action", "workspace-document-save");
+  formData.set("workspaceId", options.workspaceId);
+  formData.set("tenderId", options.tenderId);
+  formData.set("tenderReference", options.tenderReference);
+  formData.set("documentType", options.documentType);
+  formData.set("title", options.title);
+  if (options.documentId) formData.set("documentId", options.documentId);
+  formData.set("file", options.file);
+  return invokeCompanyDocuments({ method: "POST", body: formData });
+}
+
+export async function invokeWorkspaceDocumentDelete(
+  documentId: string,
+): Promise<EdgeJson> {
+  return invokeCompanyDocuments({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "workspace-document-delete",
+      documentId,
+    }),
+  });
+}
+
+export async function invokeWorkspaceDocumentRead(
+  documentId: string,
+): Promise<Response> {
+  return invokeCompanyDocumentsRaw({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "workspace-document-read",
+      documentId,
+    }),
   });
 }

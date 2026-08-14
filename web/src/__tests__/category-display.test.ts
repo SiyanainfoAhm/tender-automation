@@ -27,43 +27,44 @@ describe("normalizeCategoryDisplay", () => {
 });
 
 describe("resolveAnalyticsCategory", () => {
-  it("never uses tender title as category", () => {
+  it("never uses tender title or GEM product labels as category", () => {
     expect(
       resolveAnalyticsCategory({
         source_portal: "TENDER247",
         category: "Microsoft Office LTSC Professional Plus 2024",
         title: "Microsoft Office LTSC Professional Plus 2024",
       }),
-    ).toBe("Uncategorized");
+    ).toBe("Other");
   });
 
-  it("uses BidAssist portal category, not GEM product labels", () => {
+  it("uses stored project_category instead of BidAssist GEM labels", () => {
     expect(
       resolveAnalyticsCategory({
         source_portal: "BIDASSIST",
+        project_category: "Support / AMC / Maintenance",
         category: "Annual Maintenance Service - Desktops, Laptops...",
         title: "Some tender title",
       }),
-    ).toBe("Software & IT Solutions");
+    ).toBe("Support / AMC / Maintenance");
   });
 
-  it("prefers normalized_category over category", () => {
+  it("prefers project_category over raw category", () => {
     expect(
       resolveAnalyticsCategory({
         source_portal: "TENDER247",
-        normalized_category: "IT Services",
+        project_category: "Custom Software",
         category: "Garbage title-like value",
       }),
-    ).toBe("IT Services");
+    ).toBe("Custom Software");
   });
 
-  it("blank category becomes Uncategorized", () => {
+  it("blank project category becomes Other", () => {
     expect(
       resolveAnalyticsCategory({
         source_portal: "TENDER247",
         category: null,
       }),
-    ).toBe("Uncategorized");
+    ).toBe("Other");
   });
 });
 
@@ -98,9 +99,9 @@ describe("buildTopCategories", () => {
 
 describe("formatDecisionStatus / compactTenderCount", () => {
   it("formats status enums for display", () => {
-    expect(formatDecisionStatus("NO_GO")).toBe("NO-GO");
-    expect(formatDecisionStatus("CONDITIONAL_GO")).toBe("CONDITIONAL GO");
-    expect(formatDecisionStatus("PARTNER_BID")).toBe("PARTNER BID");
+    expect(formatDecisionStatus("NO_GO")).toBe("No Bid");
+    expect(formatDecisionStatus("CONDITIONAL_GO")).toBe("May Bid");
+    expect(formatDecisionStatus("PARTNER_BID")).toBe("Partnership");
     expect(formatDecisionStatus("NOT_EVALUATED")).toBe("Not evaluated");
   });
 

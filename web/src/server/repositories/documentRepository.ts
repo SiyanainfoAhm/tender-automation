@@ -36,18 +36,6 @@ export type CompanyDocument = {
   expiryState: ExpiryState;
 };
 
-export type CompanyExperience = {
-  id: string;
-  companyId: string;
-  projectName: string;
-  clientName: string | null;
-  projectValueInr: number | null;
-  startDate: string | null;
-  endDate: string | null;
-  description: string | null;
-  createdAt: string;
-};
-
 function mapDoc(row: Record<string, unknown>): CompanyDocument {
   const expiryDate = (row.expiry_date as string) || null;
   return {
@@ -130,43 +118,6 @@ export async function countCompanyDocuments(companyId: string): Promise<number> 
     .eq("status", "active");
   if (error) throw new Error(error.message);
   return count ?? 0;
-}
-
-export async function countCompanyExperience(companyId: string): Promise<number> {
-  const supabase = getServerSupabase();
-  const { count, error } = await supabase
-    .from("agenttender_company_experience")
-    .select("id", { count: "exact", head: true })
-    .eq("company_id", companyId);
-  if (error) throw new Error(error.message);
-  return count ?? 0;
-}
-
-export async function listCompanyExperience(
-  companyId: string,
-): Promise<CompanyExperience[]> {
-  const supabase = getServerSupabase();
-  const { data, error } = await supabase
-    .from("agenttender_company_experience")
-    .select("*")
-    .eq("company_id", companyId)
-    .order("created_at", { ascending: false });
-  if (error) throw new Error(error.message);
-  return (data || []).map((row) => {
-    const r = row as Record<string, unknown>;
-    return {
-      id: String(r.id),
-      companyId: String(r.company_id),
-      projectName: String(r.project_name),
-      clientName: (r.client_name as string) || null,
-      projectValueInr:
-        r.project_value_inr == null ? null : Number(r.project_value_inr),
-      startDate: (r.start_date as string) || null,
-      endDate: (r.end_date as string) || null,
-      description: (r.description as string) || null,
-      createdAt: String(r.created_at),
-    };
-  });
 }
 
 export async function listExpiringDocuments(options: {

@@ -4,6 +4,7 @@ import {
   isMeaninglessCurrencyText,
   resolveCanonicalInrAmount,
 } from "../bidassist/parseIndianCurrencyAmount.js";
+import { classifyProjectCategory } from "../classification/projectCategory.js";
 import type { CompleteTenderMetadata } from "../tender247Batch/extractCompleteMetadata.js";
 
 export type AgenttenderSourcePortal = "TENDER247" | "BIDASSIST";
@@ -26,6 +27,7 @@ export interface AgenttenderTenderRow {
   department: string | null;
   authority: string | null;
   category: string | null;
+  project_category: string;
   tender_type: string | null;
   description: string | null;
   city: string | null;
@@ -212,6 +214,12 @@ export function buildTender247SupabaseRow(options: {
     department,
     authority: organization,
     category: asText(normalized.category),
+    project_category: classifyProjectCategory({
+      title,
+      description:
+        asText(normalized.description) || asText(normalized.brief) || null,
+      sourceCategory: asText(normalized.category),
+    }),
     tender_type: null,
     description:
       asText(normalized.description) || asText(normalized.brief) || null,
@@ -349,6 +357,13 @@ export function buildBidassistSupabaseRow(options: {
     department,
     authority,
     category: asText(normalized.category) || asText(metadata.category),
+    project_category: classifyProjectCategory({
+      title,
+      description:
+        asText(normalized.description) || asText(metadata.description),
+      sourceCategory:
+        asText(normalized.category) || asText(metadata.category),
+    }),
     tender_type: null,
     description:
       asText(normalized.description) || asText(metadata.description),

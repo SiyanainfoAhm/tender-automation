@@ -1,10 +1,10 @@
 import type { LucideIcon } from "lucide-react";
 import {
   BarChart3,
-  Bookmark,
   Building2,
   FileStack,
   FileText,
+  Layers3,
   LayoutDashboard,
   Settings,
   Users,
@@ -18,19 +18,51 @@ export type AppNavItem = {
   /** When set, sidebar shows item only if roleHasPermission(role, permission). */
   permission?: string;
   section?: "main" | "bottom";
+  showCount?: boolean;
 };
 
 /**
- * Real routes only. Templates omitted until implemented.
- * Reports → /analytics
+ * Real routes only. Reports → /analytics
  */
 export const APP_MAIN_NAV: AppNavItem[] = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, section: "main" },
-  { href: "/tenders", label: "Tenders", icon: FileText, section: "main" },
-  { href: "/documents", label: "Documents", icon: FileStack, section: "main" },
-  { href: "/analytics", label: "Reports", icon: BarChart3, section: "main" },
-  { href: "/saved-views", label: "Saved Views", icon: Bookmark, section: "main" },
-  { href: "/users", label: "Users", icon: Users, permission: "users.view", section: "main" },
+  {
+    href: "/dashboard",
+    label: "Dashboard",
+    icon: LayoutDashboard,
+    section: "main",
+  },
+  {
+    href: "/tenders",
+    label: "Tenders",
+    icon: FileText,
+    section: "main",
+    showCount: true,
+  },
+  {
+    href: "/documents",
+    label: "Documents",
+    icon: FileStack,
+    section: "main",
+  },
+  {
+    href: "/templates",
+    label: "Templates",
+    icon: Layers3,
+    section: "main",
+  },
+  {
+    href: "/analytics",
+    label: "Reports",
+    icon: BarChart3,
+    section: "main",
+  },
+  {
+    href: "/users",
+    label: "Users",
+    icon: Users,
+    permission: "users.view",
+    section: "main",
+  },
 ];
 
 export const APP_BOTTOM_NAV: AppNavItem[] = [

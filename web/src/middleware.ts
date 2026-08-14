@@ -14,6 +14,7 @@ const PROTECTED_PREFIXES = [
   "/settings",
   "/company-profile",
   "/documents",
+  "/templates",
 ];
 
 const PASSWORD_CHANGE_PATH = "/change-password";
@@ -31,7 +32,7 @@ function applySecurityHeaders(response: NextResponse): NextResponse {
   response.headers.set("Permissions-Policy", "interest-cohort=()");
   response.headers.set(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.blob.core.windows.net; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
   );
   return response;
 }

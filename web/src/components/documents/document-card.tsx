@@ -2,28 +2,101 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Download, Eye, FileText, Loader2, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  Download,
+  Eye,
+  FileText,
+  Loader2,
+  MoreHorizontal,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import type { CompanyDocument } from "@/server/repositories/documentRepository";
 import { deleteCompanyDocumentAction } from "@/server/actions/company";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { formatBytes, formatDate } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
-function expiryBadge(doc: CompanyDocument) {
-  if (doc.expiryState === "NO_EXPIRY") return null;
+function categoryStyles(category: string) {
+  switch (category) {
+    case "GST":
+    case "PAN":
+      return {
+        icon: "bg-amber-100 text-amber-800",
+        capsule: "bg-amber-100 text-amber-800",
+      };
+    case "Certificate":
+      return {
+        icon: "bg-emerald-100 text-emerald-800",
+        capsule: "bg-emerald-100 text-emerald-800",
+      };
+    case "Financial":
+      return {
+        icon: "bg-sky-100 text-sky-800",
+        capsule: "bg-sky-100 text-sky-800",
+      };
+    case "Experience":
+      return {
+        icon: "bg-violet-100 text-violet-800",
+        capsule: "bg-violet-100 text-violet-800",
+      };
+    case "Bank Guarantee":
+      return {
+        icon: "bg-rose-100 text-rose-800",
+        capsule: "bg-rose-100 text-rose-800",
+      };
+    default:
+      return {
+        icon: "bg-background-200 text-foreground-600",
+        capsule: "bg-background-200 text-foreground-600",
+      };
+  }
+}
+
+function StatusRow({ doc }: { doc: CompanyDocument }) {
   if (doc.expiryState === "EXPIRED") {
-    return <Badge variant="destructive">Expired</Badge>;
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-700">
+        <AlertTriangle className="size-3" />
+        Expired
+      </span>
+    );
   }
   if (doc.expiryState === "EXPIRING_SOON") {
-    return <Badge variant="warning">Expiring soon</Badge>;
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700">
+        <Clock className="size-3" />
+        Expiring soon
+      </span>
+    );
+  }
+  if (doc.verificationStatus === "verified") {
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700">
+        <CheckCircle2 className="size-3" />
+        Verified
+      </span>
+    );
+  }
+  if (doc.verificationStatus === "rejected") {
+    return (
+      <span className="text-[11px] font-medium text-rose-700">Rejected</span>
+    );
   }
   return (
-    <Badge variant="outline">
-      Expires {doc.expiryDate ? formatDate(doc.expiryDate) : ""}
-    </Badge>
+    <span className="text-[11px] text-foreground-400">Pending</span>
   );
 }
 
@@ -37,9 +110,16 @@ export function DocumentCard({
   const router = useRouter();
   const [busy, setBusy] = useState<"delete" | null>(null);
   const [pending, startTransition] = useTransition();
-
+  const categoryLabel = doc.certificateType || doc.documentCategory;
+  const styleKey =
+    categoryLabel.toUpperCase() === "GST" ||
+    categoryLabel.toUpperCase() === "PAN"
+      ? categoryLabel
+      : doc.documentCategory;
+  const styles = categoryStyles(styleKey);
   const fileUrl = doc.storageUrl;
   const hasFile = Boolean(fileUrl);
+  const disabled = busy != null || pending;
 
   function openFile(mode: "view" | "download") {
     if (!fileUrl) {
@@ -84,82 +164,102 @@ export function DocumentCard({
     });
   }
 
-  const disabled = busy != null || pending;
-
   return (
-    <Card className="overflow-hidden">
-      <CardContent className="flex gap-3 p-4">
-        <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-primary-50 text-primary">
-          <FileText className="size-5" />
-        </div>
-        <div className="min-w-0 flex-1 space-y-1.5">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <p className="truncate text-sm font-semibold text-text-primary">
-              {doc.name}
-            </p>
-            <Badge variant="secondary">{doc.documentCategory}</Badge>
+    <Card
+      className="group cursor-pointer transition-all hover:border-primary-300/40"
+      onClick={() => {
+        if (hasFile) openFile("view");
+      }}
+    >
+      <CardContent className="p-4 pt-4 sm:p-4 sm:pt-4">
+        <div className="flex items-start gap-3">
+          <div
+            className={cn(
+              "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
+              styles.icon,
+            )}
+          >
+            <FileText className="size-5" />
           </div>
-          <p className="truncate text-xs text-text-muted">
-            {doc.originalFileName || "No file name"}
-            {doc.fileSizeBytes != null
-              ? ` · ${formatBytes(doc.fileSizeBytes)}`
-              : ""}
-          </p>
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Badge
-              variant={
-                doc.verificationStatus === "verified" ? "success" : "outline"
-              }
-            >
-              {doc.verificationStatus}
-            </Badge>
-            {expiryBadge(doc)}
-            <span className="text-[11px] text-text-subtle">
-              {formatDate(doc.createdAt)}
-            </span>
-          </div>
-          {!hasFile ? (
-            <p className="text-[11px] text-amber-700">
-              Metadata only — file URL missing
-            </p>
-          ) : null}
-          <div className="flex flex-wrap gap-1 pt-1">
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={!hasFile || disabled}
-              onClick={() => openFile("view")}
-            >
-              <Eye className="size-3.5" />
-              View
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={!hasFile || disabled}
-              onClick={() => openFile("download")}
-            >
-              <Download className="size-3.5" />
-              Download
-            </Button>
-            {canManage ? (
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                disabled={disabled}
-                onClick={handleDelete}
-              >
-                {busy === "delete" ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <Trash2 className="size-3.5" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-2">
+              <p className="truncate text-sm font-medium text-foreground-800 transition-colors group-hover:text-primary-600">
+                {doc.name}
+              </p>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-7 shrink-0 text-foreground-400 hover:text-foreground-700"
+                    aria-label="Document actions"
+                    disabled={disabled}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    {busy === "delete" ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <MoreHorizontal className="size-4" />
+                    )}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="end"
+                  className="w-40"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <DropdownMenuItem
+                    disabled={!hasFile || disabled}
+                    onSelect={() => openFile("view")}
+                  >
+                    <Eye className="size-4" />
+                    View
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    disabled={!hasFile || disabled}
+                    onSelect={() => openFile("download")}
+                  >
+                    <Download className="size-4" />
+                    Download
+                  </DropdownMenuItem>
+                  {canManage ? (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        className="text-status-nogo"
+                        disabled={disabled}
+                        onSelect={handleDelete}
+                      >
+                        <Trash2 className="size-4" />
+                        Delete
+                      </DropdownMenuItem>
+                    </>
+                  ) : null}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            <div className="mt-1 flex items-center gap-2">
+              <span
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-[11px] font-medium",
+                  styles.capsule,
                 )}
-                Delete
-              </Button>
-            ) : null}
+              >
+                {categoryLabel}
+              </span>
+              {doc.fileSizeBytes != null ? (
+                <span className="text-xs text-foreground-400">
+                  {formatBytes(doc.fileSizeBytes)}
+                </span>
+              ) : null}
+            </div>
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <span className="text-xs text-foreground-400">
+                {formatDate(doc.createdAt)}
+              </span>
+              <StatusRow doc={doc} />
+            </div>
           </div>
         </div>
       </CardContent>

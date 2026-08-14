@@ -1,6 +1,7 @@
 import "server-only";
 
 import { getServerSupabase } from "@/lib/db/server";
+import { PROJECT_CATEGORIES, isProjectCategory } from "@/lib/project-category";
 import { assertSupabaseOk } from "@/lib/errors/db-query";
 import { resolveTenderSortColumn } from "@/lib/tender-sort";
 import type { TenderFilters } from "@/lib/validations";
@@ -16,6 +17,7 @@ export type WebTenderListRow = {
   department: string | null;
   authority: string | null;
   category: string | null;
+  project_category: string | null;
   city: string | null;
   state: string | null;
   location_text: string | null;
@@ -62,6 +64,7 @@ export const WEB_TENDER_LIST_SELECT = [
   "department",
   "authority",
   "category",
+  "project_category",
   "city",
   "state",
   "location_text",
@@ -116,6 +119,7 @@ const SORTABLE: Record<string, string> = {
   closing: "closing_date",
   value: "tender_value",
   emd: "emd_amount",
+  match: "confidence",
 };
 
 function applyQuickDate(
@@ -229,8 +233,8 @@ export async function listTenders(filters: TenderFilters): Promise<{
 
   if (filters.state) query = query.ilike("state", filters.state);
   if (filters.city) query = query.ilike("city", `%${filters.city}%`);
-  if (filters.category) {
-    query = query.ilike("category", `%${filters.category}%`);
+  if (filters.category && isProjectCategory(filters.category)) {
+    query = query.eq("project_category", filters.category);
   }
   if (filters.organization) {
     query = query.ilike("organization", `%${filters.organization}%`);
@@ -357,6 +361,7 @@ export async function listTenders(filters: TenderFilters): Promise<{
       [
         `title.ilike.%${q}%`,
         `source_tender_id.ilike.%${q}%`,
+        `folder_id.ilike.%${q}%`,
         `organization.ilike.%${q}%`,
         `authority.ilike.%${q}%`,
         `department.ilike.%${q}%`,
@@ -364,6 +369,7 @@ export async function listTenders(filters: TenderFilters): Promise<{
         `city.ilike.%${q}%`,
         `state.ilike.%${q}%`,
         `category.ilike.%${q}%`,
+        `project_category.ilike.%${q}%`,
       ].join(","),
     );
   }
@@ -391,6 +397,15 @@ export async function listTenders(filters: TenderFilters): Promise<{
     page,
     pageSize,
   };
+}
+
+export async function countVisibleTenders(): Promise<number> {
+  const supabase = getServerSupabase();
+  const { count, error } = await supabase
+    .from("agenttender_web_tender_list")
+    .select("id", { count: "exact", head: true });
+  if (error) throw new Error(error.message);
+  return count ?? 0;
 }
 
 export async function getTenderById(id: string): Promise<{
@@ -422,11 +437,11 @@ export async function getFilterFacets(): Promise<{
   const data = assertSupabaseOk(
     await supabase
       .from("agenttender_tenders")
-      .select("state, category, organization")
+      .select("state, project_category, organization")
       .limit(2000),
     {
       queryName: "getFilterFacets",
-      selectedColumns: "state, category, organization",
+      selectedColumns: "state, project_category, organization",
     },
   );
 
@@ -435,7 +450,9 @@ export async function getFilterFacets(): Promise<{
   const organizations = new Set<string>();
   for (const row of data || []) {
     if (row.state) states.add(row.state);
-    if (row.category) categories.add(row.category);
+    if (isProjectCategory(row.project_category)) {
+      categories.add(row.project_category);
+    }
     if (row.organization) organizations.add(row.organization);
   }
   return {
@@ -443,4 +460,134 @@ export async function getFilterFacets(): Promise<{
     categories: [...categories].sort().slice(0, 100),
     organizations: [...organizations].sort().slice(0, 100),
   };
+}
+
+export type TenderExplorerFacet = {
+  value: string;
+  label: string;
+};
+
+export async function getTenderExplorerFacets(): Promise<{
+  categories: TenderExplorerFacet[];
+  portals: Array<"TENDER247" | "BIDASSIST">;
+}> {
+  const supabase = getServerSupabase();
+  const data = assertSupabaseOk(
+    await supabase
+      .from("agenttender_tenders")
+      .select("project_category, source_portal")
+      .limit(5000),
+    {
+      queryName: "getTenderExplorerFacets",
+      selectedColumns: "project_category, source_portal",
+    },
+  );
+
+  const portals = new Set<"TENDER247" | "BIDASSIST">();
+  const present = new Set<string>();
+  for (const row of data || []) {
+    if (row.source_portal === "TENDER247" || row.source_portal === "BIDASSIST") {
+      portals.add(row.source_portal);
+    }
+    if (isProjectCategory(row.project_category)) {
+      present.add(row.project_category);
+    }
+  }
+
+  const categories = PROJECT_CATEGORIES.filter((label) => present.has(label)).map(
+    (label) => ({ value: label, label }),
+  );
+
+  return {
+    categories,
+    portals: [...portals].sort(),
+  };
+}
+
+function sanitizeSearchTerm(value: string): string {
+  return value.trim().replace(/[%_,]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Bid Preparation lookup against the existing tender table.
+ * Tender ID → source_tender_id (and UUID id).
+ * Reference No → folder_id / source_tender_id / title (no dedicated reference column).
+ */
+export async function searchTendersForBidPreparation(options: {
+  tenderId?: string;
+  referenceNo?: string;
+}): Promise<
+  Array<{
+    id: string;
+    source_tender_id: string;
+    folder_id: string | null;
+    title: string;
+    organization: string | null;
+    authority: string | null;
+    tender_value: number | null;
+    tender_value_text: string | null;
+    closing_date: string | null;
+    source_portal: string;
+    qualification_status: string | null;
+    source_url: string | null;
+  }>
+> {
+  const tenderId = sanitizeSearchTerm(options.tenderId || "");
+  const referenceNo = sanitizeSearchTerm(options.referenceNo || "");
+  if (!tenderId && !referenceNo) return [];
+
+  const supabase = getServerSupabase();
+  let query = supabase
+    .from("agenttender_tenders")
+    .select(
+      "id, source_tender_id, folder_id, title, organization, authority, tender_value, tender_value_text, closing_date, source_portal, qualification_status, source_url",
+    )
+    .limit(20);
+
+  if (tenderId) {
+    const uuidLike =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        tenderId,
+      );
+    if (uuidLike) {
+      query = query.or(
+        `id.eq.${tenderId},source_tender_id.ilike.%${tenderId}%`,
+      );
+    } else {
+      query = query.ilike("source_tender_id", `%${tenderId}%`);
+    }
+  }
+
+  if (referenceNo) {
+    query = query.or(
+      [
+        `folder_id.ilike.%${referenceNo}%`,
+        `source_tender_id.ilike.%${referenceNo}%`,
+        `title.ilike.%${referenceNo}%`,
+      ].join(","),
+    );
+  }
+
+  const result = await query.order("updated_at", { ascending: false });
+  const data = assertSupabaseOk(result, {
+    queryName: "searchTendersForBidPreparation",
+    selectedColumns:
+      "id, source_tender_id, folder_id, title, organization, authority, tender_value, tender_value_text, closing_date, source_portal, qualification_status, source_url",
+    filters: { tenderId, referenceNo },
+  });
+
+  return (data || []) as Array<{
+    id: string;
+    source_tender_id: string;
+    folder_id: string | null;
+    title: string;
+    organization: string | null;
+    authority: string | null;
+    tender_value: number | null;
+    tender_value_text: string | null;
+    closing_date: string | null;
+    source_portal: string;
+    qualification_status: string | null;
+    source_url: string | null;
+  }>;
 }

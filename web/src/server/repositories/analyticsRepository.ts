@@ -11,8 +11,10 @@ import {
 } from "@/lib/analytics/category-display";
 import {
   ACTIONABLE_STATUSES,
+  MANUAL_REVIEW_STATUSES,
   QUALIFIED_STATUSES,
 } from "@/lib/tender-status";
+import { isProjectCategory } from "@/lib/project-category";
 import { AppError } from "@/lib/errors/app-error";
 import { assertSupabaseOk, runQuery, type QueryResult } from "@/lib/errors/db-query";
 import { startOfDay, subDays, formatISO, addDays } from "date-fns";
@@ -122,6 +124,53 @@ export async function getDashboardMetrics(): Promise<DashboardMetrics> {
     bySource,
     freshnessAt:
       freshRes.data?.crawled_at || freshRes.data?.updated_at || null,
+  };
+}
+
+/** Statuses counted in Active Pipeline / Pipeline Value (excludes NO_GO). */
+const PIPELINE_KPI_STATUSES = [
+  ...ACTIONABLE_STATUSES,
+  ...MANUAL_REVIEW_STATUSES,
+] as const;
+
+export type TenderManagementKpis = {
+  totalTenders: number;
+  activePipeline: number;
+  willBid: number;
+  closingSoon: number;
+  pipelineValue: number;
+};
+
+export async function getTenderManagementKpis(): Promise<TenderManagementKpis> {
+  const metrics = await getDashboardMetrics();
+  const supabase = getServerSupabase();
+  const valueRes = await supabase
+    .from("agenttender_web_tender_list")
+    .select("tender_value")
+    .in("effective_qualification_status", [...PIPELINE_KPI_STATUSES]);
+
+  if (valueRes.error) {
+    assertSupabaseOk(valueRes, {
+      queryName: "tenderManagement.pipelineValue",
+      selectedColumns: "tender_value",
+    });
+  }
+
+  const pipelineValue = (valueRes.data || []).reduce((sum, row) => {
+    const amount = Number(row.tender_value);
+    return Number.isFinite(amount) ? sum + amount : sum;
+  }, 0);
+
+  return {
+    totalTenders: metrics.totalTenders,
+    activePipeline:
+      metrics.goOpportunities +
+      metrics.pendingVerification +
+      (metrics.byStatus.CONDITIONAL_GO || 0) +
+      (metrics.byStatus.PARTNER_BID || 0),
+    willBid: metrics.goOpportunities,
+    closingSoon: metrics.closingWithin3Days,
+    pipelineValue,
   };
 }
 
@@ -307,7 +356,7 @@ export async function getAnalytics(options: {
   let query = supabase
     .from("agenttender_web_tender_list")
     .select(
-      "id, source_portal, effective_qualification_status, category, state, organization, tender_value, emd_amount, crawled_at, first_seen_at, manual_review_required, closing_date, title",
+      "id, source_portal, effective_qualification_status, category, project_category, state, organization, tender_value, emd_amount, crawled_at, first_seen_at, manual_review_required, closing_date, title",
     )
     .limit(5000);
 
@@ -321,8 +370,8 @@ export async function getAnalytics(options: {
       query = query.eq("effective_qualification_status", options.status);
     }
   }
-  if (options.category) {
-    query = query.ilike("category", `%${options.category}%`);
+  if (options.category && isProjectCategory(options.category)) {
+    query = query.eq("project_category", options.category);
   }
   if (options.from) {
     query = query.gte("crawled_at", options.from);
@@ -334,7 +383,7 @@ export async function getAnalytics(options: {
   const rows = assertSupabaseOk(await query, {
     queryName: "getAnalytics",
     selectedColumns:
-      "id, source_portal, effective_qualification_status, category, state, organization, tender_value, emd_amount, crawled_at, first_seen_at, manual_review_required, closing_date, title",
+      "id, source_portal, effective_qualification_status, category, project_category, state, organization, tender_value, emd_amount, crawled_at, first_seen_at, manual_review_required, closing_date, title",
     filters: options,
   });
 
@@ -387,6 +436,7 @@ export async function getAnalytics(options: {
 
     const categoryLabel = resolveAnalyticsCategory({
       source_portal: row.source_portal,
+      project_category: row.project_category,
       category: row.category,
       title: row.title,
     });

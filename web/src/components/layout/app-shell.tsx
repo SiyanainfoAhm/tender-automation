@@ -19,10 +19,16 @@ type AppShellProps = {
     theme: string;
     sidebarCollapsed: boolean;
   };
+  tenderCount?: number | null;
   children: React.ReactNode;
 };
 
-export function AppShell({ user, preferences, children }: AppShellProps) {
+export function AppShell({
+  user,
+  preferences,
+  tenderCount = null,
+  children,
+}: AppShellProps) {
   const router = useRouter();
   const [collapsed, setCollapsed] = React.useState(preferences.sidebarCollapsed);
   const [searchValue, setSearchValue] = React.useState("");
@@ -46,12 +52,13 @@ export function AppShell({ user, preferences, children }: AppShellProps) {
             user={sidebarUser}
             collapsed={collapsed}
             onToggle={() => setCollapsed((c) => !c)}
+            tenderCount={tenderCount}
           />
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <div className="flex h-16 items-center gap-2 border-b border-border bg-white px-4 sm:px-5 lg:hidden">
-            <MobileNav userRole={user.role} />
+            <MobileNav userRole={user.role} tenderCount={tenderCount} />
             <span className="font-heading text-sm font-semibold text-text-primary">
               TenderFlow
             </span>

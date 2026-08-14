@@ -4,6 +4,7 @@ import {
   formatEmdAmount,
   formatInrCompactAmount,
   formatTenderValue,
+  parseInrInput,
   recoverInrAmountFromText,
 } from "@/lib/format-inr";
 import { formatIndianCurrency } from "@/lib/format";
@@ -146,5 +147,19 @@ describe("formatIndianCurrency compatibility", () => {
     expect(formatIndianCurrency(48_600_000)).toBe("₹4.86 Cr");
     expect(formatIndianCurrency(561_000)).toBe("₹5.61 L");
     expect(formatIndianCurrency(null)).toBe("—");
+  });
+});
+
+describe("parseInrInput", () => {
+  it("parses crore and lakh suffixes into raw INR", () => {
+    expect(parseInrInput("₹ 12.5 Cr")).toBe(125_000_000);
+    expect(parseInrInput("8.2 Cr")).toBe(82_000_000);
+    expect(parseInrInput("₹12.50 Cr")).toBe(125_000_000);
+    expect(parseInrInput("82 L")).toBe(8_200_000);
+  });
+
+  it("parses raw rupee amounts", () => {
+    expect(parseInrInput("125000000")).toBe(125_000_000);
+    expect(parseInrInput("12,50,00,000")).toBe(125_000_000);
   });
 });

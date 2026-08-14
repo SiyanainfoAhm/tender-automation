@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { AppShell } from "@/components/layout/app-shell";
 import { getSession } from "@/server/auth/session";
 import { getUserPreferences } from "@/server/repositories/savedViewRepository";
+import { countVisibleTenders } from "@/server/repositories/tenderRepository";
 
 export default async function AppLayout({
   children,
@@ -18,7 +19,10 @@ export default async function AppLayout({
     redirect("/change-password");
   }
 
-  const preferences = await getUserPreferences(session.user.id);
+  const [preferences, tenderCount] = await Promise.all([
+    getUserPreferences(session.user.id),
+    countVisibleTenders().catch(() => null),
+  ]);
 
   return (
     <AppShell
@@ -27,6 +31,7 @@ export default async function AppLayout({
         theme: preferences.theme,
         sidebarCollapsed: preferences.sidebarCollapsed,
       }}
+      tenderCount={tenderCount}
     >
       {children}
     </AppShell>

@@ -4,8 +4,10 @@
  */
 
 import { STATUS_DISPLAY_LABELS, type TenderStatus } from "@/lib/tender-status";
-
-const BIDASSIST_PORTAL_CATEGORY = "Software and IT Solutions";
+import {
+  isProjectCategory,
+  type ProjectCategory,
+} from "@/lib/project-category";
 
 /** Known portal category strings → compact display labels. */
 const CATEGORY_DISPLAY_ALIASES: Record<string, string> = {
@@ -13,17 +15,6 @@ const CATEGORY_DISPLAY_ALIASES: Record<string, string> = {
   "software & it solutions": "Software & IT Solutions",
   "software and it solutions category": "Software & IT Solutions",
 };
-
-function firstNonBlank(
-  ...values: Array<string | null | undefined>
-): string | null {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim() !== "") {
-      return value.trim();
-    }
-  }
-  return null;
-}
 
 function titleCaseWords(value: string): string {
   return value
@@ -56,6 +47,7 @@ export function normalizeCategoryDisplay(
 export type AnalyticsCategoryRow = {
   source_portal?: string | null;
   category?: string | null;
+  project_category?: string | null;
   normalized_category?: string | null;
   /** Never used as a category fallback — reserved to detect misuse. */
   title?: string | null;
@@ -63,26 +55,16 @@ export type AnalyticsCategoryRow = {
 
 /**
  * Resolve the category used in Top Categories analytics.
- * Preferred: normalized_category → category.
- * BidAssist always uses the portal Software and IT Solutions category
- * (GEM product labels stored in `category` are not analytics categories).
- * Never falls back to title / description.
+ * Uses stored project_category only. Never displays raw portal titles.
  */
-export function resolveAnalyticsCategory(row: AnalyticsCategoryRow): string {
-  if (row.source_portal === "BIDASSIST") {
-    return normalizeCategoryDisplay(BIDASSIST_PORTAL_CATEGORY);
+export function resolveAnalyticsCategory(row: AnalyticsCategoryRow): ProjectCategory | "Other" {
+  if (isProjectCategory(row.project_category)) {
+    return row.project_category;
   }
-
-  const preferred = firstNonBlank(row.normalized_category, row.category);
-  if (!preferred) return "Uncategorized";
-
-  // Guard: if category was wrongly populated with the tender title, ignore it.
-  const title = firstNonBlank(row.title);
-  if (title && preferred.toLowerCase() === title.toLowerCase()) {
-    return "Uncategorized";
+  if (isProjectCategory(row.normalized_category)) {
+    return row.normalized_category;
   }
-
-  return normalizeCategoryDisplay(preferred);
+  return "Other";
 }
 
 export type TopCategoryDatum = {

@@ -27,6 +27,10 @@ export function canViewUsers(role: UserRole): boolean {
   return roleHasPermission(role, "users.view");
 }
 
+export function canManageBidProfileTemplates(role: UserRole): boolean {
+  return role === "ADMIN" || role === "BID_MANAGER";
+}
+
 export function companyRoleLabel(role: UserRole): string {
   return ROLE_META.find((r) => r.key === role)?.name || role.replace(/_/g, " ");
 }
@@ -115,6 +119,14 @@ export const FINANCIAL_DOCUMENT_TYPES = [
 ] as const;
 
 export const MAX_DOCUMENT_UPLOAD_BYTES = 25 * 1024 * 1024;
+export const MAX_TEMPLATE_ASSET_BYTES = 5 * 1024 * 1024;
+export const TEMPLATE_ASSET_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"] as const;
+export const TEMPLATE_ASSET_MIME_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+] as const;
 
 export const ALLOWED_DOCUMENT_EXTENSIONS = [
   ".pdf",

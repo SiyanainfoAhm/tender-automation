@@ -230,3 +230,32 @@ export function formatEmdAmount(options: {
     isNumeric: false,
   };
 }
+
+/**
+ * Parse a user-entered INR amount. Accepts raw rupees or Cr/L suffixes.
+ * "125000000", "₹ 12.5 Cr", "12.5 crore", "82 L" → numeric INR.
+ */
+export function parseInrInput(raw: string | null | undefined): number | null {
+  if (raw == null) return null;
+  const text = stripNoiseText(raw).replace(/₹/g, "").replace(/,/g, "").trim();
+  if (!text) return null;
+
+  const crore = text.match(
+    /^(-?\d+(?:\.\d+)?)\s*(?:crores?|crs?|cr)$/i,
+  );
+  if (crore) {
+    const n = Number(crore[1]) * CRORE;
+    return Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
+  }
+
+  const lakh = text.match(
+    /^(-?\d+(?:\.\d+)?)\s*(?:lakhs?|lacs?|l)$/i,
+  );
+  if (lakh) {
+    const n = Number(lakh[1]) * LAKH;
+    return Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
+  }
+
+  const n = Number(text.replace(/\s/g, ""));
+  return Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
+}

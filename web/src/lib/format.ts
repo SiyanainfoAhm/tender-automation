@@ -72,4 +72,5 @@ export {
   formatInrCompactAmount,
   formatInrFullAmount,
   formatTenderValue,
+  parseInrInput,
 } from "@/lib/format-inr";

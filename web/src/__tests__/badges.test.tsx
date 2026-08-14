@@ -7,14 +7,14 @@ import { StatusBadge } from "@/components/status/qualification-badge";
 import { SourceBadge } from "@/components/status/source-badge";
 
 describe("status badges", () => {
-  it("renders GO with accessible text", () => {
+  it("renders Will Bid label for GO", () => {
     render(<StatusBadge status="GO" />);
-    expect(screen.getByText(/GO/i)).toBeTruthy();
+    expect(screen.getByText("Will Bid")).toBeTruthy();
   });
 
-  it("renders NO-GO label", () => {
+  it("renders No Bid label for NO_GO", () => {
     render(<StatusBadge status="NO_GO" />);
-    expect(screen.getByText("NO-GO")).toBeTruthy();
+    expect(screen.getByText("No Bid")).toBeTruthy();
   });
 });
 

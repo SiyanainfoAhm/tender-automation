@@ -45,6 +45,13 @@ const commandActions: CommandAction[] = [
     keywords: ["bids", "rfp", "procurement"],
   },
   {
+    id: "templates",
+    label: "Bid Profile Templates",
+    href: "/templates",
+    icon: FileText,
+    keywords: ["templates", "bid profile", "prepare"],
+  },
+  {
     id: "analytics",
     label: "Analytics",
     href: "/analytics",

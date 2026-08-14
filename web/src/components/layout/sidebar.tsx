@@ -37,6 +37,7 @@ type AppSidebarProps = {
   user: SidebarUser;
   collapsed: boolean;
   onToggle: () => void;
+  tenderCount?: number | null;
 };
 
 function NavLink({
@@ -45,18 +46,20 @@ function NavLink({
   icon: Icon,
   collapsed,
   active,
+  count,
 }: {
   href: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   collapsed: boolean;
   active: boolean;
+  count?: number | null;
 }) {
   const link = (
     <Link
       href={href}
       className={cn(
-        "flex h-9 items-center gap-2.5 rounded-md px-2.5 text-sm font-medium transition-colors",
+        "flex h-9 w-full items-center gap-2.5 rounded-md px-2.5 text-sm font-medium transition-colors",
         active
           ? "bg-primary-50 text-primary-700"
           : "text-text-secondary hover:bg-surface-muted hover:text-text-primary",
@@ -65,6 +68,11 @@ function NavLink({
     >
       <Icon className="size-[18px] shrink-0" />
       {!collapsed ? <span className="truncate">{label}</span> : null}
+      {!collapsed && typeof count === "number" ? (
+        <span className="ml-auto inline-flex min-w-6 items-center justify-center rounded-full bg-primary-50 px-2 py-0.5 text-[11px] font-medium text-primary-700">
+          {count.toLocaleString("en-IN")}
+        </span>
+      ) : null}
     </Link>
   );
 
@@ -72,7 +80,11 @@ function NavLink({
     return (
       <Tooltip>
         <TooltipTrigger asChild>{link}</TooltipTrigger>
-        <TooltipContent side="right">{label}</TooltipContent>
+        <TooltipContent side="right">
+          {typeof count === "number"
+            ? `${label} (${count.toLocaleString("en-IN")})`
+            : label}
+        </TooltipContent>
       </Tooltip>
     );
   }
@@ -80,7 +92,12 @@ function NavLink({
   return link;
 }
 
-export function AppSidebar({ user, collapsed, onToggle }: AppSidebarProps) {
+export function AppSidebar({
+  user,
+  collapsed,
+  onToggle,
+  tenderCount = null,
+}: AppSidebarProps) {
   const pathname = usePathname();
   const mainItems = APP_MAIN_NAV.filter((item) => {
     if (item.permission) {
@@ -138,6 +155,7 @@ export function AppSidebar({ user, collapsed, onToggle }: AppSidebarProps) {
                   icon={item.icon}
                   collapsed={collapsed}
                   active={active}
+                  count={item.showCount ? tenderCount : null}
                 />
               );
             })}

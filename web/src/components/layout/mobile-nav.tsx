@@ -19,9 +19,10 @@ import { roleHasPermission, type PermissionKey } from "@/lib/rbac/permissions";
 
 type MobileNavProps = {
   userRole: UserRole;
+  tenderCount?: number | null;
 };
 
-export function MobileNav({ userRole }: MobileNavProps) {
+export function MobileNav({ userRole, tenderCount = null }: MobileNavProps) {
   const pathname = usePathname();
   const visibleItems = [
     ...APP_MAIN_NAV.filter((item) => {
@@ -71,14 +72,19 @@ export function MobileNav({ userRole }: MobileNavProps) {
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                  "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
                   isActive
                     ? "bg-primary-50 text-primary-700"
                     : "text-text-secondary hover:bg-surface-muted hover:text-text-primary",
                 )}
               >
                 <Icon className="size-[18px] shrink-0" />
-                {item.label}
+                <span className="truncate">{item.label}</span>
+                {item.showCount && typeof tenderCount === "number" ? (
+                  <span className="ml-auto inline-flex min-w-6 items-center justify-center rounded-full bg-primary-50 px-2 py-0.5 text-[11px] font-medium text-primary-700">
+                    {tenderCount.toLocaleString("en-IN")}
+                  </span>
+                ) : null}
               </Link>
             );
           })}

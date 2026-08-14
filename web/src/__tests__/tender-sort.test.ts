@@ -17,6 +17,8 @@ describe("tender sort whitelist", () => {
     expect(resolveTenderSortColumn("status")).toBe(
       "effective_qualification_status",
     );
+    expect(resolveTenderSortColumn("match")).toBe("confidence");
+    expect(resolveTenderSortColumn("confidence")).toBe("confidence");
   });
 
   it("falls back unknown sort keys to updated_at", () => {

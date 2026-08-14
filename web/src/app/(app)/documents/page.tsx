@@ -4,10 +4,12 @@ import { roleHasPermission } from "@/lib/rbac/permissions";
 import { requireCompanyOrRedirect } from "@/server/auth/company-access";
 import {
   countCompanyDocuments,
-  countCompanyExperience,
   listCompanyDocuments,
-  listCompanyExperience,
 } from "@/server/repositories/documentRepository";
+import {
+  countCompanyExperience,
+  listCompanyExperience,
+} from "@/server/repositories/experienceRepository";
 
 export default async function DocumentsPage() {
   const session = await requireCompanyOrRedirect();

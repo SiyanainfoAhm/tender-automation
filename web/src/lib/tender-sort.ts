@@ -13,6 +13,8 @@ export const TENDER_SORT_COLUMNS = {
   closing: "closing_date",
   value: "tender_value",
   emd: "emd_amount",
+  match: "confidence",
+  confidence: "confidence",
   // Legacy / default keys
   updated_at: "updated_at",
   crawled_at: "crawled_at",
@@ -47,6 +49,7 @@ export const TABLE_SORT_KEYS = [
   "closing",
   "value",
   "emd",
+  "match",
 ] as const;
 
 export type TableSortKey = (typeof TABLE_SORT_KEYS)[number];
@@ -88,6 +91,8 @@ export function normalizeSortKeyForUi(sortBy: string): TableSortKey | null {
     tender_value: "value",
     emd: "emd",
     emd_amount: "emd",
+    match: "match",
+    confidence: "match",
   };
   return reverse[sortBy] ?? null;
 }

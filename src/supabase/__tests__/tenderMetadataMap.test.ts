@@ -63,6 +63,8 @@ test("buildTender247SupabaseRow maps CompleteTenderMetadata fields", () => {
   assert.equal(row.source_tender_id, "102667034");
   assert.equal(row.folder_id, "T247-102667034");
   assert.equal(row.title, "Sample tender title");
+  assert.equal(row.category, "IT");
+  assert.equal(row.project_category, "Other");
   assert.equal(row.organization, "Sample Org");
   assert.equal(row.city, "Lucknow");
   assert.equal(row.state, "Uttar Pradesh");
