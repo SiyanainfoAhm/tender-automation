@@ -394,7 +394,7 @@ export async function qualifySingleTender(options: {
       dateFolder,
       t247Id,
       logger,
-      attemptDocumentDownload: true,
+      attemptDocumentDownload: false,
       browserContext: options.browserContext,
       listPage: options.tender247ListPage,
       config: options.config,

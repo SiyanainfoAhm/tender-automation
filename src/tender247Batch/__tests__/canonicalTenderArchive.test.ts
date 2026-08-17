@@ -63,6 +63,32 @@ test("multiple document files are all stored in the canonical ZIP", async () => 
   assert.deepEqual(names.sort(), ["BOQ.xlsx", "Corrigendum.pdf", "NIT.pdf"].sort());
 });
 
+test("PDF mis-saved as Tender_All_Documents.zip is wrapped in a real ZIP, not renamed", async () => {
+  const { tenderDir, documentsDir } = makeTenderDir("pdfzip");
+  fs.writeFileSync(
+    path.join(documentsDir, "Tender_All_Documents.zip"),
+    "%PDF-1.4 this-is-a-pdf-not-a-zip",
+  );
+
+  const result = await ensureCanonicalTenderArchive({
+    tenderDir,
+    documentsDir,
+    sourceTenderId: "pdfzip",
+  });
+
+  assert.equal(result.ready, true);
+  assert.ok(result.canonicalZipPath);
+  assert.ok(zipContainsMeaningfulDocuments(result.canonicalZipPath!));
+  const names = listZipEntryNames(result.canonicalZipPath!);
+  assert.ok(
+    names.some((n) => /\.pdf$/i.test(n)),
+    `expected a PDF entry, got ${names.join(",")}`,
+  );
+  const zipBytes = fs.readFileSync(result.canonicalZipPath!);
+  assert.notEqual(zipBytes.subarray(0, 4).toString("ascii"), "%PDF");
+  assert.equal(zipBytes[0], 0x50);
+  assert.equal(zipBytes[1], 0x4b);
+});
 test("empty documents directory does not create an empty ZIP", async () => {
   const { tenderDir, documentsDir } = makeTenderDir("789");
   const result = await ensureCanonicalTenderArchive({

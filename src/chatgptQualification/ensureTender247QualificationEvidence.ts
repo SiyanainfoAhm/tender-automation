@@ -21,6 +21,11 @@ import {
   clearNotReadyManifestEntry,
   clearRecoverableNotReadyState,
 } from "./chatgptState.js";
+import {
+  buildFinalEvidenceState,
+  loadEvidenceState,
+  writeFinalEvidenceState,
+} from "../tender247Batch/tender247EvidenceState.js";
 
 export type QualificationEvidenceMode =
   | "FULL"
@@ -61,7 +66,25 @@ export type Tender247EvidenceReport = {
   notReadyReason: string | null;
 };
 
+export type EvidenceArtifactStatus = {
+  attempted: boolean;
+  available: boolean;
+  status: "complete" | "unavailable" | "failed" | "missing" | "not_attempted";
+  path?: string;
+};
+
 export type EvidenceStateFile = {
+  t247Id?: string;
+  metadata: EvidenceArtifactStatus;
+  aiSummary: EvidenceArtifactStatus;
+  documents: {
+    attempted: boolean;
+    available: boolean;
+    status: "complete" | "unavailable" | "failed" | "missing" | "partial" | "not_attempted";
+    path?: string;
+    downloadAllAttempted: boolean;
+    individualFallbackUsed: boolean;
+  };
   evidenceMode: QualificationEvidenceMode;
   availableFiles: string[];
   missingFiles: string[];
@@ -73,8 +96,6 @@ export type EvidenceStateFile = {
   evidenceCount: number;
   updatedAt: string;
 };
-
-const EVIDENCE_STATE_FILE = "qualification-evidence-state.json";
 
 type ReadinessLogger = {
   info: (msg: string) => void;
@@ -107,36 +128,71 @@ export function countLocalMeaningfulDocuments(documentsDir: string): number {
 export function loadEvidenceStateFile(
   tenderDir: string,
 ): EvidenceStateFile | null {
-  const filePath = path.join(tenderDir, EVIDENCE_STATE_FILE);
-  if (!fs.existsSync(filePath)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8")) as EvidenceStateFile;
-  } catch {
-    return null;
-  }
+  return loadEvidenceState(tenderDir) as EvidenceStateFile | null;
 }
 
 export function saveEvidenceStateFile(
   tenderDir: string,
   report: Tender247EvidenceReport,
+  extras?: {
+    downloadAllAttempted?: boolean;
+    individualFallbackUsed?: boolean;
+  },
 ): void {
-  const payload: EvidenceStateFile = {
-    evidenceMode: report.evidenceMode,
-    availableFiles: report.availableFiles,
-    missingFiles: report.missingFiles,
-    downloadAttempted: report.downloadAttempted,
-    downloadSuccess: report.downloadSuccess,
-    metadataRepairAttempted: report.metadataRepairAttempted,
-    documentsCreatedLocally: report.documentsCreatedLocally,
-    localDocumentCount: report.localDocumentCount,
-    evidenceCount: report.evidenceCount,
-    updatedAt: new Date().toISOString(),
-  };
-  fs.writeFileSync(
-    path.join(tenderDir, EVIDENCE_STATE_FILE),
-    JSON.stringify(payload, null, 2),
-    "utf8",
-  );
+  const prior = loadEvidenceState(tenderDir);
+  const downloadAllAttempted =
+    extras?.downloadAllAttempted ??
+    prior?.documents.downloadAllAttempted ??
+    false;
+  const individualFallbackUsed =
+    extras?.individualFallbackUsed ??
+    prior?.documents.individualFallbackUsed ??
+    false;
+  const documentsAttempted =
+    prior?.documents.attempted ||
+    downloadAllAttempted ||
+    individualFallbackUsed ||
+    report.documents.available;
+  const metadataAttempted =
+    prior?.metadata.attempted || report.metadata.available;
+  const aiAttempted = prior?.aiSummary.attempted || report.aiSummary.available;
+
+  const merged = buildFinalEvidenceState({
+    t247Id: report.t247Id,
+    metadataAttempted,
+    metadataAvailable: report.metadata.available,
+    metadataStatus: report.metadata.available
+      ? "complete"
+      : metadataAttempted
+        ? "failed"
+        : "not_attempted",
+    aiAttempted,
+    aiAvailable: report.aiSummary.available,
+    aiStatus: report.aiSummary.available
+      ? "complete"
+      : aiAttempted
+        ? prior?.aiSummary.status === "unavailable"
+          ? "unavailable"
+          : "failed"
+        : "not_attempted",
+    aiPath: report.aiSummary.path,
+    documentsAttempted,
+    documentsAvailable: report.documents.available,
+    documentsStatus: report.documents.available
+      ? "complete"
+      : documentsAttempted
+        ? "failed"
+        : "not_attempted",
+    documentsPath: report.documents.canonicalZipPath,
+    downloadAllAttempted,
+    downloadAllSuccess: prior?.documents.downloadAllSuccess ?? false,
+    individualFallbackUsed,
+    individualDocsFound: prior?.individualDocsFound,
+    individualDocsSuccess: prior?.individualDocsSuccess,
+    individualDocsFailed: prior?.individualDocsFailed,
+    canonicalZipReady: prior?.canonicalZipReady,
+  });
+  writeFinalEvidenceState(tenderDir, merged);
 }
 
 function computeEvidenceMode(
@@ -201,6 +257,8 @@ export async function ensureTender247QualificationEvidence(options: {
   const priorState = loadEvidenceStateFile(tenderDir);
   let downloadAttempted = priorState?.downloadAttempted ?? false;
   let downloadSuccess = priorState?.downloadSuccess ?? false;
+  let downloadAllAttempted = priorState?.documents?.downloadAllAttempted ?? false;
+  let individualFallbackUsed = priorState?.documents?.individualFallbackUsed ?? false;
 
   let localDocumentCount = countLocalMeaningfulDocuments(documentsDir);
 
@@ -216,16 +274,24 @@ export async function ensureTender247QualificationEvidence(options: {
     archive.sourceFiles.length,
   );
 
-  const needsDownload =
-    options.attemptDocumentDownload === true &&
-    !archive.ready &&
-    localDocumentCount === 0 &&
-    !downloadAttempted;
+  const metadataProbe = await ensureGptMetadataReady({
+    tenderFolder: tenderDir,
+    t247Id,
+    logger,
+  });
+  const aiExisting = findAiSummaryPdf(tenderDir);
 
-  logger?.info(`T247_DOCUMENT_DOWNLOAD_REQUIRED=${needsDownload}`);
+  const needsAcquisition =
+    options.attemptDocumentDownload === true &&
+    (!archive.ready || !aiExisting || !metadataProbe.ready);
+
+  logger?.info(`T247_DOCUMENT_DOWNLOAD_REQUIRED=${needsAcquisition}`);
+  logger?.info(
+    "T247_ACQUISITION_NO_SHORT_CIRCUIT=true (try metadata + AI summary + documents)",
+  );
 
   if (
-    needsDownload &&
+    needsAcquisition &&
     options.browserContext &&
     options.listPage &&
     options.config &&
@@ -241,22 +307,28 @@ export async function ensureTender247QualificationEvidence(options: {
         config: options.config,
         logger: options.fullLogger,
       });
-      const aiExisting = findAiSummaryPdf(tenderDir);
       const dl = await downloadRequiredTenderFiles({
         detailPage: resolved.detailPage,
         context: options.browserContext,
         tenderFolder: tenderDir,
         t247Id,
         timeoutMs: options.config.downloadTimeoutMs,
-        maxRetries: options.config.documentDownloadMaxRetries,
+        maxRetries: 1,
         logger: options.fullLogger,
         skipAiSummary: Boolean(aiExisting),
-        skipAllDocuments: false,
+        skipAllDocuments: archive.ready,
       });
       downloadSuccess = Boolean(
-        dl.allDocumentsDownloaded || dl.allDocumentsSkipped,
+        dl.allDocumentsDownloaded ||
+          dl.canonicalZipReady ||
+          dl.individualDocsSuccess > 0,
       );
+      downloadAllAttempted = dl.downloadAllAttempted;
+      individualFallbackUsed = dl.individualFallbackUsed;
       logger?.info(`T247_DOCUMENT_DOWNLOAD_SUCCESS=${downloadSuccess}`);
+      logger?.info(`DOWNLOAD_ALL_ATTEMPTED=${dl.downloadAllAttempted}`);
+      logger?.info(`DOWNLOAD_ALL_SUCCESS=${dl.downloadAllSuccess}`);
+      logger?.info(`INDIVIDUAL_DOC_FALLBACK_USED=${dl.individualFallbackUsed}`);
       await resolved.detailPage.close().catch(() => undefined);
 
       archive = await ensureCanonicalTenderArchive({
@@ -366,7 +438,10 @@ export async function ensureTender247QualificationEvidence(options: {
     if (!aiAvailable) report.missingFiles.push("AI_Summary.pdf");
   }
 
-  saveEvidenceStateFile(tenderDir, report);
+  saveEvidenceStateFile(tenderDir, report, {
+    downloadAllAttempted,
+    individualFallbackUsed,
+  });
   logEvidenceReport(report, logger);
 
   if (gptReady) {

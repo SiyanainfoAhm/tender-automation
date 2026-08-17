@@ -655,6 +655,7 @@ export async function runTender247CompletePipeline(
       logger.info("TENDER247_COMPLETE_NO_NEW_READY_TENDERS");
     } else {
       logger.info("TENDER247_COMPLETE_CHATGPT_START");
+      logger.info("PIPELINE_PHASE=CHATGPT_QUALIFICATION");
       process.env.CHATGPT_PROCESS_READY_ONLY =
         process.env.CHATGPT_PROCESS_READY_ONLY || "true";
       process.env.CHATGPT_CONTINUE_ON_ERROR =

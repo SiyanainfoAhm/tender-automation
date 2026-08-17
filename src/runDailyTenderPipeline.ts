@@ -437,6 +437,8 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
 
     summary.tender247 = "SUCCESS";
     logger.info("DAILY_PIPELINE_TENDER247_COMPLETE");
+    logger.info("T247_ARTIFACT_ACQUISITION_BATCH_COMPLETE=true");
+    logger.info("PIPELINE_PHASE=CHATGPT_QUALIFICATION");
 
     const excelAudit = readExcelFilterAudit(dateFolder);
     if (excelAudit) {

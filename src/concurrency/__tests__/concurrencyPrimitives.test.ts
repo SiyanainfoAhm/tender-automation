@@ -6,7 +6,7 @@ import {
   createChatGptSubmissionScheduler,
   resetSharedChatGptSubmissionSchedulerForTests,
 } from "../chatGptSubmissionScheduler.js";
-import { loadTender247ConcurrencyConfig } from "../../tender247Batch/tender247ConcurrencyConfig.js";
+import { loadTender247ConcurrencyConfig, getTender247DocumentDownloadTimeoutMs } from "../../tender247Batch/tender247ConcurrencyConfig.js";
 
 test("bounded queue respects max size", () => {
   const q = createBoundedQueue<string>(2);
@@ -78,12 +78,18 @@ test("ChatGPT submission scheduler serializes send slots", async () => {
   assert.deepEqual(order, ["a-hold", "a-release", "b-hold", "b-release"]);
 });
 
-test("concurrency defaults: detail 4, chatgpt 1, queue 10, interval 300s", () => {
+test("concurrency defaults: detail 1, download 1, chatgpt 1, queue 10, interval 300s", () => {
   const cfg = loadTender247ConcurrencyConfig({});
-  assert.equal(cfg.detailConcurrency, 4);
+  assert.equal(cfg.detailConcurrency, 1);
+  assert.equal(cfg.downloadConcurrency, 1);
+  assert.equal(cfg.artifactConcurrency, 1);
   assert.equal(cfg.chatgptConcurrency, 1);
   assert.equal(cfg.chatgptReadyQueueMax, 10);
   assert.equal(cfg.chatgptMinSubmissionIntervalMs, 300_000);
+});
+
+test("TENDER247_DOCUMENT_DOWNLOAD_TIMEOUT_MS defaults to 5 minutes", () => {
+  assert.equal(getTender247DocumentDownloadTimeoutMs({}), 300_000);
 });
 
 test("CHATGPT_CONCURRENCY cannot exceed 2", () => {

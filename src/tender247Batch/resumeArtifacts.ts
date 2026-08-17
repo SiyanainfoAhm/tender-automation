@@ -4,6 +4,10 @@ import path from "node:path";
 import { parseIndianCurrencyAmount } from "../bidassist/parseIndianCurrencyAmount.js";
 import type { Logger } from "../logger.js";
 import { ensureDir } from "../fileUtils.js";
+import {
+  canonicalZipPath,
+  isCanonicalDocumentsZipReady,
+} from "./canonicalTenderArchive.js";
 
 const TEMP_EXTS = [".crdownload", ".tmp", ".download", ".part"];
 
@@ -100,13 +104,16 @@ export function writeMetadataSyncMarker(
 }
 
 export function isMetadataResumeReady(tenderFolder: string): boolean {
+  const localPath = path.join(tenderFolder, "metadata.json");
+  if (isValidArtifact(localPath) && isMetadataExtractionDone(localPath)) {
+    return true;
+  }
   const marker = readMetadataSyncMarker(tenderFolder);
   if (marker?.ok) {
     const status = marker.extractionStatus;
     return status === "complete" || status === "partial" || status == null;
   }
-  const legacyPath = path.join(tenderFolder, "metadata.json");
-  return isValidArtifact(legacyPath) && isMetadataExtractionDone(legacyPath);
+  return false;
 }
 
 export function inspectTenderResumeState(
@@ -126,10 +133,10 @@ export function inspectTenderResumeState(
   const finalZipValid = isValidArtifact(zipPath);
   const metadataValid = isMetadataResumeReady(tenderFolder);
   const aiSummaryValid = isValidArtifact(aiCanonical);
-  const allDocumentsPath = folderExists
-    ? findExistingAllDocumentsFile(documentsDir)
+  const allDocumentsValid = isCanonicalDocumentsZipReady(documentsDir);
+  const allDocumentsPath = allDocumentsValid
+    ? canonicalZipPath(documentsDir)
     : null;
-  const allDocumentsValid = isValidArtifact(allDocumentsPath);
 
   return {
     t247Id,
@@ -148,44 +155,17 @@ export function inspectTenderResumeState(
 }
 
 /**
- * Find a valid Download All Documents artifact under documents/.
- * Accepts Tender_All_Documents* or any non-empty archive/file that is not temp.
+ * Find a Download All Documents artifact. Presence of any file is NOT
+ * enough to skip the documents stage — callers must use
+ * isCanonicalDocumentsZipReady for skip/success.
  */
 export function findExistingAllDocumentsFile(
   documentsDir: string,
 ): string | null {
-  if (!fs.existsSync(documentsDir) || !fs.statSync(documentsDir).isDirectory()) {
-    return null;
+  if (isCanonicalDocumentsZipReady(documentsDir)) {
+    return canonicalZipPath(documentsDir);
   }
-
-  const entries = fs
-    .readdirSync(documentsDir)
-    .map((name) => path.join(documentsDir, name))
-    .filter((p) => isValidArtifact(p));
-
-  if (entries.length === 0) {
-    return null;
-  }
-
-  // Prefer canonical Tender_All_Documents.*
-  const canonical = entries.find((p) =>
-    /^Tender_All_Documents(\.|$)/i.test(path.basename(p)),
-  );
-  if (canonical) {
-    return canonical;
-  }
-
-  // Prefer Tender_All_Documents_* variants (will be cleaned later)
-  const variants = entries
-    .filter((p) => /^Tender_All_Documents/i.test(path.basename(p)))
-    .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-  if (variants[0]) {
-    return variants[0];
-  }
-
-  // Fallback: largest non-temp file in documents/
-  entries.sort((a, b) => fs.statSync(b).size - fs.statSync(a).size);
-  return entries[0] ?? null;
+  return null;
 }
 
 /**

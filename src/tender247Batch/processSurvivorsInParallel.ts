@@ -1,31 +1,23 @@
 /**
- * Parallel Tender247 detail/download for Excel financial survivors.
- * Uses openViaSingleTenderDirect so workers do not share card locators.
+ * Sequential Tender247 selected-tender artifact acquisition.
+ * Concurrency is always 1 — one detail page, one tender transaction, then next.
  */
 import type { BrowserContext, Page } from "playwright";
 import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
-import { runWorkerPool } from "../concurrency/workerPool.js";
+import {
+  assertSingleTender247DetailPage,
+  closeExtraTender247DetailPages,
+} from "./assertSingleTender247DetailPage.js";
 import { loadTender247ConcurrencyConfig } from "./tender247ConcurrencyConfig.js";
-import { processLiveTender } from "./processTender.js";
+import {
+  processTender247ArtifactTransaction,
+} from "./processTender.js";
+import { runSequentialArtifactAcquisition } from "./runSequentialArtifactAcquisition.js";
 import type { ProcessTenderResult } from "./types.js";
 
-/** Serialize list-page bringToFront / overlay dismiss across workers. */
-let listPageChain: Promise<void> = Promise.resolve();
-
 export async function withListPageLock<T>(fn: () => Promise<T>): Promise<T> {
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const previous = listPageChain;
-  listPageChain = previous.then(() => gate);
-  await previous;
-  try {
-    return await fn();
-  } finally {
-    release();
-  }
+  return fn();
 }
 
 export async function processSurvivorsInParallel(options: {
@@ -49,45 +41,52 @@ export async function processSurvivorsInParallel(options: {
   processedIds: string[];
 }> {
   const concurrencyCfg = loadTender247ConcurrencyConfig();
-  const concurrency =
-    options.concurrency ?? concurrencyCfg.detailConcurrency;
   const pending = options.survivorIds.filter(
     (id) => !options.alreadyCompleted.has(id),
   );
 
+  options.logger.info("T247_PHASE=ARTIFACT_ACQUISITION");
   options.logger.info(
-    `TENDER247_DETAIL_PARALLEL concurrency=${concurrency} pending=${pending.length}`,
+    `TENDER247_DETAIL_CONCURRENCY=${concurrencyCfg.detailConcurrency}`,
+  );
+  options.logger.info(
+    `TENDER247_DOWNLOAD_CONCURRENCY=${concurrencyCfg.downloadConcurrency}`,
+  );
+  options.logger.info(
+    `TENDER247_ARTIFACT_CONCURRENCY=${concurrencyCfg.artifactConcurrency}`,
   );
   console.log(
-    `TENDER247_DETAIL_PARALLEL concurrency=${concurrency} pending=${pending.length}`,
+    `TENDER247_DETAIL_SEQUENTIAL pending=${pending.length} concurrency=1`,
   );
+  if ((options.concurrency ?? 1) > 1) {
+    options.logger.warn(
+      "T247_ARTIFACT_CONCURRENCY_FORCED=1 (ignoring requested >1)",
+    );
+  }
 
   const attemptedIds: string[] = [];
   const failedIds: string[] = [];
   const processedIds: string[] = [];
   const results: ProcessTenderResult[] = [];
 
-  const outcomes = await runWorkerPool({
-    items: pending,
-    concurrency,
-    shouldStop: options.shouldStop,
-    worker: async (t247Id, workerId) => {
+  await runSequentialArtifactAcquisition({
+    candidates: pending,
+    getId: (id) => id,
+    logger: options.logger,
+    process: async (t247Id, index, total) => {
+      if (options.shouldStop?.()) {
+        return { evidenceMode: "NONE" };
+      }
       attemptedIds.push(t247Id);
-      console.log(`TENDER247_DETAIL_WORKER=${workerId}`);
-      console.log(`TENDER247_DETAIL_WORKER_TENDER_ID=${t247Id}`);
-      options.logger.info(
-        `TENDER247_DETAIL_WORKER=${workerId} tender=${t247Id}`,
+      await closeExtraTender247DetailPages(options.context, options.listPage);
+      assertSingleTender247DetailPage(
+        options.context,
+        options.listPage,
+        options.logger,
       );
 
       const excel = options.excelValueById.get(t247Id);
-      const index = attemptedIds.length;
-      const total = pending.length;
-
-      await withListPageLock(async () => {
-        await options.listPage.bringToFront().catch(() => undefined);
-      });
-
-      const result = await processLiveTender({
+      const result = await processTender247ArtifactTransaction({
         listPage: options.listPage,
         context: options.context,
         t247Id,
@@ -101,15 +100,53 @@ export async function processSurvivorsInParallel(options: {
         excelEmd: excel?.parsedEmdInr ?? null,
         openViaSingleTenderDirect: true,
       });
-      return result;
+      results.push(result);
+
+      await closeExtraTender247DetailPages(options.context, options.listPage);
+      assertSingleTender247DetailPage(
+        options.context,
+        options.listPage,
+        options.logger,
+      );
+
+      if (
+        result.status === "dropped_non_it" ||
+        result.status === "ambiguous_manual_review"
+      ) {
+        return {
+          evidenceMode: "NONE",
+          metadataOk: false,
+          aiOk: false,
+          documentsOk: false,
+        };
+      }
+      if (result.status === "completed" || result.status === "partial") {
+        processedIds.push(result.t247Id);
+      } else {
+        failedIds.push(result.t247Id);
+      }
+      return {
+        evidenceMode:
+          result.status === "completed"
+            ? "FULL"
+            : result.status === "partial"
+              ? "PARTIAL"
+              : "NONE",
+        metadataOk: result.metadataStatus === "complete",
+        aiOk: result.aiSummaryStatus === "complete",
+        documentsOk:
+          result.allDocumentsStatus === "complete" ||
+          result.allDocumentsStatus === "partial",
+      };
     },
   });
 
-  for (const outcome of outcomes) {
-    if (!outcome.ok || !outcome.result) {
-      failedIds.push(outcome.input);
+  for (const id of pending) {
+    if (!results.some((r) => r.t247Id === id) && !failedIds.includes(id)) {
+      if (options.shouldStop?.()) break;
+      failedIds.push(id);
       results.push({
-        t247Id: outcome.input,
+        t247Id: id,
         status: "failed",
         zipPath: null,
         zipSize: 0,
@@ -125,27 +162,14 @@ export async function processSurvivorsInParallel(options: {
         aiSummaryPath: null,
         allDocumentsPath: null,
         lastCompletedStep: null,
-        error: outcome.error || "parallel worker failed",
+        error: "not processed",
         failedDocuments: [],
       });
-      continue;
-    }
-    const result = outcome.result;
-    results.push(result);
-    if (
-      result.status === "dropped_non_it" ||
-      result.status === "ambiguous_manual_review"
-    ) {
-      // counted but not failed
-    } else if (
-      result.status === "completed" ||
-      result.status === "partial"
-    ) {
-      processedIds.push(result.t247Id);
-    } else {
-      failedIds.push(result.t247Id);
     }
   }
 
   return { results, attemptedIds, failedIds, processedIds };
 }
+
+/** @deprecated Use sequential processSurvivorsInParallel (concurrency forced to 1). */
+export const processSelectedTendersSequentially = processSurvivorsInParallel;

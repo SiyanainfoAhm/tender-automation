@@ -183,12 +183,19 @@ export function zipContainsMeaningfulDocuments(filePath: string): boolean {
   return listZipEntryNames(filePath).some(isMeaningfulZipEntryName);
 }
 
-function isExcludedSourceName(name: string): boolean {
-  const base = path.basename(name);
+function isExcludedSourceFile(filePath: string): boolean {
+  const base = path.basename(filePath);
   const lower = base.toLowerCase();
+  if (path.basename(path.dirname(filePath)).toLowerCase() === "_source_download") {
+    return true;
+  }
   if (isTempOrIncompleteName(base)) return true;
   if (EXCLUDED_BASENAMES.has(lower)) return true;
-  if (/^Tender_All_Documents\.zip$/i.test(base)) return true;
+  if (/^Tender_All_Documents\.zip$/i.test(base)) {
+    // A real canonical ZIP must not be nested inside itself.
+    // A PDF/DOC mis-saved as .zip is a source file, not a ZIP.
+    return isReadableZipArchive(filePath);
+  }
   if (/^Tender_All_Documents\.zip\.tmp$/i.test(base)) return true;
   if (/^AI_Summary/i.test(base)) return true;
   if (/chatgpt-state/i.test(base)) return true;
@@ -202,8 +209,9 @@ function isExcludedSourceName(name: string): boolean {
 
 export function isMeaningfulTenderDocumentFile(filePath: string): boolean {
   const name = path.basename(filePath);
-  if (isExcludedSourceName(name)) return false;
+  if (isExcludedSourceFile(filePath)) return false;
   if (!isNonEmptyRegularFile(filePath)) return false;
+  if (looksLikePdf(filePath)) return true;
   const ext = extensionOf(name);
   if (SUPPORTED_EXTENSIONS.has(ext)) return true;
   if (!ext && looksLikePdf(filePath)) return true;
@@ -226,6 +234,8 @@ export function listDocumentSourceFiles(documentsDir: string): string[] {
         continue;
       }
       if (st.isDirectory()) {
+        if (name.toLowerCase() === "_source_download") continue;
+        if (name.toLowerCase() === "_tmp") continue;
         walk(p);
         continue;
       }
@@ -241,6 +251,58 @@ export function listDocumentSourceFiles(documentsDir: string): string[] {
 
 export function canonicalZipPath(documentsDir: string): string {
   return path.join(documentsDir, CANONICAL_ARCHIVE_NAME);
+}
+
+export function isCanonicalDocumentsZipReady(
+  documentsDir: string,
+): boolean {
+  return zipContainsMeaningfulDocuments(canonicalZipPath(documentsDir));
+}
+
+/** Alias used by document-stage completion checks. */
+export function isValidTenderDocumentsZip(zipPath: string): boolean {
+  return zipContainsMeaningfulDocuments(zipPath);
+}
+
+export function removeInvalidCanonicalZip(documentsDir: string): void {
+  const zipPath = canonicalZipPath(documentsDir);
+  if (!fs.existsSync(zipPath)) return;
+  if (!zipContainsMeaningfulDocuments(zipPath)) {
+    try {
+      fs.unlinkSync(zipPath);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+function correctMisnamedDocumentExtensions(documentsDir: string): void {
+  if (!fs.existsSync(documentsDir) || !fs.statSync(documentsDir).isDirectory()) {
+    return;
+  }
+  for (const name of fs.readdirSync(documentsDir)) {
+    if (name.toLowerCase() === "_source_download") continue;
+    if (name.toLowerCase() === "_tmp") continue;
+    const p = path.join(documentsDir, name);
+    try {
+      if (!fs.statSync(p).isFile()) continue;
+    } catch {
+      continue;
+    }
+    if (looksLikePdf(p) && !/\.pdf$/i.test(name)) {
+      const dest = path.join(
+        documentsDir,
+        `${path.basename(name, path.extname(name))}.pdf`,
+      );
+      if (path.resolve(dest) === path.resolve(p)) continue;
+      if (fs.existsSync(dest) && isNonEmptyRegularFile(dest)) {
+        fs.unlinkSync(p);
+        continue;
+      }
+      if (fs.existsSync(dest)) fs.unlinkSync(dest);
+      fs.renameSync(p, dest);
+    }
+  }
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -372,6 +434,7 @@ export async function ensureCanonicalTenderArchive(options: {
   const t247Id = String(options.sourceTenderId).replace(/^T247-/i, "");
 
   return withArchiveLock(documentsDir, async () => {
+    correctMisnamedDocumentExtensions(documentsDir);
     const foundExisting = fs.existsSync(zipPath);
     if (foundExisting && existingValidCanonical(zipPath)) {
       log(options.logger, "TENDER_CANONICAL_ARCHIVE_FOUND=true");

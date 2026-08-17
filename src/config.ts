@@ -136,10 +136,7 @@ export function loadConfig(): AppConfig {
     lockFilePath: resolveProjectPath("automation.lock"),
     crawlLockFilePath: resolveProjectPath("crawl.lock"),
     projectRoot,
-    tenderDetailConcurrency: Math.max(
-      1,
-      parseIntEnv(process.env.TENDER_DETAIL_CONCURRENCY, 2),
-    ),
+    tenderDetailConcurrency: 1,
     tenderDetailMaxRetries: Math.max(
       0,
       parseIntEnv(process.env.TENDER_DETAIL_MAX_RETRIES, 2),

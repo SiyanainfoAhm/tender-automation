@@ -15,7 +15,6 @@ import {
   tenderDetailUrl,
 } from "./apiClient.js";
 import { createTenderZip, removeDirectoryRecursive } from "./createTenderZip.js";
-import { ensureCanonicalTenderArchive } from "./canonicalTenderArchive.js";
 import { downloadRequiredTenderFiles } from "./downloadRequiredTenderFiles.js";
 import {
   ensureTender247DateScopedDir,
@@ -36,6 +35,25 @@ import {
   writeMetadataSyncMarker,
 } from "./resumeArtifacts.js";
 import { waitForAllActiveDownloads } from "../tenderDetails/downloadHelpers.js";
+import { isCanonicalDocumentsZipReady } from "./canonicalTenderArchive.js";
+import { verifyCurrentTenderId } from "./verifyCurrentTenderId.js";
+import {
+  assertSingleTender247DetailPage,
+  closeExtraTender247DetailPages,
+} from "./assertSingleTender247DetailPage.js";
+import {
+  getTender247DocumentDownloadTimeoutMs,
+} from "./tender247ConcurrencyConfig.js";
+import {
+  assertCanCloseTenderDetailPage,
+  createDocumentStageTracker,
+  t247Event,
+} from "./tenderDocumentStage.js";
+import {
+  buildFinalEvidenceState,
+  writeFinalEvidenceState,
+  writeJsonAtomic,
+} from "./tender247EvidenceState.js";
 import {
   fetchTender247Metadata,
   upsertTender247Metadata,
@@ -104,12 +122,22 @@ export async function processLiveTender(
   let zipPath: string | null = null;
   let zipSize = 0;
   let lastItGate: Tender247ItRelevanceResult | null = null;
+  let downloadAllAttempted = false;
+  let downloadAllSuccess = false;
+  let individualFallbackUsed = false;
+  let individualDocsFound = 0;
+  let individualDocsSuccess = 0;
+  let individualDocsFailed: string[] = [];
+  let canonicalZipReady = false;
+  let documentsStageRan = false;
+  const documentStage = createDocumentStageTracker(t247Id);
+  const tenderStartedAt = Date.now();
 
   logger.info(`[${index}/${total}] START T247-${t247Id}`);
 
-  // -------- LEVEL A: completed ZIP --------
+  // -------- LEVEL A: skip only when metadata + AI + validated canonical docs ZIP exist --------
   let resume = inspectTenderResumeState(dateFolder, t247Id);
-  if (resume.finalZipValid) {
+  if (resume.allDocumentsValid && resume.metadataValid && resume.aiSummaryValid) {
     logger.info(`TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id}`);
     return {
       t247Id,
@@ -162,8 +190,8 @@ export async function processLiveTender(
       lastCompletedStep = "all_documents";
     }
 
-    // ZIP repair / create from existing folder — do not reopen Tender247
-    if (resume.metadataValid && resume.allDocumentsValid) {
+    // ZIP repair only when all attempted artifacts already exist (do not skip AI).
+    if (resume.metadataValid && resume.allDocumentsValid && resume.aiSummaryValid) {
       try {
         const existingMeta = await loadOrCreateMinimumMetadata({
           metadataPath: resume.metadataPath,
@@ -267,6 +295,8 @@ export async function processLiveTender(
 
   // Need live detail page for missing steps
   try {
+    await closeExtraTender247DetailPages(context, listPage);
+    assertSingleTender247DetailPage(context, listPage, logger);
     await listPage.bringToFront().catch(() => undefined);
     await dismissForTenderPage(listPage, logger, config);
 
@@ -355,11 +385,24 @@ export async function processLiveTender(
       logger.info("SECURITY_CODE_CAPTURED");
     }
 
+    logger.info(`T247_ARTIFACT_TRANSACTION_START=${t247Id}`);
+    logger.info("OPENING_DETAIL");
+    logger.info("DETAIL_PAGE_READY");
+    logger.info("T247_DETAIL_PAGE_OPENED=true");
+    t247Event(logger, t247Id, "DETAIL_OPENED");
+    assertSingleTender247DetailPage(context, listPage, logger);
+
     const portalUrl = securityCode
       ? buildDetailPageUrl(t247Id, securityCode, null)
       : detailPage.url();
 
+    await verifyCurrentTenderId(detailPage, t247Id, logger);
+
     // Minimum metadata first (in-memory / Supabase / legacy — never permanent metadata.json)
+    logger.info("METADATA_CAPTURE_START");
+    logger.info(`T247_METADATA_START=${t247Id}`);
+    logger.info(`T247_METADATA_CAPTURE_START=${t247Id}`);
+    t247Event(logger, t247Id, "METADATA_START");
     let metadata: CompleteTenderMetadata = await loadOrCreateMinimumMetadata({
       metadataPath: resume.metadataPath,
       tenderFolder: resume.tenderFolder,
@@ -398,7 +441,7 @@ export async function processLiveTender(
     await detailPage.bringToFront().catch(() => undefined);
     await dismissForTenderPage(detailPage, logger, config);
 
-    // ---- METADATA extraction (in-memory; no Supabase until docs + IT gate) ----
+    // ---- METADATA extraction immediately after detail page is ready ----
     if (!resume.metadataValid) {
       try {
         const extracted = await extractCompleteTenderMetadata({
@@ -441,6 +484,16 @@ export async function processLiveTender(
       metadataPath = null;
     }
 
+    const metadataOkNow =
+      metadata.source === "tender247" &&
+      metadata.t247Id === t247Id &&
+      Boolean(metadata.normalized?.tenderName) &&
+      Boolean(metadata.raw && Object.keys(metadata.raw).length > 0);
+    logger.info(`T247_METADATA_CAPTURE_SUCCESS=${metadataOkNow}`);
+    logger.info(`T247_METADATA_TENDER_ID=${t247Id}`);
+    logger.info("METADATA_COMPLETE");
+    t247Event(logger, t247Id, "METADATA_DONE");
+
     // Preserve Excel financial survivors when detail lacks authoritative amounts
     applyExcelFinancialsToMetadata(metadata, {
       excelTenderValue: options.excelTenderValue,
@@ -467,46 +520,92 @@ export async function processLiveTender(
       });
     }
 
-    // ---- DOWNLOADS first (IT_RELEVANT only) — then Supabase ----
-    logger.info(`TENDER247_DOCUMENT_DOWNLOAD_START=T247-${t247Id}`);
+    // Persist metadata before AI Summary / documents so it does not depend on ZIP.
+    try {
+      await persistTender247Metadata({
+        metadata,
+        tenderFolder: resume.tenderFolder,
+        logger,
+      });
+      metadataPath = null;
+      const localSaved = verifyLocalMetadataJson(resume.tenderFolder, t247Id);
+      const verified = await fetchTender247Metadata(t247Id);
+      logger.info(`T247_METADATA_SAVED=${localSaved}`);
+      logger.info(`T247_METADATA_VERIFIED=${localSaved}`);
+      logger.info("T247_METADATA_SUPABASE_UPSERTED=true");
+      logger.info(`T247_METADATA_SUPABASE_VERIFIED=${Boolean(verified)}`);
+      logger.info("PERSIST");
+    } catch (error) {
+      logger.warn(
+        `T247_METADATA_SUPABASE_UPSERTED=false ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    // ---- Sequential artifacts: AI Summary then documents (concurrency=1) ----
+    logger.info("AI_SUMMARY_CAPTURE_START");
     try {
       const downloads = await downloadRequiredTenderFiles({
         detailPage,
         context,
         tenderFolder: resume.tenderFolder,
         t247Id,
-        timeoutMs: config.downloadTimeoutMs,
-        maxRetries: config.documentDownloadMaxRetries,
+        timeoutMs: getTender247DocumentDownloadTimeoutMs(),
+        aiSummaryTimeoutMs: Math.min(
+          config.downloadTimeoutMs,
+          Number.parseInt(process.env.T247_AI_SUMMARY_TIMEOUT_MS || "90000", 10) ||
+            90_000,
+        ),
+        maxRetries: Math.min(1, config.documentDownloadMaxRetries),
         logger,
         skipAiSummary: resume.aiSummaryValid,
         skipAllDocuments: resume.allDocumentsValid,
         keepDebugFiles: config.keepDebugFiles,
+        documentStage,
       });
 
       aiSummaryPath = downloads.aiSummaryPath;
       allDocumentsPath = downloads.allDocumentsPath;
-
-      if (downloads.aiSummaryDownloaded) {
-        aiSummaryStatus = "complete";
-      } else if (downloads.aiSummarySkipped && !resume.aiSummaryValid) {
-        aiSummaryStatus = "unavailable";
-      } else if (!downloads.aiSummaryDownloaded) {
-        aiSummaryStatus = resume.aiSummaryValid ? "complete" : "unavailable";
-      }
+      aiSummaryStatus = downloads.aiSummaryStatus;
+      allDocumentsStatus =
+        downloads.documentsStatus === "unavailable"
+          ? "failed"
+          : downloads.documentsStatus === "missing"
+            ? "failed"
+            : downloads.documentsStatus;
+      downloadAllAttempted = downloads.downloadAllAttempted;
+      downloadAllSuccess = downloads.downloadAllSuccess;
+      individualFallbackUsed = downloads.individualFallbackUsed;
+      individualDocsFound = downloads.individualDocsFound;
+      individualDocsSuccess = downloads.individualDocsSuccess;
+      individualDocsFailed = downloads.individualDocsFailed;
+      canonicalZipReady = downloads.canonicalZipReady;
+      documentsStageRan = downloads.documentsAttempted;
 
       logger.info(
         `TENDER247_AI_SUMMARY_AVAILABLE=${aiSummaryStatus === "complete"}`,
       );
+      logger.info("AI_SUMMARY_COMPLETE");
 
-      if (downloads.allDocumentsDownloaded) {
-        allDocumentsStatus = "complete";
+      if (downloads.allDocumentsDownloaded || downloads.canonicalZipReady) {
         lastCompletedStep = "all_documents";
+        logger.info(`TENDER247_DOCUMENT_ARCHIVE_DOWNLOAD_START=T247-${t247Id}`);
+        logger.info(
+          `TENDER247_DOCUMENT_ARCHIVE_DOWNLOADED=${allDocumentsPath}`,
+        );
+        logger.info("TENDER247_DOCUMENT_ARCHIVE_VALID=true");
       } else {
-        allDocumentsStatus = "failed";
-        hardError = `Download All Documents failed for T247-${t247Id}`;
+        logger.warn(`TENDER247_DOCUMENT_DOWNLOAD_FAILED=T247-${t247Id}`);
+        hardError =
+          hardError ||
+          `Tender documents incomplete for T247-${t247Id}` +
+            (downloads.individualFallbackUsed
+              ? ` (individual fallback used; failed=${downloads.individualDocsFailed.join(",")})`
+              : " (Download All failed)");
       }
+      logger.info("DOCUMENT_DOWNLOAD_COMPLETE");
 
-      // Refresh resume after downloads
       resume = inspectTenderResumeState(dateFolder, t247Id);
       if (resume.aiSummaryValid) {
         aiSummaryStatus = "complete";
@@ -515,25 +614,6 @@ export async function processLiveTender(
       if (resume.allDocumentsValid) {
         allDocumentsStatus = "complete";
         allDocumentsPath = resume.allDocumentsPath;
-      }
-
-      if (allDocumentsStatus === "complete" && allDocumentsPath) {
-        logger.info(`TENDER247_DOCUMENT_ARCHIVE_DOWNLOAD_START=T247-${t247Id}`);
-        logger.info(
-          `TENDER247_DOCUMENT_ARCHIVE_DOWNLOADED=${allDocumentsPath}`,
-        );
-        logger.info("TENDER247_DOCUMENT_ARCHIVE_VALID=true");
-        const canonical = await ensureCanonicalTenderArchive({
-          tenderDir: resume.tenderFolder,
-          documentsDir: path.join(resume.tenderFolder, "documents"),
-          sourceTenderId: t247Id,
-          logger,
-        });
-        if (canonical.ready && canonical.canonicalZipPath) {
-          allDocumentsPath = canonical.canonicalZipPath;
-        }
-      } else {
-        logger.warn(`TENDER247_DOCUMENT_DOWNLOAD_FAILED=T247-${t247Id}`);
       }
 
       metadata.downloads = {
@@ -545,42 +625,65 @@ export async function processLiveTender(
           : null,
       };
       metadata.processedAt = new Date().toISOString();
+      await persistTender247Metadata({
+        metadata,
+        tenderFolder: resume.tenderFolder,
+        logger,
+      });
 
-      // Persist only after documents succeed (IT_RELEVANT path)
-      if (allDocumentsStatus === "complete") {
-        await persistTender247Metadata({
-          metadata,
-          tenderFolder: resume.tenderFolder,
-          logger,
-        });
-        metadataPath = null;
-        logger.info("METADATA_SAVED");
-      } else {
-        logger.info("SUPABASE_WRITE_SKIPPED=true");
-        logger.info("CHATGPT_SKIPPED=true");
-      }
+      logger.info(`AI_SUMMARY_ATTEMPTED=true`);
+      logger.info(`AI_SUMMARY_SUCCESS=${aiSummaryStatus === "complete"}`);
+      logger.info(`DOWNLOAD_ALL_ATTEMPTED=${downloads.downloadAllAttempted}`);
+      logger.info(`DOWNLOAD_ALL_SUCCESS=${downloads.downloadAllSuccess}`);
+      logger.info(
+        `INDIVIDUAL_DOC_FALLBACK_USED=${downloads.individualFallbackUsed}`,
+      );
+      logger.info(`INDIVIDUAL_DOCS_FOUND=${downloads.individualDocsFound}`);
+      logger.info(`INDIVIDUAL_DOCS_SUCCESS=${downloads.individualDocsSuccess}`);
+      logger.info(
+        `INDIVIDUAL_DOCS_FAILED=${downloads.individualDocsFailed.length}`,
+      );
+      logger.info(`CANONICAL_ZIP_READY=${downloads.canonicalZipReady}`);
+      t247Event(logger, t247Id, "ARTIFACT_BATCH_COMPLETE");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.warn(`Downloads step error (continuing): ${message}`);
       logger.warn(`TENDER247_DOCUMENT_DOWNLOAD_FAILED=T247-${t247Id}`);
       hardError = hardError || message;
-      if (allDocumentsStatus !== "complete") {
+      if (allDocumentsStatus !== "complete" && allDocumentsStatus !== "partial") {
         allDocumentsStatus = "failed";
+      }
+      const stage = documentStage.get();
+      if (stage === "downloading" || stage === "verifying") {
+        documentStage.set("failed");
       }
     }
   } catch (error) {
     hardError = error instanceof Error ? error.message : String(error);
     logger.warn(`Tender T247-${t247Id} failed: ${hardError}`);
   } finally {
-    // Finish any in-flight Playwright saves before closing the detail tab
     await waitForAllActiveDownloads().catch(() => undefined);
+    const stage = documentStage.get();
+    if (stage === "downloading" || stage === "verifying") {
+      logger.error(
+        `REFUSING_TO_CLOSE_TENDER_${t247Id}: document stage still active (${stage})`,
+      );
+      assertCanCloseTenderDetailPage(documentStage, t247Id);
+    }
     try {
       if (detailPage && !detailPage.isClosed()) {
+        await verifyCurrentTenderId(detailPage, t247Id, logger).catch(() => undefined);
+        t247Event(logger, t247Id, "DETAIL_CLOSE_START");
+        logger.info("DETAIL_CLOSE_START");
         await detailPage.close({ runBeforeUnload: false });
         logger.info(`DETAIL_TAB_CLOSED T247-${t247Id}`);
+        logger.info("T247_DETAIL_PAGE_CLOSED=true");
+        t247Event(logger, t247Id, "DETAIL_CLOSED");
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "REFUSING_TO_CLOSE_TENDER") {
+        throw error;
+      }
     }
     detailPage = null;
     for (const p of context.pages()) {
@@ -591,6 +694,11 @@ export async function processLiveTender(
     if (!listPage.isClosed()) {
       await listPage.bringToFront().catch(() => undefined);
     }
+    t247Event(
+      logger,
+      t247Id,
+      `TOTAL_TENDER_PROCESSING_MS=${Date.now() - tenderStartedAt}`,
+    );
   }
 
   // ---- ZIP from folder if required files exist ----
@@ -624,8 +732,10 @@ export async function processLiveTender(
       if (!config.keepUnzippedTenderFolders) {
         removeDirectoryRecursive(resume.tenderFolder);
       }
-    } else if (!hardError && !resume.allDocumentsValid) {
-      hardError = `Required Download All Documents missing for T247-${t247Id}`;
+    } else if (!resume.allDocumentsValid) {
+      logger.warn(
+        `T247_DOCUMENTS_AVAILABLE=false (stage terminal; continuing with partial if metadata/AI exist)`,
+      );
     }
   } catch (error) {
     hardError = error instanceof Error ? error.message : String(error);
@@ -646,11 +756,24 @@ export async function processLiveTender(
   }
 
   resume = inspectTenderResumeState(dateFolder, t247Id);
-  const metadataOk = isValidArtifact(resume.metadataPath) || isValidArtifact(metadataPath);
-  const allDocsOk =
-    isValidArtifact(resume.allDocumentsPath) ||
-    isValidArtifact(allDocumentsPath) ||
-    allDocumentsStatus === "complete";
+  const localMetadataOk = verifyLocalMetadataJson(resume.tenderFolder, t247Id);
+  const metadataOk =
+    localMetadataOk ||
+    isValidArtifact(resume.metadataPath) ||
+    isValidArtifact(metadataPath) ||
+    resume.metadataValid ||
+    metadataStatus === "complete";
+  const allDocsOk = isCanonicalDocumentsZipReady(
+    path.join(resume.tenderFolder, "documents"),
+  );
+  if (allDocsOk) {
+    allDocumentsPath = path.join(
+      resume.tenderFolder,
+      "documents",
+      "Tender_All_Documents.zip",
+    );
+    allDocumentsStatus = "complete";
+  }
   const zipOk = isValidArtifact(zipPath) || isValidArtifact(resume.zipPath);
   if (zipOk) {
     const resolvedZip = isValidArtifact(zipPath) ? zipPath! : resume.zipPath;
@@ -658,10 +781,85 @@ export async function processLiveTender(
     zipSize = fs.statSync(resolvedZip).size;
   }
 
+  const aiOk = aiSummaryStatus === "complete" || resume.aiSummaryValid;
+  const evidenceCount =
+    (metadataOk ? 1 : 0) + (allDocsOk ? 1 : 0) + (aiOk ? 1 : 0);
+  const evidenceMode =
+    evidenceCount === 3 ? "FULL" : evidenceCount >= 1 ? "PARTIAL" : "NONE";
+  logger.info("EVIDENCE_VERIFY");
+  logger.info(`T247_EVIDENCE_METADATA=${metadataOk}`);
+  logger.info(`T247_EVIDENCE_AI_SUMMARY=${aiOk}`);
+  logger.info(`T247_EVIDENCE_DOCUMENTS=${allDocsOk}`);
+  logger.info(`T247_METADATA_AVAILABLE=${metadataOk}`);
+  logger.info(`T247_AI_SUMMARY_AVAILABLE=${aiOk}`);
+  logger.info(`T247_DOCUMENTS_AVAILABLE=${allDocsOk}`);
+  logger.info(`T247_EVIDENCE_MODE=${evidenceMode}`);
+  logger.info(`EVIDENCE_COUNT=${evidenceCount}`);
+  logger.info(`METADATA_ATTEMPTED=true`);
+  logger.info(`METADATA_SUCCESS=${metadataOk}`);
+  logger.info(`T247_ID=${t247Id}`);
+  logger.info(
+    evidenceMode === "FULL"
+      ? "DONE_FULL"
+      : evidenceMode === "PARTIAL"
+        ? "DONE_PARTIAL"
+        : "DONE_NONE",
+  );
+  logger.info(`T247_ARTIFACT_TRANSACTION_COMPLETE=${t247Id}`);
+
+  const aiAttempted = aiSummaryStatus !== "missing";
+  const docsAttempted =
+    documentsStageRan ||
+    downloadAllAttempted ||
+    individualFallbackUsed ||
+    allDocumentsStatus !== "missing";
+  writeFinalEvidenceState(
+    resume.tenderFolder,
+    buildFinalEvidenceState({
+      t247Id,
+      metadataAttempted: true,
+      metadataAvailable: metadataOk,
+      metadataStatus: metadataOk
+        ? "complete"
+        : metadataStatus === "partial"
+          ? "failed"
+          : "failed",
+      aiAttempted,
+      aiAvailable: aiOk,
+      aiStatus:
+        aiSummaryStatus === "unavailable"
+          ? "unavailable"
+          : aiOk
+            ? "complete"
+            : aiAttempted
+              ? "failed"
+              : "not_attempted",
+      aiPath: aiSummaryPath || resume.aiSummaryPath,
+      documentsAttempted: docsAttempted,
+      documentsAvailable: allDocsOk,
+      documentsStatus:
+        allDocumentsStatus === "partial"
+          ? "partial"
+          : allDocsOk
+            ? "complete"
+            : docsAttempted
+              ? "failed"
+              : "not_attempted",
+      documentsPath: allDocumentsPath || resume.allDocumentsPath,
+      downloadAllAttempted,
+      downloadAllSuccess,
+      individualFallbackUsed,
+      individualDocsFound,
+      individualDocsSuccess,
+      individualDocsFailed,
+      canonicalZipReady,
+    }),
+  );
+
   const status =
     metadataOk && allDocsOk && zipOk
       ? "completed"
-      : zipOk || metadataOk || allDocsOk
+      : zipOk || metadataOk || allDocsOk || aiOk
         ? "partial"
         : "failed";
 
@@ -691,6 +889,8 @@ export async function processLiveTender(
     itRelevance: lastItGate,
   });
 }
+
+export const processTender247ArtifactTransaction = processLiveTender;
 
 function applyExcelFinancialsToMetadata(
   metadata: CompleteTenderMetadata,
@@ -940,7 +1140,9 @@ async function persistTender247Metadata(options: {
 }): Promise<void> {
   const { metadata, tenderFolder, logger } = options;
   logger.info("METADATA_WRITE_START");
-  // Phase 1: Supabase is the durable store — do not keep metadata.json on disk
+  const legacyPath = path.join(tenderFolder, "metadata.json");
+  writeJsonAtomic(legacyPath, metadata);
+  logger.info("METADATA_LOCAL_WRITTEN=true");
   const result = await upsertTender247Metadata({
     metadata,
     localFolderPath: tenderFolder,
@@ -955,6 +1157,7 @@ async function persistTender247Metadata(options: {
     ok: result.ok,
     error: result.error,
   });
+  writeJsonAtomic(legacyPath, metadata);
   if (result.ok) {
     if (result.id) {
       await runAndPersistPrescreen({
@@ -966,27 +1169,32 @@ async function persistTender247Metadata(options: {
         logger,
       });
     }
-    const keepLocal =
-      process.env.KEEP_LOCAL_METADATA_JSON?.trim().toLowerCase() === "true" ||
-      process.env.KEEP_LOCAL_METADATA_JSON?.trim() === "1";
-    const legacyPath = path.join(tenderFolder, "metadata.json");
-    if (!keepLocal && fs.existsSync(legacyPath)) {
-      try {
-        fs.rmSync(legacyPath, { force: true });
-        logger.info("METADATA_LEGACY_FILE_REMOVED");
-      } catch {
-        // ignore
-      }
-    } else if (keepLocal) {
-      fs.writeFileSync(
-        legacyPath,
-        JSON.stringify(metadata, null, 2),
-        "utf8",
-      );
-      logger.info("METADATA_LOCAL_KEPT");
-    }
   }
   logger.info(result.ok ? "METADATA_SAVED" : "METADATA_DB_SYNC_FAILED");
+}
+
+function verifyLocalMetadataJson(tenderFolder: string, t247Id: string): boolean {
+  const filePath = path.join(tenderFolder, "metadata.json");
+  if (!isValidArtifact(filePath)) return false;
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, "utf8")) as {
+      t247Id?: string;
+      sourceTenderId?: string;
+      source?: string;
+      normalized?: Record<string, unknown>;
+      raw?: Record<string, unknown>;
+    };
+    const id = String(data.t247Id || data.sourceTenderId || "")
+      .replace(/^T247-/i, "")
+      .trim();
+    if (id !== t247Id) return false;
+    const hasNormalized =
+      Boolean(data.normalized && Object.keys(data.normalized).length > 0) ||
+      Boolean(data.raw && Object.keys(data.raw).length > 0);
+    return hasNormalized;
+  } catch {
+    return false;
+  }
 }
 
 function folderHasUsefulContent(root: string): boolean {

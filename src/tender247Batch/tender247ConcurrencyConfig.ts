@@ -1,5 +1,6 @@
 /**
- * Tender247 / ChatGPT concurrency defaults (env-overridable).
+ * Tender247 / ChatGPT concurrency.
+ * Selected-tender artifact acquisition is forced to 1 regardless of older env vars.
  */
 function parsePositiveInt(raw: string | undefined, fallback: number): number {
   if (!raw?.trim()) return fallback;
@@ -10,6 +11,7 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
 export type Tender247ConcurrencyConfig = {
   detailConcurrency: number;
   downloadConcurrency: number;
+  artifactConcurrency: number;
   metadataConcurrency: number;
   prescreenConcurrency: number;
   chatgptConcurrency: number;
@@ -17,26 +19,42 @@ export type Tender247ConcurrencyConfig = {
   chatgptMinSubmissionIntervalMs: number;
   chatgptRateLimitBackoffMs: number;
   chatgptMaxRateLimitBackoffMs: number;
+  documentDownloadTimeoutMs: number;
 };
+
+const ARTIFACT_CONCURRENCY = 1;
+
+export function getTender247DocumentDownloadTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const n = parsePositiveInt(env.TENDER247_DOCUMENT_DOWNLOAD_TIMEOUT_MS, 300_000);
+  return Math.max(30_000, n);
+}
 
 export function loadTender247ConcurrencyConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): Tender247ConcurrencyConfig {
-  // Default 1 until dual-worker transaction is proven stable; cap at 2.
+  const requestedDetail = parsePositiveInt(env.TENDER247_DETAIL_CONCURRENCY, 1);
+  const requestedDownload = parsePositiveInt(
+    env.TENDER247_DOWNLOAD_CONCURRENCY,
+    1,
+  );
+  const requestedArtifact = parsePositiveInt(
+    env.TENDER247_ARTIFACT_CONCURRENCY,
+    1,
+  );
+  void requestedDetail;
+  void requestedDownload;
+  void requestedArtifact;
   const chatgptConcurrency = Math.min(
     2,
     parsePositiveInt(env.CHATGPT_CONCURRENCY, 1),
   );
   return {
-    detailConcurrency: parsePositiveInt(env.TENDER247_DETAIL_CONCURRENCY, 4),
-    downloadConcurrency: parsePositiveInt(
-      env.TENDER247_DOWNLOAD_CONCURRENCY,
-      4,
-    ),
-    metadataConcurrency: parsePositiveInt(
-      env.METADATA_EXTRACTION_CONCURRENCY,
-      4,
-    ),
+    detailConcurrency: ARTIFACT_CONCURRENCY,
+    downloadConcurrency: ARTIFACT_CONCURRENCY,
+    artifactConcurrency: ARTIFACT_CONCURRENCY,
+    metadataConcurrency: ARTIFACT_CONCURRENCY,
     prescreenConcurrency: parsePositiveInt(env.PRESCREEN_CONCURRENCY, 4),
     chatgptConcurrency,
     chatgptReadyQueueMax: parsePositiveInt(env.CHATGPT_READY_QUEUE_MAX, 10),
@@ -52,5 +70,6 @@ export function loadTender247ConcurrencyConfig(
       env.CHATGPT_MAX_RATE_LIMIT_BACKOFF_MS,
       600_000,
     ),
+    documentDownloadTimeoutMs: getTender247DocumentDownloadTimeoutMs(env),
   };
 }

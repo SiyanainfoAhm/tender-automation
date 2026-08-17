@@ -10,6 +10,7 @@ import { dismissTender247BlockingOverlays } from "./dismissPromotionalPopups.js"
 import { downloadAiSummary } from "./downloadAiSummary.js";
 import { downloadCorrigenda } from "./downloadCorrigenda.js";
 import { downloadTenderDocuments } from "./downloadTenderDocuments.js";
+import { waitForAllActiveDownloads } from "./downloadHelpers.js";
 import {
   assertSameBrowserContext,
   ensureTender247DetailAuthenticated,
@@ -45,7 +46,7 @@ export interface ProcessQueueOptions {
 }
 
 /**
- * Process tenders with limited concurrency. Each tender uses its own page.
+ * Process tenders strictly one at a time. Each tender uses its own page.
  * Failures are isolated — remaining tenders continue.
  */
 export async function processTenderQueue(
@@ -53,45 +54,26 @@ export async function processTenderQueue(
 ): Promise<TenderProcessResult[]> {
   const { context, listPage, items, dateFolder, config, logger, preOpenedPages } =
     options;
-  const concurrency = config.tenderDetailConcurrency;
   const results: TenderProcessResult[] = [];
-  let cursor = 0;
 
-  async function worker(workerId: number): Promise<void> {
-    while (true) {
-      const index = cursor;
-      cursor += 1;
-      if (index >= items.length) {
-        return;
-      }
-      const item = items[index];
-      if (!item) {
-        return;
-      }
-      logger.info(
-        `Worker ${workerId} starting tender ${index + 1}/${items.length}: T247-${item.t247Id}`,
-      );
-      const result = await processTenderWithRetries({
-        context,
-        listPage,
-        item,
-        dateFolder,
-        config,
-        logger,
-        preOpened: preOpenedPages?.get(item.t247Id),
-      });
-      results.push(result);
-    }
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (!item) continue;
+    logger.info(
+      `Worker 1 starting tender ${index + 1}/${items.length}: T247-${item.t247Id}`,
+    );
+    const result = await processTenderWithRetries({
+      context,
+      listPage,
+      item,
+      dateFolder,
+      config,
+      logger,
+      preOpened: preOpenedPages?.get(item.t247Id),
+    });
+    results.push(result);
   }
 
-  const workers = Array.from({ length: concurrency }, (_, i) => worker(i + 1));
-  await Promise.all(workers);
-
-  // Keep results in discovery order
-  const order = new Map(items.map((item, i) => [item.t247Id, i]));
-  results.sort(
-    (a, b) => (order.get(a.t247Id) ?? 0) - (order.get(b.t247Id) ?? 0),
-  );
   return results;
 }
 
@@ -350,6 +332,7 @@ async function processOneTender(args: {
       durationMs: Date.now() - started,
     };
   } finally {
+    await waitForAllActiveDownloads().catch(() => undefined);
     if (closeOnFinish && page && !page.isClosed()) {
       await page.close().catch(() => undefined);
     }

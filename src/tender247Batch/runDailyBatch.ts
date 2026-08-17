@@ -62,6 +62,7 @@ import {
 import { createDailyMasterZip, cleanOrphanUuidFilesInDayFolder, cleanPlaywrightDownloadTemp, playwrightDownloadsDir } from "./createTenderZip.js";
 import { readFreshExpectedCount } from "./liveListCards.js";
 import { processSurvivorsInParallel } from "./processSurvivorsInParallel.js";
+import { inspectTenderResumeState } from "./resumeArtifacts.js";
 import { loadTender247ConcurrencyConfig } from "./tender247ConcurrencyConfig.js";
 import {
   printTender247ScreeningSummary,
@@ -367,7 +368,8 @@ async function runDailyBatchBody(options: {
     let ambiguousCount = 0;
     let documentDownloadCount = 0;
 
-    // Seed from existing non-empty ZIPs on disk (resume-safe; no duplicates)
+    // Seed from completed tenders that already have a valid canonical documents ZIP.
+    // An outer T247-<id>.zip without documents/Tender_All_Documents.zip is NOT complete.
     for (const name of fs.readdirSync(dateFolder)) {
       const match = name.match(/^T247-(\d+)\.zip$/i);
       if (!match) {
@@ -378,6 +380,13 @@ async function runDailyBatchBody(options: {
         continue;
       }
       const id = match[1]!;
+      const resume = inspectTenderResumeState(dateFolder, id);
+      if (!resume.allDocumentsValid) {
+        logger.info(
+          `T247_RESUME_INCOMPLETE_DOCUMENTS=T247-${id} (outer zip present; canonical documents zip missing)`,
+        );
+        continue;
+      }
       processedIds.add(id);
       createdZips.push(zipPath);
       if (!manifest.tenders[id] || manifest.tenders[id]!.status !== "completed") {
@@ -403,14 +412,21 @@ async function runDailyBatchBody(options: {
     let batchIncomplete = false;
     const concurrencyCfg = loadTender247ConcurrencyConfig();
 
-    // Parallel detail/download for Excel survivors (direct open — no card scroll).
+    // Sequential detail/download for Excel survivors (one tender at a time).
     let survivorQueue = [...survivingIds].filter((id) => !processedIds.has(id));
     if (maxTenders < Infinity) {
       survivorQueue = survivorQueue.slice(0, Math.max(0, maxTenders - processedIds.size));
     }
 
+    logger.info("T247_PHASE=ARTIFACT_ACQUISITION");
     logger.info(
       `TENDER247_DETAIL_CONCURRENCY=${concurrencyCfg.detailConcurrency}`,
+    );
+    logger.info(
+      `TENDER247_DOWNLOAD_CONCURRENCY=${concurrencyCfg.downloadConcurrency}`,
+    );
+    logger.info(
+      `TENDER247_ARTIFACT_CONCURRENCY=${concurrencyCfg.artifactConcurrency}`,
     );
     console.log(
       `TENDER247_DETAIL_CONCURRENCY=${concurrencyCfg.detailConcurrency}`,

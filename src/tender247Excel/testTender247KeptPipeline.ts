@@ -643,45 +643,6 @@ async function runKeptPipelineTestBody(options: {
           logger,
           pathResult,
         });
-
-        if (pathResult.supabaseStored && config.chatgptQualificationEnabled) {
-          if (!gptSession) {
-            gptSession = await launchChatGptPersistentSession({ config, logger });
-            await ensureChatGptLoggedIn({
-              page: gptSession.page,
-              context: gptSession.context,
-              config,
-              logger,
-            });
-            await openChatGptProject({
-              page: gptSession.page,
-              projectName: config.chatgptProjectName,
-              projectUrl: config.chatgptProjectUrl,
-              projectMatch: config.chatgptProjectMatch,
-              config,
-              logger,
-            });
-          }
-
-          const qualStatus = await runChatgptForSingleCandidate({
-            sourceTenderId: survivor.sourceTenderId,
-            pathResult,
-            dateFolder,
-            config,
-            logger,
-            gptSession,
-          });
-
-          if (args.stopOnGo && qualStatus === "GO") {
-            console.log("KEPT_PIPELINE_STOP_ON_GO=true");
-            logger.info("KEPT_PIPELINE_STOP_ON_GO=true");
-            stopPipeline = true;
-          }
-        } else if (!config.chatgptQualificationEnabled) {
-          logger.warn(
-            "CHATGPT_QUALIFICATION_ENABLED=false — skipping ChatGPT stage",
-          );
-        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         pathResult.error = message;
@@ -698,6 +659,52 @@ async function runKeptPipelineTestBody(options: {
         cleanPlaywrightDownloadTemp(dateFolder, logger);
         cleanOrphanUuidFilesInDayFolder(dateFolder, logger);
       }
+    }
+
+    logger.info("T247_ARTIFACT_ACQUISITION_BATCH_COMPLETE=true");
+    console.log("T247_ARTIFACT_ACQUISITION_BATCH_COMPLETE=true");
+
+    if (config.chatgptQualificationEnabled) {
+      logger.info("PIPELINE_PHASE=CHATGPT_QUALIFICATION");
+      console.log("PIPELINE_PHASE=CHATGPT_QUALIFICATION");
+      for (const pathResult of results) {
+        if (stopPipeline) break;
+        if (!pathResult.supabaseStored) continue;
+        if (!gptSession) {
+          gptSession = await launchChatGptPersistentSession({ config, logger });
+          await ensureChatGptLoggedIn({
+            page: gptSession.page,
+            context: gptSession.context,
+            config,
+            logger,
+          });
+          await openChatGptProject({
+            page: gptSession.page,
+            projectName: config.chatgptProjectName,
+            projectUrl: config.chatgptProjectUrl,
+            projectMatch: config.chatgptProjectMatch,
+            config,
+            logger,
+          });
+        }
+        const qualStatus = await runChatgptForSingleCandidate({
+          sourceTenderId: pathResult.sourceTenderId,
+          pathResult,
+          dateFolder,
+          config,
+          logger,
+          gptSession,
+        });
+        if (args.stopOnGo && qualStatus === "GO") {
+          console.log("KEPT_PIPELINE_STOP_ON_GO=true");
+          logger.info("KEPT_PIPELINE_STOP_ON_GO=true");
+          stopPipeline = true;
+        }
+      }
+    } else {
+      logger.warn(
+        "CHATGPT_QUALIFICATION_ENABLED=false — skipping ChatGPT stage",
+      );
     }
 
     const withinKeep = filterItRelevantWithinFinancialKeep(

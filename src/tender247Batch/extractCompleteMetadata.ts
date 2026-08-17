@@ -167,6 +167,7 @@ async function extractAiSummaryComplete(
     logger.warn("AI Generated Tender Summary section not found");
     return {};
   }
+  logger.info("T247_AI_SUMMARY_SECTION_FOUND=true");
   logger.info("AI_SUMMARY_SECTION_FOUND");
 
   const section = heading
@@ -174,6 +175,31 @@ async function extractAiSummaryComplete(
       'xpath=ancestor::*[self::div or self::section or self::article or self::aside][position()<=8][1]',
     )
     .first();
+  await heading.scrollIntoViewIfNeeded().catch(() => undefined);
+
+  const scrollMetrics = await section
+    .evaluate((root) => {
+      const nodes = [root, ...Array.from(root.querySelectorAll("*"))];
+      for (const node of nodes) {
+        if (!(node instanceof HTMLElement)) continue;
+        const overflowY = window.getComputedStyle(node).overflowY;
+        if (
+          (overflowY === "auto" || overflowY === "scroll") &&
+          node.scrollHeight > node.clientHeight + 4
+        ) {
+          return {
+            found: true,
+            scrollHeight: node.scrollHeight,
+            clientHeight: node.clientHeight,
+          };
+        }
+      }
+      return { found: false, scrollHeight: 0, clientHeight: 0 };
+    })
+    .catch(() => ({ found: false, scrollHeight: 0, clientHeight: 0 }));
+  logger.info(`T247_AI_SUMMARY_SCROLL_CONTAINER_FOUND=${scrollMetrics.found}`);
+  logger.info(`T247_AI_SUMMARY_SCROLL_HEIGHT=${scrollMetrics.scrollHeight}`);
+  logger.info(`T247_AI_SUMMARY_CLIENT_HEIGHT=${scrollMetrics.clientHeight}`);
 
   const summaryTab = section
     .getByRole("tab", { name: /^Summary$/i })
@@ -190,8 +216,8 @@ async function extractAiSummaryComplete(
 
   assertNotTimedOut();
   const completeSummaryText =
-    (await section.textContent({ timeout: 8_000 }).catch(() => "")) ||
     (await section.innerText({ timeout: 8_000 }).catch(() => "")) ||
+    (await section.textContent({ timeout: 8_000 }).catch(() => "")) ||
     "";
   if (completeSummaryText) {
     mergeParsedTextPairs(completeSummaryText, map);
@@ -275,21 +301,35 @@ async function boundedSummaryScroll(
   let stablePasses = 0;
   let previousFieldCount = map.size;
 
-  try {
-    await section.hover({ timeout: 2_000 }).catch(() => undefined);
-  } catch {
+  const scrolledInner = await section
+    .evaluate((root) => {
+      const nodes = [root, ...Array.from(root.querySelectorAll("*"))];
+      for (const node of nodes) {
+        if (!(node instanceof HTMLElement)) continue;
+        const overflowY = window.getComputedStyle(node).overflowY;
+        if (
+          (overflowY === "auto" || overflowY === "scroll") &&
+          node.scrollHeight > node.clientHeight + 4
+        ) {
+          node.scrollTop = node.scrollHeight;
+          return true;
+        }
+      }
+      return false;
+    })
+    .catch(() => false);
+
+  if (!scrolledInner) {
     logger.info("AI_SUMMARY_SCROLL_CONTAINER_NOT_FOUND");
-    return;
   }
 
   for (let pass = 0; pass < MAX_SUMMARY_SCROLL_PASSES; pass += 1) {
     assertNotTimedOut();
-    await page.mouse.wheel(0, 350).catch(() => undefined);
-    await page.waitForTimeout(350).catch(() => undefined);
+    await page.waitForTimeout(150).catch(() => undefined);
 
     await collectBoundedRows(section, map, assertNotTimedOut);
     const text =
-      (await section.textContent({ timeout: 2_000 }).catch(() => "")) || "";
+      (await section.innerText({ timeout: 2_000 }).catch(() => "")) || "";
     mergeParsedTextPairs(text, map);
 
     if (map.size === previousFieldCount) {

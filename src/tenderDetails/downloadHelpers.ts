@@ -12,6 +12,7 @@ import {
   sanitizeFileName,
 } from "./tenderFolder.js";
 import type { DownloadedFileRecord } from "./types.js";
+import { correctArtifactFileExtension } from "../tender247Batch/detectDownloadedKind.js";
 
 export interface DownloadClickOptions {
   page: Page;
@@ -28,6 +29,7 @@ export interface DownloadClickOptions {
   linkText: string;
   publishedDate?: string | null;
   corrigendumType?: string | null;
+  t247Id?: string;
 }
 
 const activeDownloadPromises = new Set<Promise<unknown>>();
@@ -50,8 +52,9 @@ export async function waitForAllActiveDownloads(): Promise<void> {
 }
 
 /**
- * Click a download control and save the resulting file (direct download,
- * new tab, or redirected signed URL). Never uses coordinates.
+ * Click a download control and save the resulting file.
+ * Completion is the Playwright `download` event + saveAs, never click+sleep
+ * and never "a popup opened".
  */
 export async function clickAndSaveDownload(
   options: DownloadClickOptions,
@@ -70,107 +73,152 @@ export async function clickAndSaveDownload(
   } = options;
 
   ensureDir(destinationDir);
-
-  const downloadPromise = page
-    .waitForEvent("download", { timeout: timeoutMs })
-    .catch(() => null);
-  const popupPromise = context
-    .waitForEvent("page", { timeout: Math.min(timeoutMs, 15_000) })
-    .catch(() => null);
+  const urlBefore = page.url();
+  const saveOpts = {
+    destinationDir,
+    preferredBaseName,
+    preferredExtension,
+    canonicalFileName: options.canonicalFileName,
+    logger,
+    kind,
+    linkText,
+    publishedDate: options.publishedDate,
+    corrigendumType: options.corrigendumType,
+    t247Id: options.t247Id,
+  };
 
   await dismissInterruptionsBeforeClick(page, logger);
-  await clickTarget();
 
-  const download = await downloadPromise;
+  const download = await clickAndWaitForPlaywrightDownload({
+    page,
+    context,
+    timeoutMs,
+    clickTarget: async () => {
+      await clickTarget();
+      if (/download\s+all\s+documents/i.test(linkText)) {
+        logDownload(logger, options.t247Id, "DOWNLOAD_ALL_CLICKED");
+      }
+    },
+  });
+
   if (download) {
-    return trackDownloadPromise(
-      savePlaywrightDownload(download, {
-        destinationDir,
-        preferredBaseName,
-        preferredExtension,
-        canonicalFileName: options.canonicalFileName,
-        logger,
+    logDownload(logger, options.t247Id, "DOWNLOAD_EVENT_RECEIVED");
+    logDownload(logger, options.t247Id, "DOWNLOAD_SAVE_START");
+    const saved = await trackDownloadPromise(
+      savePlaywrightDownload(download, saveOpts),
+    );
+    const failure = await download.failure();
+    if (failure) {
+      return failedRecord(
         kind,
         linkText,
-        publishedDate: options.publishedDate,
-        corrigendumType: options.corrigendumType,
-      }),
-    );
+        `Tender247 Download All failed: ${failure}`,
+        options,
+      );
+    }
+    logDownload(logger, options.t247Id, "DOWNLOAD_SAVE_DONE");
+    return saved;
   }
 
-  const popup = await popupPromise;
-  if (popup) {
-    try {
-      await popup
-        .waitForLoadState("domcontentloaded", { timeout: timeoutMs })
-        .catch(() => undefined);
-      await dismissInterruptionsBeforeClick(popup, logger);
-      const popupDownload = await popup
-        .waitForEvent("download", { timeout: Math.min(timeoutMs, 30_000) })
-        .catch(() => null);
-      if (popupDownload) {
-        const record = await trackDownloadPromise(
-          savePlaywrightDownload(popupDownload, {
-            destinationDir,
-            preferredBaseName,
-            preferredExtension,
-            canonicalFileName: options.canonicalFileName,
-            logger,
-            kind,
-            linkText,
-            publishedDate: options.publishedDate,
-            corrigendumType: options.corrigendumType,
-          }),
-        );
-        await popup.close().catch(() => undefined);
-        await dismissInterruptionsBeforeClick(page, logger);
-        return record;
-      }
-
-      const url = popup.url();
-      const saved = await trackDownloadPromise(
-        saveUrlResponse(page, url, {
-          destinationDir,
-          preferredBaseName,
-          preferredExtension:
-            preferredExtension || guessExtensionFromUrl(url) || "pdf",
-          canonicalFileName: options.canonicalFileName,
-          logger,
-          kind,
-          linkText,
-          publishedDate: options.publishedDate,
-          corrigendumType: options.corrigendumType,
-        }),
-      );
-      await popup.close().catch(() => undefined);
-      await dismissInterruptionsBeforeClick(page, logger);
-      return saved;
-    } catch (error) {
-      await popup.close().catch(() => undefined);
-      await dismissInterruptionsBeforeClick(page, logger).catch((err) => {
-        if (
-          err instanceof AutomationError &&
-          err.code === "TENDER247_REMINDER_MODAL_BLOCKING"
-        ) {
-          throw err;
-        }
-      });
-      const message = error instanceof Error ? error.message : String(error);
-      return failedRecord(kind, linkText, message, options);
-    }
+  await dismissInterruptionsBeforeClick(page, logger);
+  const urlAfter = page.url();
+  if (urlAfter !== urlBefore && looksLikeDocumentUrl(urlAfter)) {
+    logDownload(logger, options.t247Id, "DOWNLOAD_SAVE_START");
+    const saved = await saveUrlResponse(page, urlAfter, {
+      ...saveOpts,
+      preferredExtension:
+        preferredExtension || guessExtensionFromUrl(urlAfter) || "pdf",
+    });
+    logDownload(logger, options.t247Id, "DOWNLOAD_SAVE_DONE");
+    return saved;
   }
 
   return failedRecord(
     kind,
     linkText,
-    "No download event or popup detected after click",
+    "No download event, popup, or file response detected after click",
     options,
   );
 }
 
 /**
- * Save a Playwright download atomically to a canonical path.
- * Never creates _2/_3 siblings.
+ * Arm Playwright's download listener, then click. A popup/new tab is only
+ * another source of a `download` event — never completion by itself.
+ */
+export async function clickAndWaitForPlaywrightDownload(options: {
+  page: Page;
+  context: BrowserContext;
+  timeoutMs: number;
+  clickTarget: () => Promise<void>;
+}): Promise<Download | null> {
+  const { page, context, timeoutMs, clickTarget } = options;
+  let popupDownload: Download | null = null;
+  const onPage = (popup: Page): void => {
+    void popup
+      .waitForEvent("download", { timeout: timeoutMs })
+      .then((download) => {
+        popupDownload = download;
+      })
+      .catch(() => undefined);
+  };
+  context.on("page", onPage);
+  try {
+    const pageDownloadPromise = page
+      .waitForEvent("download", { timeout: timeoutMs })
+      .catch(() => null);
+    await clickTarget();
+    const download = (await pageDownloadPromise) || popupDownload;
+    if (download) return download;
+    const deadline = Date.now() + 2_000;
+    while (!popupDownload && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return popupDownload;
+  } finally {
+    context.off("page", onPage);
+  }
+}
+
+/**
+ * Register download listeners BEFORE click. A new tab is only used as
+ * another source of the `download` event — never as completion by itself.
+ */
+export function waitForDownloadOnPageOrPopup(
+  page: Page,
+  context: BrowserContext,
+  timeoutMs: number,
+): Promise<Download | null> {
+  return clickAndWaitForPlaywrightDownload({
+    page,
+    context,
+    timeoutMs,
+    clickTarget: async () => undefined,
+  });
+}
+
+function logDownload(
+  logger: Logger,
+  t247Id: string | undefined,
+  event: string,
+): void {
+  if (t247Id) {
+    logger.info(`[T247 ${t247Id}] ${event}`);
+  } else {
+    logger.info(event);
+  }
+}
+
+function looksLikeDocumentUrl(url: string): boolean {
+  if (!url || url === "about:blank") return false;
+  if (url.startsWith("blob:")) return true;
+  return (
+    /\.(pdf|zip|docx?|xlsx?)(\?|$)/i.test(url) || /\/download\b/i.test(url)
+  );
+}
+
+/**
+ * Save a Playwright download atomically. Content type (magic bytes) wins
+ * over a preferred .zip extension so PDFs are never renamed into fake ZIPs.
  */
 export async function savePlaywrightDownload(
   download: Download,
@@ -188,28 +236,35 @@ export async function savePlaywrightDownload(
 ): Promise<DownloadedFileRecord> {
   const suggested = download.suggestedFilename() || "";
   const suggestedExt = extensionFromFilename(suggested);
-  let ext =
-    opts.preferredExtension ||
+  const fallbackExt =
     suggestedExt ||
+    opts.preferredExtension ||
     guessExtensionFromUrl(download.url()) ||
     "bin";
-  if (ext.toLowerCase() === "download") {
-    ext = suggestedExt || "bin";
-  }
 
-  const canonicalName =
-    opts.canonicalFileName ||
-    `${sanitizeFileName(opts.preferredBaseName)}.${ext.replace(/^\./, "")}`;
-  const canonicalPath = path.join(opts.destinationDir, canonicalName);
-  assertInside(opts.destinationDir, canonicalPath);
   ensureDir(opts.destinationDir);
-
-  const temporaryPath = `${canonicalPath}.download`;
+  const tmpDir = path.join(opts.destinationDir, "_tmp");
+  ensureDir(tmpDir);
+  const temporaryPath = path.join(
+    tmpDir,
+    `${sanitizeFileName(opts.preferredBaseName)}.download`,
+  );
+  assertInside(tmpDir, temporaryPath);
   if (fs.existsSync(temporaryPath)) {
     fs.unlinkSync(temporaryPath);
   }
 
-  await download.saveAs(temporaryPath);
+  try {
+    await download.saveAs(temporaryPath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return failedRecord(
+      opts.kind,
+      opts.linkText,
+      `DOWNLOAD_SAVE_FAILED:${message}`,
+      opts,
+    );
+  }
 
   const tempStat = await fs.promises.stat(temporaryPath).catch(() => null);
   if (!tempStat || !tempStat.isFile() || tempStat.size <= 0) {
@@ -224,10 +279,33 @@ export async function savePlaywrightDownload(
     );
   }
 
-  if (fs.existsSync(canonicalPath)) {
+  persistSourceDownload(
+    opts.destinationDir,
+    suggested || path.basename(temporaryPath),
+    temporaryPath,
+    opts.kind,
+  );
+
+  const correctedTemp = correctArtifactFileExtension(temporaryPath);
+  const detectedExt = (
+    extensionFromFilename(correctedTemp) || fallbackExt
+  ).replace(/^\./, "");
+  const ext =
+    detectedExt.toLowerCase() === "download"
+      ? fallbackExt.replace(/^\./, "")
+      : detectedExt;
+
+  const canonicalName = resolveSavedFileName(opts, ext);
+  const canonicalPath = path.join(opts.destinationDir, canonicalName);
+  assertInside(opts.destinationDir, canonicalPath);
+
+  if (
+    fs.existsSync(canonicalPath) &&
+    path.resolve(canonicalPath) !== path.resolve(correctedTemp)
+  ) {
     const existing = await fs.promises.stat(canonicalPath);
     if (existing.size > 0) {
-      await fs.promises.unlink(temporaryPath);
+      await fs.promises.unlink(correctedTemp).catch(() => undefined);
       opts.logger.info(
         `Download skipped — canonical already valid: ${canonicalName}`,
       );
@@ -248,7 +326,9 @@ export async function savePlaywrightDownload(
     await fs.promises.unlink(canonicalPath);
   }
 
-  await fs.promises.rename(temporaryPath, canonicalPath);
+  if (path.resolve(correctedTemp) !== path.resolve(canonicalPath)) {
+    await fs.promises.rename(correctedTemp, canonicalPath);
+  }
   const sizeBytes = (await fs.promises.stat(canonicalPath)).size;
   if (sizeBytes <= 0) {
     return failedRecord(
@@ -321,14 +401,12 @@ async function saveUrlResponse(
     opts.preferredExtension ||
     "bin";
 
-  const canonicalName =
-    opts.canonicalFileName ||
-    `${sanitizeFileName(opts.preferredBaseName)}.${ext.replace(/^\./, "")}`;
-  const canonicalPath = path.join(opts.destinationDir, canonicalName);
-  assertInside(opts.destinationDir, canonicalPath);
   ensureDir(opts.destinationDir);
-
-  const temporaryPath = `${canonicalPath}.download`;
+  const temporaryPath = path.join(
+    opts.destinationDir,
+    `${sanitizeFileName(opts.preferredBaseName)}.download`,
+  );
+  assertInside(opts.destinationDir, temporaryPath);
   if (fs.existsSync(temporaryPath)) {
     fs.unlinkSync(temporaryPath);
   }
@@ -340,10 +418,29 @@ async function saveUrlResponse(
     return failedRecord(opts.kind, opts.linkText, "DOWNLOADED_FILE_EMPTY", opts);
   }
 
-  if (fs.existsSync(canonicalPath)) {
+  persistSourceDownload(
+    opts.destinationDir,
+    originalFilename || path.basename(temporaryPath),
+    temporaryPath,
+    opts.kind,
+  );
+
+  const correctedTemp = correctArtifactFileExtension(temporaryPath);
+  const detectedExt = (
+    extensionFromFilename(correctedTemp) || ext
+  ).replace(/^\./, "");
+  const canonicalName = resolveSavedFileName(opts, detectedExt);
+  const canonicalPath = path.join(opts.destinationDir, canonicalName);
+  assertInside(opts.destinationDir, canonicalPath);
+  ensureDir(opts.destinationDir);
+
+  if (
+    fs.existsSync(canonicalPath) &&
+    path.resolve(canonicalPath) !== path.resolve(correctedTemp)
+  ) {
     const existing = fs.statSync(canonicalPath);
     if (existing.size > 0) {
-      fs.unlinkSync(temporaryPath);
+      fs.unlinkSync(correctedTemp);
       return {
         kind: opts.kind,
         linkText: opts.linkText,
@@ -361,7 +458,9 @@ async function saveUrlResponse(
     fs.unlinkSync(canonicalPath);
   }
 
-  fs.renameSync(temporaryPath, canonicalPath);
+  if (path.resolve(correctedTemp) !== path.resolve(canonicalPath)) {
+    fs.renameSync(correctedTemp, canonicalPath);
+  }
   const sizeBytes = fs.statSync(canonicalPath).size;
   opts.logger.info(
     `Downloaded ${opts.kind} via URL: ${canonicalName} (${sizeBytes} bytes)`,
@@ -380,6 +479,42 @@ async function saveUrlResponse(
     publishedDate: opts.publishedDate ?? null,
     corrigendumType: opts.corrigendumType ?? null,
   };
+}
+
+function resolveSavedFileName(
+  opts: {
+    preferredBaseName: string;
+    canonicalFileName?: string;
+  },
+  detectedExt: string,
+): string {
+  const ext = detectedExt.replace(/^\./, "").toLowerCase() || "bin";
+  if (opts.canonicalFileName) {
+    const canonicalExt = extensionFromFilename(opts.canonicalFileName)?.toLowerCase();
+    if (canonicalExt === ext) {
+      return opts.canonicalFileName;
+    }
+  }
+  return `${sanitizeFileName(opts.preferredBaseName)}.${ext}`;
+}
+
+function persistSourceDownload(
+  destinationDir: string,
+  originalName: string,
+  savedPath: string,
+  kind: DownloadedFileRecord["kind"],
+): void {
+  if (kind !== "document") return;
+  try {
+    const sourceDir = path.join(destinationDir, "_source_download");
+    ensureDir(sourceDir);
+    const base = sanitizeFileName(originalName || path.basename(savedPath));
+    const dest = path.join(sourceDir, base || path.basename(savedPath));
+    assertInside(sourceDir, dest);
+    fs.copyFileSync(savedPath, dest);
+  } catch {
+    // Source copy is debug-only; never fail the real download.
+  }
 }
 
 function failedRecord(
