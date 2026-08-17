@@ -15,6 +15,16 @@ test("complete pipeline parses --date= form", () => {
   assert.equal(opts.chatgptLimit, null);
 });
 
+test("complete mode ignores npm_config_chatgpt_limit test leak", () => {
+  const opts = parseTender247CompletePipelineArgs(
+    ["--date=2026-08-16", "--resume"],
+    { npm_config_chatgpt_limit: "3" },
+  );
+  assert.equal(opts.mode, "complete");
+  assert.equal(opts.chatgptLimit, null);
+  assert.equal(opts.resume, true);
+});
+
 test("complete pipeline parses --date spaced form", () => {
   const opts = parseTender247CompletePipelineArgs([
     "--date",

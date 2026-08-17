@@ -58,6 +58,10 @@ export interface ChatGptTenderState {
   retryCount?: number;
   retryAfter?: string | null;
   missingFiles?: string[];
+  evidenceMode?: string;
+  availableFiles?: string[];
+  downloadAttempted?: boolean;
+  metadataRepairAttempted?: boolean;
   aiSummarySha256?: string | null;
   tenderDocumentsSha256?: string | null;
   metadataSha256?: string | null;
@@ -108,6 +112,44 @@ export function saveChatGptTenderState(
     JSON.stringify(next, null, 2),
     "utf8",
   );
+}
+
+/** Submitted conversation still waiting — must not consume a new GPT-send slot. */
+export function hasPendingExistingConversation(
+  state: ChatGptTenderState | null,
+): boolean {
+  if (!state || state.submissionConfirmed !== true) {
+    return false;
+  }
+  if (
+    state.status !== "response_pending" &&
+    state.status !== "rate_limited"
+  ) {
+    return false;
+  }
+  const url = state.chatUrl || "";
+  return /\/c\/[^/?#]+/i.test(url);
+}
+
+/** Recoverable not_ready (missing ZIP/metadata) must not stay cached after repair. */
+export function clearRecoverableNotReadyState(tenderFolder: string): void {
+  const state = loadChatGptTenderState(tenderFolder);
+  if (!state || state.status !== "not_ready") {
+    return;
+  }
+  if (state.submissionConfirmed === true) {
+    saveChatGptTenderState(tenderFolder, {
+      ...state,
+      missingFiles: undefined,
+      error: null,
+    });
+    return;
+  }
+  try {
+    fs.rmSync(chatgptStatePath(tenderFolder), { force: true });
+  } catch {
+    // ignore
+  }
 }
 
 export function isResumablePendingState(
@@ -198,6 +240,10 @@ export interface QualificationManifestEntry {
   resultPath?: string | null;
   responsePath?: string | null;
   missingFiles?: string[];
+  availableFiles?: string[];
+  evidenceMode?: string;
+  downloadAttempted?: boolean;
+  metadataRepairAttempted?: boolean;
   updatedAt: string;
   error?: string | null;
 }
@@ -331,6 +377,21 @@ export function writeQualificationManifest(
     JSON.stringify(manifest, null, 2),
     "utf8",
   );
+}
+
+/** Drop a stale not_ready manifest row after local ZIP/metadata repair. */
+export function clearNotReadyManifestEntry(
+  dateFolder: string,
+  dateIso: string,
+  t247Id: string,
+): void {
+  const manifestPath = qualificationManifestPath(dateFolder);
+  if (!fs.existsSync(manifestPath)) return;
+  const manifest = loadQualificationManifest(dateFolder, dateIso);
+  const entry = manifest.tenders[t247Id];
+  if (!entry || entry.status !== "not_ready") return;
+  delete manifest.tenders[t247Id];
+  writeQualificationManifest(dateFolder, manifest);
 }
 
 function recomputeManifestCounters(

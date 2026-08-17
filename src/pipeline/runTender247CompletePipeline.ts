@@ -38,6 +38,7 @@ import {
   assertDatePropagationAgreement,
   effectiveArgvFromNpmConfig,
   getArgOrNpmConfig,
+  getArgValue,
   hasBooleanFlag,
   logRawArgv,
   resolveRequestedDate,
@@ -164,9 +165,13 @@ export function parseTender247CompletePipelineArgs(
     "--limit",
   );
   const chatgptLimit = parsePositiveInt(
-    getArgOrNpmConfig(argv, "chatgpt-limit", env) ??
-      getArgOrNpmConfig(argv, "qualify-limit", env) ??
-      undefined,
+    mode === "smoke"
+      ? getArgOrNpmConfig(argv, "chatgpt-limit", env) ??
+        getArgOrNpmConfig(argv, "qualify-limit", env) ??
+        undefined
+      : getArgValue(argv, "chatgpt-limit") ??
+        getArgValue(argv, "qualify-limit") ??
+        undefined,
     "--chatgpt-limit",
   );
 
@@ -629,7 +634,11 @@ export async function runTender247CompletePipeline(
     }
 
     const discovered = listDownloadedTenderIds(downloadRoot);
-    const readiness = buildGptReadinessReport(downloadRoot, requestedDate);
+    const readiness = await buildGptReadinessReport(
+      downloadRoot,
+      requestedDate,
+      logger,
+    );
     saveGptReadinessReport(downloadRoot, readiness);
     const localPrescreen = await countPrescreenOutcomesForTenderIds({
       sourcePortal: "TENDER247",

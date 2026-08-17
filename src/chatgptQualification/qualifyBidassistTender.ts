@@ -32,8 +32,8 @@ import {
 } from "./uploadQualificationAttachments.js";
 import { ensureProjectHome, assertProjectHomeOpen } from "./openProject.js";
 import {
+  applyFalseMissingDocumentClaim,
   buildQualificationPrompt,
-  claimsMandatoryUploadsUnavailable,
   isValidSavedQualificationResult,
   parseAndValidateQualificationResponse,
   withUploadedEvidenceFiles,
@@ -204,6 +204,13 @@ export async function qualifyBidassistTender(options: {
       logger,
     });
     assertProjectHomeOpen(page);
+
+    if (!files.metadataPath || !files.documentArchivePath) {
+      throw new AutomationError(
+        "CHATGPT_REQUIRED_ATTACHMENT_MISSING",
+        `BidAssist bundle incomplete for BA-${sourceTenderId}`,
+      );
+    }
 
     const prepared = prepareTenderSpecificUploadFiles({
       t247Id: sourceTenderId,
@@ -450,21 +457,20 @@ async function waitParseAndPersistBidassist(options: {
     };
   }
 
-  const finalResult = withUploadedEvidenceFiles(
+  let finalResult = withUploadedEvidenceFiles(
     validated.result,
     uploadedEvidenceFiles,
   );
-  if (claimsMandatoryUploadsUnavailable(finalResult, uploadedEvidenceFiles)) {
-    return {
-      t247Id: sourceTenderId,
-      status: "response_pending",
-      resultPath: null,
-      responsePath,
-      qualification: null,
-      chatUrl: isConversationUrl(page.url()) ? page.url() : chatUrl,
-      error: "Assistant claims uploaded files unavailable",
-      submittedAt,
-    };
+  const falseMissing = applyFalseMissingDocumentClaim({
+    result: finalResult,
+    uploadedEvidenceFiles,
+  });
+  if (falseMissing.falseClaim) {
+    logger.warn("MODEL_FALSE_MISSING_DOCUMENT_CLAIM=true");
+    console.log("MODEL_FALSE_MISSING_DOCUMENT_CLAIM=true");
+    console.log("CHATGPT_DUPLICATE_PROMPT_BLOCKED=true");
+    console.log("CHATGPT_CORRECTION_PROMPT_FORBIDDEN=true");
+    finalResult = falseMissing.result;
   }
 
   fs.writeFileSync(resultPath, JSON.stringify(finalResult, null, 2), "utf8");

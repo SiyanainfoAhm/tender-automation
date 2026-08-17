@@ -10,6 +10,166 @@ import {
   type TenderDecisionStatus,
 } from "./types.js";
 
+export function buildEvidenceAwareQualificationPrompt(
+  sourcePortal: "TENDER247" | "BIDASSIST" | string,
+  sourceTenderId: string,
+  evidence: {
+    metadataAvailable: boolean;
+    documentsAvailable: boolean;
+    aiSummaryAvailable: boolean;
+    evidenceMode?: string;
+  },
+): string {
+  const portal =
+    sourcePortal === "BIDASSIST" || sourcePortal === "BidAssist"
+      ? "BIDASSIST"
+      : "TENDER247";
+
+  const available: string[] = [];
+  const unavailable: string[] = [];
+  if (evidence.metadataAvailable) {
+    available.push("Tender metadata (metadata.json)");
+  } else {
+    unavailable.push("Tender metadata");
+  }
+  if (evidence.documentsAvailable) {
+    available.push("Complete tender-document archive (Tender_All_Documents.zip)");
+  } else {
+    unavailable.push("Complete tender-document archive");
+  }
+  if (evidence.aiSummaryAvailable) {
+    available.push("AI Summary (AI_Summary.pdf)");
+  } else {
+    unavailable.push("AI Summary");
+  }
+
+  const isFull =
+    evidence.metadataAvailable &&
+    evidence.documentsAvailable &&
+    evidence.aiSummaryAvailable;
+
+  const useLines = isFull
+    ? [
+        "Use:",
+        "1. Consolidated Siyana credentials in Project Sources.",
+        "2. The attached tender metadata.",
+        "3. The attached AI Summary, when provided.",
+        "4. The attached complete tender-document archive.",
+      ]
+    : [
+        "Available evidence for this run:",
+        ...available.map((line) => `- ${line}: attached`),
+        ...(unavailable.length > 0
+          ? [
+              "",
+              "Unavailable for this run:",
+              ...unavailable.map((line) => `- ${line}: unavailable`),
+            ]
+          : []),
+        "",
+        "Evaluate using the available evidence only.",
+        "Do not claim an unavailable attachment was reviewed.",
+        "If missing source evidence prevents a reliable mandatory-gate decision,",
+        "return VERIFY rather than inventing facts.",
+        "",
+        "Use:",
+        "1. Consolidated Siyana credentials in Project Sources.",
+        ...(evidence.metadataAvailable
+          ? ["2. The attached tender metadata."]
+          : []),
+        ...(evidence.aiSummaryAvailable
+          ? ["3. The attached AI Summary."]
+          : []),
+        ...(evidence.documentsAvailable
+          ? ["4. The attached complete tender-document archive."]
+          : []),
+      ];
+
+  const t247Id = portal === "TENDER247" ? sourceTenderId : "";
+  const bidassistId = portal === "BIDASSIST" ? sourceTenderId : "";
+
+  return [
+    "Evaluate this tender for Siyana Info Solutions Pvt. Ltd.",
+    "",
+    `Source portal: ${portal}`,
+    `Source tender ID: ${sourceTenderId}`,
+    "Company: Siyana Info Solutions Pvt. Ltd.",
+    ...(evidence.evidenceMode
+      ? [`Qualification evidence mode: ${evidence.evidenceMode}`]
+      : []),
+    "",
+    ...useLines,
+    "",
+    "Return exactly one status:",
+    "",
+    "GO",
+    "CONDITIONAL_GO",
+    "PARTNER_BID",
+    "VERIFY",
+    "NO_GO",
+    "",
+    "Rules:",
+    "",
+    "GO:",
+    "All mandatory gates pass. Scope, price, risk and submission readiness are",
+    "acceptable. The company qualifies independently.",
+    "",
+    "CONDITIONAL_GO:",
+    "A specific and resolvable condition remains, but it can be completed",
+    "before the bid deadline. Every condition must have a clear action,",
+    "responsible owner and due date. Do not use this merely because source",
+    "information is missing.",
+    "",
+    "PARTNER_BID:",
+    "The company has a material qualification gap, but the tender expressly",
+    "allows a JV, consortium, subcontractor or another eligible participation",
+    "arrangement, and a suitable partner can cover the gap.",
+    "",
+    "VERIFY:",
+    "RFP, corrigendum, company evidence or interpretation is missing,",
+    "ambiguous or requires manual verification. Hold the final bid decision",
+    "until verification is complete.",
+    "",
+    "NO_GO:",
+    "A mandatory condition clearly fails, the scope is unsuitable, time is",
+    "insufficient, an eligible partner arrangement is unavailable/not allowed,",
+    "or the commercial or contractual risk is unacceptable.",
+    "",
+    "Do not return CONDITIONAL_GO for an unknown or ambiguous criterion.",
+    "Return VERIFY instead.",
+    "",
+    "Do not return PARTNER_BID unless the tender documents expressly permit",
+    "the relevant partner/JV/consortium/participation arrangement.",
+    "",
+    "Do not assume any company qualification that is not supported by the",
+    "Project Source.",
+    "",
+    "Return only JSON:",
+    "",
+    "{",
+    `  "sourcePortal": "${portal}",`,
+    `  "sourceTenderId": "${sourceTenderId}",`,
+    ...(portal === "TENDER247" ? [`  "t247Id": "${t247Id}",`] : []),
+    ...(portal === "BIDASSIST" ? [`  "bidassistId": "${bidassistId}",`] : []),
+    '  "company": "Siyana Info Solutions Pvt. Ltd.",',
+    '  "status": "GO|CONDITIONAL_GO|PARTNER_BID|VERIFY|NO_GO",',
+    '  "decisionLabel": "...",',
+    '  "verdict": "...",',
+    '  "reason": "...",',
+    '  "requiredAction": "...",',
+    '  "confidence": 0.0,',
+    '  "matchedCriteria": [],',
+    '  "failedCriteria": [],',
+    '  "unclearCriteria": [],',
+    '  "missingDocuments": [],',
+    '  "conditions": [],',
+    '  "partnershipRequiredFor": [],',
+    '  "partnershipModeAllowed": [],',
+    '  "manualReviewRequired": false',
+    "}",
+  ].join("\n");
+}
+
 export function buildQualificationPrompt(
   sourcePortal: "TENDER247" | "BIDASSIST" | string,
   sourceTenderId: string,
@@ -957,6 +1117,14 @@ export function validateQualificationResult(
     evidenceFiles: asStringArray(obj.evidenceFiles),
     legacyStatus:
       obj.legacyStatus != null ? String(obj.legacyStatus) : undefined,
+    modelFalseMissingDocumentClaim: Boolean(obj.modelFalseMissingDocumentClaim)
+      ? true
+      : undefined,
+    modelDocumentInterpretationConflict: Boolean(
+      obj.modelDocumentInterpretationConflict,
+    )
+      ? true
+      : undefined,
   };
 
   const result = finalizeQualificationResult(draft);
@@ -1212,12 +1380,14 @@ export function isValidSavedQualificationResult(filePath: string): boolean {
     }
 
     // VERIFY claiming docs unavailable with empty evidence is never complete
+    // unless the attachment manifest proved the claim was false.
     if (
       validated.result.status === "VERIFY" &&
       (validated.result.evidenceFiles?.length ?? 0) === 0 &&
       /unavailable|not (provided|attached|uploaded)/i.test(
         `${validated.result.reason} ${validated.result.verdict}`,
-      )
+      ) &&
+      validated.result.modelFalseMissingDocumentClaim !== true
     ) {
       return false;
     }
@@ -1300,6 +1470,105 @@ export function claimsMandatoryUploadsUnavailable(
   }
 
   return false;
+}
+
+export type UploadedLogicalManifest = {
+  metadataPresent: boolean;
+  documentZipPresent: boolean;
+  aiSummaryPresent: boolean;
+  uploadedLogicalFiles: string[];
+};
+
+export function summarizeUploadedLogicalFiles(
+  uploadedEvidenceFiles: string[],
+): UploadedLogicalManifest {
+  const uploadedLogicalFiles = uploadedEvidenceFiles
+    .map((file) => file.split(/[/\\]/).pop() || file)
+    .map((file) => file.trim())
+    .filter(Boolean);
+  const lower = uploadedLogicalFiles.map((file) => file.toLowerCase());
+  return {
+    metadataPresent: lower.some((file) => file.includes("metadata")),
+    documentZipPresent: lower.some(
+      (file) => file.includes("tender_all_documents") || file.endsWith(".zip"),
+    ),
+    aiSummaryPresent: lower.some((file) => /ai[_\s-]*summary/i.test(file)),
+    uploadedLogicalFiles,
+  };
+}
+
+/**
+ * If the model claims mandatory uploads were missing while metadata + ZIP
+ * were actually uploaded, keep a usable result (typically VERIFY) instead of
+ * discarding it as response_pending. Never send a correction prompt.
+ */
+export function applyFalseMissingDocumentClaim(options: {
+  result: QualificationResult;
+  uploadedEvidenceFiles: string[];
+  metadataUploaded?: boolean;
+  documentZipUploaded?: boolean;
+}): {
+  result: QualificationResult;
+  falseClaim: boolean;
+  manifest: UploadedLogicalManifest;
+} {
+  const fromNames = summarizeUploadedLogicalFiles(options.uploadedEvidenceFiles);
+  const metadataPresent =
+    fromNames.metadataPresent || options.metadataUploaded === true;
+  const documentZipPresent =
+    fromNames.documentZipPresent || options.documentZipUploaded === true;
+  const manifest: UploadedLogicalManifest = {
+    ...fromNames,
+    metadataPresent,
+    documentZipPresent,
+  };
+
+  const evidenceForClaim =
+    options.uploadedEvidenceFiles.length > 0
+      ? options.uploadedEvidenceFiles
+      : [
+          ...(metadataPresent ? ["metadata.json"] : []),
+          ...(documentZipPresent ? ["Tender_All_Documents.zip"] : []),
+          ...(manifest.aiSummaryPresent ? ["AI_Summary.pdf"] : []),
+        ];
+
+  const claimed = claimsMandatoryUploadsUnavailable(
+    options.result,
+    evidenceForClaim,
+  );
+  if (!claimed || !metadataPresent || !documentZipPresent) {
+    return { result: options.result, falseClaim: false, manifest };
+  }
+
+  const evidenceFiles =
+    options.result.evidenceFiles && options.result.evidenceFiles.length > 0
+      ? options.result.evidenceFiles
+      : evidenceForClaim;
+
+  const conflictNote = "MODEL_DOCUMENT_INTERPRETATION_CONFLICT";
+  const unclearCriteria = options.result.unclearCriteria.includes(conflictNote)
+    ? options.result.unclearCriteria
+    : [...options.result.unclearCriteria, conflictNote];
+
+  let next: QualificationResult = {
+    ...options.result,
+    evidenceFiles,
+    unclearCriteria,
+    manualReviewRequired: true,
+    modelFalseMissingDocumentClaim: true,
+    modelDocumentInterpretationConflict: true,
+  };
+
+  if (next.status !== "VERIFY") {
+    next = finalizeQualificationResult({
+      ...next,
+      status: "VERIFY",
+      decisionLabel: "VERIFY",
+      reason: `${next.reason}\n${conflictNote}`.trim(),
+    });
+  }
+
+  return { result: next, falseClaim: true, manifest };
 }
 
 export function withUploadedEvidenceFiles(

@@ -561,6 +561,71 @@ async function handleUpload(req: Request, form: FormData) {
   return json({ success: true, document: inserted });
 }
 
+async function handleDocumentRead(
+  req: Request,
+  body: { documentId?: string; disposition?: string },
+) {
+  const azure = requireAzureConfig();
+  const user = await authenticate(req);
+
+  const documentId = String(body.documentId || "").trim();
+  if (!documentId) throw new HttpError(400, "documentId is required");
+
+  const supabase = serviceSupabase();
+  const { data: doc, error } = await supabase
+    .from("agenttender_company_documents")
+    .select(
+      "id, company_id, status, storage_provider, storage_blob_name, storage_url, original_file_name, name, mime_type",
+    )
+    .eq("id", documentId)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+  if (!doc || doc.status !== "active") {
+    throw new HttpError(404, "Document not found.");
+  }
+  if (String(doc.company_id) !== user.companyId) {
+    throw new HttpError(403, "You do not have permission to view this document.");
+  }
+
+  const blobName =
+    (doc.storage_blob_name as string | null) ||
+    blobNameFromUrl(azure, doc.storage_url ? String(doc.storage_url) : null);
+  if (!blobName) {
+    throw new HttpError(404, "File not found.");
+  }
+
+  const fileName =
+    (doc.original_file_name as string | null) ||
+    (doc.name as string | null) ||
+    "document";
+  const dispositionMode =
+    String(body.disposition || "inline").trim() === "attachment"
+      ? "attachment"
+      : "inline";
+
+  console.info("[tender-automation-documents] read started", {
+    companyId: user.companyId,
+    documentId,
+    disposition: dispositionMode,
+  });
+
+  const azureResponse = await readAzureBlob(azure, blobName);
+  const headers = new Headers({
+    ...corsHeaders,
+    "Content-Type":
+      azureResponse.headers.get("content-type") ||
+      String(doc.mime_type || "application/octet-stream"),
+    "Cache-Control": "private, max-age=300",
+    "Content-Disposition": `${dispositionMode}; filename="${String(fileName).replace(/"/g, "")}"`,
+  });
+  const contentLength = azureResponse.headers.get("content-length");
+  if (contentLength) headers.set("Content-Length", contentLength);
+
+  console.info("[tender-automation-documents] read complete", { documentId });
+  return new Response(azureResponse.body, { status: 200, headers });
+}
+
 async function handleDelete(req: Request, body: { documentId?: string }) {
   const azure = requireAzureConfig();
   const user = await authenticate(req);
@@ -1558,6 +1623,9 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json().catch(() => ({}));
+    if (body?.action === "document-read") {
+      return await handleDocumentRead(req, body);
+    }
     if (body?.action === "delete") return await handleDelete(req, body);
     if (body?.action === "template-assets-delete") {
       return await handleTemplateAssetsDelete(req, body);

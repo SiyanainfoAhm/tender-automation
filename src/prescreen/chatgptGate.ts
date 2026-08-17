@@ -18,6 +18,11 @@ export async function assertPrescreenAllowsChatgpt(options: {
   sourcePortal: PrescreenSourcePortal;
   sourceTenderId: string;
   logger: { info: (msg: string) => void; warn?: (msg: string) => void };
+  /**
+   * GPT-ready tenders already survived crawl screening. Missing/error
+   * prescreen rows must not silently drop them from the queue.
+   */
+  allowMissingPrescreenRow?: boolean;
 }): Promise<ChatgptPrescreenGateResult> {
   const config = loadPrescreenConfig();
   if (!config.enabled) {
@@ -43,6 +48,18 @@ export async function assertPrescreenAllowsChatgpt(options: {
   });
 
   if (!gate.ok) {
+    if (options.allowMissingPrescreenRow) {
+      options.logger.warn?.(
+        `CHATGPT_PRESCREEN_LOOKUP_FAILED_ALLOW_READY=${label} ${gate.error}`,
+      );
+      return {
+        allowed: true,
+        skipped: false,
+        reasonCode: "PRESCREEN_LOOKUP_FAILED",
+        status: "ERROR",
+        message: gate.error,
+      };
+    }
     options.logger.warn?.(
       `CHATGPT_PRESCREEN_GATE_LOOKUP_FAILED=${label} ${gate.error}`,
     );
@@ -60,6 +77,16 @@ export async function assertPrescreenAllowsChatgpt(options: {
   }
 
   if (!gate.row) {
+    if (options.allowMissingPrescreenRow) {
+      options.logger.info(`CHATGPT_PRESCREEN_ROW_MISSING_ALLOW_READY=${label}`);
+      return {
+        allowed: true,
+        skipped: false,
+        reasonCode: "MISSING_PRESCREEN_ROW",
+        status: "NOT_RUN",
+        message: "No tender row found for pre-screen gate; GPT-ready allowed",
+      };
+    }
     options.logger.info(`CHATGPT_SKIPPED_BY_PRESCREEN=${label}`);
     options.logger.info("PRESCREEN_STATUS=NOT_RUN");
     options.logger.info("PRESCREEN_REASON_CODE=MISSING_PRESCREEN_ROW");
@@ -75,6 +102,38 @@ export async function assertPrescreenAllowsChatgpt(options: {
   const status = gate.row.prescreen_status;
   const eligible = gate.row.chatgpt_eligible === true;
   const passed = status === "PASSED" && eligible;
+  const explicitBlock = isExplicitPrescreenChatgptBlock({
+    status,
+    chatgptEligible: gate.row.chatgpt_eligible,
+  });
+
+  if (explicitBlock) {
+    options.logger.info(`CHATGPT_SKIPPED_BY_PRESCREEN=${label}`);
+    options.logger.info(`PRESCREEN_STATUS=${status ?? "null"}`);
+    options.logger.info(
+      `PRESCREEN_REASON_CODE=${gate.row.prescreen_reason_code ?? "null"}`,
+    );
+    return {
+      allowed: false,
+      skipped: true,
+      reasonCode: gate.row.prescreen_reason_code,
+      status,
+      message: `Pre-screen status=${status} eligible=${eligible}`,
+    };
+  }
+
+  if (!passed && options.allowMissingPrescreenRow) {
+    options.logger.info(
+      `CHATGPT_PRESCREEN_NON_PASSED_ALLOW_READY=${label} status=${status ?? "null"}`,
+    );
+    return {
+      allowed: true,
+      skipped: false,
+      reasonCode: gate.row.prescreen_reason_code ?? "MISSING_PASSED_ROW",
+      status,
+      message: "GPT-ready allowed without stored PASSED row",
+    };
+  }
 
   if (!passed) {
     options.logger.info(`CHATGPT_SKIPPED_BY_PRESCREEN=${label}`);
@@ -98,6 +157,18 @@ export async function assertPrescreenAllowsChatgpt(options: {
     status,
     message: null,
   };
+}
+
+/** Rejected / manual-review rows must never open ChatGPT. */
+export function isExplicitPrescreenChatgptBlock(options: {
+  status: string | null;
+  chatgptEligible: boolean | null;
+}): boolean {
+  const status = String(options.status || "").toUpperCase();
+  if (status === "REJECTED" || status === "MANUAL_REVIEW") {
+    return true;
+  }
+  return status === "PASSED" && options.chatgptEligible === false;
 }
 
 /** Pure helper for tests — decide skip without DB. */

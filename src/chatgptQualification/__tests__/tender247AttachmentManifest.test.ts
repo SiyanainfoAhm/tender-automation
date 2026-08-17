@@ -208,6 +208,9 @@ test("stale attachment cleanup is reflected in manifest audit", () => {
   assert.equal(audit.validationPassed, true);
   assert.equal(audit.files.length, 3);
   assert.ok(audit.files.every((file) => file.verifiedVisible));
+  assert.equal(audit.metadataPresent, true);
+  assert.equal(audit.documentZipPresent, true);
+  assert.equal(audit.aiSummaryPresent, true);
 });
 
 test("filterAttachmentChipCandidates removes Remove file labels", () => {

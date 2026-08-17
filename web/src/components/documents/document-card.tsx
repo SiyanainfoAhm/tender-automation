@@ -117,25 +117,30 @@ export function DocumentCard({
       ? categoryLabel
       : doc.documentCategory;
   const styles = categoryStyles(styleKey);
-  const fileUrl = doc.storageUrl;
-  const hasFile = Boolean(fileUrl);
+  const hasFile = Boolean(doc.storageBlobName || doc.storageUrl);
   const disabled = busy != null || pending;
 
+  function documentApiUrl(mode: "view" | "download") {
+    const base = `/api/documents/${encodeURIComponent(doc.id)}`;
+    return mode === "download" ? `${base}?download=1` : base;
+  }
+
   function openFile(mode: "view" | "download") {
-    if (!fileUrl) {
-      toast.error("No file URL is available for this document.");
+    if (!hasFile) {
+      toast.error("No file is available for this document.");
       return;
     }
+    const url = documentApiUrl(mode);
     if (mode === "download") {
       const a = window.document.createElement("a");
-      a.href = fileUrl;
+      a.href = url;
       a.download = doc.originalFileName || doc.name;
       a.rel = "noopener";
       a.target = "_blank";
       a.click();
       return;
     }
-    window.open(fileUrl, "_blank", "noopener,noreferrer");
+    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   function handleDelete() {

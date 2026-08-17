@@ -277,6 +277,7 @@ test("9. Temporary metadata survives until attachment verification", () => {
       cleanup,
     });
     assert.equal(cleaned, false);
+    assert.ok(bundle.metadataPath);
     assert.ok(fs.existsSync(bundle.metadataPath));
     assert.equal(path.basename(bundle.metadataPath), "metadata.json");
     // Simulates verification complete, then cleanup

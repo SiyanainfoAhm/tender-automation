@@ -67,6 +67,10 @@ export interface QualificationResult {
   /** Phase 2 flag: VERIFY due to insufficient AI Summary detail */
   requiresDetailedTenderReview?: boolean;
   evidenceFiles?: string[];
+  /** Model claimed uploads were missing even though the attachment manifest had them. */
+  modelFalseMissingDocumentClaim?: boolean;
+  /** Normalized when a usable JSON result conflicts with the upload manifest. */
+  modelDocumentInterpretationConflict?: boolean;
   /** Preserved when migrating from old status enums */
   legacyStatus?: string;
   /**
@@ -93,8 +97,13 @@ export interface QualificationResult {
 export interface GptReadinessReport {
   expected: number;
   ready: number;
+  readyFull: number;
+  readyPartial: number;
+  notReadyZeroEvidence: number;
   missingTenderIds: string[];
   readyTenderIds: string[];
+  readyFullTenderIds: string[];
+  readyPartialTenderIds: string[];
   readyForQualification: boolean;
   date: string;
   checkedAt: string;

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  applyFalseMissingDocumentClaim,
   claimsMandatoryUploadsUnavailable,
   isValidSavedQualificationResult,
   withUploadedEvidenceFiles,
@@ -52,6 +53,48 @@ test("claimsMandatoryUploadsUnavailable detects false missing-doc VERIFY", () =>
   assert.equal(
     claimsMandatoryUploadsUnavailable(baseResult({}), uploaded),
     true,
+  );
+});
+
+test("false missing-document claim stays VERIFY and is not discarded", () => {
+  const uploaded = [
+    "metadata.json",
+    "AI_Summary.pdf",
+    "Tender_All_Documents.zip",
+  ];
+  const applied = applyFalseMissingDocumentClaim({
+    result: baseResult({}),
+    uploadedEvidenceFiles: uploaded,
+  });
+  assert.equal(applied.falseClaim, true);
+  assert.equal(applied.result.status, "VERIFY");
+  assert.equal(applied.result.modelFalseMissingDocumentClaim, true);
+  assert.equal(applied.result.modelDocumentInterpretationConflict, true);
+  assert.equal(applied.result.manualReviewRequired, true);
+  assert.deepEqual(applied.result.evidenceFiles, uploaded);
+  assert.equal(applied.manifest.metadataPresent, true);
+  assert.equal(applied.manifest.documentZipPresent, true);
+});
+
+test("GO with false missing-document claim is normalized to VERIFY", () => {
+  const uploaded = ["metadata.json", "Tender_All_Documents.zip"];
+  const applied = applyFalseMissingDocumentClaim({
+    result: baseResult({
+      status: "GO",
+      decisionLabel: "GO",
+      reason: "Tender documents were not uploaded.",
+      manualReviewRequired: false,
+      failedCriteria: [],
+      unclearCriteria: [],
+      missingDocuments: ["Tender_All_Documents.zip"],
+    }),
+    uploadedEvidenceFiles: uploaded,
+  });
+  assert.equal(applied.falseClaim, true);
+  assert.equal(applied.result.status, "VERIFY");
+  assert.match(
+    applied.result.reason,
+    /MODEL_DOCUMENT_INTERPRETATION_CONFLICT/,
   );
 });
 
@@ -117,6 +160,45 @@ test("no result files when Send never happened (completion validator)", () => {
     "utf8",
   );
   assert.equal(isValidSavedQualificationResult(resultPath), false);
+});
+
+test("false missing-document VERIFY with uploads is a valid saved result", () => {
+  const dir = makeTempDir("false-missing-valid-");
+  const tenderFolder = path.join(dir, "T247-103407645");
+  fs.mkdirSync(tenderFolder, { recursive: true });
+  const uploaded = [
+    "metadata.json",
+    "AI_Summary.pdf",
+    "Tender_All_Documents.zip",
+  ];
+  const applied = applyFalseMissingDocumentClaim({
+    result: withUploadedEvidenceFiles(
+      baseResult({ t247Id: "103407645" }),
+      uploaded,
+    ),
+    uploadedEvidenceFiles: uploaded,
+  });
+  fs.writeFileSync(
+    path.join(tenderFolder, "chatgpt-state.json"),
+    JSON.stringify({
+      t247Id: "103407645",
+      chatUrl: "https://chatgpt.com/c/abc",
+      status: "completed",
+      submissionConfirmed: true,
+      updatedAt: new Date().toISOString(),
+      uploadedEvidenceFiles: uploaded,
+    }),
+    "utf8",
+  );
+  const resultPath = path.join(tenderFolder, "qualification-result.json");
+  fs.writeFileSync(resultPath, JSON.stringify(applied.result, null, 2), "utf8");
+  fs.writeFileSync(
+    path.join(tenderFolder, "qualification-response.txt"),
+    JSON.stringify(applied.result),
+    "utf8",
+  );
+  assert.equal(applied.falseClaim, true);
+  assert.equal(isValidSavedQualificationResult(resultPath), true);
 });
 
 test("completed count stays zero without confirmed submission", () => {

@@ -11,11 +11,12 @@ import { getIndiaTodayIsoDate } from "../dateUtils.js";
 import { ensureDir, resolveProjectPath } from "../fileUtils.js";
 import { Logger, safeErrorMessage } from "../logger.js";
 import {
-  chatgptSelectionLimit,
   formatProductionLimit,
 } from "../productionLimit.js";
-import { resolveRequestedDate } from "../cli/requestedDate.js";
+import { resolveRequestedDate, hasBooleanFlag } from "../cli/requestedDate.js";
 import {
+  hasPendingExistingConversation,
+  loadChatGptTenderState,
   loadQualificationManifest,
   upsertQualificationManifestEntry,
   writeQualificationManifest,
@@ -47,13 +48,19 @@ import {
   logSkipExistingDetails,
 } from "./existingQualificationReuse.js";
 import {
+  assertGptReadyFullyAccounted,
+  planGptQualificationQueue,
+} from "./gptQueuePlan.js";
+import {
   buildGptReadinessReport,
   getMissingPhase1Files,
   listDownloadedTenderIds,
   saveGptReadinessReport,
-  tryResolvePhase1TenderUploadFiles,
 } from "./readiness.js";
-import { hasBooleanFlag } from "../cli/requestedDate.js";
+import {
+  closeTender247EvidenceSession,
+  ensureTender247EvidenceSession,
+} from "./tender247EvidenceSession.js";
 
 export interface QualificationBatchSummary {
   expected: number;
@@ -81,6 +88,11 @@ export interface QualificationBatchSummary {
   failedThisRun?: number;
   resumeMode?: boolean;
   reusedTenderIds?: string[];
+  gptEligibleCount?: number;
+  gptReadyTotal?: number;
+  gptNewRequired?: number;
+  gptNewQueued?: number;
+  gptLimitSkipped?: number;
 }
 
 export type QualificationBatchOptions = {
@@ -178,7 +190,7 @@ export async function runQualificationBatch(
     );
   }
 
-  const readiness = buildGptReadinessReport(dateFolder, dateIso);
+  const readiness = await buildGptReadinessReport(dateFolder, dateIso, logger);
   const readinessPath = saveGptReadinessReport(dateFolder, readiness);
   logger.info(`GPT_READINESS saved=${readinessPath}`);
   logger.info(
@@ -193,36 +205,143 @@ export async function runQualificationBatch(
   }
 
   const allDownloadedIds = listDownloadedTenderIds(dateFolder);
-  const notReadyIds = allDownloadedIds.filter(
-    (id) => !tryResolvePhase1TenderUploadFiles(dateFolder, id),
-  );
+  const readySet = new Set(readiness.readyTenderIds);
+  const notReadyIds = allDownloadedIds.filter((id) => !readySet.has(id));
+  const gptEligibleCount = allDownloadedIds.length;
 
-  let selectedIds: string[] = [];
+  let readyIds: string[] = [];
   if (config.chatgptTestTenderId) {
     logger.warn(
       `CHATGPT_TEST_TENDER_ID=${config.chatgptTestTenderId} — single-tender override`,
     );
-    selectedIds = [config.chatgptTestTenderId];
-  } else if (config.chatgptProcessReadyOnly || readiness.ready > 0) {
-    selectedIds = [...readiness.readyTenderIds];
+    readyIds = [config.chatgptTestTenderId];
   } else {
-    selectedIds = [...readiness.readyTenderIds];
+    readyIds = [...readiness.readyTenderIds];
   }
 
-  // Keep only pre-screen PASSED tenders before opening ChatGPT.
+  console.log(`GPT_ELIGIBLE_COUNT=${gptEligibleCount}`);
+  console.log(`GPT_READY_FULL=${readiness.readyFull}`);
+  console.log(`GPT_READY_PARTIAL=${readiness.readyPartial}`);
+  console.log(`GPT_READY_TOTAL=${readiness.ready}`);
+  console.log(`GPT_NOT_READY_ZERO_EVIDENCE=${readiness.notReadyZeroEvidence}`);
+  console.log(`GPT_READY_COUNT=${readyIds.length}`);
+  console.log(`GPT_NOT_READY_COUNT=${notReadyIds.length}`);
+  logger.info(`GPT_ELIGIBLE_COUNT=${gptEligibleCount}`);
+  logger.info(`GPT_READY_FULL=${readiness.readyFull}`);
+  logger.info(`GPT_READY_PARTIAL=${readiness.readyPartial}`);
+  logger.info(`GPT_READY_TOTAL=${readiness.ready}`);
+  logger.info(
+    `GPT_NOT_READY_ZERO_EVIDENCE=${readiness.notReadyZeroEvidence}`,
+  );
+  logger.info(`GPT_READY_COUNT=${readyIds.length}`);
+  logger.info(`GPT_NOT_READY_COUNT=${notReadyIds.length}`);
+  logChatGptIdList(logger, "CHATGPT_READY_TENDER_IDS", readyIds);
+  logChatGptIdList(logger, "CHATGPT_NOT_READY_TENDER_IDS", notReadyIds);
+
+  // Visit every ready ID. Never apply the GPT-send cap here — reuse is free.
   const passedSelection = await selectPassedForChatgpt({
     sourcePortal: "TENDER247",
-    sourceTenderIds: selectedIds,
+    sourceTenderIds: readyIds,
     logger,
-    limit: chatgptSelectionLimit(effectiveMaxGpt),
+    allowMissingPrescreenRow: true,
   });
   logger.info(
     `CHATGPT_PRESCREEN_PASSED=${passedSelection.passedIds.length} skipped=${passedSelection.skipped.length}`,
   );
-  selectedIds = passedSelection.passedIds;
+  const prescreenBlockedIds = passedSelection.skipped.map(
+    (row) => row.sourceTenderId,
+  );
+
+  const reusedIds: string[] = [];
+  const pendingRecoveryIds: string[] = [];
+  const alreadyCompletedIds: string[] = [];
+
+  for (const t247Id of passedSelection.passedIds) {
+    const tenderFolder = path.join(dateFolder, `T247-${t247Id}`);
+    const reuseDecision = evaluateExistingQualificationReuse({
+      dateFolder,
+      sourceTenderId: t247Id,
+      resumeMode,
+      logger,
+    });
+    if (resumeMode && reuseDecision.reuse) {
+      reusedIds.push(t247Id);
+      continue;
+    }
+    if (resumeMode) {
+      const recovered = await tryRecoverFromExistingRawResponse({
+        t247Id,
+        tenderFolder,
+        dateFolder,
+        dateIso,
+        resultPath: path.join(tenderFolder, "qualification-result.json"),
+        responsePath: path.join(tenderFolder, "qualification-response.txt"),
+        logger,
+        totals: {
+          expectedTender247: readiness.expected,
+          readyForChatGpt: readiness.ready,
+          selected: readyIds.length,
+        },
+      });
+      if (recovered?.status === "completed") {
+        alreadyCompletedIds.push(t247Id);
+        continue;
+      }
+    }
+    const state = loadChatGptTenderState(tenderFolder);
+    if (resumeMode && hasPendingExistingConversation(state)) {
+      pendingRecoveryIds.push(t247Id);
+    }
+  }
+
+  const plan = planGptQualificationQueue({
+    readyIds,
+    notReadyIds,
+    reusedIds,
+    pendingRecoveryIds,
+    prescreenBlockedIds,
+    alreadyCompletedIds,
+    maxGptSends: effectiveMaxGpt,
+  });
+  if (!assertGptReadyFullyAccounted(plan)) {
+    logger.error(
+      `CHATGPT_READY_ACCOUNTING_GAP ready=${plan.readyIds.length} reused=${plan.reusedIds.length} queued=${plan.queuedNewIds.length} pending=${plan.pendingRecoveryIds.length} blocked=${plan.prescreenBlockedIds.length} skipped=${plan.limitSkippedIds.length} completed=${plan.alreadyCompletedIds.length}`,
+    );
+  }
+
+  console.log(`CHATGPT_EXPLICIT_LIMIT=${plan.explicitLimit}`);
+  console.log(`CHATGPT_REUSED_EXISTING_VALID=${plan.reusedIds.length}`);
+  console.log(`CHATGPT_NEW_REQUIRED=${plan.newRequiredIds.length}`);
+  console.log(`CHATGPT_NEW_QUEUE_LENGTH=${plan.queuedNewIds.length}`);
+  console.log(`CHATGPT_LIMIT_SKIPPED=${plan.limitSkippedIds.length}`);
+  logger.info(`CHATGPT_EXPLICIT_LIMIT=${plan.explicitLimit}`);
+  logChatGptIdList(logger, "CHATGPT_REUSED_TENDER_IDS", plan.reusedIds);
+  logChatGptIdList(
+    logger,
+    "CHATGPT_NEW_REQUIRED_TENDER_IDS",
+    plan.newRequiredIds,
+  );
+  logChatGptIdList(logger, "CHATGPT_QUEUE_TENDER_IDS", plan.queuedNewIds);
+  for (const row of plan.notQueued) {
+    console.log(`CHATGPT_NOT_QUEUED=${row.id}`);
+    console.log(`CHATGPT_NOT_QUEUED_REASON=${row.reason}`);
+    logger.info(`CHATGPT_NOT_QUEUED=${row.id}`);
+    logger.info(`CHATGPT_NOT_QUEUED_REASON=${row.reason}`);
+  }
+
+  const selectedIds = [
+    ...plan.reusedIds,
+    ...plan.alreadyCompletedIds,
+    ...plan.pendingRecoveryIds,
+    ...plan.queuedNewIds,
+  ];
+  const queuedNewSet = new Set(plan.queuedNewIds);
+  const pendingSet = new Set(plan.pendingRecoveryIds);
+  const reusedSet = new Set(plan.reusedIds);
+  const alreadySet = new Set(plan.alreadyCompletedIds);
 
   logger.info(
-    `CHATGPT_READY_ONLY_BATCH expected=${readiness.expected} ready=${readiness.ready} selected=${selectedIds.length}`,
+    `CHATGPT_READY_ONLY_BATCH expected=${readiness.expected} ready=${readiness.ready} selected=${selectedIds.length} newQueued=${plan.queuedNewIds.length}`,
   );
 
   const manifestTotals = {
@@ -250,15 +369,18 @@ export async function runQualificationBatch(
 
   if (selectedIds.length === 0) {
     logger.warn("CHATGPT_NO_READY_TENDERS — nothing to qualify");
-    console.log("");
-    console.log("==================================");
-    console.log("ChatGPT Qualification Batch");
-    console.log(`Tender247 expected: ${readiness.expected}`);
-    console.log(`GPT ready: ${readiness.ready}`);
-    console.log("Selected: 0");
-    console.log(`Not ready: ${notReadyIds.length}`);
-    console.log("==================================");
-    console.log("");
+    printGptBatchSummaryHeader({
+      expected: readiness.expected,
+      ready: readiness.ready,
+      selected: 0,
+      notReady: notReadyIds.length,
+      plan,
+      submittedThisRun: 0,
+      completedThisRun: 0,
+      failed: 0,
+      pending: 0,
+      rateLimited: 0,
+    });
     writeQualificationManifest(
       dateFolder,
       loadQualificationManifest(dateFolder, dateIso),
@@ -276,11 +398,18 @@ export async function runQualificationBatch(
       remainingQueued: 0,
       pendingChatUrl: null,
       browserOpened: false,
+      gptEligibleCount,
+      gptReadyTotal: plan.readyIds.length,
+      gptNewRequired: plan.newRequiredIds.length,
+      gptNewQueued: plan.queuedNewIds.length,
+      gptLimitSkipped: plan.limitSkippedIds.length,
+      reusedExistingValid: plan.reusedIds.length,
+      reusedTenderIds: plan.reusedIds,
     };
   }
 
   logger.info(
-    `CHATGPT_QUEUE=${selectedIds.map((id) => `T247-${id}`).join(",")}`,
+    `CHATGPT_QUEUE=${plan.queuedNewIds.map((id) => `T247-${id}`).join(",")}`,
   );
 
   // Phase A: resume-only local reuse / recovery without browser
@@ -308,14 +437,13 @@ export async function runQualificationBatch(
     const resultPath = path.join(tenderFolder, "qualification-result.json");
     const responsePath = path.join(tenderFolder, "qualification-response.txt");
 
-    const reuseDecision = evaluateExistingQualificationReuse({
-      dateFolder,
-      sourceTenderId: t247Id,
-      resumeMode,
-      logger,
-    });
-
-    if (resumeMode && reuseDecision.reuse) {
+    if (reusedSet.has(t247Id)) {
+      const reuseDecision = evaluateExistingQualificationReuse({
+        dateFolder,
+        sourceTenderId: t247Id,
+        resumeMode,
+        logger,
+      });
       logSkipExistingDetails({ sourceTenderId: t247Id, decision: reuseDecision });
       logger.info(
         `CHATGPT_QUALIFICATION_ALREADY_COMPLETE_SKIP=T247-${t247Id}`,
@@ -344,36 +472,19 @@ export async function runQualificationBatch(
       continue;
     }
 
-    if (reuseDecision.found && !resumeMode) {
+    if (alreadySet.has(t247Id)) {
+      completed += 1;
+      completedThisRun += 1;
+      completedTenderIds.push(t247Id);
       logger.info(
-        `CHATGPT_EXISTING_QUALIFICATION_FOUND=true CHATGPT_EXISTING_QUALIFICATION_REUSE=false T247-${t247Id}`,
+        `[local ${i + 1}/${selectedIds.length}] COMPLETE T247-${t247Id} status=completed`,
       );
+      continue;
     }
 
-    // Resume-only: recover from existing raw response without browser.
-    if (resumeMode) {
-      const recovered = tryRecoverFromExistingRawResponse({
-        t247Id,
-        tenderFolder,
-        dateFolder,
-        dateIso,
-        resultPath,
-        responsePath,
-        logger,
-        totals: manifestTotals,
-      });
-      if (recovered?.status === "completed") {
-        completed += 1;
-        completedThisRun += 1;
-        completedTenderIds.push(t247Id);
-        logger.info(
-          `[local ${i + 1}/${selectedIds.length}] COMPLETE T247-${t247Id} status=completed`,
-        );
-        continue;
-      }
+    if (pendingSet.has(t247Id) || queuedNewSet.has(t247Id)) {
+      needsBrowser.push(t247Id);
     }
-
-    needsBrowser.push(t247Id);
   }
 
   let session: ChatGptBrowserSession | undefined;
@@ -426,6 +537,13 @@ export async function runQualificationBatch(
         `CHATGPT_PROJECT_READY_TIMEOUT_MS=${process.env.CHATGPT_PROJECT_READY_TIMEOUT_MS || "120000"}`,
       );
 
+      // Lazy Tender247 session for bounded document acquisition on selected candidates.
+      const tender247Evidence = await ensureTender247EvidenceSession({
+        config,
+        logger,
+        dateFolder,
+      });
+
       // Always use the worker runner (concurrency 1 or 2): one new tab per tender,
       // shared Send scheduler, no batch exit on response_pending / rate_limit.
       const dual = await runDualChatGptWorkers({
@@ -436,6 +554,8 @@ export async function runQualificationBatch(
         dateIso,
         config,
         logger,
+        tender247EvidenceContext: tender247Evidence?.context,
+        tender247ListPage: tender247Evidence?.listPage,
         stopOnGo: false,
         resumeMode,
         forceReprocess: !resumeMode,
@@ -488,6 +608,7 @@ export async function runQualificationBatch(
         keepPages: [page],
         logger,
       }).catch(() => undefined);
+      await closeTender247EvidenceSession().catch(() => undefined);
 
       // Actual GPT attempts: submitted / got a conversation URL / completed waiting.
       // Do not count pre-browser skips or not_ready.
@@ -556,9 +677,20 @@ export async function runQualificationBatch(
     console.log("==================================");
     console.log("ChatGPT Qualification Batch");
     console.log(`Tender247 expected: ${readiness.expected}`);
+    console.log(`GPT_READY_TOTAL=${plan.readyIds.length}`);
+    console.log(`GPT_REUSED_EXISTING=${plan.reusedIds.length}`);
+    console.log(`GPT_NEW_REQUIRED=${plan.newRequiredIds.length}`);
+    console.log(`GPT_NEW_QUEUED=${plan.queuedNewIds.length}`);
+    console.log(`GPT_SUBMITTED_THIS_RUN=${submittedThisRun}`);
+    console.log(`GPT_COMPLETED_THIS_RUN=${completedThisRun}`);
+    console.log(`GPT_PENDING=${pending + rateLimited}`);
+    console.log(`GPT_FAILED=${failed}`);
+    console.log(`GPT_NOT_READY=${notReady}`);
     console.log(`GPT ready: ${readiness.ready}`);
-    console.log(`Selected: ${selectedIds.length}`);
     console.log(`CHATGPT_SELECTED=${selectedIds.length}`);
+    console.log(`CHATGPT_NEW_QUEUE_LENGTH=${plan.queuedNewIds.length}`);
+    console.log(`CHATGPT_EXPLICIT_LIMIT=${plan.explicitLimit}`);
+    console.log(`CHATGPT_LIMIT_SKIPPED=${plan.limitSkippedIds.length}`);
     console.log(`CHATGPT_SUBMITTED_THIS_RUN=${submittedThisRun}`);
     console.log(`CHATGPT_COMPLETED_THIS_RUN=${completedThisRun}`);
     console.log(`CHATGPT_REUSED_EXISTING_VALID=${reusedExistingValid}`);
@@ -706,7 +838,56 @@ export async function runQualificationBatch(
     failedThisRun: failed,
     resumeMode,
     reusedTenderIds: [...new Set(reusedTenderIds)],
+    gptEligibleCount,
+    gptReadyTotal: plan.readyIds.length,
+    gptNewRequired: plan.newRequiredIds.length,
+    gptNewQueued: plan.queuedNewIds.length,
+    gptLimitSkipped: plan.limitSkippedIds.length,
   };
+}
+
+function logChatGptIdList(
+  logger: Logger,
+  label: string,
+  ids: string[],
+): void {
+  const line = `${label}=${JSON.stringify(ids)}`;
+  console.log(line);
+  logger.info(line);
+}
+
+function printGptBatchSummaryHeader(options: {
+  expected: number;
+  ready: number;
+  selected: number;
+  notReady: number;
+  plan: ReturnType<typeof planGptQualificationQueue>;
+  submittedThisRun: number;
+  completedThisRun: number;
+  failed: number;
+  pending: number;
+  rateLimited: number;
+}): void {
+  console.log("");
+  console.log("==================================");
+  console.log("ChatGPT Qualification Batch");
+  console.log(`Tender247 expected: ${options.expected}`);
+  console.log(`GPT_READY_TOTAL=${options.plan.readyIds.length}`);
+  console.log(`GPT_REUSED_EXISTING=${options.plan.reusedIds.length}`);
+  console.log(`GPT_NEW_REQUIRED=${options.plan.newRequiredIds.length}`);
+  console.log(`GPT_NEW_QUEUED=${options.plan.queuedNewIds.length}`);
+  console.log(`GPT_SUBMITTED_THIS_RUN=${options.submittedThisRun}`);
+  console.log(`GPT_COMPLETED_THIS_RUN=${options.completedThisRun}`);
+  console.log(`GPT_PENDING=${options.pending + options.rateLimited}`);
+  console.log(`GPT_FAILED=${options.failed}`);
+  console.log(`GPT_NOT_READY=${options.notReady}`);
+  console.log(`GPT ready: ${options.ready}`);
+  console.log(`CHATGPT_SELECTED=${options.selected}`);
+  console.log(`CHATGPT_NEW_QUEUE_LENGTH=${options.plan.queuedNewIds.length}`);
+  console.log(`CHATGPT_EXPLICIT_LIMIT=${options.plan.explicitLimit}`);
+  console.log(`CHATGPT_LIMIT_SKIPPED=${options.plan.limitSkippedIds.length}`);
+  console.log("==================================");
+  console.log("");
 }
 
 function applyOutcomeCounters(

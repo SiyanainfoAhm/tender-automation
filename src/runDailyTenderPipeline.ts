@@ -454,7 +454,7 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
     });
 
     // -------- PHASE 2: readiness --------
-    const readiness = buildGptReadinessReport(dateFolder, dateIso);
+    const readiness = await buildGptReadinessReport(dateFolder, dateIso, logger);
     saveGptReadinessReport(dateFolder, readiness);
     const discovered = listDownloadedTenderIds(dateFolder);
     summary.tenderFoldersDiscovered = discovered.length;
@@ -535,7 +535,7 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
     );
 
     // Recompute remaining ready after qualification (no valid result yet).
-    const postReadiness = buildGptReadinessReport(dateFolder, dateIso);
+    const postReadiness = await buildGptReadinessReport(dateFolder, dateIso, logger);
     summary.remainingReady = listNewReadyTenderIds(
       dateFolder,
       postReadiness.readyTenderIds,

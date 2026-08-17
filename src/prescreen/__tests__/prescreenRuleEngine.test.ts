@@ -6,7 +6,7 @@ import {
   evaluatePrescreen,
   getTodayIsoInTimezone,
 } from "../prescreenRuleEngine.js";
-import { shouldSkipChatgptForPrescreenDecision } from "../chatgptGate.js";
+import { shouldSkipChatgptForPrescreenDecision, isExplicitPrescreenChatgptBlock } from "../chatgptGate.js";
 import {
   assertBidassistDidNotRunItClassifier,
   classifyTender247ItRelevance,
@@ -264,6 +264,30 @@ test("25. Passed tender follows existing ChatGPT flow (gate)", () => {
       enabled: true,
       status: "PASSED",
       chatgptEligible: true,
+    }),
+    false,
+  );
+});
+
+test("GPT-ready allow-missing still blocks REJECTED and MANUAL_REVIEW", () => {
+  assert.equal(
+    isExplicitPrescreenChatgptBlock({
+      status: "REJECTED",
+      chatgptEligible: false,
+    }),
+    true,
+  );
+  assert.equal(
+    isExplicitPrescreenChatgptBlock({
+      status: "MANUAL_REVIEW",
+      chatgptEligible: false,
+    }),
+    true,
+  );
+  assert.equal(
+    isExplicitPrescreenChatgptBlock({
+      status: "NOT_RUN",
+      chatgptEligible: null,
     }),
     false,
   );

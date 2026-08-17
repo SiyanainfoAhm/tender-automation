@@ -480,20 +480,17 @@ export function assertAttachmentFilesExistOnDisk(
 export function assertTender247BundleComplete(
   files: QualificationAttachmentFile[],
   sourceTenderId: string,
-  aiSummaryRequired: boolean,
+  _aiSummaryRequired: boolean,
 ): void {
-  const metadataFile = files.find((f) => f.kind === "METADATA");
-  const archiveFile = files.find((f) => f.kind === "DOCUMENT_ARCHIVE");
-  if (!metadataFile || !archiveFile) {
+  if (files.length === 0) {
     throw new Error(
-      `E2E_REQUIRED_ATTACHMENT_BUNDLE_INCOMPLETE=T247-${sourceTenderId}`,
+      `E2E_REQUIRED_ATTACHMENT_BUNDLE_INCOMPLETE=T247-${sourceTenderId} count=0`,
     );
   }
-  if (aiSummaryRequired) {
-    const ai = files.find((f) => f.kind === "AI_SUMMARY");
-    if (!ai) {
+  for (const file of files) {
+    if (!file.filePath || !fs.existsSync(file.filePath)) {
       throw new Error(
-        `E2E_REQUIRED_ATTACHMENT_BUNDLE_INCOMPLETE=T247-${sourceTenderId} missing=AI_SUMMARY`,
+        `E2E_REQUIRED_ATTACHMENT_BUNDLE_INCOMPLETE=T247-${sourceTenderId} missing=${file.kind}`,
       );
     }
   }
@@ -1013,6 +1010,8 @@ export async function uploadQualificationAttachments(options: {
     sourcePortal,
     sourceTenderId,
     aiSummaryRequired,
+    metadataRequired: files.some((f) => f.kind === "METADATA"),
+    tenderArchiveRequired: files.some((f) => f.kind === "DOCUMENT_ARCHIVE"),
     expectedArchiveFileName: archiveName,
     logger,
     composerToken,
@@ -1055,6 +1054,8 @@ export async function assertPreSendAttachmentCheck(options: {
   sourcePortal: "TENDER247" | "BIDASSIST";
   sourceTenderId: string;
   aiSummaryRequired: boolean;
+  metadataRequired?: boolean;
+  tenderArchiveRequired?: boolean;
   expectedArchiveFileName: string;
   logger: Logger;
   composerToken?: string;
@@ -1068,6 +1069,8 @@ export async function assertPreSendAttachmentCheck(options: {
     logger,
     composerToken,
   } = options;
+  const metadataRequired = options.metadataRequired ?? false;
+  const tenderArchiveRequired = options.tenderArchiveRequired ?? false;
 
   logger.info("CHATGPT_PRE_SEND_ATTACHMENT_CHECK_START");
   console.log("CHATGPT_PRE_SEND_ATTACHMENT_CHECK_START");
@@ -1113,6 +1116,8 @@ export async function assertPreSendAttachmentCheck(options: {
       bidassistArchiveDetected: archivePresent,
       aiSummaryDetected: aiPresent,
       aiSummaryRequired,
+      metadataRequired,
+      tenderArchiveRequired,
     });
   } catch (error) {
     throw new AutomationError(
@@ -1282,6 +1287,12 @@ export async function enterPromptAndSendWithConfirmedAttachments(options: {
       sourcePortal: confirmed.sourcePortal,
       sourceTenderId: confirmed.sourceTenderId,
       aiSummaryRequired: confirmed.aiSummaryRequired,
+      metadataRequired: confirmed.fileNames.some((n) =>
+        /^metadata/i.test(n),
+      ),
+      tenderArchiveRequired: confirmed.fileNames.some((n) =>
+        /Tender_All_Documents.*\.zip$/i.test(n),
+      ),
       expectedArchiveFileName: archiveName,
       logger,
       composerToken: confirmed.composerIdentity,
@@ -1389,6 +1400,12 @@ export async function enterPromptAndSendWithConfirmedAttachments(options: {
       sourcePortal: confirmed.sourcePortal,
       sourceTenderId: confirmed.sourceTenderId,
       aiSummaryRequired: confirmed.aiSummaryRequired,
+      metadataRequired: confirmed.fileNames.some((n) =>
+        /^metadata/i.test(n),
+      ),
+      tenderArchiveRequired: confirmed.fileNames.some((n) =>
+        /Tender_All_Documents.*\.zip$/i.test(n),
+      ),
       expectedArchiveFileName: archiveName,
       logger,
       composerToken: confirmed.composerIdentity,

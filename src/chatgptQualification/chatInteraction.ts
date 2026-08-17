@@ -351,6 +351,126 @@ export function prepareTenderSpecificUploadFiles(options: {
   };
 }
 
+/**
+ * Prepare ChatGPT upload sources for partial-evidence Tender247 runs.
+ * Only validates and hashes paths that are actually present.
+ */
+export function preparePartialTenderUploadFiles(options: {
+  t247Id: string;
+  tenderFolder: string;
+  metadataPath: string | null;
+  aiSummaryPath: string | null;
+  documentZipPath: string | null;
+  logger: Logger;
+}): PreparedTenderUploads {
+  const { t247Id, logger } = options;
+  const marker = `T247-${t247Id}`;
+  const metadataSourcePath = options.metadataPath
+    ? path.resolve(options.metadataPath)
+    : null;
+  const documentsSourcePath = options.documentZipPath
+    ? path.resolve(options.documentZipPath)
+    : null;
+  const aiSummarySourcePath = options.aiSummaryPath
+    ? path.resolve(options.aiSummaryPath)
+    : null;
+
+  if (
+    !metadataSourcePath &&
+    !documentsSourcePath &&
+    !aiSummarySourcePath
+  ) {
+    throw new AutomationError(
+      "CHATGPT_NO_QUALIFICATION_EVIDENCE",
+      `No upload sources for ${marker}`,
+    );
+  }
+
+  if (metadataSourcePath) {
+    const metaOk =
+      metadataSourcePath.toLowerCase().includes(marker.toLowerCase()) ||
+      /[/\\]metadata\.json$/i.test(metadataSourcePath);
+    if (!metaOk) {
+      throw new AutomationError(
+        "CHATGPT_UPLOAD_SOURCE_MISMATCH",
+        `Metadata path does not belong to ${marker}: ${metadataSourcePath}`,
+      );
+    }
+    logger.info(`CHATGPT_UPLOAD_SOURCE_METADATA=${metadataSourcePath}`);
+  }
+
+  if (documentsSourcePath) {
+    const docsOk =
+      documentsSourcePath.toLowerCase().includes(marker.toLowerCase()) ||
+      /Tender[_\s-]*All[_\s-]*Documents/i.test(
+        path.basename(documentsSourcePath),
+      ) ||
+      /\.zip$/i.test(documentsSourcePath);
+    if (!docsOk) {
+      throw new AutomationError(
+        "CHATGPT_UPLOAD_SOURCE_MISMATCH",
+        `Documents ZIP path does not belong to ${marker}: ${documentsSourcePath}`,
+      );
+    }
+    logger.info(`CHATGPT_UPLOAD_SOURCE_DOCUMENTS=${documentsSourcePath}`);
+  }
+
+  if (aiSummarySourcePath) {
+    if (
+      !aiSummarySourcePath.toLowerCase().includes(marker.toLowerCase()) &&
+      !/AI[_\s-]*Summary\.pdf$/i.test(path.basename(aiSummarySourcePath))
+    ) {
+      throw new AutomationError(
+        "CHATGPT_UPLOAD_SOURCE_MISMATCH",
+        `AI Summary path does not belong to ${marker}: ${aiSummarySourcePath}`,
+      );
+    }
+    logger.info(`CHATGPT_UPLOAD_SOURCE_AI_SUMMARY=${aiSummarySourcePath}`);
+  } else {
+    logger.info("CHATGPT_UPLOAD_SOURCE_AI_SUMMARY=NOT_AVAILABLE");
+    logger.info(`CHATGPT_AI_SUMMARY_NOT_AVAILABLE=${marker}`);
+  }
+
+  const metadataSha256 = metadataSourcePath
+    ? sha256File(metadataSourcePath)
+    : null;
+  const documentsSha256 = documentsSourcePath
+    ? sha256File(documentsSourcePath)
+    : null;
+  const aiSummarySha256 = aiSummarySourcePath
+    ? sha256File(aiSummarySourcePath)
+    : null;
+  if (metadataSha256) {
+    logger.info(`CHATGPT_UPLOAD_METADATA_SHA256=${metadataSha256}`);
+  }
+  if (aiSummarySha256) {
+    logger.info(`CHATGPT_UPLOAD_AI_SUMMARY_SHA256=${aiSummarySha256}`);
+  }
+  if (documentsSha256) {
+    logger.info(`CHATGPT_UPLOAD_DOCUMENTS_SHA256=${documentsSha256}`);
+  }
+
+  const uploadPaths: string[] = [];
+  if (metadataSourcePath) uploadPaths.push(metadataSourcePath);
+  if (aiSummarySourcePath) uploadPaths.push(aiSummarySourcePath);
+  if (documentsSourcePath) uploadPaths.push(documentsSourcePath);
+
+  return {
+    metadataSourcePath: metadataSourcePath ?? "",
+    aiSummarySourcePath,
+    documentsSourcePath: documentsSourcePath ?? "",
+    metadataUploadPath: metadataSourcePath ?? "",
+    aiSummaryUploadPath: aiSummarySourcePath,
+    documentsUploadPath: documentsSourcePath ?? "",
+    metadataSha256: metadataSha256 ?? "",
+    aiSummarySha256,
+    documentsSha256: documentsSha256 ?? "",
+    aiSummaryAvailable: Boolean(aiSummarySourcePath),
+    uploadPaths,
+    tempDir: null,
+  };
+}
+
 /** Remove a per-tender OS temp upload directory if one was created. */
 export function cleanupTenderTempUpload(
   tempDir: string | null | undefined,
@@ -553,9 +673,17 @@ export async function uploadFilesToComposer(options: {
           session.filesAssigned = true;
           await dismissDuplicateUploadDialog(page, logger);
           await waitForAttachmentChips(page, validFiles, logger, session, t247Id);
+          const metadataRequired = validFiles.some((f) =>
+            /metadata\.json$/i.test(path.basename(f)),
+          );
+          const tenderArchiveRequired = validFiles.some((f) =>
+            /\.zip$/i.test(path.basename(f)),
+          );
           await assertTenderAttachmentsVerified(page, t247Id, logger, {
             expectAiSummary,
             expectedArchiveFileName,
+            metadataRequired,
+            tenderArchiveRequired,
           });
           await waitForSendEnabled(page, logger);
           logger.info("CHATGPT_ALL_REQUIRED_ATTACHMENTS_READY");
@@ -622,9 +750,17 @@ export async function uploadFilesToComposer(options: {
     }
 
     if (t247Id) {
+      const metadataRequired = validFiles.some((f) =>
+        /metadata\.json$/i.test(path.basename(f)),
+      );
+      const tenderArchiveRequired = validFiles.some((f) =>
+        /\.zip$/i.test(path.basename(f)),
+      );
       await assertTenderAttachmentsVerified(page, t247Id, logger, {
         expectAiSummary,
         expectedArchiveFileName,
+        metadataRequired,
+        tenderArchiveRequired,
       });
     }
 
@@ -1919,10 +2055,14 @@ export async function assertTenderAttachmentsVerified(
     expectAiSummary?: boolean;
     expectedArchiveFileName?: string;
     sourcePortal?: "TENDER247" | "BIDASSIST";
+    metadataRequired?: boolean;
+    tenderArchiveRequired?: boolean;
   },
 ): Promise<void> {
   const expectAiSummary = options?.expectAiSummary ?? false;
   const sourcePortal = options?.sourcePortal ?? "TENDER247";
+  const metadataRequired = options?.metadataRequired ?? false;
+  const tenderArchiveRequired = options?.tenderArchiveRequired ?? false;
   const presence = await detectComposerAttachments(page, {
     expectedArchiveFileName: options?.expectedArchiveFileName,
   });
@@ -1940,6 +2080,8 @@ export async function assertTenderAttachmentsVerified(
     bidassistArchiveDetected,
     aiSummaryDetected,
     aiSummaryRequired: expectAiSummary,
+    metadataRequired,
+    tenderArchiveRequired,
   });
 
   if (!presence.aiSummaryAttached) {

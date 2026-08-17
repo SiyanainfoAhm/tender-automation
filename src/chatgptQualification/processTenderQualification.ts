@@ -26,7 +26,7 @@ import {
   cleanupTenderTempUpload,
   handleRateLimitModal,
   isConversationUrl,
-  prepareTenderSpecificUploadFiles,
+  preparePartialTenderUploadFiles,
   saveUploadFailureDiagnostics,
   waitForAssistantResponse,
   type MessageBaseline,
@@ -52,20 +52,21 @@ import {
   assertProjectHomeOpen,
 } from "./openProject.js";
 import {
-  buildQualificationPrompt,
-  claimsMandatoryUploadsUnavailable,
+  buildEvidenceAwareQualificationPrompt,
+  applyFalseMissingDocumentClaim,
   isValidSavedQualificationResult,
   parseAndValidateQualificationResponse,
   withUploadedEvidenceFiles,
 } from "./qualificationSchema.js";
 import {
-  getMissingPhase1Files,
-  tryResolvePhase1TenderUploadFiles,
-} from "./readiness.js";
+  ensureTender247QualificationEvidence,
+} from "./ensureTender247QualificationEvidence.js";
+import {
+  resolvePartialQualificationFiles,
+} from "./sourceDocumentResolver.js";
 import { assertPrescreenAllowsChatgpt } from "../prescreen/chatgptGate.js";
 import type { QualificationResult } from "./types.js";
 import { persistValidatedQualificationToSupabase } from "../supabase/persistQualification.js";
-import { resolveQualificationFiles } from "./sourceDocumentResolver.js";
 
 export interface QualifyTenderOutcome {
   t247Id: string;
@@ -122,6 +123,9 @@ export async function qualifySingleTender(options: {
    * clean composer — do NOT re-navigate / reload project home.
    */
   skipInitialProjectHome?: boolean;
+  /** When set, may open Tender247 for one bounded document acquisition attempt. */
+  browserContext?: import("playwright").BrowserContext;
+  tender247ListPage?: import("playwright").Page;
 }): Promise<QualifyTenderOutcome> {
   const { page, dateFolder, t247Id, config, logger } = options;
   const resumeMode = options.resumeMode === true;
@@ -187,7 +191,7 @@ export async function qualifySingleTender(options: {
   // ---- Local raw-response recovery (no ChatGPT / no re-upload) ----
   // Resume only — fresh runs must submit a new GPT request.
   if (resumeMode && !options.forceReprocess) {
-    const localRecovery = tryRecoverFromExistingRawResponse({
+    const localRecovery = await tryRecoverFromExistingRawResponse({
       t247Id,
       tenderFolder,
       dateFolder,
@@ -209,6 +213,7 @@ export async function qualifySingleTender(options: {
     sourcePortal: "TENDER247",
     sourceTenderId: t247Id,
     logger,
+    allowMissingPrescreenRow: true,
   });
   if (!prescreenGate.allowed) {
     upsertQualificationManifestEntry(
@@ -385,21 +390,35 @@ export async function qualifySingleTender(options: {
       });
     }
 
-    const missingFiles = getMissingPhase1Files(dateFolder, t247Id);
-    if (
-      missingFiles.length > 0 ||
-      !tryResolvePhase1TenderUploadFiles(dateFolder, t247Id, logger)
-    ) {
+    const evidence = await ensureTender247QualificationEvidence({
+      dateFolder,
+      t247Id,
+      logger,
+      attemptDocumentDownload: true,
+      browserContext: options.browserContext,
+      listPage: options.tender247ListPage,
+      config: options.config,
+      fullLogger: logger,
+    });
+
+    if (!evidence.gptReady) {
+      const missingFiles = [
+        evidence.notReadyReason ?? "NO_USABLE_QUALIFICATION_EVIDENCE",
+      ];
       logger.warn(
-        `CHATGPT_TENDER_NOT_READY=T247-${t247Id} missing=${missingFiles.join(",")}`,
+        `CHATGPT_TENDER_NOT_READY=T247-${t247Id} reason=${missingFiles.join(",")}`,
       );
       saveChatGptTenderState(tenderFolder, {
         t247Id,
         chatUrl: null,
         status: "not_ready",
         updatedAt: new Date().toISOString(),
-        missingFiles,
-        error: `Missing: ${missingFiles.join(", ")}`,
+        missingFiles: evidence.missingFiles,
+        error: missingFiles.join(", "),
+        evidenceMode: evidence.evidenceMode,
+        availableFiles: evidence.availableFiles,
+        downloadAttempted: evidence.downloadAttempted,
+        metadataRepairAttempted: evidence.metadataRepairAttempted,
       });
       upsertQualificationManifestEntry(
         dateFolder,
@@ -409,7 +428,7 @@ export async function qualifySingleTender(options: {
           status: "not_ready",
           missingFiles,
           updatedAt: new Date().toISOString(),
-          error: `Missing: ${missingFiles.join(", ")}`,
+          error: missingFiles.join(", "),
         },
         totals,
       );
@@ -420,7 +439,7 @@ export async function qualifySingleTender(options: {
         responsePath: null,
         qualification: null,
         chatUrl: null,
-        error: null,
+        error: missingFiles.join(", "),
         missingFiles,
       };
     }
@@ -433,10 +452,10 @@ export async function qualifySingleTender(options: {
     let composerIdentity: string | null = null;
     let submissionConfirmed = false;
 
-    const attachmentBundle = await resolveQualificationFiles(
-      "TENDER247",
+    const attachmentBundle = await resolvePartialQualificationFiles(
       t247Id,
       tenderFolder,
+      evidence,
     );
 
     assertTender247BundleComplete(
@@ -445,6 +464,38 @@ export async function qualifySingleTender(options: {
       attachmentBundle.aiSummaryAvailable,
     );
     logAttachmentBundle("TENDER247", t247Id, attachmentBundle.files, logger);
+
+    const readinessStatus =
+      evidence.evidenceMode === "FULL" ? "ready_full" : "ready_partial";
+    saveChatGptTenderState(tenderFolder, {
+      t247Id,
+      chatUrl: existingState?.chatUrl ?? null,
+      status: existingState?.status ?? "attachments_confirmed",
+      updatedAt: new Date().toISOString(),
+      evidenceMode: evidence.evidenceMode,
+      availableFiles: evidence.availableFiles,
+      missingFiles: evidence.missingFiles,
+      downloadAttempted: evidence.downloadAttempted,
+      metadataRepairAttempted: evidence.metadataRepairAttempted,
+      processingState: readinessStatus,
+      aiSummaryAvailable: evidence.aiSummary.available,
+    });
+    upsertQualificationManifestEntry(
+      dateFolder,
+      dateIso,
+      {
+        t247Id,
+        status: readinessStatus,
+        missingFiles: evidence.missingFiles,
+        availableFiles: evidence.availableFiles,
+        evidenceMode: evidence.evidenceMode,
+        downloadAttempted: evidence.downloadAttempted,
+        metadataRepairAttempted: evidence.metadataRepairAttempted,
+        updatedAt: new Date().toISOString(),
+        error: null,
+      },
+      totals,
+    );
 
     try {
       if (options.skipInitialProjectHome === true) {
@@ -483,7 +534,7 @@ export async function qualifySingleTender(options: {
 
       logger.info(`CHATGPT_CHAT_TITLE_HINT=T247-${t247Id} Qualification`);
 
-      const prepared = prepareTenderSpecificUploadFiles({
+      const prepared = preparePartialTenderUploadFiles({
         t247Id,
         tenderFolder,
         metadataPath: attachmentBundle.metadataPath,
@@ -493,10 +544,16 @@ export async function qualifySingleTender(options: {
       });
 
       try {
-        const prompt = buildQualificationPrompt("TENDER247", t247Id, {
-          aiSummaryAvailable:
-            prepared.aiSummaryAvailable || attachmentBundle.aiSummaryAvailable,
-        });
+        const prompt = buildEvidenceAwareQualificationPrompt(
+          "TENDER247",
+          t247Id,
+          {
+            metadataAvailable: evidence.metadata.available,
+            documentsAvailable: evidence.documents.available,
+            aiSummaryAvailable: evidence.aiSummary.available,
+            evidenceMode: evidence.evidenceMode,
+          },
+        );
         fs.writeFileSync(
           path.join(tenderFolder, "qualification-prompt.txt"),
           prompt,
@@ -529,6 +586,18 @@ export async function qualifySingleTender(options: {
               : null,
           });
           logger.info(`CHATGPT_ATTACHMENT_MANIFEST_SAVED=${manifestPath}`);
+          const audit = confirmed.attachmentManifest;
+          logger.info(
+            `CHATGPT_ATTACHMENT_MANIFEST metadataPresent=${audit.metadataPresent} documentZipPresent=${audit.documentZipPresent} aiSummaryPresent=${audit.aiSummaryPresent}`,
+          );
+          console.log(
+            `CHATGPT_ATTACHMENT_MANIFEST=${JSON.stringify({
+              metadataPresent: audit.metadataPresent,
+              documentZipPresent: audit.documentZipPresent,
+              aiSummaryPresent: audit.aiSummaryPresent,
+              uploadedLogicalFiles: audit.uploadedLogicalFiles,
+            })}`,
+          );
         }
 
         saveChatGptTenderState(tenderFolder, {
@@ -986,7 +1055,7 @@ export async function qualifySingleTender(options: {
 /**
  * Local-only recovery from qualification-response.txt (no browser).
  */
-export function tryRecoverFromExistingRawResponse(options: {
+export async function tryRecoverFromExistingRawResponse(options: {
   t247Id: string;
   tenderFolder: string;
   dateFolder: string;
@@ -999,7 +1068,7 @@ export function tryRecoverFromExistingRawResponse(options: {
     readyForChatGpt: number;
     selected: number;
   };
-}): QualifyTenderOutcome | null {
+}): Promise<QualifyTenderOutcome | null> {
   const {
     t247Id,
     tenderFolder,
@@ -1041,29 +1110,34 @@ export function tryRecoverFromExistingRawResponse(options: {
     return null;
   }
 
+  const uploadedEvidenceFiles = existingState.uploadedEvidenceFiles || [];
   const withEvidence = withUploadedEvidenceFiles(
     parsed.result,
-    existingState.uploadedEvidenceFiles || [],
+    uploadedEvidenceFiles,
   );
-
-  if (
-    claimsMandatoryUploadsUnavailable(
-      withEvidence,
-      existingState.uploadedEvidenceFiles || [],
-    )
-  ) {
-    logger.warn(
-      "CHATGPT_EXISTING_RAW_RESPONSE_FALSE_MISSING_DOCS — not marking completed",
+  const falseMissing = applyFalseMissingDocumentClaim({
+    result: withEvidence,
+    uploadedEvidenceFiles,
+    metadataUploaded: existingState.metadataUploaded,
+    documentZipUploaded: existingState.documentArchiveUploaded,
+  });
+  if (falseMissing.falseClaim) {
+    logger.warn("MODEL_FALSE_MISSING_DOCUMENT_CLAIM=true");
+    console.log("MODEL_FALSE_MISSING_DOCUMENT_CLAIM=true");
+    console.log("CHATGPT_DUPLICATE_PROMPT_BLOCKED=true");
+    console.log("CHATGPT_CORRECTION_PROMPT_FORBIDDEN=true");
+    logger.info("CHATGPT_CORRECTION_PROMPT_FORBIDDEN=true");
+    logger.info(
+      `CHATGPT_ATTACHMENT_MANIFEST=${JSON.stringify(falseMissing.manifest)}`,
     );
-    return null;
   }
 
   logger.info(
-    `CHATGPT_EXISTING_RAW_RESPONSE_PARSED status=${withEvidence.status}`,
+    `CHATGPT_EXISTING_RAW_RESPONSE_PARSED status=${falseMissing.result.status}`,
   );
   fs.writeFileSync(
     resultPath,
-    JSON.stringify(withEvidence, null, 2),
+    JSON.stringify(falseMissing.result, null, 2),
     "utf8",
   );
   if (!isValidSavedQualificationResult(resultPath)) {
@@ -1074,16 +1148,71 @@ export function tryRecoverFromExistingRawResponse(options: {
   }
   logger.info("CHATGPT_RESULT_VALIDATED");
   logger.info("CHATGPT_RESULT_SAVED");
-  logger.info("CHATGPT_QUALIFICATION_COMPLETE");
-  logger.info(`CHATGPT_RESULT_STATUS=${withEvidence.status}`);
+  logger.info(`CHATGPT_RESULT_STATUS=${falseMissing.result.status}`);
   logger.info(
-    `CHATGPT_RESULT_DECISION_LABEL=${withEvidence.decisionLabel}`,
-  );
-  logger.info(
-    `CHATGPT_QUALIFICATION_SAVED=T247-${t247Id} status=${withEvidence.status}`,
+    `CHATGPT_RESULT_DECISION_LABEL=${falseMissing.result.decisionLabel}`,
   );
 
   const chatUrl = existingState.chatUrl;
+  const inputFingerprint = computeQualificationInputFingerprint({
+    dateFolder,
+    sourceTenderId: t247Id,
+    sourcePortal: "TENDER247",
+  });
+  saveQualificationInputFingerprint(tenderFolder, inputFingerprint);
+
+  let supabasePersist = { ok: false, error: "not_attempted" as string | null };
+  const maxPersistAttempts = 3;
+  for (let persistAttempt = 1; persistAttempt <= maxPersistAttempts; persistAttempt++) {
+    supabasePersist = await persistValidatedQualificationToSupabase({
+      sourcePortal: "TENDER247",
+      sourceTenderId: t247Id,
+      qualification: falseMissing.result,
+      rawResponse: responseText,
+      chatUrl,
+      logger,
+    });
+    if (supabasePersist.ok) break;
+    logger.warn(
+      `CHATGPT_PERSIST_RETRY_PENDING=true attempt=${persistAttempt}/${maxPersistAttempts} error=${supabasePersist.error}`,
+    );
+  }
+  if (!supabasePersist.ok) {
+    logger.warn(
+      `CHATGPT_DB_SYNC_FAILED — raw response retained for retry (no GPT re-prompt): ${supabasePersist.error}`,
+    );
+    saveChatGptTenderState(tenderFolder, {
+      ...existingState,
+      t247Id,
+      chatUrl,
+      status: "response_pending",
+      submissionConfirmed: true,
+      phase: "DB_SYNC_FAILED",
+      updatedAt: new Date().toISOString(),
+      latestAssistantText: responseText,
+      uiState: "response_saved_db_pending",
+      uploadedEvidenceFiles,
+      qualificationInputHash: inputFingerprint.qualificationInputHash,
+      error: supabasePersist.error,
+    });
+    return {
+      t247Id,
+      status: "response_pending",
+      resultPath,
+      responsePath,
+      qualification: falseMissing.result,
+      chatUrl,
+      error: supabasePersist.error,
+    };
+  }
+
+  logger.info("CHATGPT_QUALIFICATION_COMPLETE");
+  logger.info(
+    `CHATGPT_QUALIFICATION_SAVED=T247-${t247Id} status=${falseMissing.result.status}`,
+  );
+  console.log(`CHATGPT_RESULT=${falseMissing.result.status}`);
+  console.log("CHATGPT_CANDIDATE_DONE=true");
+
   saveChatGptTenderState(tenderFolder, {
     ...existingState,
     t247Id,
@@ -1094,6 +1223,8 @@ export function tryRecoverFromExistingRawResponse(options: {
     updatedAt: new Date().toISOString(),
     latestAssistantText: responseText,
     uiState: "completed_from_raw",
+    uploadedEvidenceFiles,
+    qualificationInputHash: inputFingerprint.qualificationInputHash,
     error: null,
   });
   upsertQualificationManifestEntry(
@@ -1102,7 +1233,7 @@ export function tryRecoverFromExistingRawResponse(options: {
     {
       t247Id,
       status: "completed",
-      qualificationStatus: withEvidence.status,
+      qualificationStatus: falseMissing.result.status,
       chatUrl,
       resultPath,
       responsePath,
@@ -1117,7 +1248,7 @@ export function tryRecoverFromExistingRawResponse(options: {
     status: "completed",
     resultPath,
     responsePath,
-    qualification: withEvidence,
+    qualification: falseMissing.result,
     chatUrl,
     error: null,
   };
@@ -1427,38 +1558,6 @@ async function waitParseAndPersist(options: {
     );
     console.log("CHATGPT_DUPLICATE_PROMPT_BLOCKED=true");
     console.log("CHATGPT_CORRECTION_PROMPT_FORBIDDEN=true");
-  } else if (
-    claimsMandatoryUploadsUnavailable(
-      validated.result,
-      uploadedEvidenceFiles,
-    )
-  ) {
-    logger.warn(
-      "CHATGPT_FALSE_MISSING_UPLOADS — correction prompt forbidden; holding as response_pending",
-    );
-    console.log("CHATGPT_DUPLICATE_PROMPT_BLOCKED=true");
-    console.log("CHATGPT_CORRECTION_PROMPT_FORBIDDEN=true");
-    saveRawResponse(responseText);
-    saveChatGptTenderState(tenderFolder, {
-      t247Id,
-      chatUrl: isConversationUrl(page.url()) ? page.url() : chatUrl,
-      status: "response_pending",
-      submissionConfirmed: true,
-      phase: "RAW_RESPONSE_SAVED",
-      updatedAt: new Date().toISOString(),
-      latestAssistantText: responseText,
-      uploadedEvidenceFiles,
-      error: "Assistant claims uploaded files unavailable (no GPT retry)",
-    });
-    return {
-      t247Id,
-      status: "response_pending",
-      resultPath: null,
-      responsePath,
-      qualification: null,
-      chatUrl: isConversationUrl(page.url()) ? page.url() : chatUrl,
-      error: "Assistant claims uploaded files unavailable (no GPT retry)",
-    };
   }
 
   if (!validated.ok) {
@@ -1528,10 +1627,30 @@ async function waitParseAndPersist(options: {
     };
   }
 
-  const finalResult = withUploadedEvidenceFiles(
+  let finalResult = withUploadedEvidenceFiles(
     validated.result,
     uploadedEvidenceFiles,
   );
+  const falseMissing = applyFalseMissingDocumentClaim({
+    result: finalResult,
+    uploadedEvidenceFiles,
+    metadataUploaded: existing?.metadataUploaded,
+    documentZipUploaded: existing?.documentArchiveUploaded,
+  });
+  if (falseMissing.falseClaim) {
+    logger.warn("MODEL_FALSE_MISSING_DOCUMENT_CLAIM=true");
+    console.log("MODEL_FALSE_MISSING_DOCUMENT_CLAIM=true");
+    console.log("CHATGPT_DUPLICATE_PROMPT_BLOCKED=true");
+    console.log("CHATGPT_CORRECTION_PROMPT_FORBIDDEN=true");
+    logger.info("CHATGPT_CORRECTION_PROMPT_FORBIDDEN=true");
+    logger.info(
+      `CHATGPT_ATTACHMENT_MANIFEST=${JSON.stringify(falseMissing.manifest)}`,
+    );
+    if (falseMissing.result.status === "VERIFY") {
+      logger.info("CHATGPT_MODEL_DOCUMENT_INTERPRETATION_CONFLICT=VERIFY");
+    }
+    finalResult = falseMissing.result;
+  }
 
   if (!submissionConfirmed) {
     throw new AutomationError(

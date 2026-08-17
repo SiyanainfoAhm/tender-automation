@@ -3,7 +3,16 @@ import path from "node:path";
 import { loadManifest } from "../tender247Batch/batchManifest.js";
 import { isMetadataResumeReady } from "../tender247Batch/resumeArtifacts.js";
 import { materializeTempMetadataJson } from "../supabase/tenderMetadataStore.js";
+import {
+  isReadableZipArchive as zipLooksLikeZip,
+} from "../tender247Batch/canonicalTenderArchive.js";
+import {
+  ensureTender247QualificationEvidence,
+  type Tender247EvidenceReport,
+} from "./ensureTender247QualificationEvidence.js";
 import type { GptReadinessReport } from "./types.js";
+
+export { isReadableZipArchive } from "../tender247Batch/canonicalTenderArchive.js";
 
 function isNonEmptyFile(filePath: string): boolean {
   try {
@@ -62,27 +71,8 @@ export function isValidMetadataJson(filePath: string): boolean {
 }
 
 /** ZIP exists, size > 0, and central directory / local headers are readable. */
-export function isReadableZipArchive(filePath: string): boolean {
-  try {
-    if (!isNonEmptyFile(filePath)) {
-      return false;
-    }
-    const fd = fs.openSync(filePath, "r");
-    try {
-      const header = Buffer.alloc(4);
-      const bytesRead = fs.readSync(fd, header, 0, 4, 0);
-      if (bytesRead < 4) {
-        return false;
-      }
-      // Local file header (PK\x03\x04) or empty archive / EOCD (PK\x05\x06)
-      const sig = header.readUInt32LE(0);
-      return sig === 0x04034b50 || sig === 0x06054b50 || sig === 0x08074b50;
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return false;
-  }
+function isReadableZipArchiveLocal(filePath: string): boolean {
+  return zipLooksLikeZip(filePath);
 }
 
 /**
@@ -100,7 +90,7 @@ export function findTenderAllDocumentsZip(tenderFolder: string): string | null {
     .filter((name) => /^Tender_All_Documents.*\.zip$/i.test(name))
     .filter((name) => !isTempOrIncompleteName(name))
     .map((name) => path.join(documentsDir, name))
-    .filter((p) => isNonEmptyFile(p) && isReadableZipArchive(p));
+    .filter((p) => isNonEmptyFile(p) && isReadableZipArchiveLocal(p));
 
   if (candidates.length === 0) {
     return null;
@@ -134,14 +124,75 @@ export interface Phase1UploadFiles {
   cleanupMetadata?: () => void;
 }
 
+export type Phase1ReadinessPrepareResult = {
+  t247Id: string;
+  requestedDate: string;
+  tenderDir: string;
+  localDocumentsFound: string[];
+  canonicalZipExisted: boolean;
+  canonicalZipCreated: boolean;
+  metadataSupabaseFound: boolean;
+  metadataRepaired: boolean;
+  gptReady: boolean;
+  evidenceMode: Tender247EvidenceReport["evidenceMode"];
+  evidenceCount: number;
+  readiness: Tender247EvidenceReport["readiness"];
+  availableFiles: string[];
+  notReadyReason: string | null;
+  missingFiles: string[];
+};
+
+type ReadinessLogger = {
+  info: (msg: string) => void;
+  warn?: (msg: string) => void;
+  error?: (msg: string) => void;
+};
+
+/**
+ * Normalize local documents + repair metadata BEFORE declaring NOT_READY.
+ * GPT may proceed with partial evidence (metadata, documents, or AI Summary).
+ */
+export async function preparePhase1TenderReadiness(options: {
+  dateFolder: string;
+  t247Id: string;
+  logger?: ReadinessLogger;
+}): Promise<Phase1ReadinessPrepareResult> {
+  const evidence = await ensureTender247QualificationEvidence({
+    dateFolder: options.dateFolder,
+    t247Id: options.t247Id,
+    logger: options.logger,
+  });
+
+  return {
+    t247Id: evidence.t247Id,
+    requestedDate: evidence.requestedDate,
+    tenderDir: evidence.tenderDir,
+    localDocumentsFound: evidence.documents.sourceFiles,
+    canonicalZipExisted:
+      evidence.documents.available && !evidence.documentsCreatedLocally,
+    canonicalZipCreated: evidence.documentsCreatedLocally,
+    metadataSupabaseFound: evidence.metadata.available,
+    metadataRepaired: evidence.metadataRepairAttempted,
+    gptReady: evidence.gptReady,
+    evidenceMode: evidence.evidenceMode,
+    evidenceCount: evidence.evidenceCount,
+    readiness: evidence.readiness,
+    availableFiles: evidence.availableFiles,
+    notReadyReason: evidence.notReadyReason,
+    missingFiles: evidence.gptReady ? evidence.missingFiles : ["NO_USABLE_QUALIFICATION_EVIDENCE"],
+  };
+}
+
 /**
  * Phase 1 readiness: Supabase/legacy metadata available + Tender_All_Documents*.zip
  * AI_Summary.pdf is optional. Permanent metadata.json is no longer required.
+ * Normalizes local PDFs/docs into the canonical ZIP before scoring readiness.
  */
-export function buildGptReadinessReport(
+export async function buildGptReadinessReport(
   dateFolder: string,
   dateIso: string,
-): GptReadinessReport {
+  logger?: ReadinessLogger,
+): Promise<GptReadinessReport> {
   const manifestPath = path.join(dateFolder, "crawl-manifest.json");
   const manifest = loadManifest(manifestPath);
 
@@ -175,12 +226,23 @@ export function buildGptReadinessReport(
   }
 
   const readyIds: string[] = [];
+  const readyFullIds: string[] = [];
+  const readyPartialIds: string[] = [];
   const missingTenderIds: string[] = [];
 
   for (const id of [...candidateIds].sort()) {
-    const resolved = tryResolvePhase1TenderUploadFiles(dateFolder, id);
-    if (resolved) {
+    const prepared = await preparePhase1TenderReadiness({
+      dateFolder,
+      t247Id: id,
+      logger,
+    });
+    if (prepared.gptReady) {
       readyIds.push(id);
+      if (prepared.evidenceMode === "FULL") {
+        readyFullIds.push(id);
+      } else {
+        readyPartialIds.push(id);
+      }
     } else {
       missingTenderIds.push(id);
     }
@@ -201,8 +263,13 @@ export function buildGptReadinessReport(
   return {
     expected,
     ready: readyIds.length,
+    readyFull: readyFullIds.length,
+    readyPartial: readyPartialIds.length,
+    notReadyZeroEvidence: missingTenderIds.length,
     missingTenderIds,
     readyTenderIds: readyIds,
+    readyFullTenderIds: readyFullIds,
+    readyPartialTenderIds: readyPartialIds,
     readyForQualification:
       expected > 0
         ? readyIds.length === expected
@@ -221,10 +288,15 @@ export function saveGptReadinessReport(
   const publicReport = {
     expected: report.expected,
     ready: report.ready,
+    readyFull: report.readyFull,
+    readyPartial: report.readyPartial,
+    notReadyZeroEvidence: report.notReadyZeroEvidence,
     missingTenderIds: report.missingTenderIds,
     readyTenderIds: report.readyTenderIds,
+    readyFullTenderIds: report.readyFullTenderIds,
+    readyPartialTenderIds: report.readyPartialTenderIds,
     readyForQualification: report.readyForQualification,
-    note: "Phase 1: ready = Supabase/legacy metadata + readable Tender_All_Documents*.zip (AI_Summary.pdf optional)",
+    note: "Ready = at least one usable artifact (metadata, Tender_All_Documents.zip, or AI_Summary.pdf)",
     checkedAt: report.checkedAt,
   };
   fs.writeFileSync(outPath, JSON.stringify(publicReport, null, 2), "utf8");
@@ -285,7 +357,7 @@ export function tryResolvePhase1TenderUploadFiles(
     return null;
   }
 
-  if (!isReadableZipArchive(documentZipPath)) {
+  if (!isReadableZipArchiveLocal(documentZipPath)) {
     return null;
   }
   try {
@@ -310,7 +382,7 @@ export function tryResolvePhase1TenderUploadFiles(
   };
 }
 
-/** List missing Phase-1 ChatGPT files (AI Summary is never required). */
+/** List unavailable evidence (informational when partial-ready). */
 export function getMissingPhase1Files(
   dateFolder: string,
   t247Id: string,
@@ -318,15 +390,54 @@ export function getMissingPhase1Files(
   const tenderFolder = path.join(dateFolder, `T247-${t247Id}`);
   const missing: string[] = [];
   const documentZipPath = findTenderAllDocumentsZip(tenderFolder);
+  const aiSummary = findAiSummaryPdfLocal(tenderFolder);
 
   if (!documentZipPath) {
     missing.push("Tender_All_Documents.zip");
   }
   if (!hasMetadataForChatGpt({ dateFolder, t247Id })) {
-    missing.push("metadata (Supabase)");
+    missing.push("metadata");
   }
-
+  if (!aiSummary) {
+    missing.push("AI_Summary.pdf");
+  }
   return missing;
+}
+
+function findAiSummaryPdfLocal(tenderDir: string): string | null {
+  if (!fs.existsSync(tenderDir)) return null;
+  for (const name of fs.readdirSync(tenderDir)) {
+    if (/^AI[_\s-]*Summary.*\.pdf$/i.test(name)) {
+      const p = path.join(tenderDir, name);
+      if (isNonEmptyFile(p)) return p;
+    }
+  }
+  return null;
+}
+
+export function hasAnyQualificationEvidence(
+  dateFolder: string,
+  t247Id: string,
+): boolean {
+  const tenderFolder = path.join(dateFolder, `T247-${t247Id}`);
+  const hasMeta = hasMetadataForChatGpt({ dateFolder, t247Id });
+  const hasZip = Boolean(findTenderAllDocumentsZip(tenderFolder));
+  const hasAi = Boolean(findAiSummaryPdfLocal(tenderFolder));
+  return hasMeta || hasZip || hasAi;
+}
+
+/** Normalize artifacts, then list remaining missing Phase-1 files. */
+export async function prepareAndGetMissingPhase1Files(
+  dateFolder: string,
+  t247Id: string,
+  logger?: ReadinessLogger,
+): Promise<string[]> {
+  const prepared = await preparePhase1TenderReadiness({
+    dateFolder,
+    t247Id,
+    logger,
+  });
+  return prepared.missingFiles;
 }
 
 /** All numeric T247 folder IDs under the day folder. */
@@ -394,4 +505,27 @@ export function listNewReadyTenderIds(
     );
     return !isComplete(resultPath);
   });
+}
+
+/** Repair canonical ZIP + metadata for selected (or all downloaded) tenders. */
+export async function repairDateFolderGptReadiness(options: {
+  dateFolder: string;
+  t247Ids?: string[];
+  logger?: ReadinessLogger;
+}): Promise<Phase1ReadinessPrepareResult[]> {
+  const ids =
+    options.t247Ids && options.t247Ids.length > 0
+      ? options.t247Ids
+      : listDownloadedTenderIds(options.dateFolder);
+  const reports: Phase1ReadinessPrepareResult[] = [];
+  for (const id of ids) {
+    reports.push(
+      await preparePhase1TenderReadiness({
+        dateFolder: options.dateFolder,
+        t247Id: id,
+        logger: options.logger,
+      }),
+    );
+  }
+  return reports;
 }

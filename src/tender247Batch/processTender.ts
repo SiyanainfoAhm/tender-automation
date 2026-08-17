@@ -15,6 +15,7 @@ import {
   tenderDetailUrl,
 } from "./apiClient.js";
 import { createTenderZip, removeDirectoryRecursive } from "./createTenderZip.js";
+import { ensureCanonicalTenderArchive } from "./canonicalTenderArchive.js";
 import { downloadRequiredTenderFiles } from "./downloadRequiredTenderFiles.js";
 import {
   ensureTender247DateScopedDir,
@@ -522,6 +523,15 @@ export async function processLiveTender(
           `TENDER247_DOCUMENT_ARCHIVE_DOWNLOADED=${allDocumentsPath}`,
         );
         logger.info("TENDER247_DOCUMENT_ARCHIVE_VALID=true");
+        const canonical = await ensureCanonicalTenderArchive({
+          tenderDir: resume.tenderFolder,
+          documentsDir: path.join(resume.tenderFolder, "documents"),
+          sourceTenderId: t247Id,
+          logger,
+        });
+        if (canonical.ready && canonical.canonicalZipPath) {
+          allDocumentsPath = canonical.canonicalZipPath;
+        }
       } else {
         logger.warn(`TENDER247_DOCUMENT_DOWNLOAD_FAILED=T247-${t247Id}`);
       }

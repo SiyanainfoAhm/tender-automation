@@ -93,6 +93,21 @@ export async function invokeDocumentDelete(
   });
 }
 
+export async function invokeDocumentRead(
+  documentId: string,
+  disposition: "inline" | "attachment" = "inline",
+): Promise<Response> {
+  return invokeCompanyDocumentsRaw({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "document-read",
+      documentId,
+      disposition,
+    }),
+  });
+}
+
 export async function invokeTemplateAssetsSave(options: {
   templateId: string;
   templateName: string;

@@ -24,8 +24,9 @@ export async function selectPassedForChatgpt(options: {
   sourcePortal: PrescreenSourcePortal;
   sourceTenderIds: string[];
   logger: { info: (msg: string) => void; warn?: (msg: string) => void };
-  /** Max PASSED ids to return (default: all) */
+  /** Max PASSED ids to return (default: all). 0 / omitted = unlimited. */
   limit?: number;
+  allowMissingPrescreenRow?: boolean;
 }): Promise<SelectPassedForChatgptResult> {
   const config = loadPrescreenConfig();
   const skipped: PrescreenSkipRecord[] = [];
@@ -57,6 +58,7 @@ export async function selectPassedForChatgpt(options: {
       sourcePortal: options.sourcePortal,
       sourceTenderId,
       logger: options.logger,
+      allowMissingPrescreenRow: options.allowMissingPrescreenRow,
     });
 
     const label =

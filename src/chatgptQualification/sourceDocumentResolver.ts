@@ -6,6 +6,8 @@ import {
   type SourcePortal,
 } from "../supabase/materializeTenderMetadata.js";
 import { getTenderMetadata } from "../supabase/tenderMetadataStore.js";
+import { findTenderAllDocumentsZip } from "./readiness.js";
+import type { Tender247EvidenceReport } from "./ensureTender247QualificationEvidence.js";
 
 export type AttachmentKind = "METADATA" | "AI_SUMMARY" | "DOCUMENT_ARCHIVE";
 
@@ -21,12 +23,13 @@ export type QualificationAttachmentBundle = {
   sourceTenderId: string;
   localFolderPath: string;
   files: QualificationAttachmentFile[];
-  metadataPath: string;
-  documentArchivePath: string;
+  metadataPath: string | null;
+  documentArchivePath: string | null;
   aiSummaryPath: string | null;
   uploadFiles: string[];
   aiSummaryAvailable: boolean;
   expectedAttachmentCount: number;
+  evidenceMode?: "FULL" | "STRONG_PARTIAL" | "PARTIAL";
   cleanup: () => void;
 };
 
@@ -121,18 +124,128 @@ function resolveBidassistOriginalZip(
 }
 
 function resolveTender247DocumentZip(localFolderPath: string): string {
+  const found = findTenderAllDocumentsZip(localFolderPath);
+  if (found && isNonEmptyFile(found)) {
+    return path.resolve(found);
+  }
   const archivePath = path.join(
     localFolderPath,
     "documents",
     "Tender_All_Documents.zip",
   );
-  if (isNonEmptyFile(archivePath)) {
-    return path.resolve(archivePath);
-  }
   throw new AutomationError(
     "CHATGPT_REQUIRED_ATTACHMENT_MISSING",
     `CHATGPT_REQUIRED_ATTACHMENT_MISSING=Tender_All_Documents.zip path=${archivePath}`,
   );
+}
+
+/**
+ * Resolve partial-evidence attachment bundle for Tender247.
+ * Only includes artifacts that are actually available — no placeholders.
+ */
+export async function resolvePartialQualificationFiles(
+  sourceTenderId: string,
+  localFolderPath: string,
+  evidence: Tender247EvidenceReport,
+): Promise<QualificationAttachmentBundle> {
+  const cleanups: Array<() => void> = [];
+  const files: QualificationAttachmentFile[] = [];
+  let metadataPath: string | null = null;
+  let documentArchivePath: string | null = null;
+  let aiSummaryPath: string | null = null;
+
+  if (evidence.metadata.available) {
+    const tempMetadata = await materializeTenderMetadata(
+      "TENDER247",
+      sourceTenderId,
+    );
+    cleanups.push(tempMetadata.cleanup);
+    metadataPath = tempMetadata.filePath;
+    assertNonEmptyFile(metadataPath, "metadata.json");
+    files.push({
+      kind: "METADATA",
+      filePath: path.resolve(metadataPath),
+      fileName: "metadata.json",
+      required: true,
+    });
+  }
+
+  if (evidence.aiSummary.available && evidence.aiSummary.path) {
+    aiSummaryPath = path.resolve(evidence.aiSummary.path);
+    assertNonEmptyFile(aiSummaryPath, "AI_Summary.pdf");
+    files.push({
+      kind: "AI_SUMMARY",
+      filePath: aiSummaryPath,
+      fileName: evidence.aiSummary.fileName || "AI_Summary.pdf",
+      required: true,
+    });
+  }
+
+  if (evidence.documents.available && evidence.documents.canonicalZipPath) {
+    documentArchivePath = path.resolve(evidence.documents.canonicalZipPath);
+    assertNonEmptyFile(documentArchivePath, "Tender_All_Documents.zip");
+    files.push({
+      kind: "DOCUMENT_ARCHIVE",
+      filePath: documentArchivePath,
+      fileName: path.basename(documentArchivePath),
+      required: true,
+    });
+  }
+
+  if (files.length === 0) {
+    throw new AutomationError(
+      "CHATGPT_NO_QUALIFICATION_EVIDENCE",
+      `CHATGPT_NO_QUALIFICATION_EVIDENCE=T247-${sourceTenderId}`,
+    );
+  }
+
+  const cleanup = (): void => {
+    for (const fn of cleanups) {
+      try {
+        fn();
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  const bundle: QualificationAttachmentBundle = {
+    sourcePortal: "TENDER247",
+    sourceTenderId,
+    localFolderPath: path.resolve(localFolderPath),
+    files,
+    metadataPath,
+    documentArchivePath,
+    aiSummaryPath,
+    uploadFiles: files.map((f) => f.filePath),
+    aiSummaryAvailable: Boolean(aiSummaryPath),
+    expectedAttachmentCount: files.length,
+    evidenceMode:
+      evidence.evidenceMode === "FULL" || evidence.evidenceMode === "STRONG_PARTIAL"
+        ? evidence.evidenceMode
+        : "PARTIAL",
+    cleanup,
+  };
+
+  console.log(
+    `CHATGPT_EXPECTED_ATTACHMENT_COUNT=${bundle.expectedAttachmentCount}`,
+  );
+  console.log(
+    `CHATGPT_EXPECTED_LOGICAL_FILES=${JSON.stringify(
+      files.map((f) =>
+        f.kind === "METADATA"
+          ? "metadata"
+          : f.kind === "AI_SUMMARY"
+            ? "AI_Summary"
+            : "Tender_All_Documents",
+      ),
+    )}`,
+  );
+  for (const file of files) {
+    console.log(`CHATGPT_UPLOAD_FILE=${file.fileName}`);
+  }
+
+  return bundle;
 }
 
 /**
@@ -169,7 +282,7 @@ export async function resolveQualificationFiles(
     });
 
     console.log(
-      `CHATGPT_UPLOAD_SOURCE_METADATA=${path.resolve(bundle.metadataPath)}`,
+      `CHATGPT_UPLOAD_SOURCE_METADATA=${path.resolve(bundle.metadataPath!)}`,
     );
     if (sourcePortal === "TENDER247") {
       if (bundle.aiSummaryPath) {
@@ -180,9 +293,11 @@ export async function resolveQualificationFiles(
         console.log("CHATGPT_UPLOAD_SOURCE_AI_SUMMARY=NOT_AVAILABLE");
       }
     }
-    console.log(
-      `CHATGPT_UPLOAD_SOURCE_DOCUMENTS=${path.resolve(bundle.documentArchivePath)}`,
-    );
+    if (bundle.documentArchivePath) {
+      console.log(
+        `CHATGPT_UPLOAD_SOURCE_DOCUMENTS=${path.resolve(bundle.documentArchivePath)}`,
+      );
+    }
     for (const file of bundle.files) {
       console.log(`CHATGPT_UPLOAD_FILE=${file.fileName}`);
     }
@@ -284,6 +399,7 @@ export function assembleQualificationAttachmentBundle(options: {
     uploadFiles,
     aiSummaryAvailable,
     expectedAttachmentCount: uploadFiles.length,
+    evidenceMode: "FULL",
     cleanup,
   };
 }
@@ -357,6 +473,8 @@ export function assertRequiredAttachmentsReady(options: {
   bidassistArchiveDetected: boolean;
   aiSummaryDetected: boolean;
   aiSummaryRequired: boolean;
+  metadataRequired?: boolean;
+  tenderArchiveRequired?: boolean;
 }): void {
   const {
     sourcePortal,
@@ -367,23 +485,37 @@ export function assertRequiredAttachmentsReady(options: {
     aiSummaryDetected,
     aiSummaryRequired,
   } = options;
+  const metadataRequired = options.metadataRequired ?? sourcePortal !== "TENDER247";
+  const tenderArchiveRequired =
+    options.tenderArchiveRequired ?? sourcePortal === "TENDER247";
+
+  if (sourcePortal === "TENDER247") {
+    const checks: boolean[] = [];
+    if (metadataRequired) checks.push(metadataDetected);
+    if (tenderArchiveRequired) checks.push(tenderArchiveDetected);
+    if (aiSummaryRequired) checks.push(aiSummaryDetected);
+    if (checks.length === 0) {
+      throw new AutomationError(
+        "CHATGPT_REQUIRED_ATTACHMENTS_NOT_READY",
+        `CHATGPT_REQUIRED_ATTACHMENTS_NOT_READY=${sourcePortal}-${sourceTenderId}`,
+      );
+    }
+    if (!checks.every(Boolean)) {
+      throw new AutomationError(
+        "CHATGPT_REQUIRED_ATTACHMENTS_NOT_READY",
+        `CHATGPT_REQUIRED_ATTACHMENTS_NOT_READY=${sourcePortal}-${sourceTenderId}`,
+      );
+    }
+    return;
+  }
 
   const requiredAttachmentsReady =
-    sourcePortal === "TENDER247"
-      ? metadataDetected && tenderArchiveDetected
-      : metadataDetected && bidassistArchiveDetected;
+    metadataDetected && bidassistArchiveDetected;
 
   if (!requiredAttachmentsReady) {
     throw new AutomationError(
       "CHATGPT_REQUIRED_ATTACHMENTS_NOT_READY",
       `CHATGPT_REQUIRED_ATTACHMENTS_NOT_READY=${sourcePortal}-${sourceTenderId}`,
-    );
-  }
-
-  if (sourcePortal === "TENDER247" && aiSummaryRequired && !aiSummaryDetected) {
-    throw new AutomationError(
-      "CHATGPT_REQUIRED_ATTACHMENTS_NOT_READY",
-      `CHATGPT_REQUIRED_ATTACHMENTS_NOT_READY=${sourcePortal}-${sourceTenderId} missing=AI_Summary.pdf`,
     );
   }
 }

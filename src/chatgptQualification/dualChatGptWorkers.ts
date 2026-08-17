@@ -87,6 +87,9 @@ export async function runDualChatGptWorkers(options: {
    * Must relaunch authenticated persistent ChatGPT and return new handles.
    */
   recoverSharedContext?: () => Promise<SharedContextHandles>;
+  /** Optional Tender247 session for bounded document acquisition. */
+  tender247EvidenceContext?: import("playwright").BrowserContext;
+  tender247ListPage?: import("playwright").Page;
 }): Promise<DualChatGptRunResult> {
   const concurrencyCfg = loadTender247ConcurrencyConfig();
   const workerCount = Math.min(2, Math.max(1, concurrencyCfg.chatgptConcurrency));
@@ -114,6 +117,8 @@ export async function runDualChatGptWorkers(options: {
     `CHATGPT_SHARED_CONTEXT_ANCHOR_PAGE_OPEN=${!anchorPage.isClosed()}`,
   );
   console.log(`CHATGPT_WORKER_COUNT=${workerCount}`);
+  console.log(`PIPELINE_GPT_QUEUE_LENGTH=${queue.size()}`);
+  options.logger.info(`PIPELINE_GPT_QUEUE_LENGTH=${queue.size()}`);
 
   let stopDequeue = false;
   let goStopTenderId: string | null = null;
@@ -255,6 +260,8 @@ export async function runDualChatGptWorkers(options: {
           skipInitialProjectHome: true,
           forceReprocess: options.forceReprocess === true,
           resumeMode: options.resumeMode === true,
+          browserContext: options.tender247EvidenceContext,
+          tender247ListPage: options.tender247ListPage,
           onSubmitted: () => {
             submitted = true;
             if (candidatePage && !candidatePage.isClosed()) {

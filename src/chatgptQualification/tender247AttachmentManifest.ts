@@ -46,6 +46,10 @@ export type AttachmentManifestAudit = {
   staleAttachmentsCleared: boolean;
   validationPassed: boolean;
   sendBlocked: boolean;
+  metadataPresent: boolean;
+  documentZipPresent: boolean;
+  aiSummaryPresent: boolean;
+  uploadedLogicalFiles: string[];
   files: AttachmentManifestFileAudit[];
   failureReason?: string;
 };
@@ -159,7 +163,7 @@ export type DisplayedAttachmentValidation = {
   failureReason?: string;
 };
 
-/** Verify each required attachment appears exactly once in visible chip names. */
+/** Verify each manifest entry appears exactly once in visible chip names. */
 export function validateDisplayedAttachmentNames(options: {
   manifest: Tender247ExpectedManifest;
   displayedNames: string[];
@@ -167,7 +171,6 @@ export function validateDisplayedAttachmentNames(options: {
   const { manifest, displayedNames } = options;
   const chips = filterAttachmentChipCandidates(displayedNames);
 
-  // Logical types — accept timestamped/suffixed display names (not exact basenames).
   const metadataCount = chips.filter((chip) =>
     isLogicalMetadataAttachmentName(chip),
   ).length;
@@ -178,43 +181,47 @@ export function validateDisplayedAttachmentNames(options: {
     isLogicalTenderZipAttachmentName(chip),
   ).length;
 
-  const requiredVisible =
-    metadataCount +
-    (manifest.aiSummaryRequired ? aiSummaryCount : 0) +
-    archiveCount;
+  const wantsMetadata = manifest.entries.some((e) => e.kind === "METADATA");
+  const wantsAi = manifest.entries.some((e) => e.kind === "AI_SUMMARY");
+  const wantsArchive = manifest.entries.some((e) => e.kind === "DOCUMENT_ARCHIVE");
 
-  if (metadataCount !== 1) {
+  if (wantsMetadata && metadataCount !== 1) {
     return {
       ok: false,
-      visibleCount: requiredVisible,
+      visibleCount: chips.length,
       metadataCount,
       aiSummaryCount,
       archiveCount,
       failureReason:
-        metadataCount === 0
-          ? "metadata_missing"
-          : "duplicate_metadata",
+        metadataCount === 0 ? "metadata_missing" : "duplicate_metadata",
+    };
+  }
+  if (!wantsMetadata && metadataCount > 0) {
+    return {
+      ok: false,
+      visibleCount: chips.length,
+      metadataCount,
+      aiSummaryCount,
+      archiveCount,
+      failureReason: "unexpected_metadata",
     };
   }
 
-  if (manifest.aiSummaryRequired && aiSummaryCount !== 1) {
+  if (wantsAi && aiSummaryCount !== 1) {
     return {
       ok: false,
-      visibleCount: requiredVisible,
+      visibleCount: chips.length,
       metadataCount,
       aiSummaryCount,
       archiveCount,
       failureReason:
-        aiSummaryCount === 0
-          ? "ai_summary_missing"
-          : "duplicate_ai_summary",
+        aiSummaryCount === 0 ? "ai_summary_missing" : "duplicate_ai_summary",
     };
   }
-
-  if (!manifest.aiSummaryRequired && aiSummaryCount > 0) {
+  if (!wantsAi && aiSummaryCount > 0) {
     return {
       ok: false,
-      visibleCount: requiredVisible,
+      visibleCount: chips.length,
       metadataCount,
       aiSummaryCount,
       archiveCount,
@@ -222,10 +229,10 @@ export function validateDisplayedAttachmentNames(options: {
     };
   }
 
-  if (archiveCount !== 1) {
+  if (wantsArchive && archiveCount !== 1) {
     return {
       ok: false,
-      visibleCount: requiredVisible,
+      visibleCount: chips.length,
       metadataCount,
       aiSummaryCount,
       archiveCount,
@@ -233,6 +240,19 @@ export function validateDisplayedAttachmentNames(options: {
         archiveCount === 0 ? "archive_missing" : "duplicate_archive",
     };
   }
+  if (!wantsArchive && archiveCount > 0) {
+    return {
+      ok: false,
+      visibleCount: chips.length,
+      metadataCount,
+      aiSummaryCount,
+      archiveCount,
+      failureReason: "unexpected_archive",
+    };
+  }
+
+  const requiredVisible =
+    (wantsMetadata ? 1 : 0) + (wantsAi ? 1 : 0) + (wantsArchive ? 1 : 0);
 
   if (requiredVisible !== manifest.expectedCount) {
     return {
@@ -241,7 +261,7 @@ export function validateDisplayedAttachmentNames(options: {
       metadataCount,
       aiSummaryCount,
       archiveCount,
-      failureReason: "visible_count_mismatch",
+      failureReason: "manifest_count_mismatch",
     };
   }
 
@@ -288,6 +308,20 @@ export function buildAttachmentManifestAudit(options: {
     },
   );
 
+  const uploadedLogicalFiles = files
+    .filter((file) => file.uploaded || file.verifiedVisible)
+    .map(
+      (file) =>
+        file.displayedChatGptFilename ||
+        options.manifest.entries.find(
+          (entry) => entry.originalLocalPath === file.originalLocalPath,
+        )?.expectedFileName ||
+        "",
+    )
+    .filter(Boolean);
+  const expectedNames = options.manifest.entries.map((e) => e.expectedFileName);
+  const names = uploadedLogicalFiles.length > 0 ? uploadedLogicalFiles : expectedNames;
+
   return {
     sourcePortal: "TENDER247",
     sourceTenderId: options.sourceTenderId,
@@ -299,6 +333,14 @@ export function buildAttachmentManifestAudit(options: {
     staleAttachmentsCleared: options.staleAttachmentsCleared,
     validationPassed: options.validation.ok && !options.sendBlocked,
     sendBlocked: options.sendBlocked,
+    metadataPresent: names.some((name) => isLogicalMetadataAttachmentName(name)),
+    documentZipPresent: names.some((name) =>
+      isLogicalTenderZipAttachmentName(name),
+    ),
+    aiSummaryPresent: names.some((name) =>
+      isLogicalAiSummaryAttachmentName(name),
+    ),
+    uploadedLogicalFiles: names,
     files,
     failureReason: options.validation.failureReason,
   };
