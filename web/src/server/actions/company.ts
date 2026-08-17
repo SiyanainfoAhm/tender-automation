@@ -22,6 +22,7 @@ import {
 import {
   ALLOWED_DOCUMENT_EXTENSIONS,
   MAX_DOCUMENT_UPLOAD_BYTES,
+  MAX_DOCUMENT_UPLOAD_SIZE_MB,
 } from "@/lib/company/types";
 
 const companyProfileSchema = z.object({
@@ -175,7 +176,9 @@ export async function uploadCompanyDocumentAction(
       return { error: "Please select a file to upload" };
     }
     if (file.size > MAX_DOCUMENT_UPLOAD_BYTES) {
-      return { error: "File exceeds the 25 MB limit" };
+      return {
+        error: `File too large. Maximum size is ${MAX_DOCUMENT_UPLOAD_SIZE_MB} MB.`,
+      };
     }
     if (!extensionAllowed(file.name)) {
       return {

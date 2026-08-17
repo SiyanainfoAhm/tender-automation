@@ -8,7 +8,7 @@ import {
   WORKSPACE_DOCUMENT_STATUSES,
   type WorkspaceDocumentStatus,
 } from "@/lib/bid-workspace";
-import { MAX_DOCUMENT_UPLOAD_BYTES } from "@/lib/company/types";
+import { MAX_SINGLE_SHOT_UPLOAD_BYTES } from "@/lib/company/types";
 import { CompanyAccessError } from "@/server/auth/company-access";
 import { requirePermissionStrict } from "@/server/auth/permissions";
 import { insertTenderActivity } from "@/server/repositories/tenderActivityRepository";
@@ -272,7 +272,7 @@ export async function uploadWorkspaceDocumentAction(formData: FormData): Promise
     if (!(file instanceof File) || file.size <= 0) {
       return { ok: false, error: "Choose a file to upload." };
     }
-    if (file.size > MAX_DOCUMENT_UPLOAD_BYTES) {
+    if (file.size > MAX_SINGLE_SHOT_UPLOAD_BYTES) {
       return { ok: false, error: "File exceeds the 25 MB limit." };
     }
     const title = String(formData.get("title") || file.name).trim();

@@ -3,13 +3,30 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-agenttender-session",
+    "authorization, x-client-info, apikey, content-type, x-agenttender-session, x-upload-action, x-upload-id, x-chunk-index, x-total-chunks, x-block-id",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
 const MAX_BYTES = 25 * 1024 * 1024;
+const MAX_COMPANY_DOCUMENT_BYTES = 100 * 1024 * 1024;
+const CHUNK_SIZE = 5 * 1024 * 1024;
+const UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_TEMPLATE_ASSET_BYTES = 5 * 1024 * 1024;
-const ALLOWED_EXT = [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".png", ".jpg", ".jpeg"];
+const ALLOWED_EXT = [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".png", ".jpg", ".jpeg", ".zip"];
+const ALLOWED_MIME = [
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/x-zip",
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "application/octet-stream",
+];
 const TEMPLATE_ASSET_EXT = [".png", ".jpg", ".jpeg", ".webp"];
 const TEMPLATE_ASSET_MIME = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
 const UPLOAD_ROLES = new Set([
@@ -266,6 +283,138 @@ async function uploadAzureBlob(
   return { blobName, storageUrl };
 }
 
+function azureQueryUrl(azure: AzureConfig, blobName: string, extraQuery: string) {
+  const encoded = encodeBlobPath(blobName);
+  const storageUrl = `${azureBaseUrl(azure)}/${encoded}`;
+  const sas = normalizeSas(azure.sasToken);
+  const extra = extraQuery.startsWith("?") ? extraQuery.slice(1) : extraQuery;
+  return `${storageUrl}?${extra}${sas.replace("?", "&")}`;
+}
+
+function encodeAzureBlockId(chunkIndex: number) {
+  const label = `block-${String(chunkIndex + 1).padStart(6, "0")}`;
+  return btoa(label);
+}
+
+function expectedChunkSize(fileSize: number, chunkSize: number, chunkIndex: number) {
+  const start = chunkIndex * chunkSize;
+  return Math.max(0, Math.min(fileSize, start + chunkSize) - start);
+}
+
+function uploadedBytesFromIndexes(
+  fileSize: number,
+  chunkSize: number,
+  indexes: number[],
+) {
+  return indexes.reduce(
+    (sum, index) => sum + expectedChunkSize(fileSize, chunkSize, index),
+    0,
+  );
+}
+
+async function stageAzureBlock(
+  azure: AzureConfig,
+  blobName: string,
+  blockId: string,
+  bytes: Uint8Array,
+) {
+  const url = azureQueryUrl(
+    azure,
+    blobName,
+    `comp=block&blockid=${encodeURIComponent(blockId)}`,
+  );
+  const put = await fetch(url, {
+    method: "PUT",
+    headers: {
+      "x-ms-version": "2020-10-02",
+      "Content-Length": String(bytes.byteLength),
+    },
+    body: bytes,
+  });
+  if (!put.ok) {
+    const body = await put.text();
+    console.error("[tender-automation-azure] stage block failed", {
+      status: put.status,
+      errorCode: put.headers.get("x-ms-error-code"),
+      requestId: put.headers.get("x-ms-request-id"),
+      blobName,
+      blockId,
+      responseBody: body.slice(0, 1500),
+    });
+    throw new HttpError(500, "Chunk upload failed");
+  }
+}
+
+async function commitAzureBlockList(
+  azure: AzureConfig,
+  blobName: string,
+  blockIds: string[],
+  options: { mimeType: string; fileName: string },
+) {
+  const xml =
+    `<?xml version="1.0" encoding="utf-8"?>\n<BlockList>\n` +
+    blockIds.map((id) => `  <Latest>${id}</Latest>`).join("\n") +
+    `\n</BlockList>`;
+  const url = azureQueryUrl(azure, blobName, "comp=blocklist");
+  const put = await fetch(url, {
+    method: "PUT",
+    headers: {
+      "x-ms-version": "2020-10-02",
+      "Content-Type": "application/xml",
+      "x-ms-blob-content-type": options.mimeType || "application/octet-stream",
+      "x-ms-blob-content-disposition":
+        `attachment; filename="${options.fileName.replace(/"/g, "")}"`,
+    },
+    body: xml,
+  });
+  if (!put.ok) {
+    const body = await put.text();
+    console.error("[tender-automation-azure] commit block list failed", {
+      status: put.status,
+      errorCode: put.headers.get("x-ms-error-code"),
+      requestId: put.headers.get("x-ms-request-id"),
+      blobName,
+      responseBody: body.slice(0, 1500),
+    });
+    throw new HttpError(500, "Unable to finalize document storage. Please try again.");
+  }
+}
+
+function validateCompanyDocumentFile(
+  fileName: string,
+  mimeType: string,
+  fileSize: number,
+  maxBytes = MAX_COMPANY_DOCUMENT_BYTES,
+) {
+  const name = fileName.trim();
+  if (!name) throw new HttpError(400, "File name is required");
+  if (!Number.isFinite(fileSize) || fileSize <= 0) {
+    throw new HttpError(400, "File is empty");
+  }
+  if (fileSize > maxBytes) {
+    throw new HttpError(413, `File too large. Maximum size is ${Math.round(maxBytes / (1024 * 1024))} MB.`);
+  }
+  const lowerName = name.toLowerCase();
+  if (!ALLOWED_EXT.some((ext) => lowerName.endsWith(ext))) {
+    throw new HttpError(415, "Unsupported type. Use PDF, DOC, DOCX, XLS, XLSX, PNG, JPG, or ZIP.");
+  }
+  const mime = (mimeType || "").trim().toLowerCase();
+  if (mime && !ALLOWED_MIME.includes(mime)) {
+    throw new HttpError(415, "Unsupported type");
+  }
+}
+
+function resolveCategoryFromValue(raw: unknown): Category {
+  const value = String(raw || "").trim();
+  const lower = value.toLowerCase();
+  if (lower === "certificate") return "Certificate";
+  if (lower === "financial") return "Financial";
+  if (value === "Certificate" || value === "Financial" || value === "General") {
+    return value as Category;
+  }
+  return "General";
+}
+
 async function deleteAzureBlob(azure: AzureConfig, blobName: string | null) {
   if (!blobName) return;
 
@@ -448,6 +597,436 @@ function validateTemplateAsset(file: File, label: string) {
     throw new HttpError(400, `${label} type not allowed. Use PNG, JPG, JPEG, or WEBP.`);
   }
   return ext;
+}
+
+async function handleCreateUploadSession(
+  req: Request,
+  body: Record<string, unknown>,
+) {
+  const azure = requireAzureConfig();
+  const user = await authenticate(req);
+  if (!UPLOAD_ROLES.has(user.role)) {
+    throw new HttpError(403, "You do not have permission to manage company documents.");
+  }
+
+  const documentName = String(body.documentName || body.name || "").trim();
+  const fileName = String(body.fileName || "").trim();
+  const mimeType = String(body.mimeType || "application/octet-stream");
+  const fileSizeBytes = Number(body.fileSizeBytes);
+  const notes = String(body.notes || "").trim() || null;
+  const category = resolveCategoryFromValue(body.category || body.uploadKind);
+
+  if (!documentName) throw new HttpError(400, "Document name is required");
+  validateCompanyDocumentFile(fileName, mimeType, fileSizeBytes);
+
+  let documentType: string | null = null;
+  let certificateType: string | null = null;
+  let financialYear: string | null = null;
+  let issuingAuthority: string | null = null;
+  let issueDate: string | null = null;
+  let expiryDate: string | null = null;
+
+  if (category === "Certificate") {
+    certificateType = String(body.certificateType || "").trim();
+    issuingAuthority = String(body.issuingAuthority || "").trim();
+    issueDate = String(body.issueDate || "").trim() || null;
+    expiryDate = String(body.expiryDate || "").trim() || null;
+    if (!certificateType) throw new HttpError(400, "Certificate type is required");
+    if (!issuingAuthority) throw new HttpError(400, "Issuing authority is required");
+    if (!issueDate) throw new HttpError(400, "Issue date is required");
+    if (!expiryDate) throw new HttpError(400, "Expiry date is required");
+    if (expiryDate < issueDate) {
+      throw new HttpError(400, "Expiry date must be on or after issue date");
+    }
+  } else if (category === "Financial") {
+    financialYear = String(body.financialYear || "").trim();
+    documentType = String(body.documentType || "").trim();
+    if (!financialYear) throw new HttpError(400, "Financial year is required");
+    if (!documentType) throw new HttpError(400, "Document type is required");
+  }
+
+  const documentId = crypto.randomUUID();
+  const uploadId = crypto.randomUUID();
+  const totalChunks = Math.max(1, Math.ceil(fileSizeBytes / CHUNK_SIZE));
+  const blobName =
+    `${slugify(user.companyName)}_${user.companyId}/` +
+    `${slugify(documentName)}_${documentId}/` +
+    `${category}/` +
+    sanitizeFileName(fileName);
+  const expiresAt = new Date(Date.now() + UPLOAD_SESSION_TTL_MS).toISOString();
+  const supabase = serviceSupabase();
+
+  const { error: insertDocError } = await supabase
+    .from("agenttender_company_documents")
+    .insert({
+      id: documentId,
+      company_id: user.companyId,
+      name: documentName,
+      original_file_name: fileName,
+      document_category: category,
+      document_type: documentType,
+      certificate_type: certificateType,
+      financial_year: financialYear,
+      issuing_authority: issuingAuthority,
+      issue_date: issueDate,
+      expiry_date: expiryDate,
+      notes,
+      mime_type: mimeType || null,
+      file_size_bytes: fileSizeBytes,
+      storage_provider: "azure",
+      storage_container: azure.containerName,
+      storage_blob_name: blobName,
+      storage_url: null,
+      content_hash: null,
+      verification_status: "pending",
+      status: "uploading",
+      created_by: user.id,
+    });
+
+  if (insertDocError) {
+    console.error("[tender-automation-documents] pending document insert failed", {
+      message: insertDocError.message,
+      documentId,
+    });
+    throw new HttpError(500, "Unable to start upload session.");
+  }
+
+  const { error: insertSessionError } = await supabase
+    .from("agenttender_document_upload_sessions")
+    .insert({
+      id: uploadId,
+      document_id: documentId,
+      company_id: user.companyId,
+      created_by: user.id,
+      blob_name: blobName,
+      original_file_name: fileName,
+      mime_type: mimeType || null,
+      file_size_bytes: fileSizeBytes,
+      chunk_size: CHUNK_SIZE,
+      total_chunks: totalChunks,
+      received_indexes: [],
+      status: "pending",
+      expires_at: expiresAt,
+    });
+
+  if (insertSessionError) {
+    console.error("[tender-automation-documents] upload session insert failed", {
+      message: insertSessionError.message,
+      uploadId,
+    });
+    await supabase.from("agenttender_company_documents").delete().eq("id", documentId);
+    throw new HttpError(500, "Unable to start upload session.");
+  }
+
+  console.info("[tender-automation-documents] upload session created", {
+    companyId: user.companyId,
+    uploadId,
+    documentId,
+    totalChunks,
+  });
+
+  return json({
+    success: true,
+    uploadId,
+    documentId,
+    chunkSize: CHUNK_SIZE,
+    totalChunks,
+  });
+}
+
+async function loadOwnedUploadSession(
+  req: Request,
+  uploadId: string,
+) {
+  const azure = requireAzureConfig();
+  const user = await authenticate(req);
+  if (!UPLOAD_ROLES.has(user.role)) {
+    throw new HttpError(403, "You do not have permission to manage company documents.");
+  }
+  assertSafeId(uploadId, "uploadId");
+
+  const supabase = serviceSupabase();
+  const { data: session, error } = await supabase
+    .from("agenttender_document_upload_sessions")
+    .select("*")
+    .eq("id", uploadId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!session) throw new HttpError(404, "Upload session expired");
+  if (String(session.company_id) !== user.companyId) {
+    throw new HttpError(403, "You cannot access another company's upload.");
+  }
+  if (String(session.created_by) !== user.id) {
+    throw new HttpError(403, "You cannot access another user's upload.");
+  }
+
+  const status = String(session.status);
+  if (status === "aborted" || status === "expired") {
+    throw new HttpError(410, "Upload session expired");
+  }
+  if (status === "complete") {
+    throw new HttpError(409, "Upload session already completed.");
+  }
+  if (new Date(String(session.expires_at)).getTime() <= Date.now()) {
+    await supabase
+      .from("agenttender_document_upload_sessions")
+      .update({ status: "expired", updated_at: new Date().toISOString() })
+      .eq("id", uploadId)
+      .eq("company_id", user.companyId);
+    await supabase
+      .from("agenttender_company_documents")
+      .update({ status: "failed", updated_at: new Date().toISOString() })
+      .eq("id", session.document_id)
+      .eq("company_id", user.companyId)
+      .eq("status", "uploading");
+    throw new HttpError(410, "Upload session expired");
+  }
+
+  return { azure, user, supabase, session };
+}
+
+async function handleUploadChunk(req: Request) {
+  const uploadId = String(req.headers.get("x-upload-id") || "").trim();
+  const chunkIndex = Number(req.headers.get("x-chunk-index"));
+  const totalChunksHeader = Number(req.headers.get("x-total-chunks"));
+  const blockIdHeader = String(req.headers.get("x-block-id") || "").trim();
+  if (!uploadId) throw new HttpError(400, "uploadId is required");
+  if (!Number.isInteger(chunkIndex) || chunkIndex < 0) {
+    throw new HttpError(400, "chunkIndex is required");
+  }
+
+  const { azure, supabase, session } = await loadOwnedUploadSession(req, uploadId);
+  const chunkSize = Number(session.chunk_size) || CHUNK_SIZE;
+  const totalChunks = Number(session.total_chunks);
+  const fileSize = Number(session.file_size_bytes);
+  if (Number.isInteger(totalChunksHeader) && totalChunksHeader !== totalChunks) {
+    throw new HttpError(400, "totalChunks does not match the upload session.");
+  }
+  if (chunkIndex >= totalChunks) {
+    throw new HttpError(400, "chunkIndex is out of range.");
+  }
+
+  const expectedId = encodeAzureBlockId(chunkIndex);
+  const blockId = blockIdHeader || expectedId;
+  if (blockId !== expectedId) {
+    throw new HttpError(400, "Invalid block id.");
+  }
+
+  const received = Array.isArray(session.received_indexes)
+    ? (session.received_indexes as number[]).map((n) => Number(n))
+    : [];
+  const bytes = new Uint8Array(await req.arrayBuffer());
+  const expected = expectedChunkSize(fileSize, chunkSize, chunkIndex);
+  if (bytes.byteLength !== expected) {
+    throw new HttpError(400, "Chunk size does not match the expected range.");
+  }
+  if (bytes.byteLength > chunkSize) {
+    throw new HttpError(413, "Chunk exceeds the configured size limit.");
+  }
+
+  if (!received.includes(chunkIndex)) {
+    await stageAzureBlock(azure, String(session.blob_name), blockId, bytes);
+    received.push(chunkIndex);
+    const { error: updateError } = await supabase
+      .from("agenttender_document_upload_sessions")
+      .update({
+        received_indexes: received,
+        status: "uploading",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", uploadId)
+      .eq("company_id", session.company_id);
+    if (updateError) throw new Error(updateError.message);
+  }
+
+  return json({
+    success: true,
+    chunkIndex,
+    receivedIndexes: received,
+    uploadedBytes: uploadedBytesFromIndexes(fileSize, chunkSize, received),
+  });
+}
+
+async function handleCompleteUpload(
+  req: Request,
+  body: Record<string, unknown>,
+) {
+  const uploadId = String(body.uploadId || "").trim();
+  if (!uploadId) throw new HttpError(400, "uploadId is required");
+  const { azure, user, supabase, session } = await loadOwnedUploadSession(
+    req,
+    uploadId,
+  );
+
+  const chunkSize = Number(session.chunk_size) || CHUNK_SIZE;
+  const totalChunks = Number(session.total_chunks);
+  const received = Array.isArray(session.received_indexes)
+    ? (session.received_indexes as number[]).map((n) => Number(n))
+    : [];
+  const missing = Array.from({ length: totalChunks }, (_, i) => i).filter(
+    (i) => !received.includes(i),
+  );
+  if (missing.length > 0) {
+    throw new HttpError(400, "Upload is incomplete. Missing chunks must be retried.");
+  }
+
+  const { error: finalizingError } = await supabase
+    .from("agenttender_document_upload_sessions")
+    .update({ status: "finalizing", updated_at: new Date().toISOString() })
+    .eq("id", uploadId)
+    .eq("company_id", user.companyId);
+  if (finalizingError) throw new Error(finalizingError.message);
+
+  await supabase
+    .from("agenttender_company_documents")
+    .update({ status: "processing", updated_at: new Date().toISOString() })
+    .eq("id", session.document_id)
+    .eq("company_id", user.companyId)
+    .eq("status", "uploading");
+
+  const blockIds = Array.from({ length: totalChunks }, (_, index) =>
+    encodeAzureBlockId(index),
+  );
+  const blobName = String(session.blob_name);
+  const fileName = String(session.original_file_name || "document");
+  const mimeType = String(session.mime_type || "application/octet-stream");
+
+  try {
+    await commitAzureBlockList(azure, blobName, blockIds, { mimeType, fileName });
+  } catch (error) {
+    await supabase
+      .from("agenttender_document_upload_sessions")
+      .update({
+        status: "failed",
+        error_message: "Storage commit failed",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", uploadId);
+    await supabase
+      .from("agenttender_company_documents")
+      .update({ status: "failed", updated_at: new Date().toISOString() })
+      .eq("id", session.document_id)
+      .eq("company_id", user.companyId);
+    throw error;
+  }
+
+  const storageUrl = `${azureBaseUrl(azure)}/${encodeBlobPath(blobName)}`;
+  const contentHash =
+    typeof body.contentHash === "string" && body.contentHash.trim()
+      ? body.contentHash.trim()
+      : null;
+
+  const { data: updated, error: updateDocError } = await supabase
+    .from("agenttender_company_documents")
+    .update({
+      status: "active",
+      storage_provider: "azure",
+      storage_container: azure.containerName,
+      storage_blob_name: blobName,
+      storage_url: storageUrl,
+      content_hash: contentHash,
+      mime_type: mimeType,
+      file_size_bytes: Number(session.file_size_bytes),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", session.document_id)
+    .eq("company_id", user.companyId)
+    .select("*")
+    .single();
+
+  if (updateDocError) {
+    console.error("[tender-automation-documents] metadata finalize failed", {
+      message: updateDocError.message,
+      documentId: session.document_id,
+    });
+    await deleteAzureBlob(azure, blobName).catch(() => null);
+    await supabase
+      .from("agenttender_document_upload_sessions")
+      .update({
+        status: "failed",
+        error_message: "Metadata persistence failed",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", uploadId);
+    await supabase
+      .from("agenttender_company_documents")
+      .update({ status: "failed", updated_at: new Date().toISOString() })
+      .eq("id", session.document_id)
+      .eq("company_id", user.companyId);
+    throw new HttpError(
+      500,
+      "The file was uploaded but the document record could not be saved. The uploaded file was cleaned up. Please try again.",
+    );
+  }
+
+  await supabase
+    .from("agenttender_document_upload_sessions")
+    .update({
+      status: "complete",
+      content_hash: contentHash,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", uploadId)
+    .eq("company_id", user.companyId);
+
+  console.info("[tender-automation-documents] chunked upload complete", {
+    documentId: session.document_id,
+    uploadId,
+  });
+
+  return json({
+    success: true,
+    documentId: session.document_id,
+    document: updated,
+  });
+}
+
+async function handleAbortUpload(req: Request, body: Record<string, unknown>) {
+  const uploadId = String(body.uploadId || "").trim();
+  if (!uploadId) throw new HttpError(400, "uploadId is required");
+
+  const azure = requireAzureConfig();
+  const user = await authenticate(req);
+  if (!UPLOAD_ROLES.has(user.role)) {
+    throw new HttpError(403, "You do not have permission to manage company documents.");
+  }
+  assertSafeId(uploadId, "uploadId");
+
+  const supabase = serviceSupabase();
+  const { data: session, error } = await supabase
+    .from("agenttender_document_upload_sessions")
+    .select("*")
+    .eq("id", uploadId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!session) return json({ success: true });
+  if (String(session.company_id) !== user.companyId) {
+    throw new HttpError(403, "You cannot access another company's upload.");
+  }
+  if (String(session.created_by) !== user.id) {
+    throw new HttpError(403, "You cannot access another user's upload.");
+  }
+  if (String(session.status) === "complete") {
+    throw new HttpError(409, "Completed uploads cannot be cancelled.");
+  }
+
+  await deleteAzureBlob(azure, String(session.blob_name)).catch(() => null);
+  await supabase
+    .from("agenttender_document_upload_sessions")
+    .update({
+      status: "aborted",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", uploadId)
+    .eq("company_id", user.companyId);
+  await supabase
+    .from("agenttender_company_documents")
+    .update({ status: "deleted", updated_at: new Date().toISOString() })
+    .eq("id", session.document_id)
+    .eq("company_id", user.companyId)
+    .in("status", ["uploading", "processing", "failed"]);
+
+  return json({ success: true });
 }
 
 async function handleUpload(req: Request, form: FormData) {
@@ -1605,6 +2184,11 @@ Deno.serve(async (req) => {
 
   try {
     const contentType = req.headers.get("content-type") ?? "";
+    const uploadAction = req.headers.get("x-upload-action") ?? "";
+
+    if (uploadAction === "upload-chunk" || contentType.includes("application/octet-stream")) {
+      return await handleUploadChunk(req);
+    }
 
     if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
@@ -1623,6 +2207,15 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json().catch(() => ({}));
+    if (body?.action === "create-upload-session") {
+      return await handleCreateUploadSession(req, body);
+    }
+    if (body?.action === "complete-upload") {
+      return await handleCompleteUpload(req, body);
+    }
+    if (body?.action === "abort-upload") {
+      return await handleAbortUpload(req, body);
+    }
     if (body?.action === "document-read") {
       return await handleDocumentRead(req, body);
     }

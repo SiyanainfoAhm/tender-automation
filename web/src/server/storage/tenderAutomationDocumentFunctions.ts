@@ -10,6 +10,12 @@ type EdgeJson = {
   error?: string;
   documentId?: string;
   document?: unknown;
+  uploadId?: string;
+  chunkSize?: number;
+  totalChunks?: number;
+  chunkIndex?: number;
+  receivedIndexes?: number[];
+  uploadedBytes?: number;
   templateId?: string;
   companyLogoUrl?: string | null;
   companySignatoryUrl?: string | null;
@@ -18,6 +24,8 @@ type EdgeJson = {
   completionCertificateUrl?: string | null;
   workspaceDocumentId?: string;
 };
+
+type EdgeResult = EdgeJson & { status: number };
 
 function resolveServiceKey(): string {
   return (
@@ -68,19 +76,79 @@ async function invokeCompanyDocumentsRaw(
 
 async function invokeCompanyDocuments(
   init: RequestInit,
-): Promise<EdgeJson> {
+): Promise<EdgeResult> {
   const response = await invokeCompanyDocumentsRaw(init);
-  return (await response.json().catch(() => ({
+  const body = (await response.json().catch(() => ({
     success: false,
     error: "Invalid response from document storage function.",
   }))) as EdgeJson;
+  return { ...body, status: response.status };
 }
 
 export async function invokeDocumentUpload(
   formData: FormData,
-): Promise<EdgeJson> {
+): Promise<EdgeResult> {
   if (!formData.get("action")) formData.set("action", "upload");
   return invokeCompanyDocuments({ method: "POST", body: formData });
+}
+
+export async function invokeCreateUploadSession(
+  payload: Record<string, unknown>,
+): Promise<EdgeResult> {
+  return invokeCompanyDocuments({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "create-upload-session", ...payload }),
+  });
+}
+
+export async function invokeUploadChunk(input: {
+  uploadId: string;
+  chunkIndex: number;
+  totalChunks: number;
+  blockId: string;
+  bytes: Uint8Array;
+}): Promise<EdgeResult> {
+  return invokeCompanyDocuments({
+    method: "POST",
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "x-upload-action": "upload-chunk",
+      "x-upload-id": input.uploadId,
+      "x-chunk-index": String(input.chunkIndex),
+      "x-total-chunks": String(input.totalChunks),
+      "x-block-id": input.blockId,
+    },
+    body: Buffer.from(input.bytes),
+  });
+}
+
+export async function invokeCompleteUpload(input: {
+  uploadId: string;
+  contentHash?: string | null;
+}): Promise<EdgeResult> {
+  return invokeCompanyDocuments({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "complete-upload",
+      uploadId: input.uploadId,
+      contentHash: input.contentHash ?? null,
+    }),
+  });
+}
+
+export async function invokeAbortUpload(input: {
+  uploadId: string;
+}): Promise<EdgeResult> {
+  return invokeCompanyDocuments({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "abort-upload",
+      uploadId: input.uploadId,
+    }),
+  });
 }
 
 export async function invokeDocumentDelete(

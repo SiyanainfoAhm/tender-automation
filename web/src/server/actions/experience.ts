@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 
-import { MAX_DOCUMENT_UPLOAD_BYTES } from "@/lib/company/types";
+import { MAX_SINGLE_SHOT_UPLOAD_BYTES } from "@/lib/company/types";
 import { monthsBetween } from "@/lib/experience/duration";
 import { companyExperienceSchema } from "@/lib/experience/schema";
 import { requireCompanyDocumentManager } from "@/server/auth/company-access";
@@ -24,7 +24,7 @@ function getOptionalFile(formData: FormData, name: string): File | null {
 }
 
 function validateExperiencePdf(file: File, label: string): string | null {
-  if (file.size > MAX_DOCUMENT_UPLOAD_BYTES) {
+  if (file.size > MAX_SINGLE_SHOT_UPLOAD_BYTES) {
     return `${label} exceeds the 25 MB limit.`;
   }
   const lower = file.name.toLowerCase();

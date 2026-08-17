@@ -30,7 +30,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { MAX_DOCUMENT_UPLOAD_BYTES } from "@/lib/company/types";
+import { MAX_SINGLE_SHOT_UPLOAD_BYTES } from "@/lib/company/types";
 import { NATURE_OF_WORK_OPTIONS } from "@/lib/experience/nature-of-work";
 import type { CompanyExperience } from "@/lib/experience/types";
 import { formatBytes, formatIndianCurrency } from "@/lib/format";
@@ -83,7 +83,7 @@ function PdfDropzone({
       toast.error(`${label} must be a PDF.`);
       return;
     }
-    if (next.size > MAX_DOCUMENT_UPLOAD_BYTES) {
+    if (next.size > MAX_SINGLE_SHOT_UPLOAD_BYTES) {
       toast.error(`${label} exceeds the 25 MB limit.`);
       return;
     }

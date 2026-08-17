@@ -29,10 +29,53 @@ export type DocumentUploadInput = {
   bytes: Buffer;
 };
 
+export type CreateUploadSessionInput = {
+  documentName: string;
+  fileName: string;
+  mimeType: string;
+  fileSizeBytes: number;
+  category: AzureDocumentCategory;
+  notes?: string | null;
+  certificateType?: string | null;
+  issuingAuthority?: string | null;
+  issueDate?: string | null;
+  expiryDate?: string | null;
+  financialYear?: string | null;
+  documentType?: string | null;
+};
+
+export type UploadSessionRef = {
+  uploadId: string;
+  documentId: string;
+  chunkSize: number;
+  totalChunks: number;
+};
+
+export type UploadChunkInput = {
+  uploadId: string;
+  chunkIndex: number;
+  totalChunks: number;
+  blockId: string;
+  bytes: Uint8Array;
+};
+
+export type UploadChunkAck = {
+  chunkIndex: number;
+  receivedIndexes: number[];
+  uploadedBytes: number;
+};
+
 export interface DocumentStorageProvider {
   readonly name: string;
   isConfigured(): boolean;
   upload(input: DocumentUploadInput): Promise<StoredDocumentRef>;
+  createUploadSession(input: CreateUploadSessionInput): Promise<UploadSessionRef>;
+  uploadChunk(input: UploadChunkInput): Promise<UploadChunkAck>;
+  completeUpload(input: {
+    uploadId: string;
+    contentHash?: string | null;
+  }): Promise<StoredDocumentRef & { documentId: string }>;
+  abortUpload(input: { uploadId: string }): Promise<void>;
   delete(ref: StoredDocumentRef): Promise<void>;
   getDownloadUrl(ref: StoredDocumentRef): Promise<string>;
 }
@@ -63,6 +106,31 @@ export class UnconfiguredDocumentStorageProvider
     throw new StorageNotConfiguredError(
       "Document storage runs via Supabase Edge Functions. Configure TENDER_AUTOMATION_AZURE_STORAGE_ACCOUNT_NAME, TENDER_AUTOMATION_AZURE_STORAGE_CONTAINER_NAME, and TENDER_AUTOMATION_AZURE_STORAGE_SAS_TOKEN as Edge Function secrets.",
     );
+  }
+
+  async createUploadSession(
+    _input: CreateUploadSessionInput,
+  ): Promise<UploadSessionRef> {
+    void _input;
+    throw new StorageNotConfiguredError();
+  }
+
+  async uploadChunk(_input: UploadChunkInput): Promise<UploadChunkAck> {
+    void _input;
+    throw new StorageNotConfiguredError();
+  }
+
+  async completeUpload(_input: {
+    uploadId: string;
+    contentHash?: string | null;
+  }): Promise<StoredDocumentRef & { documentId: string }> {
+    void _input;
+    throw new StorageNotConfiguredError();
+  }
+
+  async abortUpload(_input: { uploadId: string }): Promise<void> {
+    void _input;
+    throw new StorageNotConfiguredError();
   }
 
   async delete(_ref: StoredDocumentRef): Promise<void> {

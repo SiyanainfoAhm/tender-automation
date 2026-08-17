@@ -12,6 +12,10 @@ export {
   type DocumentStorageProvider,
   type DocumentUploadInput,
   type StoredDocumentRef,
+  type CreateUploadSessionInput,
+  type UploadSessionRef,
+  type UploadChunkInput,
+  type UploadChunkAck,
 } from "@/lib/storage/documentStorageProvider";
 
 export {
@@ -21,6 +25,10 @@ export {
 } from "@/lib/storage/blobPath";
 
 export {
+  invokeAbortUpload,
+  invokeCompleteUpload,
+  invokeCreateUploadSession,
   invokeDocumentDelete,
   invokeDocumentUpload,
+  invokeUploadChunk,
 } from "@/server/storage/tenderAutomationDocumentFunctions";

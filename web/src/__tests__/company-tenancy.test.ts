@@ -66,6 +66,15 @@ describe("document storage provider", () => {
         bytes: Buffer.from("x"),
       }),
     ).rejects.toBeInstanceOf(StorageNotConfiguredError);
+    await expect(
+      provider.createUploadSession({
+        documentName: "ISO 27001 Certificate",
+        fileName: "x.pdf",
+        mimeType: "application/pdf",
+        fileSizeBytes: 1024,
+        category: "Certificate",
+      }),
+    ).rejects.toBeInstanceOf(StorageNotConfiguredError);
   });
 
   it("builds tenant-scoped blob paths with category folders", () => {
