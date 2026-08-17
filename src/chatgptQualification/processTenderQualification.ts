@@ -15,6 +15,14 @@ import {
   upsertQualificationManifestEntry,
 } from "./chatgptState.js";
 import {
+  evaluateExistingQualificationReuse,
+  logSkipExistingDetails,
+} from "./existingQualificationReuse.js";
+import {
+  computeQualificationInputFingerprint,
+  saveQualificationInputFingerprint,
+} from "./qualificationInputFingerprint.js";
+import {
   cleanupTenderTempUpload,
   handleRateLimitModal,
   isConversationUrl,
@@ -102,6 +110,8 @@ export async function qualifySingleTender(options: {
   };
   /** When true, ignore saved qualification results and rerun ChatGPT from scratch. */
   forceReprocess?: boolean;
+  /** When true (--resume), may reuse valid unchanged qualifications. */
+  resumeMode?: boolean;
   /**
    * Fired immediately after authoritative Send / SUBMITTED.
    * Used by dual workers to protect the page until terminal outcome.
@@ -114,7 +124,9 @@ export async function qualifySingleTender(options: {
   skipInitialProjectHome?: boolean;
 }): Promise<QualifyTenderOutcome> {
   const { page, dateFolder, t247Id, config, logger } = options;
-  const forceReprocess = options.forceReprocess === true;
+  const resumeMode = options.resumeMode === true;
+  // Fresh runs always reprocess; resume may reuse matching valid results.
+  const effectiveForceReprocess = !resumeMode || options.forceReprocess === true;
   // Source/run date comes from the caller's date folder — never system today.
   const dateIso = requestedDateFromDateFolder(dateFolder);
   const tenderFolder = path.join(dateFolder, `T247-${t247Id}`);
@@ -127,7 +139,15 @@ export async function qualifySingleTender(options: {
   const attempt = Math.min(priorAttempt + 1, maxAttempts);
   const txn: ChatGptCandidateTxnState = createCandidateTxnState(attempt);
 
-  if (!forceReprocess && isValidSavedQualificationResult(resultPath)) {
+  const reuseDecision = evaluateExistingQualificationReuse({
+    dateFolder,
+    sourceTenderId: t247Id,
+    resumeMode,
+    logger,
+  });
+
+  if (resumeMode && reuseDecision.reuse) {
+    logSkipExistingDetails({ sourceTenderId: t247Id, decision: reuseDecision });
     logger.info(`CHATGPT_QUALIFICATION_ALREADY_COMPLETE_SKIP=T247-${t247Id}`);
     const qualification = JSON.parse(
       fs.readFileSync(resultPath, "utf8"),
@@ -158,8 +178,15 @@ export async function qualifySingleTender(options: {
     };
   }
 
+  if (reuseDecision.found && !resumeMode) {
+    logger.info(
+      `CHATGPT_EXISTING_QUALIFICATION_FOUND=true CHATGPT_EXISTING_QUALIFICATION_REUSE=false T247-${t247Id}`,
+    );
+  }
+
   // ---- Local raw-response recovery (no ChatGPT / no re-upload) ----
-  if (!forceReprocess) {
+  // Resume only — fresh runs must submit a new GPT request.
+  if (resumeMode && !options.forceReprocess) {
     const localRecovery = tryRecoverFromExistingRawResponse({
       t247Id,
       tenderFolder,
@@ -173,7 +200,7 @@ export async function qualifySingleTender(options: {
     if (localRecovery) {
       return localRecovery;
     }
-  } else {
+  } else if (effectiveForceReprocess) {
     logger.info(`QUALIFICATION_REPROCESSED=true T247-${t247Id}`);
     console.log(`QUALIFICATION_REPROCESSED=true T247-${t247Id}`);
   }
@@ -230,8 +257,11 @@ export async function qualifySingleTender(options: {
     }
 
     // ---- Resume pending / rate-limited / failed-with-/c/ chat ----
+    // Fresh runs (--resume absent) must submit a NEW GPT request even if a
+    // prior /c/ URL exists. Pending URL recovery is resume-only.
     if (
       existingState &&
+      resumeMode &&
       !isResumablePendingState(existingState) &&
       isConversationUrl(existingState.chatUrl || "") &&
       existingState.requiredAttachmentsConfirmed !== true
@@ -245,7 +275,7 @@ export async function qualifySingleTender(options: {
       );
     }
 
-    if (isResumablePendingState(existingState)) {
+    if (resumeMode && isResumablePendingState(existingState)) {
       logger.info(`CHATGPT_PENDING_CHAT_RESUME=T247-${t247Id}`);
       // Resume owns a single goto to THIS tender's /c/ URL — never reuse
       // another tender's conversation. Reset lifecycle so the recovery goto
@@ -1616,6 +1646,13 @@ async function waitParseAndPersist(options: {
   console.log(`CHATGPT_RESULT=${finalResult.status}`);
   logger.info(`CHATGPT_RESULT=${finalResult.status}`);
 
+  const inputFingerprint = computeQualificationInputFingerprint({
+    dateFolder,
+    sourceTenderId: t247Id,
+    sourcePortal: "TENDER247",
+  });
+  saveQualificationInputFingerprint(tenderFolder, inputFingerprint);
+
   saveChatGptTenderState(tenderFolder, {
     t247Id,
     chatUrl: finalChatUrl,
@@ -1626,6 +1663,7 @@ async function waitParseAndPersist(options: {
     latestAssistantText: responseText,
     uiState: "completed",
     uploadedEvidenceFiles,
+    qualificationInputHash: inputFingerprint.qualificationInputHash,
     error: null,
   });
   upsertQualificationManifestEntry(

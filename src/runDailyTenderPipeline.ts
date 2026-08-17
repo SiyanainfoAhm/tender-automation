@@ -475,13 +475,10 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
       `DAILY_PIPELINE_GPT_NOT_READY_COUNT=${readiness.missingTenderIds.length}`,
     );
 
-    const newReady = listNewReadyTenderIds(
-      dateFolder,
-      readiness.readyTenderIds,
-      isValidSavedQualificationResult,
-    );
-    summary.newReadyForQualification = newReady.length;
-    summary.remainingReady = newReady.length;
+    // Fresh runs must still qualify selected ready tenders even when an old
+    // result exists. Resume reuse is decided inside runQualificationBatch.
+    summary.newReadyForQualification = readiness.readyTenderIds.length;
+    summary.remainingReady = readiness.readyTenderIds.length;
 
     // -------- Settle delay --------
     if (config.dailyPipelinePhaseDelayMs > 0) {
@@ -491,11 +488,10 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
       await sleep(config.dailyPipelinePhaseDelayMs);
     }
 
-    // -------- PHASE 3: ChatGPT (only if new ready work) --------
-    if (newReady.length === 0) {
+    // -------- PHASE 3: ChatGPT --------
+    if (readiness.readyTenderIds.length === 0) {
       logger.info("DAILY_PIPELINE_NO_NEW_READY_TENDERS");
-      // Count completed/skipped for the summary
-      summary.skippedExisting = readiness.readyTenderIds.length;
+      summary.skippedExisting = 0;
       summary.finishedAt = new Date().toISOString();
       writeDailyPipelineSummary(dateFolder, summary);
       printDailyPipelineSummary(summary);
@@ -523,11 +519,13 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
       return summary;
     }
 
-    summary.qualificationCompleted = chatgptSummary.completed;
-    summary.skippedExisting = chatgptSummary.skipped;
+    summary.qualificationCompleted =
+      chatgptSummary.completedThisRun ?? chatgptSummary.completed;
+    summary.skippedExisting =
+      chatgptSummary.reusedExistingValid ?? chatgptSummary.skipped;
     summary.pending = chatgptSummary.pending;
     summary.rateLimited = chatgptSummary.rateLimited;
-    summary.failed = chatgptSummary.failed;
+    summary.failed = chatgptSummary.failedThisRun ?? chatgptSummary.failed;
     summary.remainingReady = Math.max(
       0,
       chatgptSummary.remainingQueued +
@@ -536,7 +534,7 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
           : 0),
     );
 
-    // Recompute remaining ready after qualification
+    // Recompute remaining ready after qualification (no valid result yet).
     const postReadiness = buildGptReadinessReport(dateFolder, dateIso);
     summary.remainingReady = listNewReadyTenderIds(
       dateFolder,

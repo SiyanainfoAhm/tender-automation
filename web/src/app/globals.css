@@ -344,4 +344,12 @@
     border-color: var(--border);
     color: var(--text-primary);
   }
+
+  .card {
+    @apply rounded-lg border border-border bg-white;
+  }
+
+  .page-header {
+    @apply flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between;
+  }
 }

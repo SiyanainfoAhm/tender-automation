@@ -32,7 +32,6 @@ import {
 import {
   buildGptReadinessReport,
   listDownloadedTenderIds,
-  listNewReadyTenderIds,
   saveGptReadinessReport,
 } from "../chatgptQualification/readiness.js";
 import {
@@ -103,6 +102,12 @@ export type Tender247CompleteRunSummary = {
   chatgptAttempted: number;
   chatgptSuccess: number;
   chatgptFailed: number;
+  chatgptSelected?: number;
+  chatgptSubmittedThisRun?: number;
+  chatgptCompletedThisRun?: number;
+  chatgptReusedExistingValid?: number;
+  chatgptFailedThisRun?: number;
+  chatgptRetryPending?: number;
   go: number;
   conditionalGo: number;
   partnerBid: number;
@@ -310,8 +315,30 @@ export function printTender247CompleteRunSummary(
   console.log(`DETAIL_CRAWL_ATTEMPTED=${summary.detailCrawlAttempted}`);
   console.log(`DETAIL_CRAWL_SUCCESS=${summary.detailCrawlSuccess}`);
   console.log(`DETAIL_CRAWL_FAILED=${summary.detailCrawlFailed}`);
-  console.log(`CHATGPT_ATTEMPTED=${summary.chatgptAttempted}`);
-  console.log(`CHATGPT_SUCCESS=${summary.chatgptSuccess}`);
+  console.log(`CHATGPT_SELECTED=${summary.chatgptSelected ?? summary.chatgptAttempted}`);
+  console.log(
+    `CHATGPT_SUBMITTED_THIS_RUN=${summary.chatgptSubmittedThisRun ?? summary.chatgptAttempted}`,
+  );
+  console.log(
+    `CHATGPT_COMPLETED_THIS_RUN=${summary.chatgptCompletedThisRun ?? 0}`,
+  );
+  console.log(
+    `CHATGPT_REUSED_EXISTING_VALID=${summary.chatgptReusedExistingValid ?? 0}`,
+  );
+  console.log(
+    `CHATGPT_FAILED_THIS_RUN=${summary.chatgptFailedThisRun ?? summary.chatgptFailed}`,
+  );
+  console.log(
+    `CHATGPT_RETRY_PENDING=${summary.chatgptRetryPending ?? 0}`,
+  );
+  console.log(
+    `CHATGPT_TOTAL_VALID_QUALIFICATIONS_AVAILABLE=${summary.chatgptSuccess}`,
+  );
+  // Legacy aliases — CHATGPT_ATTEMPTED means actual GPT submissions this run.
+  console.log(`CHATGPT_ATTEMPTED=${summary.chatgptSubmittedThisRun ?? summary.chatgptAttempted}`);
+  console.log(
+    `CHATGPT_SUCCESS=${summary.chatgptSuccess}`,
+  );
   console.log(`CHATGPT_FAILED=${summary.chatgptFailed}`);
   console.log(`GO=${summary.go}`);
   console.log(`CONDITIONAL_GO=${summary.conditionalGo}`);
@@ -609,14 +636,13 @@ export async function runTender247CompletePipeline(
       sourceTenderIds: discovered,
     });
 
-    const newReady = listNewReadyTenderIds(
-      downloadRoot,
-      readiness.readyTenderIds,
-      isValidSavedQualificationResult,
-    );
+    // Fresh runs must still process selected candidates even if an old
+    // qualification-result.json exists. Resume skip/reuse is decided inside
+    // runQualificationBatch via input fingerprint — do not pre-filter here.
+    const readyForChatgpt = readiness.readyTenderIds;
 
     let chatgptSummary: QualificationBatchSummary | null = null;
-    if (newReady.length === 0) {
+    if (readyForChatgpt.length === 0) {
       logger.info("TENDER247_COMPLETE_NO_NEW_READY_TENDERS");
     } else {
       logger.info("TENDER247_COMPLETE_CHATGPT_START");
@@ -627,6 +653,7 @@ export async function runTender247CompletePipeline(
       try {
         chatgptSummary = await runQualificationBatch({
           dateIso: requestedDate,
+          resume: options.resume,
           maxGptTenders:
             chatgptLimit != null
               ? chatgptLimit
@@ -660,15 +687,21 @@ export async function runTender247CompletePipeline(
     const noGo = statusCounts.NO_GO ?? 0;
     const chatgptSuccessCanonical =
       go + conditionalGo + partnerBid + verify + noGo;
-    // CHATGPT_SUCCESS means valid canonical qualifications on disk for this date.
+    // Disk totals available for the date (includes reused + completed this run).
     const chatgptSuccess = chatgptSuccessCanonical;
-    const chatgptFailed = chatgptSummary?.failed ?? 0;
+    const chatgptFailed =
+      chatgptSummary?.failedThisRun ?? chatgptSummary?.failed ?? 0;
+    const submittedThisRun = chatgptSummary?.submittedThisRun ?? 0;
+    const completedThisRun = chatgptSummary?.completedThisRun ?? 0;
+    const reusedExistingValid = chatgptSummary?.reusedExistingValid ?? 0;
+    const retryPending =
+      (chatgptSummary?.pending ?? 0) + (chatgptSummary?.rateLimited ?? 0);
     const invariantFailed =
       chatgptSummary != null &&
-      chatgptSummary.completed > 0 &&
-      chatgptSummary.completed !== chatgptSuccessCanonical &&
-      // Resume runs may already have prior successes on disk beyond this batch's completed count.
-      !options.resume;
+      completedThisRun > 0 &&
+      // Fresh: this-run completions should appear on disk; resume may have extras.
+      !options.resume &&
+      chatgptSuccessCanonical < completedThisRun;
 
     let runStatus: Tender247CompleteRunStatus = "SUCCESS";
     if (exitCode !== 0 && chatgptFailed === 0 && processingErrors.length > 0) {
@@ -690,9 +723,16 @@ export async function runTender247CompletePipeline(
       detailCrawlAttempted: discovered.length,
       detailCrawlSuccess: discovered.length,
       detailCrawlFailed: 0,
-      chatgptAttempted: chatgptSummary?.selected ?? 0,
+      // CHATGPT_ATTEMPTED = actual GPT submissions this run (not selected, not reused).
+      chatgptAttempted: submittedThisRun,
       chatgptSuccess,
       chatgptFailed,
+      chatgptSelected: chatgptSummary?.selected ?? 0,
+      chatgptSubmittedThisRun: submittedThisRun,
+      chatgptCompletedThisRun: completedThisRun,
+      chatgptReusedExistingValid: reusedExistingValid,
+      chatgptFailedThisRun: chatgptFailed,
+      chatgptRetryPending: retryPending,
       go,
       conditionalGo,
       partnerBid,

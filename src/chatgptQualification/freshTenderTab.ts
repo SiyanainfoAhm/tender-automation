@@ -239,7 +239,7 @@ async function waitForFreshComposerReadOnly(options: {
 
 /**
  * Close leftover bootstrap/blank pages so concurrency=1 shows ONE tender tab.
- * Never closes the keepPages set.
+ * Never closes keepPages. Never closes the shared context.
  */
 export async function closeUnusedBootstrapPages(options: {
   context: BrowserContext;
@@ -249,6 +249,14 @@ export async function closeUnusedBootstrapPages(options: {
   closeAllExceptKeep?: boolean;
 }): Promise<number> {
   const keep = new Set(options.keepPages.filter((p) => p && !p.isClosed()));
+  if (keep.size === 0) {
+    log(
+      options.logger,
+      "CHATGPT_BOOTSTRAP_CLOSE_SKIPPED=true reason=no_keep_pages",
+    );
+    return 0;
+  }
+
   let closed = 0;
   for (const p of options.context.pages()) {
     if (p.isClosed()) continue;
@@ -278,9 +286,18 @@ async function openAndWaitOnce(options: {
   workerId: number;
   sourceTenderId: string;
   projectUrl: string;
+  /** Shared batch anchor — must never be closed by candidate bootstrap cleanup. */
+  keepAlivePages?: Page[];
 }): Promise<Page> {
-  const { context, config, logger, workerId, sourceTenderId, projectUrl } =
-    options;
+  const {
+    context,
+    config,
+    logger,
+    workerId,
+    sourceTenderId,
+    projectUrl,
+    keepAlivePages,
+  } = options;
 
   const page = await openOwnedCandidatePage({
     context,
@@ -297,14 +314,19 @@ async function openAndWaitOnce(options: {
   log(logger, `CHATGPT_TENDER_ID=${sourceTenderId}`);
   log(logger, "CHATGPT_TENDER_TAB_CREATED=true");
 
-  // Close unused bootstrap so concurrency=1 shows a single tender tab.
+  // Close unused bootstrap so concurrency=1 shows a single tender tab,
+  // but ALWAYS preserve the shared anchor / keep-alive pages.
   const concurrency = Number.parseInt(
     process.env.CHATGPT_CONCURRENCY || "1",
     10,
   );
+  const keepPages = [
+    page,
+    ...(keepAlivePages || []).filter((p) => p && !p.isClosed()),
+  ];
   await closeUnusedBootstrapPages({
     context,
-    keepPages: [page],
+    keepPages,
     logger,
     closeAllExceptKeep: !Number.isFinite(concurrency) || concurrency <= 1,
   });
@@ -355,8 +377,11 @@ export async function openFreshTenderPage(options: {
   logger: Logger;
   workerId: number;
   sourceTenderId: string;
+  /** Shared authenticated pages that must survive candidate cleanup. */
+  keepAlivePages?: Page[];
 }): Promise<Page> {
-  const { context, config, logger, workerId, sourceTenderId } = options;
+  const { context, config, logger, workerId, sourceTenderId, keepAlivePages } =
+    options;
 
   await waitWhileGlobalChatGptRateLimited({ logger, workerId });
 
@@ -375,11 +400,18 @@ export async function openFreshTenderPage(options: {
       workerId,
       sourceTenderId,
       projectUrl,
+      keepAlivePages,
     });
   } catch (error) {
     if (
       error instanceof AutomationError &&
       error.code === "CHATGPT_RATE_LIMITED"
+    ) {
+      throw error;
+    }
+    if (
+      error instanceof AutomationError &&
+      error.code === "CHATGPT_BROWSER_CONTEXT_DEAD"
     ) {
       throw error;
     }
@@ -399,6 +431,7 @@ export async function openFreshTenderPage(options: {
       workerId,
       sourceTenderId,
       projectUrl,
+      keepAlivePages,
     });
   }
 }

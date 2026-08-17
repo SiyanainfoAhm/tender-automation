@@ -1,71 +1,49 @@
-import Link from "next/link";
-import { RefreshCw } from "lucide-react";
-
-import { PageHeader } from "@/components/layout/page-header";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { formatRelativeTime } from "@/lib/format";
+import { ErrorState } from "@/components/ui/error-state";
+import { DashboardOverviewClient } from "@/components/dashboard/dashboard-overview";
+import { isAppError } from "@/lib/errors/app-error";
+import {
+  DEFAULT_DASHBOARD_TIME_RANGE,
+  parseDashboardTimeRange,
+} from "@/lib/dashboard/time-range";
 import { requireSession } from "@/server/auth/session";
-import { getDashboardMetrics } from "@/server/repositories/analyticsRepository";
+import { getDashboardOverview } from "@/server/repositories/dashboardRepository";
 
-import { DashboardChartsSection } from "./dashboard-charts-section";
-import { DashboardKpiSection } from "./dashboard-kpi-section";
-import { DashboardOperationalSection } from "./dashboard-operational-section";
-import { DashboardDocumentExpiryCard } from "@/components/dashboard/document-expiry-card";
+type DashboardPageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
 
-function firstName(fullName: string): string {
-  return fullName.split(" ")[0] || fullName;
-}
-
-function getGreeting(): string {
-  const hour = new Date().getHours();
-  if (hour < 12) return "morning";
-  if (hour < 17) return "afternoon";
-  return "evening";
-}
-
-async function FreshnessChip() {
-  try {
-    const metrics = await getDashboardMetrics();
-    if (!metrics.freshnessAt) return null;
-    return (
-      <Badge variant="outline" className="font-normal">
-        Updated {formatRelativeTime(metrics.freshnessAt)}
-      </Badge>
-    );
-  } catch {
-    return null;
-  }
-}
-
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: DashboardPageProps) {
   const session = await requireSession();
+  const params = searchParams ? await searchParams : {};
+  const range = parseDashboardTimeRange(params.range) || DEFAULT_DASHBOARD_TIME_RANGE;
 
-  return (
-    <div className="space-y-6">
-      <PageHeader
-        title={`Good ${getGreeting()}, ${firstName(session.user.fullName)}`}
-        subtitle="Overview of your tender pipeline and bid activity"
-        actions={
-          <>
-            <FreshnessChip />
-            <Button variant="outline" size="sm" className="gap-2" asChild>
-              <Link href="/dashboard">
-                <RefreshCw className="size-4" />
-                Refresh
-              </Link>
-            </Button>
-            <Button size="sm" asChild>
-              <Link href="/tenders">View tenders</Link>
-            </Button>
-          </>
-        }
-      />
+  try {
+    const data = await getDashboardOverview({
+      range,
+      companyId: session.user.companyId ?? null,
+    });
 
-      <DashboardDocumentExpiryCard />
-      <DashboardKpiSection />
-      <DashboardChartsSection />
-      <DashboardOperationalSection />
-    </div>
-  );
+    return <DashboardOverviewClient data={data} />;
+  } catch (error) {
+    const correlationId = isAppError(error) ? error.correlationId : undefined;
+    const message =
+      error instanceof Error ? error.message : "Dashboard data could not be loaded.";
+    return (
+      <div className="space-y-4">
+        <div>
+          <h1 className="page-title">Dashboard</h1>
+          <p className="text-sm text-text-secondary">
+            Overview of your tender pipeline and bid activity
+          </p>
+        </div>
+        <ErrorState
+          title="Unable to load dashboard"
+          message={message}
+          correlationId={correlationId}
+        />
+      </div>
+    );
+  }
 }

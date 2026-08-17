@@ -66,6 +66,8 @@ export interface ChatGptTenderState {
   aiSummaryUploaded?: boolean;
   documentArchiveUploaded?: boolean;
   uploadedEvidenceFiles?: string[];
+  /** SHA-256 fingerprint of GPT inputs used when this result was produced. */
+  qualificationInputHash?: string | null;
 }
 
 export function chatgptStatePath(tenderFolder: string): string {

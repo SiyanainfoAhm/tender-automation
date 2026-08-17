@@ -82,12 +82,82 @@ export function assertPageOwnedBy(
   }
 }
 
+/**
+ * Authoritative shared-context health check.
+ * Do NOT treat a non-null context object as alive.
+ */
 export function isBrowserContextAlive(context: BrowserContext): boolean {
   try {
-    // Accessing pages() throws when context is closed.
+    // Throws when context is closed.
     void context.pages();
-    return true;
   } catch {
+    return false;
+  }
+
+  try {
+    const browser = context.browser();
+    // Persistent contexts may return null for browser(); that is still usable
+    // when pages() succeeds. Only fail when a Browser exists and is disconnected.
+    if (browser && !browser.isConnected()) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Authoritative lightweight probe before newPage.
+ * Do not treat a non-null context object as alive.
+ */
+export async function probeSharedContextHealth(
+  context: BrowserContext,
+  logger?: Logger,
+): Promise<boolean> {
+  console.log("CHATGPT_SHARED_CONTEXT_HEALTH_CHECK_START");
+  logger?.info("CHATGPT_SHARED_CONTEXT_HEALTH_CHECK_START");
+
+  if (!isBrowserContextAlive(context)) {
+    console.log("CHATGPT_SHARED_CONTEXT_ALIVE=false");
+    logger?.warn("CHATGPT_SHARED_CONTEXT_ALIVE=false");
+    return false;
+  }
+
+  try {
+    let openPages = context.pages().filter((p) => !p.isClosed());
+    if (openPages.length === 0) {
+      const anchor = await context.newPage();
+      await anchor.goto("about:blank", { waitUntil: "domcontentloaded" }).catch(
+        () => undefined,
+      );
+      console.log("CHATGPT_SHARED_CONTEXT_ANCHOR_RECREATED=true");
+      logger?.info("CHATGPT_SHARED_CONTEXT_ANCHOR_RECREATED=true");
+      openPages = [anchor];
+    }
+
+    // Exercise the live page — proves the context is not a stale handle.
+    try {
+      await openPages[0]!.evaluate(() => true);
+    } catch {
+      const probe = await context.newPage();
+      await probe.close({ runBeforeUnload: false }).catch(() => undefined);
+    }
+
+    if (!isBrowserContextAlive(context)) {
+      console.log("CHATGPT_SHARED_CONTEXT_ALIVE=false");
+      logger?.warn("CHATGPT_SHARED_CONTEXT_ALIVE=false");
+      return false;
+    }
+
+    console.log("CHATGPT_SHARED_CONTEXT_ALIVE=true");
+    logger?.info("CHATGPT_SHARED_CONTEXT_ALIVE=true");
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.log(`CHATGPT_SHARED_CONTEXT_ALIVE=false reason=${message}`);
+    logger?.warn(`CHATGPT_SHARED_CONTEXT_ALIVE=false reason=${message}`);
     return false;
   }
 }
@@ -167,9 +237,24 @@ export async function openOwnedCandidatePage(options: {
   logger?: Logger;
 }): Promise<Page> {
   const { context, workerId, sourceTenderId, logger } = options;
-  assertSharedContextAlive(context);
+  const healthy = await probeSharedContextHealth(context, logger);
+  if (!healthy) {
+    throw new AutomationError(
+      "CHATGPT_BROWSER_CONTEXT_DEAD",
+      "Shared BrowserContext failed health check before newPage",
+    );
+  }
 
-  const page = await context.newPage();
+  let page: Page;
+  try {
+    page = await context.newPage();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new AutomationError(
+      "CHATGPT_BROWSER_CONTEXT_DEAD",
+      `browserContext.newPage failed: ${message}`,
+    );
+  }
   registerOwnedPage(page, workerId, sourceTenderId);
   console.log(
     `CHATGPT_CANDIDATE_PAGE_OPEN worker=${workerId} tender=${sourceTenderId}`,
