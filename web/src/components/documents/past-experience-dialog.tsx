@@ -342,6 +342,25 @@ export function PastExperienceDialog({
               );
               return;
             }
+            if (!ongoing) {
+              const form = event.currentTarget;
+              const startDate = String(
+                new FormData(form).get("startDate") || "",
+              );
+              const completionDate = String(
+                new FormData(form).get("completionDate") || "",
+              );
+              if (!completionDate) {
+                event.preventDefault();
+                toast.error("Completion date is required");
+                return;
+              }
+              if (startDate && completionDate < startDate) {
+                event.preventDefault();
+                toast.error("Completion date cannot be before the start date.");
+                return;
+              }
+            }
             if (
               isEditing &&
               experience?.projectStatus === "completed" &&
@@ -457,8 +476,8 @@ export function PastExperienceDialog({
                     aria-label="Project is ongoing"
                   />
                 </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="space-y-1">
+                <div className={cn("grid gap-4", ongoing ? "sm:grid-cols-1" : "sm:grid-cols-2")}>
+                  <div className={cn("space-y-1", ongoing && "sm:max-w-[50%]")}>
                     <Label htmlFor="startDate">Start Date *</Label>
                     <Input
                       id="startDate"
@@ -469,20 +488,7 @@ export function PastExperienceDialog({
                       defaultValue={experience?.startDate || ""}
                     />
                   </div>
-                  {ongoing ? (
-                    <div className="space-y-1">
-                      <Label htmlFor="expectedCompletionDate">
-                        Expected Completion Date
-                      </Label>
-                      <Input
-                        id="expectedCompletionDate"
-                        name="expectedCompletionDate"
-                        type="date"
-                        disabled={readOnly}
-                        defaultValue={experience?.expectedCompletionDate || ""}
-                      />
-                    </div>
-                  ) : (
+                  {ongoing ? null : (
                     <div className="space-y-1">
                       <Label htmlFor="completionDate">Completion Date *</Label>
                       <Input

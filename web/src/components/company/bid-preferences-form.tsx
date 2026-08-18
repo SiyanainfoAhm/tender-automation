@@ -1,23 +1,19 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
-import { Loader2, X } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { updateBidPreferencesAction } from "@/server/actions/company";
+import { ScopeChipField } from "@/components/company/scope-chip-field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-
-const QUICK_SERVICES = [
-  "Information Technology",
-  "Software Development",
-  "System Integration",
-  "Networking",
-  "Cloud Services",
-  "Cybersecurity",
-];
+import {
+  DEFAULT_EXCLUDED_SCOPE_SUGGESTIONS,
+  DEFAULT_SERVICE_SCOPE_SUGGESTIONS,
+  parseStoredScopeList,
+} from "@/lib/company/scope-chips";
 
 type BidPreferencesFormProps = {
   canEdit: boolean;
@@ -38,25 +34,20 @@ export function BidPreferencesForm({
     updateBidPreferencesAction,
     {},
   );
-  const [services, setServices] = useState(initial.serviceScope);
-  const [customService, setCustomService] = useState("");
+  const [selectedServices, setSelectedServices] = useState(() =>
+    parseStoredScopeList(initial.serviceScope),
+  );
+  const [selectedExcludedScopes, setSelectedExcludedScopes] = useState(() =>
+    parseStoredScopeList(initial.excludedScope),
+  );
 
   useEffect(() => {
     if (state?.ok) toast.success("Bid preferences saved");
     if (state?.error) toast.error(state.error);
   }, [state]);
 
-  function addService(value: string) {
-    const v = value.trim();
-    if (!v || services.includes(v)) return;
-    setServices((prev) => [...prev, v]);
-    setCustomService("");
-  }
-
   return (
     <form action={formAction} className="space-y-6">
-      <input type="hidden" name="serviceScope" value={services.join("\n")} />
-
       <section className="space-y-3">
         <p className="text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
           Financial Preferences
@@ -105,80 +96,29 @@ export function BidPreferencesForm({
         </p>
       </section>
 
-      <section className="space-y-3">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
-          Service Scope
-        </p>
-        {canEdit ? (
-          <div className="flex flex-wrap gap-2">
-            {QUICK_SERVICES.map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => addService(s)}
-                className="rounded-full border border-border bg-white px-2.5 py-1 text-xs text-text-secondary hover:border-primary/40 hover:text-primary"
-              >
-                + {s}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        <div className="flex flex-wrap gap-2">
-          {services.map((s) => (
-            <span
-              key={s}
-              className="inline-flex items-center gap-1 rounded-full bg-primary-50 px-2.5 py-1 text-xs font-medium text-primary-700"
-            >
-              {s}
-              {canEdit ? (
-                <button
-                  type="button"
-                  aria-label={`Remove ${s}`}
-                  onClick={() =>
-                    setServices((prev) => prev.filter((x) => x !== s))
-                  }
-                >
-                  <X className="size-3" />
-                </button>
-              ) : null}
-            </span>
-          ))}
-          {services.length === 0 ? (
-            <span className="text-xs text-text-muted">No services selected</span>
-          ) : null}
-        </div>
-        {canEdit ? (
-          <div className="flex gap-2">
-            <Input
-              placeholder="Add custom service"
-              value={customService}
-              onChange={(e) => setCustomService(e.target.value)}
-              disabled={pending}
-            />
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => addService(customService)}
-              disabled={pending}
-            >
-              Add
-            </Button>
-          </div>
-        ) : null}
-      </section>
+      <ScopeChipField
+        label="Service Scope"
+        hiddenName="serviceScope"
+        canEdit={canEdit}
+        pending={pending}
+        defaultSuggestions={DEFAULT_SERVICE_SCOPE_SUGGESTIONS}
+        selected={selectedServices}
+        onSelectedChange={setSelectedServices}
+        customPlaceholder="Add custom service"
+        emptyLabel="No services selected"
+      />
 
-      <section className="space-y-3">
-        <p className="text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
-          Excluded Scope
-        </p>
-        <Textarea
-          name="excludedScope"
-          rows={3}
-          placeholder="One exclusion per line"
-          defaultValue={initial.excludedScope.join("\n")}
-          disabled={!canEdit || pending}
-        />
-      </section>
+      <ScopeChipField
+        label="Excluded Scope"
+        hiddenName="excludedScope"
+        canEdit={canEdit}
+        pending={pending}
+        defaultSuggestions={DEFAULT_EXCLUDED_SCOPE_SUGGESTIONS}
+        selected={selectedExcludedScopes}
+        onSelectedChange={setSelectedExcludedScopes}
+        customPlaceholder="Add custom excluded scope"
+        emptyLabel="No exclusions selected"
+      />
 
       {canEdit ? (
         <div className="flex justify-end">

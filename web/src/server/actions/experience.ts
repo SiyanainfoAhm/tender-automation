@@ -48,9 +48,6 @@ function parseExperienceForm(formData: FormData) {
     projectStatus: String(formData.get("projectStatus") || "ongoing"),
     startDate: String(formData.get("startDate") || ""),
     completionDate: String(formData.get("completionDate") || ""),
-    expectedCompletionDate: String(
-      formData.get("expectedCompletionDate") || "",
-    ),
     description: String(formData.get("description") || ""),
     contactPersonName: String(formData.get("contactPersonName") || ""),
     contactMobile: String(formData.get("contactMobile") || ""),
@@ -58,25 +55,25 @@ function parseExperienceForm(formData: FormData) {
   });
 }
 
-function toInsert(parsed: {
-  projectName: string;
-  clientName: string;
-  location: string;
-  natureOfWork: string;
-  contractValue: number;
-  projectStatus: "ongoing" | "completed";
-  startDate: string;
-  completionDate: string | null;
-  expectedCompletionDate: string | null;
-  description: string | null;
-  contactPersonName: string;
-  contactMobile: string;
-  contactEmail: string | null;
-}) {
+function toInsert(
+  parsed: {
+    projectName: string;
+    clientName: string;
+    location: string;
+    natureOfWork: string;
+    contractValue: number;
+    projectStatus: "ongoing" | "completed";
+    startDate: string;
+    completionDate: string | null;
+    description: string | null;
+    contactPersonName: string;
+    contactMobile: string;
+    contactEmail: string | null;
+  },
+  existing?: { expectedCompletionDate: string | null } | null,
+) {
   const endDate =
     parsed.projectStatus === "completed" ? parsed.completionDate : null;
-  const expected =
-    parsed.projectStatus === "ongoing" ? parsed.expectedCompletionDate : null;
   const durationMonths =
     parsed.projectStatus === "completed"
       ? monthsBetween(parsed.startDate, endDate)
@@ -91,7 +88,10 @@ function toInsert(parsed: {
     projectStatus: parsed.projectStatus,
     startDate: parsed.startDate,
     endDate,
-    expectedCompletionDate: expected,
+    expectedCompletionDate:
+      parsed.projectStatus === "ongoing"
+        ? existing?.expectedCompletionDate ?? null
+        : null,
     durationMonths,
     description: parsed.description,
     contactPersonName: parsed.contactPersonName,
@@ -256,7 +256,7 @@ export async function updateCompanyExperienceAction(
       companyId: session.companyId,
       id,
       updatedBy: session.user.id,
-      input: toInsert(parsed.data),
+      input: toInsert(parsed.data, existing),
     });
 
     const assetError = await saveExperienceAssets({

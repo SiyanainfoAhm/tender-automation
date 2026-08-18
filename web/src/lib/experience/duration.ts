@@ -26,9 +26,7 @@ export function experienceDurationMonths(
   now = new Date(),
 ): number | null {
   if (item.projectStatus === "completed") {
-    return (
-      monthsBetween(item.startDate, item.endDate) ?? item.durationMonths
-    );
+    return monthsBetween(item.startDate, item.endDate) ?? item.durationMonths;
   }
   return monthsBetween(item.startDate, now) ?? item.durationMonths;
 }
@@ -36,5 +34,7 @@ export function experienceDurationMonths(
 export function formatDurationMonths(months: number | null | undefined): string {
   if (months == null || !Number.isFinite(months)) return "—";
   const n = Math.max(0, Math.round(months));
-  return `${n} ${n === 1 ? "month" : "months"}`;
+  if (n <= 0) return "<1 month";
+  if (n === 1) return "1 month";
+  return `${n} months`;
 }

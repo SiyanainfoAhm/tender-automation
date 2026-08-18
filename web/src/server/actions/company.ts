@@ -24,6 +24,7 @@ import {
   MAX_DOCUMENT_UPLOAD_BYTES,
   MAX_DOCUMENT_UPLOAD_SIZE_MB,
 } from "@/lib/company/types";
+import { parseStoredScopeList } from "@/lib/company/scope-chips";
 
 const companyProfileSchema = z.object({
   name: z.string().trim().min(1).max(200),
@@ -71,11 +72,7 @@ const bidPreferencesSchema = z.object({
 });
 
 function parseScopeList(raw: string | undefined): string[] {
-  if (!raw) return [];
-  return raw
-    .split(/[\n,]/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  return parseStoredScopeList(raw);
 }
 
 export async function updateCompanyProfileAction(

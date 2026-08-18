@@ -81,7 +81,6 @@ export const companyExperienceSchema = z
     projectStatus: z.enum(["ongoing", "completed"]),
     startDate: dateValue,
     completionDate: optionalDate,
-    expectedCompletionDate: optionalDate,
     description: z
       .string()
       .trim()
@@ -112,15 +111,6 @@ export const companyExperienceSchema = z
           path: ["completionDate"],
         });
       }
-    } else if (
-      value.expectedCompletionDate &&
-      value.expectedCompletionDate < value.startDate
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Expected completion cannot be before the start date",
-        path: ["expectedCompletionDate"],
-      });
     }
   });
 

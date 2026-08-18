@@ -2,6 +2,7 @@ import "server-only";
 
 import { getServerSupabase } from "@/lib/db/server";
 import { SIYANA_COMPANY_ID } from "@/lib/company/types";
+import { parseStoredScopeList } from "@/lib/company/scope-chips";
 
 export type CompanyRecord = {
   id: string;
@@ -55,12 +56,8 @@ function mapPrefs(row: Record<string, unknown>): CompanyBidPreferences {
       row.min_tender_value_inr == null ? null : Number(row.min_tender_value_inr),
     maxTenderValueInr:
       row.max_tender_value_inr == null ? null : Number(row.max_tender_value_inr),
-    serviceScope: Array.isArray(service)
-      ? service.map(String)
-      : [],
-    excludedScope: Array.isArray(excluded)
-      ? excluded.map(String)
-      : [],
+    serviceScope: parseStoredScopeList(service),
+    excludedScope: parseStoredScopeList(excluded),
     extras: (row.extras as Record<string, unknown>) || {},
     updatedAt: String(row.updated_at),
   };
