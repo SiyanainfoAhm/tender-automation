@@ -19,6 +19,7 @@ import {
 } from "@/server/repositories/rbacRepository";
 import {
   createUser,
+  deleteCompanyUser,
   getUserByEmail,
   getUserById,
   resetUserPassword,
@@ -228,20 +229,25 @@ export async function updateCompanyMemberAction(
 export async function deactivateCompanyMemberAction(
   userId: string,
 ): Promise<{ error?: string; ok?: boolean }> {
+  return deleteCompanyMemberAction(userId);
+}
+
+export async function deleteCompanyMemberAction(
+  userId: string,
+): Promise<{ error?: string; ok?: boolean }> {
   try {
     const session = await requirePermissionStrict("users.deactivate");
-    const target = await getUserById(userId);
-    if (!target || target.companyId !== session.companyId) {
-      return { error: "User not found in your company." };
-    }
-
-    await updateUser(userId, { isActive: false }, session.user.id);
+    await deleteCompanyUser({
+      userId,
+      actorId: session.user.id,
+      companyId: session.companyId,
+    });
     revalidatePath("/users");
     return { ok: true };
   } catch (error) {
     return {
       error:
-        error instanceof Error ? error.message : "Unable to remove member",
+        error instanceof Error ? error.message : "Unable to delete member",
     };
   }
 }

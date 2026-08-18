@@ -4,6 +4,7 @@ import { getServerSupabase } from "@/lib/db/server";
 import { hashPassword, recordAuthEvent } from "@/server/auth/session";
 import {
   assertAdminMutationAllowed,
+  assertUserDeletionAllowed,
   countActiveAdmins,
   type AdminGuardUser,
 } from "@/server/auth/admin-guards";
@@ -443,4 +444,44 @@ export async function revokeOtherSessions(
   currentSessionId: string,
 ): Promise<void> {
   await revokeAllSessionsExcept(userId, currentSessionId);
+}
+
+export async function deleteCompanyUser(options: {
+  userId: string;
+  actorId: string;
+  companyId: string;
+}): Promise<void> {
+  const target = await getUserById(options.userId);
+  if (!target || target.companyId !== options.companyId) {
+    throw new Error("User not found in your company.");
+  }
+
+  const companyUsers = await listUsers({ companyId: options.companyId });
+  const guard = assertUserDeletionAllowed({
+    actorId: options.actorId,
+    target: target as AdminGuardUser,
+    activeAdminCount: countActiveAdmins(companyUsers as AdminGuardUser[]),
+  });
+  if (!guard.ok) throw new Error(guard.message);
+
+  await recordAuthEvent({
+    userId: options.actorId,
+    attemptedEmail: target.email,
+    eventType: "USER_DISABLED",
+    success: true,
+    reason: `deleted:${target.id}`,
+  });
+
+  const supabase = getServerSupabase();
+  const { data, error } = await supabase
+    .from("agenttender_users")
+    .delete()
+    .eq("id", target.id)
+    .eq("company_id", options.companyId)
+    .select("id");
+
+  if (error) throw new Error(error.message);
+  if (!data?.length) {
+    throw new Error("User not found in your company.");
+  }
 }

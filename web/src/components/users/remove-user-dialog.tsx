@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { Loader2, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -18,7 +19,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { deactivateCompanyMemberAction } from "@/server/actions/team";
+import { deleteCompanyMemberAction } from "@/server/actions/team";
 
 type RemoveUserDialogProps = {
   userId: string;
@@ -30,20 +31,28 @@ export function RemoveUserDialog({ userId, fullName }: RemoveUserDialogProps) {
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
+  function onOpenChange(next: boolean) {
+    setOpen(next);
+    if (!next) setError(null);
+  }
+
   function onConfirm() {
+    if (pending) return;
     setError(null);
     startTransition(async () => {
-      const result = await deactivateCompanyMemberAction(userId);
+      const result = await deleteCompanyMemberAction(userId);
       if (result.error) {
         setError(result.error);
+        toast.error(result.error);
         return;
       }
+      toast.success("User deleted.");
       setOpen(false);
     });
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <Tooltip>
         <TooltipTrigger asChild>
           <DialogTrigger asChild>
@@ -51,21 +60,21 @@ export function RemoveUserDialog({ userId, fullName }: RemoveUserDialogProps) {
               variant="ghost"
               size="icon"
               className="size-8 text-text-muted hover:text-red-600"
-              aria-label="Remove member"
+              aria-label="Delete member"
             >
               <Trash2 className="size-3.5" />
             </Button>
           </DialogTrigger>
         </TooltipTrigger>
-        <TooltipContent>Remove</TooltipContent>
+        <TooltipContent>Delete</TooltipContent>
       </Tooltip>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Remove team member</DialogTitle>
+          <DialogTitle>Delete user?</DialogTitle>
           <DialogDescription>
-            {fullName} will lose access to this company&apos;s TenderFlow
-            workspace. Their account will be deactivated for this company — not
-            permanently deleted.
+            This permanently deletes {fullName} from TenderFlow and removes
+            their account from the database. They will lose access immediately.
+            This cannot be undone.
           </DialogDescription>
         </DialogHeader>
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
@@ -73,7 +82,7 @@ export function RemoveUserDialog({ userId, fullName }: RemoveUserDialogProps) {
           <Button
             type="button"
             variant="outline"
-            onClick={() => setOpen(false)}
+            onClick={() => onOpenChange(false)}
             disabled={pending}
           >
             Cancel
@@ -87,10 +96,10 @@ export function RemoveUserDialog({ userId, fullName }: RemoveUserDialogProps) {
             {pending ? (
               <>
                 <Loader2 className="size-4 animate-spin" />
-                Removing…
+                Deleting…
               </>
             ) : (
-              "Remove from company"
+              "Delete user"
             )}
           </Button>
         </DialogFooter>

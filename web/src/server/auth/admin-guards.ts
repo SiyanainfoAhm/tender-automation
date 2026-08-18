@@ -43,3 +43,25 @@ export function assertAdminMutationAllowed(options: {
 export function countActiveAdmins(users: AdminGuardUser[]): number {
   return users.filter((u) => u.role === "ADMIN" && u.isActive).length;
 }
+
+/** Prevent deleting yourself or the last active administrator. */
+export function assertUserDeletionAllowed(options: {
+  actorId: string;
+  target: AdminGuardUser;
+  activeAdminCount: number;
+}): { ok: true } | { ok: false; message: string } {
+  const { actorId, target, activeAdminCount } = options;
+
+  if (target.id === actorId) {
+    return { ok: false, message: "You cannot delete your own account." };
+  }
+
+  if (target.role === "ADMIN" && activeAdminCount <= 1) {
+    return {
+      ok: false,
+      message: "Your company must have at least one active administrator.",
+    };
+  }
+
+  return { ok: true };
+}

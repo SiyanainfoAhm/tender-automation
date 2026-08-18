@@ -8,6 +8,7 @@ import {
 } from "@/lib/rbac/permissions";
 import {
   assertAdminMutationAllowed,
+  assertUserDeletionAllowed,
   countActiveAdmins,
 } from "@/server/auth/admin-guards";
 
@@ -82,6 +83,38 @@ describe("last-admin protection", () => {
       target: users[0]!,
       patch: { role: "BID_MANAGER" },
       activeAdminCount: countActiveAdmins(users),
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
+describe("user deletion protection", () => {
+  it("blocks deleting your own account", () => {
+    const result = assertUserDeletionAllowed({
+      actorId: "a1",
+      target: { id: "a1", role: "ADMIN", isActive: true },
+      activeAdminCount: 2,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toMatch(/cannot delete your own account/i);
+    }
+  });
+
+  it("blocks deleting the last active administrator", () => {
+    const result = assertUserDeletionAllowed({
+      actorId: "actor",
+      target: { id: "a1", role: "ADMIN", isActive: true },
+      activeAdminCount: 1,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("allows deleting a non-admin teammate", () => {
+    const result = assertUserDeletionAllowed({
+      actorId: "a1",
+      target: { id: "u2", role: "BID_COORDINATOR", isActive: true },
+      activeAdminCount: 1,
     });
     expect(result.ok).toBe(true);
   });
