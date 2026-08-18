@@ -31,8 +31,17 @@ import {
   t247Event,
 } from "./tenderDocumentStage.js";
 import { verifyCurrentTenderId } from "./verifyCurrentTenderId.js";
+import {
+  inspectTenderArtifactState,
+  isValidAiSummaryPdf,
+} from "./tenderArtifactState.js";
 
 const ARTIFACT_ATTEMPTS = 3;
+
+export type ArtifactResult =
+  | { status: "success"; path: string }
+  | { status: "retryable_failure"; reason: string }
+  | { status: "unavailable"; reason: string };
 
 export interface RequiredDownloadResult {
   aiSummaryPath: string | null;
@@ -53,6 +62,8 @@ export interface RequiredDownloadResult {
   individualDocsFailed: string[];
   canonicalZipReady: boolean;
   documentsAttempted: boolean;
+  aiResult: ArtifactResult;
+  documentsResult: ArtifactResult;
 }
 
 /**
@@ -268,29 +279,52 @@ export async function downloadRequiredTenderFiles(options: {
     `DOCUMENTS_DOWNLOAD_MS=${Date.now() - documentsStartedAt}`,
   );
 
+  const disk = inspectTenderArtifactState(tenderFolder, t247Id);
+  const aiValid = disk.aiSummaryValid && isValidAiSummaryPdf(disk.aiSummaryPath);
+  const aiResult: ArtifactResult = aiValid
+    ? { status: "success", path: disk.aiSummaryPath }
+    : ai.status === "unavailable"
+      ? { status: "unavailable", reason: "AI Summary not available on the tender page" }
+      : { status: "retryable_failure", reason: "AI_Summary.pdf missing or invalid on disk" };
+  const documentsResult: ArtifactResult = disk.documentsZipValid
+    ? { status: "success", path: disk.documentsZipPath }
+    : individualDocsFound === 0 && downloadAllAttempted && !downloadAllSuccess
+      ? {
+          status: "retryable_failure",
+          reason: "Download All produced no file and individual fallback found no links",
+        }
+      : {
+          status: "retryable_failure",
+          reason: "Tender_All_Documents.zip missing or invalid on disk",
+        };
+
   return {
-    aiSummaryPath: ai.path,
+    aiSummaryPath: aiValid ? disk.aiSummaryPath : ai.path,
     allDocumentsPath: canonicalZipReady ? allDocumentsPath : null,
-    aiSummaryDownloaded: ai.available,
-    allDocumentsDownloaded: canonicalZipReady,
+    aiSummaryDownloaded: aiValid,
+    allDocumentsDownloaded: canonicalZipReady && disk.documentsZipValid,
     aiSummarySize: ai.size,
     allDocumentsSize: canonicalZipReady ? allDocumentsSize : 0,
     aiSummarySkipped: Boolean(options.skipAiSummary),
     allDocumentsSkipped,
-    aiSummaryStatus: ai.status,
-    documentsStatus: canonicalZipReady
+    aiSummaryStatus: aiValid ? "complete" : ai.status,
+    documentsStatus: canonicalZipReady && disk.documentsZipValid
       ? documentsStatus === "partial"
         ? "partial"
         : "complete"
-      : documentsStatus,
+      : documentsStatus === "complete"
+        ? "failed"
+        : documentsStatus,
     downloadAllAttempted,
     downloadAllSuccess,
     individualFallbackUsed,
     individualDocsFound,
     individualDocsSuccess,
     individualDocsFailed,
-    canonicalZipReady,
+    canonicalZipReady: canonicalZipReady && disk.documentsZipValid,
     documentsAttempted: documentsAttempted || downloadAllAttempted || individualFallbackUsed,
+    aiResult,
+    documentsResult,
   };
 }
 
@@ -516,6 +550,8 @@ async function downloadAllDocumentsOnce(options: {
         throw new Error(record.error || "Download All Documents failed");
       }
 
+      logger.info("T247_DOWNLOAD_ALL_EVENT_RECEIVED=true");
+
       const canonicalPath = path.join(documentsDir, record.finalFilename);
       if (!isValidArtifact(canonicalPath)) {
         throw new Error("Download All Documents file empty after save");
@@ -534,6 +570,7 @@ async function downloadAllDocumentsOnce(options: {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+      logger.info("T247_DOWNLOAD_ALL_NO_EVENT_OR_SAVE_FAILED=true");
       await dismissTender247Interruptions(detailPage, logger).catch((err) => {
         if (
           err instanceof AutomationError &&
@@ -686,21 +723,7 @@ async function downloadIndividualDocumentsOnce(options: {
 export async function findIndividualDocumentControls(
   page: Page,
 ): Promise<Array<{ linkText: string; locator: Locator }>> {
-  const heading = page.getByRole("heading", { name: /Tender\s*Documents/i }).first();
-  let root = page.locator("body");
-  if ((await heading.count().catch(() => 0)) > 0) {
-    const card = heading
-      .locator(
-        "xpath=ancestor::*[self::div or self::section or self::article][position()<=10][1]",
-      )
-      .first();
-    if ((await card.count().catch(() => 0)) > 0) {
-      root = card;
-    } else {
-      root = heading.locator("xpath=ancestor::*[1]");
-    }
-  }
-
+  const root = await tenderDocumentsCardRoot(page);
   const controls = root.getByRole("link").or(root.getByRole("button"));
   const count = await controls.count().catch(() => 0);
   const items: Array<{ linkText: string; locator: Locator }> = [];
@@ -709,16 +732,54 @@ export async function findIndividualDocumentControls(
     const locator = controls.nth(i);
     await locator.scrollIntoViewIfNeeded().catch(() => undefined);
     const linkText = normalizeControlLabel(
-      (await locator.innerText().catch(() => "")) || "",
+      (await locator.innerText().catch(() => "")) ||
+        (await locator.getAttribute("aria-label").catch(() => "")) ||
+        "",
     );
     if (!linkText) continue;
     if (isDownloadAllDocumentsLabel(linkText)) continue;
-    if (/ai\s*summary/i.test(linkText)) continue;
-    if (
-      /nit|tender\s*document|document\s*\d+|corrigendum|download/i.test(linkText)
-    ) {
-      items.push({ linkText, locator });
-    }
+    if (/ai\s*(generated\s*)?(tender\s*)?summary/i.test(linkText)) continue;
+    items.push({ linkText, locator });
   }
   return items;
+}
+
+async function tenderDocumentsCardRoot(page: Page): Promise<Locator> {
+  const heading = page.getByRole("heading", { name: /Tender\s*Documents/i }).first();
+  if ((await heading.count().catch(() => 0)) > 0) {
+    let best: Locator | null = null;
+    let bestScore = -1;
+    for (let depth = 1; depth <= 12; depth += 1) {
+      const ancestor = heading
+        .locator(
+          `xpath=ancestor::*[self::div or self::section or self::article][${depth}]`,
+        )
+        .first();
+      if ((await ancestor.count().catch(() => 0)) === 0) {
+        break;
+      }
+      const text = (await ancestor.innerText().catch(() => "")) || "";
+      const linkCount = await ancestor.getByRole("link").count().catch(() => 0);
+      const hasDownloadAll = /download\s*all\s*documents/i.test(text);
+      const score = (hasDownloadAll ? 100 : 0) + linkCount;
+      if (score > bestScore) {
+        bestScore = score;
+        best = ancestor;
+      }
+    }
+    if (best) {
+      return best;
+    }
+    return heading.locator("xpath=ancestor::*[1]");
+  }
+
+  const card = page
+    .locator("section, article, div")
+    .filter({ hasText: /Tender\s*Documents/i })
+    .filter({ has: page.locator("a") })
+    .first();
+  if ((await card.count().catch(() => 0)) > 0) {
+    return card;
+  }
+  return page.locator("body");
 }

@@ -41,6 +41,11 @@ export async function GET(_request: Request, context: RouteContext) {
     if (contentType) headers.set("Content-Type", contentType);
     const contentLength = upstream.headers.get("content-length");
     if (contentLength) headers.set("Content-Length", contentLength);
+    const contentDisposition = upstream.headers.get("content-disposition");
+    headers.set(
+      "Content-Disposition",
+      contentDisposition || "inline",
+    );
     headers.set(
       "Cache-Control",
       upstream.ok ? "private, max-age=300" : "no-store",

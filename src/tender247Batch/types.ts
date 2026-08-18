@@ -81,8 +81,11 @@ export interface ManifestTenderEntry {
   aiSummaryPath?: string | null;
   allDocumentsPath?: string | null;
   lastCompletedStep?: string | null;
-  error: string | null;
-  updatedAt: string;
+    error: string | null;
+    pendingReason?: string | null;
+    artifactComplete?: boolean;
+    chatgptSkipped?: boolean;
+    updatedAt: string;
   failedDocuments?: Array<{ name: string; error: string }>;
 }
 
@@ -126,5 +129,7 @@ export interface ProcessTenderResult {
   titleForAudit?: string | null;
   supabaseWriteSkipped?: boolean;
   documentDownloadSkipped?: boolean;
+  pendingReason?: string | null;
+  artifactComplete?: boolean;
   chatgptSkipped?: boolean;
 }

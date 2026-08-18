@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config as loadDotenv } from "dotenv";
+import { CHATGPT_PROFILE_DIR } from "./chatgptQualification/chatgptProfile.js";
 import { resolveProjectPath } from "./fileUtils.js";
 
 loadDotenv({ path: resolveProjectPath(".env"), quiet: true });
@@ -193,12 +194,7 @@ export function loadConfig(): AppConfig {
         path.join("auth", "chatgpt.json");
       return resolveProjectPath(raw);
     })(),
-    chatgptAuthProfile: (() => {
-      const raw =
-        process.env.CHATGPT_AUTH_PROFILE?.trim() ||
-        path.join("auth", "chatgpt-profile");
-      return resolveProjectPath(raw);
-    })(),
+    chatgptAuthProfile: CHATGPT_PROFILE_DIR,
     chatgptManualLoginTimeoutMs: Math.max(
       60_000,
       parseIntEnv(process.env.CHATGPT_MANUAL_LOGIN_TIMEOUT_MS, 600_000),

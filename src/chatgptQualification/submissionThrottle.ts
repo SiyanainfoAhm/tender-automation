@@ -70,6 +70,24 @@ export function getDefaultMinSubmissionIntervalMs(): number {
   return Number.isFinite(n) && n >= 0 ? n : 300_000;
 }
 
+/** Individual-tender qualification gap. Default 5 minutes. */
+export function getTenderQualificationMinSendIntervalMs(): number {
+  const named = process.env.CHATGPT_TENDER_MIN_SEND_INTERVAL_MS?.trim();
+  if (named) {
+    const n = Number.parseInt(named, 10);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return getDefaultMinSubmissionIntervalMs();
+}
+
+/** Run-level Excel screening: no artificial gap unless explicitly configured. */
+export function getRunExcelScreeningMinSendIntervalMs(): number {
+  const raw = process.env.CHATGPT_RUN_SCREENING_MIN_SEND_INTERVAL_MS?.trim();
+  if (!raw) return 0;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
 /** Pure helper — remaining wait before the next Send is allowed. */
 export function remainingSubmissionWaitMs(options: {
   lastSubmissionAtMs: number | null;

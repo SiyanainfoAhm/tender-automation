@@ -22,6 +22,10 @@ export async function runSequentialArtifactAcquisition<T>(options: {
     metadataOk?: boolean;
     aiOk?: boolean;
     documentsOk?: boolean;
+    complete?: boolean;
+    pendingTimeout?: boolean;
+    dropped?: boolean;
+    safeToAdvance?: boolean;
   } | void>;
   logger?: { info: (msg: string) => void };
   onEvent?: (event: SequentialAcquisitionEvent) => void;
@@ -46,17 +50,34 @@ export async function runSequentialArtifactAcquisition<T>(options: {
     documentsSuccess: 0,
   };
 
+  let previousTenderId: string | null = null;
+  let previousSafeToAdvance = true;
+
   for (let index = 0; index < candidates.length; index += 1) {
     if ((gptStarted?.count ?? 0) > 0) {
       throw new Error(
         "T247_SEQUENTIAL_PROCESSING_INVARIANT_VIOLATION GPT started during artifact acquisition",
       );
     }
+    if (previousTenderId && !previousSafeToAdvance) {
+      throw new Error(`T247_PREVIOUS_TENDER_NOT_TERMINAL: ${previousTenderId}`);
+    }
     const candidate = candidates[index]!;
     const id = getId(candidate);
     logger?.info(`T247_SELECTED_INDEX=${index + 1}/${total}`);
     emit(`T247_ARTIFACT_TRANSACTION_START=${id}`);
+    logger?.info(`[T247 ${id}] DETAIL_OPENED`);
     const result = await process(candidate, index + 1, total);
+    previousTenderId = id;
+    previousSafeToAdvance = Boolean(
+      result?.safeToAdvance ||
+        result?.complete ||
+        result?.pendingTimeout ||
+        result?.dropped,
+    );
+    if (!previousSafeToAdvance) {
+      throw new Error(`T247_PREVIOUS_TENDER_NOT_TERMINAL: ${id}`);
+    }
     counters.completed += 1;
     if (result?.metadataOk) counters.metadataSuccess += 1;
     if (result?.aiOk) counters.aiSummarySuccess += 1;

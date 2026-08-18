@@ -34,6 +34,7 @@ export async function processSurvivorsInParallel(options: {
   alreadyCompleted: Set<string>;
   shouldStop?: () => boolean;
   concurrency?: number;
+  phase1ScreeningAuthoritative?: boolean;
 }): Promise<{
   results: ProcessTenderResult[];
   attemptedIds: string[];
@@ -75,7 +76,7 @@ export async function processSurvivorsInParallel(options: {
     logger: options.logger,
     process: async (t247Id, index, total) => {
       if (options.shouldStop?.()) {
-        return { evidenceMode: "NONE" };
+        return { evidenceMode: "NONE", dropped: true, safeToAdvance: true };
       }
       attemptedIds.push(t247Id);
       await closeExtraTender247DetailPages(options.context, options.listPage);
@@ -99,6 +100,7 @@ export async function processSurvivorsInParallel(options: {
         excelTenderValue: excel?.parsedTenderValueInr ?? null,
         excelEmd: excel?.parsedEmdInr ?? null,
         openViaSingleTenderDirect: true,
+        phase1ScreeningAuthoritative: options.phase1ScreeningAuthoritative,
       });
       results.push(result);
 
@@ -118,25 +120,38 @@ export async function processSurvivorsInParallel(options: {
           metadataOk: false,
           aiOk: false,
           documentsOk: false,
+          dropped: true,
+          safeToAdvance: true,
         };
       }
-      if (result.status === "completed" || result.status === "partial") {
+      if (result.status === "completed") {
+        processedIds.push(result.t247Id);
+      } else if (result.status === "pending") {
+        processedIds.push(result.t247Id);
+      } else if (result.status === "partial") {
         processedIds.push(result.t247Id);
       } else {
         failedIds.push(result.t247Id);
       }
+      const complete = result.status === "completed" && result.artifactComplete === true;
+      const pendingTimeout = result.status === "pending";
+      const failed = result.status === "failed";
+      const partial = result.status === "partial";
       return {
-        evidenceMode:
-          result.status === "completed"
-            ? "FULL"
-            : result.status === "partial"
-              ? "PARTIAL"
-              : "NONE",
+        evidenceMode: complete
+          ? "FULL"
+          : pendingTimeout || partial
+            ? "PARTIAL"
+            : "NONE",
         metadataOk: result.metadataStatus === "complete",
         aiOk: result.aiSummaryStatus === "complete",
         documentsOk:
           result.allDocumentsStatus === "complete" ||
           result.allDocumentsStatus === "partial",
+        complete,
+        pendingTimeout,
+        dropped: failed,
+        safeToAdvance: complete || pendingTimeout || failed || partial,
       };
     },
   });

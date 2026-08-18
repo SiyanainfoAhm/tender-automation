@@ -27,6 +27,7 @@ import {
 } from "../tender247EvidenceState.js";
 import { runSequentialArtifactAcquisition } from "../runSequentialArtifactAcquisition.js";
 import { inspectTenderResumeState } from "../resumeArtifacts.js";
+import { writeMinimalValidAiSummaryPdf } from "../tenderArtifactState.js";
 import { isCanonicalDocumentsZipReady } from "../canonicalTenderArchive.js";
 import { correctArtifactFileExtension } from "../detectDownloadedKind.js";
 
@@ -163,6 +164,33 @@ describe("Tender247 artifact locators and AI Summary inner scroll", () => {
     const items = await findIndividualDocumentControls(page);
     assert.ok(items.length >= 3);
     assert.ok(items.some((it) => /NIT/i.test(it.linkText)));
+    assert.ok(items.some((it) => /Corrigendum/i.test(it.linkText)));
+    assert.ok(!items.some((it) => /Download All/i.test(it.linkText)));
+    await page.close();
+  });
+
+  it("collects every Tender Documents link except Download All Documents", async () => {
+    page = await browser.newPage();
+    await page.setContent(`<!DOCTYPE html><html><body>
+      <h1>Tender Id: 103383747</h1>
+      <section>
+        <h2>Tender Documents</h2>
+        <a href="/nit.pdf">NIT</a>
+        <a href="/d1.pdf">Tender Document 1</a>
+        <a href="/d2.pdf">Tender Document 2</a>
+        <a href="/d3.pdf">Tender Document 3</a>
+        <a href="/d4.pdf">Tender Document 4</a>
+        <a href="/d5.pdf">Tender Document 5</a>
+        <a href="/d6.pdf">Tender Document 6</a>
+        <a href="/d7.pdf">Tender Document 7</a>
+        <a href="/corr.pdf">Corrigendum</a>
+        <a href="/all.zip">Download All Documents</a>
+      </section>
+    </body></html>`);
+    const items = await findIndividualDocumentControls(page);
+    assert.equal(items.length, 9);
+    assert.ok(items.some((it) => /NIT/i.test(it.linkText)));
+    assert.ok(items.some((it) => /Tender Document 7/i.test(it.linkText)));
     assert.ok(items.some((it) => /Corrigendum/i.test(it.linkText)));
     assert.ok(!items.some((it) => /Download All/i.test(it.linkText)));
     await page.close();
@@ -320,6 +348,8 @@ describe("Tender247 sequential selected-tender loop", () => {
           metadataOk: true,
           aiOk: true,
           documentsOk: true,
+          complete: true,
+          safeToAdvance: true,
         };
       },
     });
@@ -370,7 +400,7 @@ describe("Tender247 sequential selected-tender loop", () => {
       gptStarted,
       process: async () => {
         assert.equal(gptStarted.count, 0);
-        return { evidenceMode: "PARTIAL", metadataOk: true };
+        return { evidenceMode: "PARTIAL", metadataOk: true, complete: true, safeToAdvance: true };
       },
     });
     assert.equal(gptStarted.count, 0);
@@ -386,7 +416,7 @@ describe("Tender247 documents completeness is the canonical ZIP only", () => {
       path.join(tenderFolder, "metadata.json"),
       JSON.stringify({ t247Id: "100053264", sourceTenderId: "100053264", normalized: { tenderName: "x" }, raw: { a: 1 } }),
     );
-    fs.writeFileSync(path.join(tenderFolder, "AI_Summary.pdf"), "%PDF-1.4 ai");
+    writeMinimalValidAiSummaryPdf(path.join(tenderFolder, "AI_Summary.pdf"));
     const resume = inspectTenderResumeState(root, "100053264");
     assert.equal(resume.metadataValid, true);
     assert.equal(resume.aiSummaryValid, true);

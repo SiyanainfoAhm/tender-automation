@@ -540,10 +540,20 @@ export function PastExperienceDialog({
                     <Input
                       id="contactMobile"
                       name="contactMobile"
+                      type="tel"
+                      inputMode="numeric"
+                      autoComplete="tel"
+                      maxLength={20}
                       required
                       disabled={readOnly}
                       defaultValue={experience?.contactMobile || ""}
                       placeholder="+91 98765 43210"
+                      onChange={(event) => {
+                        const digitsAndSep = event.target.value
+                          .replace(/[^\d+\s-]/g, "")
+                          .slice(0, 20);
+                        event.target.value = digitsAndSep;
+                      }}
                     />
                   </div>
                   <div className="space-y-1">

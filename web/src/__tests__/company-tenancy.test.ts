@@ -51,6 +51,14 @@ describe("financial year generator", () => {
   });
 });
 
+describe("certificate types", () => {
+  it("does not treat GST or PAN as certificates", async () => {
+    const { CERTIFICATE_TYPES } = await import("@/lib/company/types");
+    expect(CERTIFICATE_TYPES).not.toContain("GST");
+    expect(CERTIFICATE_TYPES).not.toContain("PAN");
+  });
+});
+
 describe("document storage provider", () => {
   it("throws when Azure is not configured", async () => {
     const provider = new UnconfiguredDocumentStorageProvider();

@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import {
   Building2,
   FileText,
-  FolderPlus,
   Plus,
   Search,
   Upload,
@@ -73,7 +72,12 @@ export function DocumentsClient({
     });
   }, [documents, q, category]);
 
-  const filters = ["All", ...DOCUMENT_CATEGORIES.filter((c) => c !== "General")];
+  const filters = [
+    "All",
+    ...DOCUMENT_CATEGORIES.filter(
+      (c) => c !== "General" && c !== "GST" && c !== "PAN",
+    ),
+  ];
 
   function openCreateExperience() {
     setSelectedExperience(null);
@@ -132,15 +136,6 @@ export function DocumentsClient({
             </details>
           </div>
         ) : null}
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled
-          title="Folders will be enabled in a later phase"
-        >
-          <FolderPlus className="size-4" />
-          New Folder
-        </Button>
       </>
     );
 

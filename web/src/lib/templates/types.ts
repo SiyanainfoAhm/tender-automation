@@ -16,8 +16,10 @@ export type BidProfileTemplate = {
   departmentName: string;
   departmentAddress: string | null;
   companyAddress: string | null;
-  companyLogoUrl: string | null;
+  companySignStampUrl: string | null;
+  companySignStampFileName: string | null;
   companySignatoryUrl: string | null;
+  companyLogoUrl: string | null;
   companyLogoBlobName: string | null;
   companySignatoryBlobName: string | null;
   status: "active" | "archived";
@@ -43,9 +45,7 @@ export type BidProfileTemplateInsert = {
   departmentName: string;
   departmentAddress?: string | null;
   companyAddress?: string | null;
-  companyLogoUrl?: string | null;
   companySignatoryUrl?: string | null;
-  companyLogoBlobName?: string | null;
   companySignatoryBlobName?: string | null;
 };
 

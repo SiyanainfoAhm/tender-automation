@@ -48,6 +48,19 @@ import {
   RESPONSE_INSPECT_TIMEOUT_MS,
 } from "./immediateResponseInspect.js";
 import type { AppConfig } from "../config.js";
+import {
+  countAssistantMessages,
+  findGeneratedScreeningWorkbook,
+  isScreeningGenerationActive,
+  SCREENING_STABILITY_POLLS,
+} from "./assistantSpreadsheetAttachment.js";
+import {
+  assertRunExcelScreeningPreSend,
+  assertTenderQualificationPreSend,
+  type ChatGptSubmissionKind,
+} from "./chatgptSubmissionKind.js";
+
+export type { ChatGptSubmissionKind } from "./chatgptSubmissionKind.js";
 
 export { COMPOSER_TOKEN_ATTR } from "./composerShellAttachments.js";
 export {
@@ -2470,9 +2483,18 @@ export async function sendComposerMessage(
      */
     sendSlotAlreadyHeld?: boolean;
     workerId?: number;
+    /** Run-level Excel screening attaches a single workbook. */
+    minAttachmentCount?: number;
+    /**
+     * Explicit submission mode. Defaults to single-tender qualification.
+     * Never inferred from filenames.
+     */
+    submissionKind?: ChatGptSubmissionKind;
   },
 ): Promise<SendComposerResult> {
   const requireNewConversation = options?.requireNewConversation ?? true;
+  const submissionKind: ChatGptSubmissionKind =
+    options?.submissionKind ?? "TENDER_QUALIFICATION";
   const userMessagePattern =
     options?.userMessagePattern ??
     /Evaluate this tender for Siyana Info Solutions Pvt\. Ltd\./i;
@@ -2484,11 +2506,12 @@ export async function sendComposerMessage(
   await assertNotRateLimited(page, logger);
 
   if (requireNewConversation) {
+    const minAttachments = options?.minAttachmentCount ?? 2;
     if (
       !confirmed ||
       confirmed.requiredAttachmentsConfirmed !== true ||
       !Array.isArray(confirmed.fileNames) ||
-      confirmed.fileNames.length < 2
+      confirmed.fileNames.length < minAttachments
     ) {
       throw new AutomationError(
         "CHATGPT_PRE_SEND_ATTACHMENT_CHECK_FAILED",
@@ -2499,12 +2522,20 @@ export async function sendComposerMessage(
 
   const scheduler = getSharedChatGptSubmissionScheduler();
 
+  logger?.info(`CHATGPT_SUBMISSION_KIND=${submissionKind}`);
+  console.log(`CHATGPT_SUBMISSION_KIND=${submissionKind}`);
+
   // Global mutex: wait for interval + hold through Send confirmation, then release.
   // Do NOT hold during response wait (released before return to caller).
+  // RUN_EXCEL_SCREENING still takes the lock (no duplicate Send) but skips the
+  // multi-minute individual-tender interval.
   let sendSlotHeld = sendSlotAlreadyHeld;
   if (!sendSlotAlreadyHeld) {
-    await scheduler.acquireSendSlot({ logger, workerId });
+    await scheduler.acquireSendSlot({ logger, workerId, submissionKind });
     sendSlotHeld = true;
+  } else if (submissionKind === "RUN_EXCEL_SCREENING") {
+    logger?.info("CHATGPT_ARTIFICIAL_SEND_DELAY_MS=0");
+    console.log("CHATGPT_ARTIFICIAL_SEND_DELAY_MS=0");
   }
 
   const releaseSendSlotSafe = (success: boolean): void => {
@@ -2534,7 +2565,7 @@ export async function sendComposerMessage(
     await page.waitForTimeout(250);
   }
 
-  if (requireNewConversation) {
+  if (requireNewConversation && submissionKind === "TENDER_QUALIFICATION") {
     const archiveName =
       confirmed!.fileNames.find((n) => /\.zip$/i.test(n)) || undefined;
     const presence = await detectComposerAttachments(page, {
@@ -2542,38 +2573,72 @@ export async function sendComposerMessage(
       composerToken: confirmed!.composerIdentity,
       aiSummaryRequired: confirmed!.aiSummaryRequired === true,
     });
-    const metadataDetected = presence.metadataAttached;
-    const documentsDetected = presence.documentsAttached;
-    const aiDetected = presence.aiSummaryAttached;
     const aiRequired = confirmed!.aiSummaryRequired === true;
     logger?.info(
-      `CHATGPT_PRE_SEND_LOGICAL_RECHECK metadata=${metadataDetected} zip=${documentsDetected} ai=${aiDetected} aiRequired=${aiRequired}`,
+      `CHATGPT_PRE_SEND_LOGICAL_RECHECK metadata=${presence.metadataAttached} zip=${presence.documentsAttached} ai=${presence.aiSummaryAttached} aiRequired=${aiRequired}`,
     );
     console.log(
-      `CHATGPT_PRE_SEND_LOGICAL_RECHECK metadata=${metadataDetected} zip=${documentsDetected} ai=${aiDetected} aiRequired=${aiRequired}`,
+      `CHATGPT_PRE_SEND_LOGICAL_RECHECK metadata=${presence.metadataAttached} zip=${presence.documentsAttached} ai=${presence.aiSummaryAttached} aiRequired=${aiRequired}`,
     );
-    const requiredAttachmentsReady =
-      metadataDetected &&
-      documentsDetected &&
-      (!aiRequired || aiDetected);
-    if (!requiredAttachmentsReady) {
-      if (!metadataDetected) {
+    try {
+      assertTenderQualificationPreSend(presence, aiRequired);
+    } catch (error) {
+      if (!presence.metadataAttached) {
         console.log("CHATGPT_REQUIRED_ATTACHMENT_MISSING=metadata");
         logger?.error("CHATGPT_REQUIRED_ATTACHMENT_MISSING=metadata");
       }
-      if (!documentsDetected) {
+      if (!presence.documentsAttached) {
         console.log("CHATGPT_REQUIRED_ATTACHMENT_MISSING=documents");
         logger?.error("CHATGPT_REQUIRED_ATTACHMENT_MISSING=documents");
       }
-      if (aiRequired && !aiDetected) {
+      if (aiRequired && !presence.aiSummaryAttached) {
         console.log("CHATGPT_REQUIRED_ATTACHMENT_MISSING=ai_summary");
         logger?.error("CHATGPT_REQUIRED_ATTACHMENT_MISSING=ai_summary");
       }
-      throw new AutomationError(
-        "CHATGPT_PRE_SEND_ATTACHMENT_CHECK_FAILED",
-        `Cannot submit: metadata=${metadataDetected} documents=${documentsDetected} ai=${aiDetected} aiRequired=${aiRequired} cards=${presence.visibleCardCount}`,
-      );
+      throw error;
     }
+  }
+
+  if (requireNewConversation && submissionKind === "RUN_EXCEL_SCREENING") {
+    const expectedWorkbookName = confirmed!.fileNames[0] || "run-normalized.xlsx";
+    logger?.info("CHATGPT_RUN_SCREENING_PRE_SEND_CHECK");
+    console.log("CHATGPT_RUN_SCREENING_PRE_SEND_CHECK");
+    const presence = await detectComposerAttachments(page, {
+      composerToken: confirmed!.composerIdentity,
+    });
+    if (
+      !presence.candidates.some((name) =>
+        /\.xlsx$/i.test(name) ||
+        name.toLowerCase().includes(expectedWorkbookName.replace(/\.xlsx$/i, "").toLowerCase()),
+      )
+    ) {
+      const visibleName = await page
+        .getByText(new RegExp(expectedWorkbookName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"))
+        .first()
+        .isVisible()
+        .catch(() => false);
+      const removeBtn = await page
+        .getByRole("button", {
+          name: new RegExp(`Remove file:.*${expectedWorkbookName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i"),
+        })
+        .first()
+        .isVisible()
+        .catch(() => false);
+      if (visibleName || removeBtn) {
+        presence.candidates.push(expectedWorkbookName);
+      }
+    }
+    const promptCheck = await readComposerPromptPresence(page, userMessagePattern);
+    const sendEnabled = await isComposerSendEnabled(page);
+    assertRunExcelScreeningPreSend({
+      presence,
+      expectedWorkbookName,
+      promptPresent: promptCheck.present,
+      sendEnabled,
+      requireSendEnabled: false,
+    });
+    logger?.info("CHATGPT_RUN_SCREENING_WORKBOOK_READY=true");
+    console.log("CHATGPT_RUN_SCREENING_WORKBOOK_READY=true");
   }
 
   // Baseline MUST be captured immediately before Send
@@ -2615,6 +2680,12 @@ export async function sendComposerMessage(
       }
     }
     logger?.info("CHATGPT_SEND_BUTTON_ENABLED");
+    logger?.info("CHATGPT_SEND_BUTTON_ENABLED=true");
+    console.log("CHATGPT_SEND_BUTTON_ENABLED=true");
+    if (submissionKind === "RUN_EXCEL_SCREENING") {
+      logger?.info("CHATGPT_ARTIFICIAL_SEND_DELAY_MS=0");
+      console.log("CHATGPT_ARTIFICIAL_SEND_DELAY_MS=0");
+    }
     console.log("CHATGPT_SEND_CLICK_START");
     logger?.info("CHATGPT_SEND_CLICK_START");
     await sendButton.scrollIntoViewIfNeeded().catch(() => undefined);
@@ -2629,7 +2700,9 @@ export async function sendComposerMessage(
     });
     const attachmentsReady =
       !requireNewConversation ||
-      (presence.metadataAttached && presence.documentsAttached);
+      (submissionKind === "RUN_EXCEL_SCREENING"
+        ? presence.candidates.some((name) => /\.xlsx$/i.test(name))
+        : presence.metadataAttached && presence.documentsAttached);
     if (!promptReady || !attachmentsReady) {
       throw new AutomationError(
         "CHATGPT_SEND_BUTTON_MISSING",
@@ -2666,10 +2739,13 @@ export async function sendComposerMessage(
     logger?.info("CHATGPT_PROMPT_SUBMITTED=true");
     console.log("CHATGPT_PROMPT_SUBMITTED=true");
     logger?.info("CHATGPT_PROMPT_SUBMITTED");
+    logger?.info("CHATGPT_MESSAGE_SUBMITTED=true");
+    console.log("CHATGPT_MESSAGE_SUBMITTED=true");
     if (confirmed) {
       scheduler.markSubmissionSuccess({
         sourcePortal: confirmed.sourcePortal,
         sourceTenderId: confirmed.sourceTenderId,
+        force: true,
       });
     }
     const url = page.url();
@@ -2701,10 +2777,13 @@ export async function sendComposerMessage(
     logger?.info("CHATGPT_PROMPT_SUBMITTED=true");
     console.log("CHATGPT_PROMPT_SUBMITTED=true");
     logger?.info("CHATGPT_PROMPT_SUBMITTED");
+    logger?.info("CHATGPT_MESSAGE_SUBMITTED=true");
+    console.log("CHATGPT_MESSAGE_SUBMITTED=true");
     if (confirmed) {
       scheduler.markSubmissionSuccess({
         sourcePortal: confirmed.sourcePortal,
         sourceTenderId: confirmed.sourceTenderId,
+        force: true,
       });
     }
     console.log(`CHATGPT_CONVERSATION_URL=${page.url()}`);
@@ -2734,6 +2813,8 @@ export async function sendComposerMessage(
     stillOnProject &&
     promptStillInComposer
   ) {
+    logger?.warn("CHATGPT_SEND_NOT_CONFIRMED");
+    console.log("CHATGPT_SEND_NOT_CONFIRMED");
     logger?.warn("CHATGPT_SEND_RETRY_ENTER");
     const composer = getProjectComposerLocator(page);
     await composer.click({ timeout: 5_000 }).catch(() => undefined);
@@ -2747,10 +2828,13 @@ export async function sendComposerMessage(
       expectedT247Id,
     }))) {
       logger?.info("CHATGPT_PROMPT_SUBMITTED");
+      logger?.info("CHATGPT_MESSAGE_SUBMITTED=true");
+      console.log("CHATGPT_MESSAGE_SUBMITTED=true");
       if (confirmed) {
         scheduler.markSubmissionSuccess({
           sourcePortal: confirmed.sourcePortal,
           sourceTenderId: confirmed.sourceTenderId,
+          force: true,
         });
       }
       const url = page.url();
@@ -2768,6 +2852,11 @@ export async function sendComposerMessage(
       releaseSendSlotSafe(true);
       return { chatUrl: url, baseline, submissionConfirmed: true };
     }
+  }
+
+  if (anyMatchingUser) {
+    logger?.info("CHATGPT_DUPLICATE_PROMPT_BLOCKED=true");
+    console.log("CHATGPT_DUPLICATE_PROMPT_BLOCKED=true");
   }
 
   throw new AutomationError(
@@ -2791,6 +2880,8 @@ async function composerStillHasPromptText(page: Page): Promise<boolean> {
   }
   return (
     /Evaluate this tender for Siyana/i.test(text) ||
+    /Evaluate the attached tender Excel for Phase-1 screening/i.test(text) ||
+    /\bRUN-\d{4}-\d{2}-\d{2}\b/.test(text) ||
     /Your previous status value|not valid JSON|ONE JSON object only/i.test(
       text,
     )
@@ -3036,7 +3127,7 @@ export function isLikelyConversationUrl(url: string): boolean {
 }
 
 export type AssistantWaitResult =
-  | { status: "complete"; text: string; reason?: string }
+  | { status: "complete"; text: string; reason?: string; outputFilename?: string }
   | { status: "pending_timeout"; text: string; uiState: string }
   | { status: "stalled"; text: string; uiState: string };
 
@@ -3364,6 +3455,11 @@ export async function waitForAssistantResponse(options: {
   assistantCountBefore?: number;
   userCountBefore?: number;
   stallTimeoutMs?: number;
+  /** qualification_json (default) or generation_complete for run Excel screening */
+  completionMode?: "qualification_json" | "generation_complete";
+  /** Explicit mode. RUN_EXCEL_SCREENING completes on assistant XLSX, not JSON. */
+  submissionKind?: ChatGptSubmissionKind;
+  inputWorkbookFileName?: string;
   onProgress?: (info: {
     elapsedSeconds: number;
     assistantCountCurrent: number;
@@ -3373,6 +3469,15 @@ export async function waitForAssistantResponse(options: {
   }) => void;
 }): Promise<AssistantWaitResult> {
   const { page, timeoutMs, logger, expectedT247Id, onProgress } = options;
+  const submissionKind: ChatGptSubmissionKind =
+    options.submissionKind ??
+    (options.completionMode === "generation_complete"
+      ? "RUN_EXCEL_SCREENING"
+      : "TENDER_QUALIFICATION");
+  const isRunScreening = submissionKind === "RUN_EXCEL_SCREENING";
+  const completionMode =
+    options.completionMode ??
+    (isRunScreening ? "generation_complete" : "qualification_json");
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
   const stallTimeoutMs =
@@ -3412,6 +3517,10 @@ export async function waitForAssistantResponse(options: {
 
   logger.info("CHATGPT_RESPONSE_WAIT_START");
   console.log("CHATGPT_RESPONSE_WAIT_START");
+  logger.info(`CHATGPT_RESPONSE_MODE=${submissionKind}`);
+  console.log(`CHATGPT_RESPONSE_MODE=${submissionKind}`);
+  logger.info(`CHATGPT_JSON_RESPONSE_REQUIRED=${!isRunScreening}`);
+  console.log(`CHATGPT_JSON_RESPONSE_REQUIRED=${!isRunScreening}`);
   logger.info(
     `CHATGPT_RESPONSE_BASELINE assistantCountBefore=${assistantCountBefore}`,
   );
@@ -3433,10 +3542,14 @@ export async function waitForAssistantResponse(options: {
   let schemaValidLogged = false;
   let jsonStableLogged = false;
   const postJsonGraceMs = getPostJsonUiGraceMs();
-  logger.info(`CHATGPT_POST_JSON_UI_GRACE_MS=${postJsonGraceMs}`);
-  logger.info(
-    `CHATGPT_RESPONSE_INSPECT_TIMEOUT_MS=${RESPONSE_INSPECT_TIMEOUT_MS}`,
-  );
+  if (!isRunScreening) {
+    logger.info(`CHATGPT_POST_JSON_UI_GRACE_MS=${postJsonGraceMs}`);
+  }
+  if (!isRunScreening) {
+    logger.info(
+      `CHATGPT_RESPONSE_INSPECT_TIMEOUT_MS=${RESPONSE_INSPECT_TIMEOUT_MS}`,
+    );
+  }
 
   await page.keyboard.press("End").catch(() => undefined);
   await page
@@ -3461,6 +3574,97 @@ export async function waitForAssistantResponse(options: {
         "CHATGPT_CONVERSATION_URL_LOST",
         `Left conversation URL during response wait: ${page.url()}`,
       );
+    }
+
+    if (isRunScreening) {
+      const elapsedSec = Math.floor(elapsedMs / 1000);
+      const assistantCount = await countAssistantMessages(page);
+      const generating = await isScreeningGenerationActive(page);
+      const newAssistant = assistantCount > assistantCountBefore;
+      const responseStarted = newAssistant || generating;
+      if (responseStarted && !responseActiveLogged) {
+        responseActiveLogged = true;
+        logger.info("CHATGPT_RESPONSE_STARTED=true");
+        console.log("CHATGPT_RESPONSE_STARTED=true");
+        logger.info("CHATGPT_RUN_SCREENING_STAGE=RESPONSE_STARTED");
+        if (generating) {
+          logger.info("CHATGPT_RUN_SCREENING_STAGE=RESPONSE_GENERATING");
+        }
+      }
+
+      const workbook =
+        responseStarted
+          ? await findGeneratedScreeningWorkbook(page, {
+              correlationId: expectedT247Id,
+              inputFileName: options.inputWorkbookFileName,
+              assistantCountBefore,
+            })
+          : null;
+
+      if (elapsedSec === 0 || elapsedSec % 10 === 0) {
+        const waitLine = `CHATGPT_RUN_SCREENING_WAIT elapsedSec=${elapsedSec} xlsx=${Boolean(workbook)} generating=${generating}`;
+        logger.info(waitLine);
+        console.log(waitLine);
+        logger.info(
+          `[AI SCREENING] Waiting for generated XLSX... elapsed=${elapsedSec}s`,
+        );
+        console.log(
+          `[AI SCREENING] Waiting for generated XLSX... elapsed=${elapsedSec}s`,
+        );
+      }
+
+      if (!responseStarted) {
+        await page.waitForTimeout(1000);
+        continue;
+      }
+
+      if (workbook && !generating) {
+        if (
+          previousText !== workbook.filename
+        ) {
+          previousText = workbook.filename;
+          stableChecks = 0;
+          logger.info("CHATGPT_GENERATED_XLSX_FOUND=true");
+          console.log("CHATGPT_GENERATED_XLSX_FOUND=true");
+          logger.info(
+            `CHATGPT_GENERATED_XLSX_FILENAME=${workbook.filename}`,
+          );
+          console.log(
+            `CHATGPT_GENERATED_XLSX_FILENAME=${workbook.filename}`,
+          );
+          logger.info("CHATGPT_GENERATION_ACTIVE=false");
+          console.log("CHATGPT_GENERATION_ACTIVE=false");
+          logger.info("CHATGPT_RUN_SCREENING_STAGE=GENERATED_XLSX_DETECTED");
+        }
+        stableChecks += 1;
+        logger.info(
+          `CHATGPT_RESPONSE_STABILITY_CHECK=${stableChecks}/${SCREENING_STABILITY_POLLS}`,
+        );
+        console.log(
+          `CHATGPT_RESPONSE_STABILITY_CHECK=${stableChecks}/${SCREENING_STABILITY_POLLS}`,
+        );
+        if (stableChecks >= SCREENING_STABILITY_POLLS) {
+          logger.info("CHATGPT_RUN_SCREENING_RESPONSE_STABLE=true");
+          console.log("CHATGPT_RUN_SCREENING_RESPONSE_STABLE=true");
+          logger.info("CHATGPT_RUN_SCREENING_RESPONSE_COMPLETE=true");
+          console.log("CHATGPT_RUN_SCREENING_RESPONSE_COMPLETE=true");
+          logger.info("CHATGPT_RESPONSE_COMPLETE=true");
+          console.log("CHATGPT_RESPONSE_COMPLETE=true");
+          logger.info("CHATGPT_RESPONSE_COMPLETE_REASON=SCREENING_XLSX");
+          console.log("CHATGPT_RESPONSE_COMPLETE_REASON=SCREENING_XLSX");
+          return {
+            status: "complete",
+            text: "",
+            reason: "SCREENING_XLSX",
+            outputFilename: workbook.filename,
+          };
+        }
+      } else {
+        stableChecks = 0;
+      }
+
+      await page.waitForTimeout(1000);
+      continue;
     }
 
     logger.info("CHATGPT_RESPONSE_INSPECT_START");
@@ -3510,6 +3714,8 @@ export async function waitForAssistantResponse(options: {
     if (snap.active && activity.changed && !responseActiveLogged) {
       logger.info("CHATGPT_RESPONSE_ACTIVE=true");
       console.log("CHATGPT_RESPONSE_ACTIVE=true");
+      logger.info("CHATGPT_RESPONSE_GENERATING");
+      console.log("CHATGPT_RESPONSE_GENERATING");
       responseActiveLogged = true;
     }
 
@@ -3680,7 +3886,7 @@ export async function waitForAssistantResponse(options: {
         jsonStableLogged = true;
       }
 
-      if (jsonTick.shouldComplete) {
+      if (jsonTick.shouldComplete && completionMode !== "generation_complete") {
         if (jsonTick.ignoreStaleStop) {
           logger.info("CHATGPT_STALE_GENERATION_INDICATOR_IGNORED=true");
           console.log("CHATGPT_STALE_GENERATION_INDICATOR_IGNORED=true");
@@ -3742,6 +3948,28 @@ export async function waitForAssistantResponse(options: {
   }
 
   try {
+    if (isRunScreening) {
+      const workbook = await findGeneratedScreeningWorkbook(page, {
+        correlationId: expectedT247Id,
+        inputFileName: options.inputWorkbookFileName,
+        assistantCountBefore,
+      });
+      if (workbook) {
+        logger.info("CHATGPT_GENERATED_XLSX_FOUND=true");
+        logger.info(`CHATGPT_GENERATED_XLSX_FILENAME=${workbook.filename}`);
+        logger.info("CHATGPT_RUN_SCREENING_RESPONSE_COMPLETE=true");
+        return {
+          status: "complete",
+          text: "",
+          reason: "SCREENING_XLSX",
+          outputFilename: workbook.filename,
+        };
+      }
+      throw new AutomationError(
+        "SCREENING_OUTPUT_MISSING",
+        "SCREENING_OUTPUT_MISSING: response wait timed out without an assistant Excel workbook",
+      );
+    }
     const finalInsp = await inspectLatestAssistantBounded(
       page,
       assistantCountBefore,
@@ -3751,7 +3979,7 @@ export async function waitForAssistantResponse(options: {
       finalInsp.latestText,
       expectedT247Id,
     );
-    if (lastChance.ok) {
+    if (lastChance.ok && completionMode !== "generation_complete") {
       logger.info("CHATGPT_VALID_JSON_DETECTED=true");
       logger.info("CHATGPT_RESPONSE_COMPLETE=true");
       console.log("CHATGPT_RESPONSE_COMPLETE=true");
@@ -3770,7 +3998,10 @@ export async function waitForAssistantResponse(options: {
       text: finalInsp.latestText,
       uiState: "timeout",
     };
-  } catch {
+  } catch (error) {
+    if (error instanceof AutomationError && error.code === "SCREENING_OUTPUT_MISSING") {
+      throw error;
+    }
     logger.warn("CHATGPT_RESPONSE_TIMEOUT_PENDING");
     return { status: "pending_timeout", text: "", uiState: "timeout" };
   }

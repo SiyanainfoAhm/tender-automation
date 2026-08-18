@@ -21,6 +21,7 @@ import {
 } from "@/server/storage/tenderAutomationDocumentFunctions";
 import {
   ALLOWED_DOCUMENT_EXTENSIONS,
+  CERTIFICATE_TYPES,
   MAX_DOCUMENT_UPLOAD_BYTES,
   MAX_DOCUMENT_UPLOAD_SIZE_MB,
 } from "@/lib/company/types";
@@ -193,6 +194,11 @@ export async function uploadCompanyDocumentAction(
       const issueDate = String(formData.get("issueDate") || "").trim();
       const expiryDate = String(formData.get("expiryDate") || "").trim();
       if (!certificateType) return { error: "Certificate type is required" };
+      if (
+        !(CERTIFICATE_TYPES as readonly string[]).includes(certificateType)
+      ) {
+        return { error: "Select a valid certificate type" };
+      }
       if (!issuingAuthority) return { error: "Issuing authority is required" };
       if (!issueDate) return { error: "Issue date is required" };
       if (!expiryDate) return { error: "Expiry date is required" };

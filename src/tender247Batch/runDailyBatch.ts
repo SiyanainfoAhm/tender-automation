@@ -1,12 +1,9 @@
 /**
- * Tender247 daily batch — Excel-first early financial gate, then live list:
- * Download today's Excel → DROP over-limit rows (no detail/docs/Supabase) →
- * process only KEEP survivors from Fresh cards (detail tab → docs → ZIP).
+ * Tender247 daily batch — download Excel, deterministic dedupe, ChatGPT
+ * Phase-1 screening, then detail-crawl only VERIFY / May Bid / Will Bid.
  *
  * security_code is captured from real detail navigation/network only —
  * never invented.
- *
- * BidAssist is not part of this batch.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -47,22 +44,28 @@ import {
   upsertTenderEntry,
 } from "./batchManifest.js";
 import { downloadTender247DailyExcel } from "../sources/tender247.js";
-import { loadPrescreenConfig } from "../prescreen/prescreenConfig.js";
-import {
-  applyExcelEarlyFinancialFilter,
-  printExcelEarlyFilterSummary,
-} from "./excelEarlyFinancialFilter.js";
-import { writeExcelFilterAudit } from "./excelFilterAudit.js";
 import { parseTender247DailyExcelRows } from "./parseDailyExcelRows.js";
 import {
-  applyTender247ExcelPrescreen,
-  printTender247PrescreenCounts,
-  writeTender247PrescreenArtifacts,
-} from "./tender247ExcelPrescreen.js";
+  resolveExcelEmd,
+  resolveExcelTenderValue,
+} from "./excelEarlyFinancialFilter.js";
 import { createDailyMasterZip, cleanOrphanUuidFilesInDayFolder, cleanPlaywrightDownloadTemp, playwrightDownloadsDir } from "./createTenderZip.js";
 import { readFreshExpectedCount } from "./liveListCards.js";
 import { processSurvivorsInParallel } from "./processSurvivorsInParallel.js";
 import { inspectTenderResumeState } from "./resumeArtifacts.js";
+import {
+  discoverCompleteTenderIds,
+  discoverIncompleteTenders,
+  inspectTenderArtifactState,
+  listT247TenderDirs,
+  pendingTimeoutMessage,
+  pendingTimeoutReasonFromState,
+} from "./tenderArtifactState.js";
+import {
+  emptyRecoveryReport,
+  recordRecoveryItem,
+  writeTender247RecoveryReport,
+} from "./tender247RecoveryReport.js";
 import { loadTender247ConcurrencyConfig } from "./tender247ConcurrencyConfig.js";
 import {
   printTender247ScreeningSummary,
@@ -70,6 +73,11 @@ import {
   type ItRelevanceAuditRecord,
 } from "./itRelevanceAudit.js";
 import type { Tender247ItRelevance } from "../prescreen/tender247ItRelevanceClassifier.js";
+import {
+  assertAiScreeningCompleteForDetailCrawl,
+  runPhase1ExcelScreening,
+} from "../runScreening/runPhase1ExcelScreening.js";
+import { saveRunState } from "../runScreening/screeningManifest.js";
 
 // HARD GUARD: runDailyBatch must NEVER import or call ensureTodayTendersSelected.
 // Calling it stalls on dashboard card diagnostics. Throw BUG_BATCH_CALLED_ENSURE_TODAY
@@ -249,51 +257,22 @@ async function runDailyBatchBody(options: {
       dateIso,
     );
     logger.info(`TENDER247_DAILY_EXCEL_DOWNLOADED=${excelPath}`);
+    logger.info("TENDER247_LOCAL_COMPANY_FILTER_BYPASSED=true");
 
     const parsedExcel = parseTender247DailyExcelRows(excelPath, logger);
-    const prescreenCfg = loadPrescreenConfig();
-    const excelFilter = applyExcelEarlyFinancialFilter(parsedExcel.rows, {
-      tenderValueMaxInr: prescreenCfg.tenderValueMaxInr,
-      tender247EmdMaxInr: prescreenCfg.tender247EmdMaxInr,
-    });
-    const excelPrescreen = applyTender247ExcelPrescreen(parsedExcel.rows, {
-      businessDateIso: dateIso,
-      tenderValueMaxInr: prescreenCfg.tenderValueMaxInr,
-      tender247EmdMaxInr: prescreenCfg.tender247EmdMaxInr,
-    });
-    printTender247PrescreenCounts(excelPrescreen);
-    const prescreenArtifacts = writeTender247PrescreenArtifacts(
+    const phase1 = await runPhase1ExcelScreening({
       dateFolder,
-      excelPrescreen,
-    );
-    logger.info(
-      `TENDER247_PRESCREEN_ARTIFACTS=${prescreenArtifacts.prescreenJson}`,
-    );
+      dateIso,
+      config,
+      logger,
+      tender247ExcelPath: excelPath,
+      skipChatGpt: dryRunDate,
+    });
 
-    for (const decision of excelFilter.decisions) {
-      logger.info(`TENDER247_EXCEL_FILTER=${decision.sourceTenderId}`);
-      logger.info(`EXCEL_FILTER_STATUS=${decision.status}`);
-      if (decision.status === "DROP") {
-        logger.info(`EXCEL_FILTER_REASON=${decision.reasonCode}`);
-      } else {
-        if (decision.excelTenderValueUnavailable) {
-          logger.info("EXCEL_TENDER_VALUE_UNAVAILABLE=true");
-        }
-        if (decision.excelEmdUnavailable) {
-          logger.info("EXCEL_EMD_UNAVAILABLE=true");
-        }
-        if (decision.reasonCode !== "WITHIN_FINANCIAL_LIMITS") {
-          logger.info(`EXCEL_FILTER_REASON=${decision.reasonCode}`);
-        }
-      }
-    }
-
-    const auditPath = writeExcelFilterAudit(dateFolder, excelFilter);
-    logger.info(`TENDER247_EXCEL_FILTER_AUDIT=${auditPath}`);
-    printExcelEarlyFilterSummary(excelFilter);
-
-    // Detail crawl only for full pre-screen survivors (financial + scope + deadline).
-    const survivingIds = new Set(excelPrescreen.survivingTenderIds);
+    // Detail crawl only for Phase-1 shortlist (VERIFY / CONDITIONAL_GO / GO / PARTNER_BID)
+    // plus any incomplete T247-* folders discovered from disk.
+    const survivingIds = new Set(phase1.tender247DetailIds);
+    const incompleteAtStart = discoverIncompleteTenders(dateFolder);
 
     if (dryRunDate) {
       console.log("TENDER247_DRY_RUN_DATE_COMPLETE=true");
@@ -309,19 +288,27 @@ async function runDailyBatchBody(options: {
       return;
     }
 
-    if (survivingIds.size === 0) {
-      logger.warn(
-        "TENDER247_EXCEL_FILTER_NO_SURVIVORS — skipping detail crawler",
+    if (!dryRunDate && !phase1.aiScreeningComplete) {
+      throw new AutomationError(
+        "T247_DETAIL_CRAWL_BLOCKED",
+        phase1.error || "run-level AI screening not complete",
       );
-      printExcelEarlyFilterSummary(excelFilter);
+    }
+    if (!dryRunDate) {
+      assertAiScreeningCompleteForDetailCrawl(dateFolder);
+    }
+
+    if (survivingIds.size === 0 && incompleteAtStart.length === 0) {
+      logger.warn(
+        "TENDER247_PHASE1_NO_DETAIL_CANDIDATES — skipping detail crawler",
+      );
       writeItRelevanceAuditOutputs({ dateFolder, records: [] });
       printTender247ScreeningSummary({
-        excelRows: excelPrescreen.dailyRowsDeduped,
-        droppedFinancialGate:
-          excelPrescreen.filterDropEmd + excelPrescreen.filterDropValue,
-        financialSurvivors: excelPrescreen.filterPassed,
+        excelRows: phase1.inputRows,
+        droppedFinancialGate: phase1.counts.NO_GO,
+        financialSurvivors: phase1.tender247DetailIds.length,
         itRelevant: 0,
-        nonItDropped: excelPrescreen.filterDropNonIt,
+        nonItDropped: phase1.counts.NO_GO,
         ambiguousManualReview: 0,
         documentDownloads: 0,
         supabaseStored: 0,
@@ -332,8 +319,9 @@ async function runDailyBatchBody(options: {
       console.log("");
       console.log("==================================");
       console.log("Tender247 Daily Batch Complete");
-      console.log(`Excel rows: ${excelPrescreen.dailyRowsDeduped}`);
-      console.log("Detail crawled: 0 (no Excel survivors)");
+      console.log(`Excel rows: ${phase1.inputRows}`);
+      console.log(`Phase-1 NO_BID: ${phase1.counts.NO_GO}`);
+      console.log("Detail crawled: 0 (no Phase-1 shortlist)");
       console.log("==================================");
       await persistAuthState(context, config, logger);
       return;
@@ -346,7 +334,7 @@ async function runDailyBatchBody(options: {
     );
     logger.info(`EXPECTED_TODAY_COUNT=${expectedCount}`);
     logger.info(
-      `TENDER247_EXCEL_SURVIVORS=${survivingIds.size} detail crawls required`,
+      `TENDER247_EXCEL_SURVIVORS=${survivingIds.size} detail crawls required (Phase-1 shortlist)`,
     );
 
     let manifest =
@@ -361,49 +349,40 @@ async function runDailyBatchBody(options: {
     const createdZips: string[] = [];
     const itRelevanceAuditRecords: ItRelevanceAuditRecord[] = [];
     const excelDecisionById = new Map(
-      excelFilter.decisions.map((d) => [d.sourceTenderId, d]),
+      parsedExcel.rows.map((row) => {
+        const value = resolveExcelTenderValue(row.rawTenderValue);
+        const emd = resolveExcelEmd(row.rawEmd);
+        return [
+          row.sourceTenderId,
+          {
+            parsedTenderValueInr: value.amountInr,
+            parsedEmdInr: emd.amountInr,
+            title: row.title,
+          },
+        ] as const;
+      }),
     );
     let itRelevantCount = 0;
     let nonItDroppedCount = 0;
     let ambiguousCount = 0;
     let documentDownloadCount = 0;
 
-    // Seed from completed tenders that already have a valid canonical documents ZIP.
-    // An outer T247-<id>.zip without documents/Tender_All_Documents.zip is NOT complete.
-    for (const name of fs.readdirSync(dateFolder)) {
-      const match = name.match(/^T247-(\d+)\.zip$/i);
-      if (!match) {
-        continue;
-      }
-      const zipPath = path.join(dateFolder, name);
-      if (!fs.existsSync(zipPath) || fs.statSync(zipPath).size <= 0) {
-        continue;
-      }
-      const id = match[1]!;
-      const resume = inspectTenderResumeState(dateFolder, id);
-      if (!resume.allDocumentsValid) {
-        logger.info(
-          `T247_RESUME_INCOMPLETE_DOCUMENTS=T247-${id} (outer zip present; canonical documents zip missing)`,
-        );
-        continue;
-      }
+    // Filesystem artifacts are authoritative. Manifest "completed" / outer T247-<id>.zip
+    // cannot hide a folder missing metadata, AI_Summary.pdf, or Tender_All_Documents.zip.
+    const completeAtStart = discoverCompleteTenderIds(dateFolder);
+    for (const id of completeAtStart) {
       processedIds.add(id);
-      createdZips.push(zipPath);
-      if (!manifest.tenders[id] || manifest.tenders[id]!.status !== "completed") {
-        upsertTenderEntry(manifest, id, {
-          status: "completed",
-          zipPath,
-          zipSize: fs.statSync(zipPath).size,
-          documentsDownloaded: manifest.tenders[id]?.documentsDownloaded ?? 0,
-          corrigendaDownloaded: manifest.tenders[id]?.corrigendaDownloaded ?? 0,
-          aiSummaryDownloaded: manifest.tenders[id]?.aiSummaryDownloaded,
-          allDocumentsDownloaded: manifest.tenders[id]?.allDocumentsDownloaded,
-          securityCodeCaptured: manifest.tenders[id]?.securityCodeCaptured,
-          error: null,
-          updatedAt: new Date().toISOString(),
-        });
+      const zipPath = path.join(dateFolder, `T247-${id}.zip`);
+      if (fs.existsSync(zipPath) && fs.statSync(zipPath).size > 0) {
+        createdZips.push(zipPath);
       }
       logger.info(`TENDER247_ALREADY_COMPLETED_SKIP=T247-${id}`);
+    }
+    for (const id of incompleteAtStart) {
+      const resume = inspectTenderResumeState(dateFolder, id);
+      logger.info(
+        `T247_RESUME_INCOMPLETE=T247-${id} metadata=${resume.metadataValid} aiSummary=${resume.aiSummaryValid} documents=${resume.allDocumentsValid} outerZip=${resume.finalZipValid} manifest=${manifest.tenders[id]?.status ?? "none"}`,
+      );
     }
     saveManifest(manifestPath, manifest);
 
@@ -412,12 +391,22 @@ async function runDailyBatchBody(options: {
     let batchIncomplete = false;
     const concurrencyCfg = loadTender247ConcurrencyConfig();
 
-    // Sequential detail/download for Excel survivors (one tender at a time).
-    let survivorQueue = [...survivingIds].filter((id) => !processedIds.has(id));
+    // Sequential detail/download: Excel survivors plus incomplete T247-* folders.
+    const recoveryFirst = incompleteAtStart.filter((id) => !processedIds.has(id));
+    const survivorRest = [...survivingIds].filter(
+      (id) => !processedIds.has(id) && !recoveryFirst.includes(id),
+    );
+    let survivorQueue = [...new Set([...recoveryFirst, ...survivorRest])];
     if (maxTenders < Infinity) {
       survivorQueue = survivorQueue.slice(0, Math.max(0, maxTenders - processedIds.size));
     }
 
+    saveRunState(dateFolder, {
+      stage: "DETAIL_CRAWL_STARTED",
+      aiScreeningComplete: true,
+      shortlistReady: true,
+      updatedAt: new Date().toISOString(),
+    });
     logger.info("T247_PHASE=ARTIFACT_ACQUISITION");
     logger.info(
       `TENDER247_DETAIL_CONCURRENCY=${concurrencyCfg.detailConcurrency}`,
@@ -432,7 +421,7 @@ async function runDailyBatchBody(options: {
       `TENDER247_DETAIL_CONCURRENCY=${concurrencyCfg.detailConcurrency}`,
     );
     console.log(
-      `PIPELINE_FINANCIAL_SURVIVORS=${survivingIds.size}`,
+      `PIPELINE_PHASE1_SHORTLIST=${survivingIds.size}`,
     );
     console.log(`PIPELINE_DETAIL_QUEUE=${survivorQueue.length}`);
 
@@ -445,6 +434,7 @@ async function runDailyBatchBody(options: {
       logger,
       alreadyCompleted: processedIds,
       concurrency: concurrencyCfg.detailConcurrency,
+      phase1ScreeningAuthoritative: true,
       excelValueById: new Map(
         [...excelDecisionById.entries()].map(([id, d]) => [
           id,
@@ -521,6 +511,9 @@ async function runDailyBatchBody(options: {
         allDocumentsPath: result.allDocumentsPath,
         lastCompletedStep: result.lastCompletedStep,
         error: result.error,
+        pendingReason: result.pendingReason ?? null,
+        artifactComplete: result.artifactComplete === true,
+        chatgptSkipped: result.chatgptSkipped === true,
         failedDocuments: result.failedDocuments,
         updatedAt: new Date().toISOString(),
       });
@@ -530,6 +523,42 @@ async function runDailyBatchBody(options: {
       }
     }
     saveManifest(manifestPath, manifest);
+
+    const recoveryReport = emptyRecoveryReport();
+    const processedById = new Map(parallel.results.map((r) => [r.t247Id, r]));
+    for (const { t247Id, tenderDir } of listT247TenderDirs(dateFolder)) {
+      const state = inspectTenderArtifactState(tenderDir, t247Id);
+      const startedIncomplete = incompleteAtStart.includes(t247Id);
+      const processed = processedById.get(t247Id);
+      if (state.complete) {
+        recordRecoveryItem(
+          recoveryReport,
+          t247Id,
+          state,
+          startedIncomplete ? "recovered" : "complete",
+        );
+      } else {
+        const reason =
+          processed?.pendingReason ||
+          pendingTimeoutMessage(pendingTimeoutReasonFromState(state));
+        recordRecoveryItem(
+          recoveryReport,
+          t247Id,
+          state,
+          "pending_timeout",
+          reason,
+        );
+      }
+    }
+    const recoveryReportPath = writeTender247RecoveryReport(
+      dateFolder,
+      recoveryReport,
+    );
+    logger.info(`TENDER247_RECOVERY_REPORT=${recoveryReportPath}`);
+    logger.info(
+      `TENDER247_RECOVERY_SUMMARY complete=${recoveryReport.complete} recovered=${recoveryReport.recovered} pendingTimeout=${recoveryReport.pendingTimeout}`,
+    );
+
     cleanPlaywrightDownloadTemp(dateFolder, logger);
     cleanOrphanUuidFilesInDayFolder(dateFolder, logger);
 
@@ -569,6 +598,12 @@ async function runDailyBatchBody(options: {
     logger.info(`TENDER247_IT_RELEVANCE_AUDIT=${itAudit.jsonPath}`);
 
     await persistAuthState(context, config, logger);
+    saveRunState(dateFolder, {
+      stage: "DETAIL_CRAWL_COMPLETE",
+      aiScreeningComplete: true,
+      shortlistReady: true,
+      updatedAt: new Date().toISOString(),
+    });
 
     const finalManifest = loadManifest(manifestPath) ?? manifest;
     finalManifest.discoveredCount = Math.max(
@@ -585,11 +620,9 @@ async function runDailyBatchBody(options: {
     console.log("");
     console.log("==================================");
     console.log("Tender247 Daily Batch Complete");
-    console.log(`Excel rows: ${excelFilter.excelRows}`);
-    console.log(
-      `Excel early filtered (DROP): ${excelFilter.droppedByTenderValue + excelFilter.droppedByEmd}`,
-    );
-    console.log(`Excel survivors (KEEP): ${excelFilter.detailCrawlsRequired}`);
+    console.log(`Excel rows: ${phase1.inputRows}`);
+    console.log(`Phase-1 NO_BID: ${phase1.counts.NO_GO}`);
+    console.log(`Phase-1 shortlist: ${phase1.tender247DetailIds.length}`);
     console.log(`Expected Fresh count: ${finalManifest.expectedCount}`);
     console.log(`Detail crawled / processed: ${attemptedIds.size}`);
     console.log(`IT relevant: ${itRelevantCount || itAudit.summary.itRelevant}`);
@@ -603,10 +636,9 @@ async function runDailyBatchBody(options: {
     console.log(`ZIP files created: ${zipPathCount(createdZips)}`);
     console.log("==================================");
     printTender247ScreeningSummary({
-      excelRows: excelFilter.excelRows,
-      droppedFinancialGate:
-        excelFilter.droppedByTenderValue + excelFilter.droppedByEmd,
-      financialSurvivors: excelFilter.detailCrawlsRequired,
+      excelRows: phase1.inputRows,
+      droppedFinancialGate: phase1.counts.NO_GO,
+      financialSurvivors: phase1.tender247DetailIds.length,
       itRelevant: itAudit.summary.itRelevant,
       nonItDropped: itAudit.summary.nonItDropped,
       ambiguousManualReview: itAudit.summary.ambiguousManualReview,
@@ -615,10 +647,6 @@ async function runDailyBatchBody(options: {
       detailedPrescreenPassed: finalManifest.successCount,
       detailedPrescreenRejected: 0,
       chatgptSubmitted: 0,
-    });
-    printExcelEarlyFilterSummary(excelFilter, {
-      supabaseCandidates: processedIds.size,
-      chatgptEligible: undefined,
     });
     if (batchIncomplete) {
       console.log("");
@@ -631,9 +659,7 @@ async function runDailyBatchBody(options: {
     }
 
     logger.info(
-      `BATCH_SUMMARY excelRows=${excelFilter.excelRows} excelDropped=${
-        excelFilter.droppedByTenderValue + excelFilter.droppedByEmd
-      } excelKept=${excelFilter.detailCrawlsRequired} itRelevant=${itAudit.summary.itRelevant} nonIt=${itAudit.summary.nonItDropped} ambiguous=${itAudit.summary.ambiguousManualReview} expectedFresh=${finalManifest.expectedCount} processed=${processedIds.size} failedIds=${failedIds.size} completed=${finalManifest.successCount} partial=${finalManifest.partialCount} failed=${finalManifest.failedCount} zipCount=${zipCount} incomplete=${batchIncomplete}`,
+      `BATCH_SUMMARY excelRows=${phase1.inputRows} phase1NoBid=${phase1.counts.NO_GO} phase1Shortlist=${phase1.tender247DetailIds.length} itRelevant=${itAudit.summary.itRelevant} nonIt=${itAudit.summary.nonItDropped} ambiguous=${itAudit.summary.ambiguousManualReview} expectedFresh=${finalManifest.expectedCount} processed=${processedIds.size} failedIds=${failedIds.size} completed=${finalManifest.successCount} partial=${finalManifest.partialCount} failed=${finalManifest.failedCount} zipCount=${zipCount} incomplete=${batchIncomplete}`,
     );
 
     if (

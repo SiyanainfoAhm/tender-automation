@@ -103,8 +103,6 @@ export const CERTIFICATE_TYPES = [
   "CMMI",
   "MSME / Udyam",
   "DPIIT / Startup India",
-  "GST",
-  "PAN",
   "Other",
 ] as const;
 
@@ -123,9 +121,15 @@ export {
   MAX_DOCUMENT_UPLOAD_SIZE_MB,
   MAX_SINGLE_SHOT_UPLOAD_BYTES,
 } from "@/lib/uploads/config";
-export const MAX_TEMPLATE_ASSET_BYTES = 5 * 1024 * 1024;
-export const TEMPLATE_ASSET_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp"] as const;
+export const TEMPLATE_ASSET_EXTENSIONS = [
+  ".pdf",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".webp",
+] as const;
 export const TEMPLATE_ASSET_MIME_TYPES = [
+  "application/pdf",
   "image/png",
   "image/jpeg",
   "image/jpg",

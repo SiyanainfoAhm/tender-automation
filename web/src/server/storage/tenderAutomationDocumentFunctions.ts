@@ -17,8 +17,8 @@ type EdgeJson = {
   receivedIndexes?: number[];
   uploadedBytes?: number;
   templateId?: string;
-  companyLogoUrl?: string | null;
   companySignatoryUrl?: string | null;
+  companySignStampUrl?: string | null;
   experienceId?: string;
   workOrderUrl?: string | null;
   completionCertificateUrl?: string | null;
@@ -179,16 +179,18 @@ export async function invokeDocumentRead(
 export async function invokeTemplateAssetsSave(options: {
   templateId: string;
   templateName: string;
-  companyLogo?: File | null;
-  companySignatory?: File | null;
+  companySignStamp?: File | null;
+  cleanupLegacyLogo?: boolean;
 }): Promise<EdgeJson> {
   const formData = new FormData();
   formData.set("action", "template-assets-save");
   formData.set("templateId", options.templateId);
   formData.set("templateName", options.templateName);
-  if (options.companyLogo) formData.set("companyLogo", options.companyLogo);
-  if (options.companySignatory) {
-    formData.set("companySignatory", options.companySignatory);
+  if (options.cleanupLegacyLogo) {
+    formData.set("cleanupLegacyLogo", "true");
+  }
+  if (options.companySignStamp) {
+    formData.set("companySignStamp", options.companySignStamp);
   }
   return invokeCompanyDocuments({ method: "POST", body: formData });
 }

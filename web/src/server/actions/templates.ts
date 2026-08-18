@@ -3,18 +3,15 @@
 import { revalidatePath } from "next/cache";
 
 import { CompanyAccessError, requireCompanySession } from "@/server/auth/company-access";
-import {
-  canManageBidProfileTemplates,
-  MAX_TEMPLATE_ASSET_BYTES,
-  TEMPLATE_ASSET_EXTENSIONS,
-  TEMPLATE_ASSET_MIME_TYPES,
-} from "@/lib/company/types";
+import { canManageBidProfileTemplates } from "@/lib/company/types";
 import { bidProfileTemplateSchema } from "@/lib/templates/schema";
+import { templateAssetValidationError } from "@/lib/templates/templateAsset";
 import type { BidPreparationTender } from "@/lib/templates/types";
 import {
   archiveBidProfileTemplate,
   createBidProfileTemplate,
   duplicateBidProfileTemplate,
+  getBidProfileTemplate,
   setDefaultBidProfileTemplate,
   updateBidProfileTemplate,
 } from "@/server/repositories/bidProfileTemplateRepository";
@@ -41,33 +38,13 @@ function getOptionalFile(formData: FormData, name: string): File | null {
   return null;
 }
 
-function validateTemplateAssetFile(file: File, label: string): string | null {
-  if (file.size > MAX_TEMPLATE_ASSET_BYTES) {
-    return `${label} exceeds the 5 MB limit.`;
-  }
-  const lower = file.name.toLowerCase();
-  if (!TEMPLATE_ASSET_EXTENSIONS.some((ext) => lower.endsWith(ext))) {
-    return `${label} type not allowed. Use PNG, JPG, JPEG, or WEBP.`;
-  }
-  const mime = (file.type || "").toLowerCase();
-  if (
-    mime &&
-    !TEMPLATE_ASSET_MIME_TYPES.includes(
-      mime as (typeof TEMPLATE_ASSET_MIME_TYPES)[number],
-    )
-  ) {
-    return `${label} type not allowed. Use PNG, JPG, JPEG, or WEBP.`;
-  }
-  return null;
-}
-
 async function saveTemplateAssets(options: {
   templateId: string;
   templateName: string;
-  companyLogo: File | null;
-  companySignatory: File | null;
+  companySignStamp: File | null;
+  cleanupLegacyLogo?: boolean;
 }): Promise<string | null> {
-  if (!options.companyLogo && !options.companySignatory) return null;
+  if (!options.companySignStamp && !options.cleanupLegacyLogo) return null;
   const result = await invokeTemplateAssetsSave(options);
   if (!result.success) {
     return result.error || "Unable to upload template files. Please try again.";
@@ -103,8 +80,6 @@ function parseTemplateForm(formData: FormData) {
     departmentName: String(formData.get("departmentName") || ""),
     departmentAddress: String(formData.get("departmentAddress") || ""),
     companyAddress: String(formData.get("companyAddress") || ""),
-    companyLogoUrl: String(formData.get("companyLogoUrl") || ""),
-    companySignatoryUrl: String(formData.get("companySignatoryUrl") || ""),
   });
 }
 
@@ -156,23 +131,19 @@ export async function createBidProfileTemplateAction(
       return { error: parsed.error.issues[0]?.message || "Invalid template" };
     }
 
-    const companyLogo = getOptionalFile(formData, "companyLogo");
-    const companySignatory = getOptionalFile(formData, "companySignatory");
-    const logoError = companyLogo
-      ? validateTemplateAssetFile(companyLogo, "Company Logo")
+    const companySignStamp =
+      getOptionalFile(formData, "companySignStamp") ||
+      getOptionalFile(formData, "companySignatory");
+    const stampError = companySignStamp
+      ? templateAssetValidationError(companySignStamp)
       : null;
-    const signatoryError = companySignatory
-      ? validateTemplateAssetFile(companySignatory, "Company Signatory")
-      : null;
-    if (logoError) return { error: logoError };
-    if (signatoryError) return { error: signatoryError };
+    if (stampError) return { error: stampError };
 
     const created = await createBidProfileTemplate({
       companyId: session.companyId,
       createdBy: session.user.id,
       input: {
         ...parsed.data,
-        companyLogoUrl: null,
         companySignatoryUrl: null,
       },
     });
@@ -180,8 +151,7 @@ export async function createBidProfileTemplateAction(
     const assetError = await saveTemplateAssets({
       templateId: created.id,
       templateName: created.templateName,
-      companyLogo,
-      companySignatory,
+      companySignStamp,
     });
     if (assetError) {
       const cleanup = await invokeTemplateAssetsDelete(created.id);
@@ -219,31 +189,37 @@ export async function updateBidProfileTemplateAction(
       return { error: parsed.error.issues[0]?.message || "Invalid template" };
     }
 
-    const companyLogo = getOptionalFile(formData, "companyLogo");
-    const companySignatory = getOptionalFile(formData, "companySignatory");
-    const logoError = companyLogo
-      ? validateTemplateAssetFile(companyLogo, "Company Logo")
+    const companySignStamp =
+      getOptionalFile(formData, "companySignStamp") ||
+      getOptionalFile(formData, "companySignatory");
+    const stampError = companySignStamp
+      ? templateAssetValidationError(companySignStamp)
       : null;
-    const signatoryError = companySignatory
-      ? validateTemplateAssetFile(companySignatory, "Company Signatory")
-      : null;
-    if (logoError) return { error: logoError };
-    if (signatoryError) return { error: signatoryError };
+    if (stampError) return { error: stampError };
 
-    const { companyLogoUrl: _logoUrl, companySignatoryUrl: _signatoryUrl, ...rest } =
-      parsed.data;
+    const existing = await getBidProfileTemplate({
+      companyId: session.companyId,
+      id,
+    });
+    if (!existing || existing.status !== "active") {
+      return { error: "Template not found." };
+    }
+
     await updateBidProfileTemplate({
       companyId: session.companyId,
       id,
       updatedBy: session.user.id,
-      input: rest,
+      input: parsed.data,
     });
 
+    const cleanupLegacyLogo = Boolean(
+      existing.companyLogoUrl || existing.companyLogoBlobName,
+    );
     const assetError = await saveTemplateAssets({
       templateId: id,
-      templateName: rest.templateName,
-      companyLogo,
-      companySignatory,
+      templateName: parsed.data.templateName,
+      companySignStamp,
+      cleanupLegacyLogo,
     });
     if (assetError) return { error: assetError };
 

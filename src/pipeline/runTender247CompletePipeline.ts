@@ -56,6 +56,11 @@ import {
 } from "../prescreen/prescreenRepository.js";
 import { readExcelFilterAudit } from "../tender247Batch/excelFilterAudit.js";
 import {
+  loadIngestionCounts,
+  loadRunState,
+  loadScreeningManifest,
+} from "../runScreening/screeningManifest.js";
+import {
   acquirePipelineLock,
   releasePipelineLock,
 } from "../runDailyTenderPipeline.js";
@@ -95,8 +100,9 @@ export type Tender247CompleteRunSummary = {
   requestedDate: string;
   dailyRowsRaw: number;
   dailyRowsDeduped: number;
-  filteredOut: number;
-  filterPassed: number;
+  filteredOut: number | "UNKNOWN";
+  filterPassed: number | "UNKNOWN";
+  aiScreeningStatus?: "COMPLETE" | "FAILED" | "PENDING" | "SKIPPED";
   detailCrawlAttempted: number;
   detailCrawlSuccess: number;
   detailCrawlFailed: number;
@@ -256,9 +262,50 @@ function countQualificationStatuses(
 function readPrescreenCounts(dateFolder: string): {
   dailyRowsRaw: number;
   dailyRowsDeduped: number;
-  filteredOut: number;
-  filterPassed: number;
+  filteredOut: number | "UNKNOWN";
+  filterPassed: number | "UNKNOWN";
+  aiScreeningStatus?: "COMPLETE" | "FAILED" | "PENDING" | "SKIPPED";
 } {
+  const ingested = loadIngestionCounts(dateFolder);
+  const runState = loadRunState(dateFolder);
+  const screeningFailed =
+    runState?.stage === "AI_SCREENING_FAILED" ||
+    Boolean(runState?.error && !runState.aiScreeningComplete);
+  const screeningComplete = Boolean(runState?.aiScreeningComplete);
+  const aiScreeningStatus: "COMPLETE" | "FAILED" | "PENDING" | "SKIPPED" | undefined =
+    screeningComplete
+      ? "COMPLETE"
+      : screeningFailed
+        ? "FAILED"
+        : runState
+          ? "PENDING"
+          : undefined;
+
+  if (ingested) {
+    const manifest = loadScreeningManifest(dateFolder);
+    if (screeningComplete && manifest) {
+      const filteredOut = manifest.counts.NO_GO;
+      const filterPassed =
+        manifest.counts.VERIFY +
+        manifest.counts.CONDITIONAL_GO +
+        manifest.counts.GO +
+        manifest.counts.PARTNER_BID;
+      return {
+        dailyRowsRaw: ingested.dailyRowsRaw,
+        dailyRowsDeduped: ingested.dailyRowsDeduped,
+        filteredOut,
+        filterPassed,
+        aiScreeningStatus: "COMPLETE",
+      };
+    }
+    return {
+      dailyRowsRaw: ingested.dailyRowsRaw,
+      dailyRowsDeduped: ingested.dailyRowsDeduped,
+      filteredOut: "UNKNOWN",
+      filterPassed: "UNKNOWN",
+      aiScreeningStatus: aiScreeningStatus ?? "FAILED",
+    };
+  }
   const prescreenPath = path.join(dateFolder, "tender247-prescreen.json");
   if (fs.existsSync(prescreenPath)) {
     try {
@@ -315,6 +362,9 @@ export function printTender247CompleteRunSummary(
   console.log(`SOURCE=TENDER247`);
   console.log(`DAILY_ROWS_RAW=${summary.dailyRowsRaw}`);
   console.log(`DAILY_ROWS_DEDUPED=${summary.dailyRowsDeduped}`);
+  if (summary.aiScreeningStatus) {
+    console.log(`AI_SCREENING_STATUS=${summary.aiScreeningStatus}`);
+  }
   console.log(`FILTERED_OUT=${summary.filteredOut}`);
   console.log(`FILTER_PASSED=${summary.filterPassed}`);
   console.log(`DETAIL_CRAWL_ATTEMPTED=${summary.detailCrawlAttempted}`);
@@ -828,6 +878,7 @@ function buildFailureSummary(options: {
     dailyRowsDeduped: pre.dailyRowsDeduped,
     filteredOut: pre.filteredOut,
     filterPassed: pre.filterPassed,
+    aiScreeningStatus: pre.aiScreeningStatus,
     detailCrawlAttempted: 0,
     detailCrawlSuccess: 0,
     detailCrawlFailed: 0,

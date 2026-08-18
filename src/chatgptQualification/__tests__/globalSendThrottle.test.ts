@@ -174,4 +174,72 @@ describe("CHATGPT_CONCURRENCY=2 global Send throttling", () => {
     });
     assert.equal(sentAt, 60_000);
   });
+
+  it("RUN_EXCEL_SCREENING skips the individual-tender min interval", async () => {
+    const clock = createFakeClock(0);
+    const logs: string[] = [];
+    const capturingLogger = {
+      info: (msg: string) => logs.push(msg),
+      warn: (msg: string) => logs.push(msg),
+      error: (msg: string) => logs.push(msg),
+      debug: () => undefined,
+    } as unknown as import("../../logger.js").Logger;
+      const scheduler = createChatGptSubmissionScheduler({
+        minIntervalMs: 300_000,
+        runScreeningMinIntervalMs: 0,
+        clock,
+        initialLastSubmissionAtMs: 0,
+      });
+      clock.advance(1_000);
+
+      await scheduler.acquireSendSlot({
+        workerId: 1,
+        submissionKind: "RUN_EXCEL_SCREENING",
+        logger: capturingLogger,
+      });
+      assert.equal(clock.now(), 1_000);
+      scheduler.markSubmissionSuccess({
+        sourcePortal: "TENDER247",
+        sourceTenderId: "RUN-2026-08-18",
+        force: true,
+      });
+      scheduler.releaseSendSlot();
+
+      assert.equal(
+        logs.some((line) => line.includes("CHATGPT_SUBMISSION_KIND=RUN_EXCEL_SCREENING")),
+        true,
+      );
+      assert.equal(
+        logs.some((line) => line.includes("CHATGPT_ARTIFICIAL_SEND_DELAY_MS=0")),
+        true,
+      );
+      assert.equal(
+        logs.some((line) => line.includes("CHATGPT_TENDER_MIN_SEND_INTERVAL_MS=300000")),
+        true,
+      );
+      assert.equal(
+        logs.some((line) => line.includes("CHATGPT_RUN_SCREENING_MIN_SEND_INTERVAL_MS=0")),
+        true,
+      );
+      assert.equal(
+        logs.some((line) => line.includes("CHATGPT_SCHEDULER_MIN_INTERVAL_WAIT_MS=")),
+        false,
+      );
+
+      let tenderAt = -1;
+      await scheduler.withGlobalSendSlot({
+        workerId: 2,
+        sourcePortal: "TENDER247",
+        sourceTenderId: "101279958",
+        submissionKind: "TENDER_QUALIFICATION",
+        send: async () => {
+          tenderAt = clock.now();
+          return { submitted: true, result: true };
+        },
+      });
+      assert.ok(
+        tenderAt >= 1_000 + 300_000,
+        `tender send should still wait; got ${tenderAt}`,
+      );
+  });
 });

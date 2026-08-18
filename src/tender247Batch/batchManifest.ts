@@ -51,6 +51,7 @@ function recalculateCounts(manifest: CrawlManifest): void {
     [
       "completed",
       "partial",
+      "pending",
       "failed",
       "dropped_non_it",
       "ambiguous_manual_review",

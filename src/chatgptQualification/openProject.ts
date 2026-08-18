@@ -5,7 +5,7 @@ import { AutomationError } from "../browserUtils.js";
 import type { AppConfig } from "../config.js";
 import { ensureDir, resolveProjectPath } from "../fileUtils.js";
 import type { Logger } from "../logger.js";
-import { isChatGptLoggedOut } from "./ensureChatGptLoggedIn.js";
+import { isChatGptLoggedOut } from "./chatgptAuthState.js";
 
 const PROJECT_CACHE_PATH = resolveProjectPath("auth", "chatgpt-project.json");
 
@@ -69,8 +69,8 @@ export async function openChatGptProject(options: {
 
   await logProjectHomeDiagnostics(page, projectName, logger);
   throw new AutomationError(
-    "CHATGPT_PROJECT_HOME_NOT_OPEN",
-    `Failed to open Project Home for "${projectName}" (url=${page.url()})`,
+    "CHATGPT_PROJECT_NAVIGATION_FAILED",
+    `CHATGPT_PROJECT_NAVIGATION_FAILED Failed to open Project Home for "${projectName}" (url=${page.url()})`,
   );
 }
 

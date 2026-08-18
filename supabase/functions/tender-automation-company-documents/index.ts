@@ -11,7 +11,6 @@ const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_COMPANY_DOCUMENT_BYTES = 100 * 1024 * 1024;
 const CHUNK_SIZE = 5 * 1024 * 1024;
 const UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
-const MAX_TEMPLATE_ASSET_BYTES = 5 * 1024 * 1024;
 const ALLOWED_EXT = [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".png", ".jpg", ".jpeg", ".zip"];
 const ALLOWED_MIME = [
   "application/pdf",
@@ -27,8 +26,21 @@ const ALLOWED_MIME = [
   "image/jpg",
   "application/octet-stream",
 ];
-const TEMPLATE_ASSET_EXT = [".png", ".jpg", ".jpeg", ".webp"];
-const TEMPLATE_ASSET_MIME = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
+const TEMPLATE_SIGN_STAMP_EXTENSIONS = [
+  ".pdf",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".webp",
+];
+const TEMPLATE_SIGN_STAMP_MIME = [
+  "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+];
+const GENERIC_TEMPLATE_ASSET_MIME = new Set(["", "application/octet-stream"]);
 const UPLOAD_ROLES = new Set([
   "ADMIN",
   "BID_MANAGER",
@@ -245,22 +257,34 @@ function blobNameFromUrl(azure: AzureConfig, storageUrl: string | null) {
   }
 }
 
+function templateAssetContentType(file: File, ext: string) {
+  const mime = (file.type || "").toLowerCase();
+  if (mime && mime !== "application/octet-stream") return file.type || mime;
+  if (ext === ".pdf") return "application/pdf";
+  if (ext === ".png") return "image/png";
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".webp") return "image/webp";
+  return file.type || "application/octet-stream";
+}
+
 async function uploadAzureBlob(
   azure: AzureConfig,
   blobName: string,
   file: File,
+  options?: { contentType?: string; contentDisposition?: "inline" | "attachment" },
 ): Promise<AzureUploadResult> {
   const encoded = encodeBlobPath(blobName);
   const storageUrl = `${azureBaseUrl(azure)}/${encoded}`;
   const azureRequestUrl = `${storageUrl}${normalizeSas(azure.sasToken)}`;
   const bytes = new Uint8Array(await file.arrayBuffer());
+  const safeName = file.name.replace(/"/g, "");
+  const disposition = options?.contentDisposition || "attachment";
   const put = await fetch(azureRequestUrl, {
     method: "PUT",
     headers: {
       "x-ms-blob-type": "BlockBlob",
-      "Content-Type": file.type || "application/octet-stream",
-      "x-ms-blob-content-disposition":
-        `attachment; filename="${file.name.replace(/"/g, "")}"`,
+      "Content-Type": options?.contentType || file.type || "application/octet-stream",
+      "x-ms-blob-content-disposition": `${disposition}; filename="${safeName}"`,
       "x-ms-version": "2020-10-02",
     },
     body: bytes,
@@ -440,6 +464,22 @@ async function deleteAzureBlob(azure: AzureConfig, blobName: string | null) {
   }
 }
 
+async function deleteAzureBlobBestEffort(
+  azure: AzureConfig,
+  blobName: string | null,
+  context: string,
+) {
+  try {
+    await deleteAzureBlob(azure, blobName);
+  } catch (error) {
+    console.error("[tender-automation-templates] blob cleanup failed", {
+      context,
+      blobName,
+      message: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}
+
 async function readAzureBlob(azure: AzureConfig, blobName: string) {
   const encoded = encodeBlobPath(blobName);
   const storageUrl = `${azureBaseUrl(azure)}/${encoded}`;
@@ -584,17 +624,25 @@ function validateTemplateAsset(file: File, label: string) {
   if (file.size <= 0) {
     throw new HttpError(400, `${label} file is empty.`);
   }
-  if (file.size > MAX_TEMPLATE_ASSET_BYTES) {
-    throw new HttpError(400, `${label} exceeds the 5 MB limit.`);
-  }
   const lowerName = file.name.toLowerCase();
-  const ext = TEMPLATE_ASSET_EXT.find((item) => lowerName.endsWith(item));
+  const ext = TEMPLATE_SIGN_STAMP_EXTENSIONS.find((item) =>
+    lowerName.endsWith(item),
+  );
   if (!ext) {
-    throw new HttpError(400, `${label} type not allowed. Use PNG, JPG, JPEG, or WEBP.`);
+    throw new HttpError(
+      400,
+      "Unsupported file type. Upload PDF, PNG, JPG, JPEG, or WEBP.",
+    );
   }
   const mime = (file.type || "").toLowerCase();
-  if (mime && !TEMPLATE_ASSET_MIME.includes(mime)) {
-    throw new HttpError(400, `${label} type not allowed. Use PNG, JPG, JPEG, or WEBP.`);
+  if (
+    !GENERIC_TEMPLATE_ASSET_MIME.has(mime) &&
+    !TEMPLATE_SIGN_STAMP_MIME.includes(mime)
+  ) {
+    throw new HttpError(
+      400,
+      "Unsupported file type. Upload PDF, PNG, JPG, JPEG, or WEBP.",
+    );
   }
   return ext;
 }
@@ -1266,12 +1314,14 @@ async function handleTemplateAssetsSave(req: Request, form: FormData) {
 
   const templateId = String(form.get("templateId") || "").trim();
   const templateName = String(form.get("templateName") || "").trim();
-  const logoFile = getFormFile(form, "companyLogo");
-  const signatoryFile = getFormFile(form, "companySignatory");
+  const stampFile =
+    getFormFile(form, "companySignStamp") ||
+    getFormFile(form, "companySignatory");
+  const cleanupLegacyLogo = String(form.get("cleanupLegacyLogo") || "").trim() === "true";
 
   if (!templateId) throw new HttpError(400, "templateId is required");
   if (!templateName) throw new HttpError(400, "templateName is required");
-  if (!logoFile && !signatoryFile) {
+  if (!stampFile && !cleanupLegacyLogo) {
     throw new HttpError(400, "No template assets were provided.");
   }
 
@@ -1301,8 +1351,8 @@ async function handleTemplateAssetsSave(req: Request, form: FormData) {
     blobNameFromUrl(azure, template.company_signatory_url as string | null);
 
   const templatePrefix =
-    templatePrefixFromBlobName(previousLogoBlob) ||
     templatePrefixFromBlobName(previousSignatoryBlob) ||
+    templatePrefixFromBlobName(previousLogoBlob) ||
     buildTemplateAssetPrefix(
       user.companyName,
       user.companyId,
@@ -1315,33 +1365,25 @@ async function handleTemplateAssetsSave(req: Request, form: FormData) {
     templateId,
   });
 
-  let logoUpload: AzureUploadResult | null = null;
-  let signatoryUpload: AzureUploadResult | null = null;
+  let stampUpload: AzureUploadResult | null = null;
 
   try {
-    if (logoFile) {
-      const ext = validateTemplateAsset(logoFile, "Company Logo");
-      const logoVersionId = crypto.randomUUID();
-      logoUpload = await uploadAzureBlob(
+    if (stampFile) {
+      const ext = validateTemplateAsset(stampFile, "Company Sign + Stamp");
+      const stampVersionId = crypto.randomUUID();
+      stampUpload = await uploadAzureBlob(
         azure,
-        `${templatePrefix}/company-logo/company-logo-${logoVersionId}${ext}`,
-        logoFile,
+        `${templatePrefix}/company-sign-stamp/company-sign-stamp-${stampVersionId}${ext}`,
+        stampFile,
+        {
+          contentType: templateAssetContentType(stampFile, ext),
+          contentDisposition: "inline",
+        },
       );
-      console.info("[tender-automation-templates] logo uploaded", { templateId });
-    }
-    if (signatoryFile) {
-      const ext = validateTemplateAsset(signatoryFile, "Company Signatory");
-      const signatoryVersionId = crypto.randomUUID();
-      signatoryUpload = await uploadAzureBlob(
-        azure,
-        `${templatePrefix}/company-signatory/company-signatory-${signatoryVersionId}${ext}`,
-        signatoryFile,
-      );
-      console.info("[tender-automation-templates] signatory uploaded", { templateId });
+      console.info("[tender-automation-templates] sign+stamp uploaded", { templateId });
     }
   } catch (uploadError) {
-    await deleteAzureBlob(azure, logoUpload?.blobName ?? null).catch(() => null);
-    await deleteAzureBlob(azure, signatoryUpload?.blobName ?? null).catch(() => null);
+    await deleteAzureBlob(azure, stampUpload?.blobName ?? null).catch(() => null);
     throw uploadError;
   }
 
@@ -1349,13 +1391,13 @@ async function handleTemplateAssetsSave(req: Request, form: FormData) {
     updated_by: user.id,
     updated_at: new Date().toISOString(),
   };
-  if (logoUpload) {
-    patch.company_logo_url = logoUpload.storageUrl;
-    patch.company_logo_blob_name = logoUpload.blobName;
+  if (stampUpload) {
+    patch.company_signatory_url = stampUpload.storageUrl;
+    patch.company_signatory_blob_name = stampUpload.blobName;
   }
-  if (signatoryUpload) {
-    patch.company_signatory_url = signatoryUpload.storageUrl;
-    patch.company_signatory_blob_name = signatoryUpload.blobName;
+  if (cleanupLegacyLogo && (previousLogoBlob || template.company_logo_url)) {
+    patch.company_logo_url = null;
+    patch.company_logo_blob_name = null;
   }
 
   const { error: updateError } = await supabase
@@ -1369,32 +1411,34 @@ async function handleTemplateAssetsSave(req: Request, form: FormData) {
       message: updateError.message,
       templateId,
     });
-    await deleteAzureBlob(azure, logoUpload?.blobName ?? null).catch(() => null);
-    await deleteAzureBlob(azure, signatoryUpload?.blobName ?? null).catch(() => null);
+    await deleteAzureBlob(azure, stampUpload?.blobName ?? null).catch(() => null);
     throw new HttpError(500, "Unable to save template file records. Please try again.");
   }
 
-  if (logoUpload && previousLogoBlob && previousLogoBlob !== logoUpload.blobName) {
-    await deleteAzureBlob(azure, previousLogoBlob);
-    console.info("[tender-automation-templates] previous logo deleted", { templateId });
-  }
   if (
-    signatoryUpload &&
+    stampUpload &&
     previousSignatoryBlob &&
-    previousSignatoryBlob !== signatoryUpload.blobName
+    previousSignatoryBlob !== stampUpload.blobName
   ) {
-    await deleteAzureBlob(azure, previousSignatoryBlob);
-    console.info("[tender-automation-templates] previous signatory deleted", {
-      templateId,
-    });
+    await deleteAzureBlobBestEffort(
+      azure,
+      previousSignatoryBlob,
+      "previous-sign-stamp",
+    );
+  }
+
+  if (cleanupLegacyLogo && previousLogoBlob) {
+    await deleteAzureBlobBestEffort(azure, previousLogoBlob, "legacy-company-logo");
   }
 
   console.info("[tender-automation-templates] asset save complete", { templateId });
   return json({
     success: true,
     templateId,
-    companyLogoUrl: logoUpload?.storageUrl ?? template.company_logo_url,
-    companySignatoryUrl: signatoryUpload?.storageUrl ?? template.company_signatory_url,
+    companySignatoryUrl:
+      stampUpload?.storageUrl ?? template.company_signatory_url,
+    companySignStampUrl:
+      stampUpload?.storageUrl ?? template.company_signatory_url,
   });
 }
 
@@ -1451,12 +1495,26 @@ async function handleTemplateAssetRead(
   });
 
   const azureResponse = await readAzureBlob(azure, blobName);
-  const headers = new Headers({
-    ...corsHeaders,
-    "Content-Type":
-      azureResponse.headers.get("content-type") || "application/octet-stream",
-    "Cache-Control": "private, max-age=300",
-  });
+  const contentType = azureResponse.headers.get("content-type") || "";
+    const lowerBlob = blobName.toLowerCase();
+    let resolvedType = contentType || "application/octet-stream";
+    if (
+      !resolvedType ||
+      resolvedType === "application/octet-stream"
+    ) {
+      if (lowerBlob.endsWith(".pdf")) resolvedType = "application/pdf";
+      else if (lowerBlob.endsWith(".png")) resolvedType = "image/png";
+      else if (lowerBlob.endsWith(".jpg") || lowerBlob.endsWith(".jpeg")) {
+        resolvedType = "image/jpeg";
+      } else if (lowerBlob.endsWith(".webp")) resolvedType = "image/webp";
+    }
+    const fileName = blobName.split("/").filter(Boolean).pop() || "file";
+    const headers = new Headers({
+      ...corsHeaders,
+      "Content-Type": resolvedType,
+      "Content-Disposition": `inline; filename="${fileName.replace(/"/g, "")}"`,
+      "Cache-Control": "private, max-age=300",
+    });
   const contentLength = azureResponse.headers.get("content-length");
   if (contentLength) {
     headers.set("Content-Length", contentLength);

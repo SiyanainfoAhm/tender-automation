@@ -10,6 +10,9 @@ import {
   ensureTender247QualificationEvidence,
   type Tender247EvidenceReport,
 } from "./ensureTender247QualificationEvidence.js";
+import {
+  inspectTenderArtifactState,
+} from "../tender247Batch/tenderArtifactState.js";
 import type { GptReadinessReport } from "./types.js";
 
 export { isReadableZipArchive } from "../tender247Batch/canonicalTenderArchive.js";
@@ -237,6 +240,14 @@ export async function buildGptReadinessReport(
       logger,
     });
     if (prepared.gptReady) {
+      const artifacts = inspectTenderArtifactState(
+        path.join(dateFolder, `T247-${id}`),
+        id,
+      );
+      if (!artifacts.complete) {
+        missingTenderIds.push(id);
+        continue;
+      }
       readyIds.push(id);
       if (prepared.evidenceMode === "FULL") {
         readyFullIds.push(id);
@@ -348,37 +359,21 @@ export function tryResolvePhase1TenderUploadFiles(
     return null;
   }
 
-  const documentZipPath = findTenderAllDocumentsZip(tenderFolder);
+  const artifacts = inspectTenderArtifactState(tenderFolder, t247Id);
+  if (!artifacts.complete) {
+    return null;
+  }
+
+  const documentZipPath = artifacts.documentsZipPath;
   if (!documentZipPath) {
     return null;
   }
 
-  if (!hasMetadataForChatGpt({ dateFolder, t247Id })) {
-    return null;
-  }
-
-  if (!isReadableZipArchiveLocal(documentZipPath)) {
-    return null;
-  }
-  try {
-    const size1 = fs.statSync(documentZipPath).size;
-    const size2 = fs.statSync(documentZipPath).size;
-    if (size1 !== size2 || size1 <= 0) {
-      return null;
-    }
-  } catch {
-    return null;
-  }
-
-  const aiSummaryCandidate = path.resolve(tenderFolder, "AI_Summary.pdf");
-  const aiSummaryAvailable = isNonEmptyFile(aiSummaryCandidate);
-  const legacyMeta = path.resolve(tenderFolder, "metadata.json");
-
   return {
-    metadataPath: legacyMeta,
-    aiSummaryPath: aiSummaryAvailable ? aiSummaryCandidate : null,
+    metadataPath: artifacts.metadataPath,
+    aiSummaryPath: artifacts.aiSummaryPath,
     documentZipPath,
-    aiSummaryAvailable,
+    aiSummaryAvailable: true,
   };
 }
 

@@ -19,6 +19,7 @@ import {
   waitForDownloadOnPageOrPopup,
 } from "../../tenderDetails/downloadHelpers.js";
 import { inspectTenderResumeState } from "../resumeArtifacts.js";
+import { writeMinimalValidAiSummaryPdf } from "../tenderArtifactState.js";
 import {
   assertCanCloseTenderDetailPage,
   createDocumentStageTracker,
@@ -480,7 +481,7 @@ describe("Tender247 resume does not skip missing documents ZIP", () => {
         raw: { a: 1 },
       }),
     );
-    fs.writeFileSync(path.join(tenderFolder, "AI_Summary.pdf"), "%PDF-1.4 ai");
+    writeMinimalValidAiSummaryPdf(path.join(tenderFolder, "AI_Summary.pdf"));
     fs.writeFileSync(path.join(root, "T247-103383747.zip"), "not-a-reason-to-skip");
     const resume = inspectTenderResumeState(root, "103383747");
     assert.equal(resume.metadataValid, true);

@@ -222,7 +222,7 @@ export async function resolveComposerShell(
               continue;
             }
             if (
-              !/\b(metadata[^\s]*\.json|AI[_\s-]*Summary[^\s]*\.pdf|Tender[_\s-]*All[_\s-]*Documents[^\s]*\.zip)\b/i.test(
+              !/\b(metadata[^\s]*\.json|AI[_\s-]*Summary[^\s]*\.pdf|Tender[_\s-]*All[_\s-]*Documents[^\s]*\.zip|[\w.-]+\.xlsx)\b/i.test(
                 t,
               )
             ) {
@@ -393,7 +393,7 @@ export async function discoverComposerShellAttachments(
         if (card.querySelector('[contenteditable="true"], textarea')) continue;
 
         const fileMatch = text.match(
-          /\b(metadata[^\s/\\]*\.json|AI[_\s-]*Summary[^\s/\\]*\.pdf|Tender[_\s-]*All[_\s-]*Documents[^\s/\\]*\.zip)\b/i,
+          /\b(metadata[^\s/\\]*\.json|AI[_\s-]*Summary[^\s/\\]*\.pdf|Tender[_\s-]*All[_\s-]*Documents[^\s/\\]*\.zip|[\w.-]+\.xlsx)\b/i,
         );
         if (!fileMatch) continue;
 

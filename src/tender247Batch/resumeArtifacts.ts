@@ -8,6 +8,7 @@ import {
   canonicalZipPath,
   isCanonicalDocumentsZipReady,
 } from "./canonicalTenderArchive.js";
+import { inspectTenderArtifactState } from "./tenderArtifactState.js";
 
 const TEMP_EXTS = [".crdownload", ".tmp", ".download", ".part"];
 
@@ -124,18 +125,17 @@ export function inspectTenderResumeState(
   const zipPath = path.join(dateFolder, `T247-${t247Id}.zip`);
   const metadataPath = path.join(tenderFolder, "metadata.json");
   const metadataSyncPath = path.join(tenderFolder, METADATA_SYNC_MARKER);
-  const aiCanonical = path.join(tenderFolder, "AI_Summary.pdf");
-  const documentsDir = path.join(tenderFolder, "documents");
+  const artifacts = inspectTenderArtifactState(tenderFolder, t247Id);
 
   const folderExists =
     fs.existsSync(tenderFolder) && fs.statSync(tenderFolder).isDirectory();
 
   const finalZipValid = isValidArtifact(zipPath);
-  const metadataValid = isMetadataResumeReady(tenderFolder);
-  const aiSummaryValid = isValidArtifact(aiCanonical);
-  const allDocumentsValid = isCanonicalDocumentsZipReady(documentsDir);
+  const metadataValid = artifacts.metadataValid;
+  const aiSummaryValid = artifacts.aiSummaryValid;
+  const allDocumentsValid = artifacts.documentsZipValid;
   const allDocumentsPath = allDocumentsValid
-    ? canonicalZipPath(documentsDir)
+    ? canonicalZipPath(path.join(tenderFolder, "documents"))
     : null;
 
   return {
@@ -144,7 +144,7 @@ export function inspectTenderResumeState(
     zipPath,
     metadataPath,
     metadataSyncPath,
-    aiSummaryPath: aiSummaryValid ? aiCanonical : null,
+    aiSummaryPath: aiSummaryValid ? artifacts.aiSummaryPath : null,
     allDocumentsPath: allDocumentsValid ? allDocumentsPath : null,
     metadataValid,
     aiSummaryValid,

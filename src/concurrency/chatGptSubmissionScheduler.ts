@@ -9,12 +9,14 @@
  */
 import { AutomationError } from "../browserUtils.js";
 import {
-  getDefaultMinSubmissionIntervalMs,
+  getTenderQualificationMinSendIntervalMs,
   readLastSubmission,
   remainingSubmissionWaitMs,
   recordSuccessfulSubmission,
   chatgptLastSubmissionPath,
+  getRunExcelScreeningMinSendIntervalMs,
 } from "../chatgptQualification/submissionThrottle.js";
+import type { ChatGptSubmissionKind } from "../chatgptQualification/chatgptSubmissionKind.js";
 import type { Logger } from "../logger.js";
 
 export type ChatGptSubmissionClock = {
@@ -45,6 +47,7 @@ export type ChatGptSubmissionScheduler = {
     workerId?: number;
     sourcePortal: "TENDER247" | "BIDASSIST";
     sourceTenderId: string;
+    submissionKind?: ChatGptSubmissionKind;
     /**
      * Perform Send + authoritative confirmation while mutex is held.
      * Return submitted=true only when Send actually succeeded.
@@ -56,6 +59,7 @@ export type ChatGptSubmissionScheduler = {
   acquireSendSlot: (options?: {
     logger?: Logger;
     workerId?: number;
+    submissionKind?: ChatGptSubmissionKind;
   }) => Promise<{ waitedMs: number }>;
 
   /** Record successful Send and release slot (legacy pair with acquireSendSlot). */
@@ -95,6 +99,7 @@ function loadPersistedLastMs(): number | null {
 
 export function createChatGptSubmissionScheduler(options?: {
   minIntervalMs?: number;
+  runScreeningMinIntervalMs?: number;
   rateLimitBackoffMs?: number;
   maxRateLimitBackoffMs?: number;
   maxWorkers?: number;
@@ -103,7 +108,9 @@ export function createChatGptSubmissionScheduler(options?: {
   initialLastSubmissionAtMs?: number | null;
 }): ChatGptSubmissionScheduler {
   const minIntervalMs =
-    options?.minIntervalMs ?? getDefaultMinSubmissionIntervalMs();
+    options?.minIntervalMs ?? getTenderQualificationMinSendIntervalMs();
+  const runScreeningMinIntervalMs =
+    options?.runScreeningMinIntervalMs ?? getRunExcelScreeningMinSendIntervalMs();
   const clock = options?.clock ?? realClock;
   const baseBackoff =
     options?.rateLimitBackoffMs ??
@@ -152,9 +159,16 @@ export function createChatGptSubmissionScheduler(options?: {
   const waitForBackoffAndInterval = async (opts?: {
     logger?: Logger;
     workerId?: number;
+    submissionKind?: ChatGptSubmissionKind;
   }): Promise<{ waitedMs: number; previousSendAtMs: number | null }> => {
     const started = clock.now();
     const workerId = opts?.workerId;
+    const submissionKind: ChatGptSubmissionKind =
+      opts?.submissionKind ?? "TENDER_QUALIFICATION";
+    const artificialMinIntervalMs =
+      submissionKind === "RUN_EXCEL_SCREENING"
+        ? runScreeningMinIntervalMs
+        : minIntervalMs;
 
     // Refresh from disk so process restarts / other processes are respected.
     const persisted = loadPersistedLastMs();
@@ -171,31 +185,45 @@ export function createChatGptSubmissionScheduler(options?: {
       previousSendAtMs != null
         ? new Date(previousSendAtMs).toISOString()
         : "none";
-    const nextAt =
-      previousSendAtMs != null
-        ? previousSendAtMs + minIntervalMs
-        : clock.now();
-    const remainingInterval = remainingSubmissionWaitMs({
-      lastSubmissionAtMs: previousSendAtMs,
-      nowMs: clock.now(),
-      minIntervalMs,
-    });
     const remainingBackoff = Math.max(0, backoffUntilMs - clock.now());
+    const remainingInterval =
+      artificialMinIntervalMs <= 0
+        ? 0
+        : remainingSubmissionWaitMs({
+            lastSubmissionAtMs: previousSendAtMs,
+            nowMs: clock.now(),
+            minIntervalMs: artificialMinIntervalMs,
+          });
     const waitMs = Math.max(remainingInterval, remainingBackoff);
 
+    log(opts?.logger, `CHATGPT_SUBMISSION_KIND=${submissionKind}`);
     log(
       opts?.logger,
-      `CHATGPT_WAITING_FOR_GLOBAL_SEND_SLOT=true`,
+      `CHATGPT_TENDER_MIN_SEND_INTERVAL_MS=${minIntervalMs}`,
+    );
+    log(
+      opts?.logger,
+      `CHATGPT_RUN_SCREENING_MIN_SEND_INTERVAL_MS=${runScreeningMinIntervalMs}`,
     );
     if (workerId != null) {
       log(opts?.logger, `CHATGPT_WORKER_ID=${workerId}`);
     }
     log(opts?.logger, `CHATGPT_GLOBAL_LAST_SEND_AT=${lastIso}`);
-    log(
-      opts?.logger,
-      `CHATGPT_GLOBAL_NEXT_SEND_AT=${new Date(nextAt).toISOString()}`,
-    );
-    log(opts?.logger, `CHATGPT_GLOBAL_SEND_WAIT_MS=${waitMs}`);
+
+    if (submissionKind === "RUN_EXCEL_SCREENING") {
+      log(opts?.logger, `CHATGPT_ARTIFICIAL_SEND_DELAY_MS=${remainingInterval}`);
+    } else {
+      const nextAt =
+        previousSendAtMs != null
+          ? previousSendAtMs + minIntervalMs
+          : clock.now();
+      log(opts?.logger, `CHATGPT_WAITING_FOR_GLOBAL_SEND_SLOT=true`);
+      log(
+        opts?.logger,
+        `CHATGPT_GLOBAL_NEXT_SEND_AT=${new Date(nextAt).toISOString()}`,
+      );
+      log(opts?.logger, `CHATGPT_GLOBAL_SEND_WAIT_MS=${waitMs}`);
+    }
 
     while (clock.now() < backoffUntilMs) {
       const left = Math.max(0, backoffUntilMs - clock.now());
@@ -206,17 +234,21 @@ export function createChatGptSubmissionScheduler(options?: {
       await clock.sleep(Math.min(left, 5_000));
     }
 
-    const remaining = remainingSubmissionWaitMs({
-      lastSubmissionAtMs: lastSuccessfulSubmissionAtMs,
-      nowMs: clock.now(),
-      minIntervalMs,
-    });
-    if (remaining > 0) {
-      log(
-        opts?.logger,
-        `CHATGPT_SCHEDULER_MIN_INTERVAL_WAIT_MS=${remaining} worker=${workerId ?? "?"}`,
-      );
-      await clock.sleep(remaining);
+    if (remainingInterval > 0) {
+      const remaining = remainingSubmissionWaitMs({
+        lastSubmissionAtMs: lastSuccessfulSubmissionAtMs,
+        nowMs: clock.now(),
+        minIntervalMs: artificialMinIntervalMs,
+      });
+      if (remaining > 0) {
+        if (submissionKind === "TENDER_QUALIFICATION") {
+          log(
+            opts?.logger,
+            `CHATGPT_SCHEDULER_MIN_INTERVAL_WAIT_MS=${remaining} worker=${workerId ?? "?"}`,
+          );
+        }
+        await clock.sleep(remaining);
+      }
     }
 
     return { waitedMs: clock.now() - started, previousSendAtMs };
@@ -228,6 +260,7 @@ export function createChatGptSubmissionScheduler(options?: {
     sourcePortal: "TENDER247" | "BIDASSIST";
     sourceTenderId: string;
     previousSendAtMs: number | null;
+    skipMinIntervalCheck?: boolean;
   }): GlobalSendSlotAcquireInfo => {
     const currentSendAtMs = clock.now();
     const previousSendAtMs = options.previousSendAtMs;
@@ -253,6 +286,7 @@ export function createChatGptSubmissionScheduler(options?: {
     log(options.logger, `CHATGPT_GLOBAL_SEND_INTERVAL_MS=${intervalMs}`);
 
     if (
+      !options.skipMinIntervalCheck &&
       previousSendAtMs != null &&
       intervalMs < minIntervalMs
     ) {
@@ -288,6 +322,7 @@ export function createChatGptSubmissionScheduler(options?: {
         const { previousSendAtMs, waitedMs } = await waitForBackoffAndInterval({
           logger: opts.logger,
           workerId: opts.workerId,
+          submissionKind: opts.submissionKind,
         });
         log(opts.logger, "CHATGPT_GLOBAL_SEND_SLOT_ACQUIRED=true");
         void waitedMs;
@@ -301,6 +336,7 @@ export function createChatGptSubmissionScheduler(options?: {
             sourcePortal: opts.sourcePortal,
             sourceTenderId: opts.sourceTenderId,
             previousSendAtMs,
+            skipMinIntervalCheck: opts.submissionKind === "RUN_EXCEL_SCREENING",
           });
           successStreak += 1;
           if (successStreak >= 2 && activeWorkersAllowed < maxWorkers) {

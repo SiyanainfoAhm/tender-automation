@@ -61,6 +61,7 @@ import {
 import {
   ensureTender247QualificationEvidence,
 } from "./ensureTender247QualificationEvidence.js";
+import { inspectTenderArtifactState } from "../tender247Batch/tenderArtifactState.js";
 import {
   resolvePartialQualificationFiles,
 } from "./sourceDocumentResolver.js";
@@ -400,6 +401,54 @@ export async function qualifySingleTender(options: {
       config: options.config,
       fullLogger: logger,
     });
+
+    const crawlArtifacts = inspectTenderArtifactState(tenderFolder, t247Id);
+    if (!crawlArtifacts.complete) {
+      const missingFiles = crawlArtifacts.missing.map((name) =>
+        name === "aiSummary"
+          ? "AI_Summary.pdf"
+          : name === "documents"
+            ? "Tender_All_Documents.zip"
+            : "metadata.json",
+      );
+      logger.warn(
+        `CHATGPT_TENDER_NOT_READY=T247-${t247Id} reason=ARTIFACTS_INCOMPLETE ${missingFiles.join(",")}`,
+      );
+      saveChatGptTenderState(tenderFolder, {
+        t247Id,
+        chatUrl: null,
+        status: "not_ready",
+        updatedAt: new Date().toISOString(),
+        missingFiles,
+        error: `PENDING_TIMEOUT artifacts incomplete: ${missingFiles.join(", ")}`,
+        evidenceMode: evidence.evidenceMode,
+        availableFiles: evidence.availableFiles,
+        downloadAttempted: evidence.downloadAttempted,
+        metadataRepairAttempted: evidence.metadataRepairAttempted,
+      });
+      upsertQualificationManifestEntry(
+        dateFolder,
+        dateIso,
+        {
+          t247Id,
+          status: "not_ready",
+          missingFiles,
+          updatedAt: new Date().toISOString(),
+          error: `PENDING_TIMEOUT artifacts incomplete: ${missingFiles.join(", ")}`,
+        },
+        totals,
+      );
+      return {
+        t247Id,
+        status: "not_ready",
+        resultPath: null,
+        responsePath: null,
+        qualification: null,
+        chatUrl: null,
+        error: `PENDING_TIMEOUT artifacts incomplete: ${missingFiles.join(", ")}`,
+        missingFiles,
+      };
+    }
 
     if (!evidence.gptReady) {
       const missingFiles = [

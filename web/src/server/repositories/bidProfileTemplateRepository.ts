@@ -1,6 +1,11 @@
 import "server-only";
 
 import { getServerSupabase } from "@/lib/db/server";
+import {
+  fileNameFromStoragePath,
+  templateLogoReadUrl,
+  templateSignStampReadUrl,
+} from "@/lib/templates/templateAsset";
 import type {
   BidProfileTemplate,
   BidProfileTemplateInsert,
@@ -8,8 +13,16 @@ import type {
 } from "@/lib/templates/types";
 
 function mapTemplate(row: Record<string, unknown>): BidProfileTemplate {
+  const id = String(row.id);
+  const stampBlob = (row.company_signatory_blob_name as string) || null;
+  const stampAzureUrl = (row.company_signatory_url as string) || null;
+  const hasStamp = Boolean(stampBlob || stampAzureUrl);
+  const logoBlob = (row.company_logo_blob_name as string) || null;
+  const logoAzureUrl = (row.company_logo_url as string) || null;
+  const hasLogo = Boolean(logoBlob || logoAzureUrl);
+
   return {
-    id: String(row.id),
+    id,
     companyId: String(row.company_id),
     templateName: String(row.template_name),
     description: (row.description as string) || null,
@@ -32,10 +45,14 @@ function mapTemplate(row: Record<string, unknown>): BidProfileTemplate {
     departmentName: String(row.department_name),
     departmentAddress: (row.department_address as string) || null,
     companyAddress: (row.company_address as string) || null,
-    companyLogoUrl: (row.company_logo_url as string) || null,
-    companySignatoryUrl: (row.company_signatory_url as string) || null,
-    companyLogoBlobName: (row.company_logo_blob_name as string) || null,
-    companySignatoryBlobName: (row.company_signatory_blob_name as string) || null,
+    companySignStampUrl: hasStamp ? templateSignStampReadUrl(id) : null,
+    companySignStampFileName:
+      fileNameFromStoragePath(stampBlob) ||
+      fileNameFromStoragePath(stampAzureUrl),
+    companySignatoryUrl: hasStamp ? templateSignStampReadUrl(id) : null,
+    companyLogoUrl: hasLogo ? templateLogoReadUrl(id) : null,
+    companyLogoBlobName: logoBlob,
+    companySignatoryBlobName: stampBlob,
     status: row.status === "archived" ? "archived" : "active",
     createdBy: row.created_by ? String(row.created_by) : null,
     updatedBy: row.updated_by ? String(row.updated_by) : null,
@@ -64,7 +81,6 @@ function toRow(input: BidProfileTemplateInsert): Record<string, unknown> {
     department_name: input.departmentName.trim(),
     department_address: input.departmentAddress?.trim() || null,
     company_address: input.companyAddress?.trim() || null,
-    company_logo_url: input.companyLogoUrl?.trim() || null,
     company_signatory_url: input.companySignatoryUrl?.trim() || null,
   };
 }
@@ -195,10 +211,6 @@ export async function updateBidProfileTemplate(options: {
       options.input.companyAddress !== undefined
         ? options.input.companyAddress
         : existing.companyAddress,
-    companyLogoUrl:
-      options.input.companyLogoUrl !== undefined
-        ? options.input.companyLogoUrl
-        : existing.companyLogoUrl,
     companySignatoryUrl:
       options.input.companySignatoryUrl !== undefined
         ? options.input.companySignatoryUrl
@@ -300,7 +312,6 @@ export async function duplicateBidProfileTemplate(options: {
       departmentName: existing.departmentName,
       departmentAddress: existing.departmentAddress,
       companyAddress: existing.companyAddress,
-      companyLogoUrl: null,
       companySignatoryUrl: null,
     },
   });

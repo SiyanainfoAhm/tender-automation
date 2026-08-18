@@ -1,0 +1,416 @@
+/**
+ * Deterministic run workbook: normalize + internal/cross-source dedupe.
+ * No company-preference classification.
+ */
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import XLSX from "xlsx";
+import { ensureDir } from "../fileUtils.js";
+import {
+  buildHeaderMap,
+  cleanCell,
+  formatIdAsText,
+  getField,
+  hasAnyHeaders,
+  normalizeHeaderKey,
+} from "../excel/types.js";
+import {
+  isDetailScrapeStatus,
+  normalizePhase1ScreeningStatus,
+  type Phase1ScreeningStatus,
+} from "./phase1Statuses.js";
+
+export const RUN_NORMALIZED_FILE = "run-normalized.xlsx";
+export const RUN_SCREENED_FILE = "run-screened-siyana.xlsx";
+
+export type RunSourcePortal = "TENDER247" | "BIDASSIST" | "BOTH";
+
+export type RunWorkbookRow = {
+  canonicalId: string;
+  source: RunSourcePortal;
+  tender247Id: string;
+  bidAssistId: string;
+  tenderName: string;
+  organization: string;
+  location: string;
+  deadline: string;
+  estimatedCost: string;
+  emdAmount: string;
+  sourceRefs: string;
+  screeningStatus: Phase1ScreeningStatus | "";
+  screeningReason: string;
+};
+
+export type NormalizedRunWorkbook = {
+  rows: RunWorkbookRow[];
+  tender247Raw: number;
+  bidAssistRaw: number;
+  tender247Unique: number;
+  bidAssistUnique: number;
+  combinedUnique: number;
+  duplicatesRemoved: number;
+};
+
+const T247_ID_HEADERS = [
+  "T247 ID",
+  "Tender247 ID",
+  "Tender 247 ID",
+  "Tender Id",
+  "Tender ID",
+  "Canonical ID",
+];
+const BA_ID_HEADERS = ["BidAssist ID", "GEM/Eprocure ID", "REFERENCE NO", "Reference No"];
+const TITLE_HEADERS = ["TENDER BRIEF", "Tender Name", "Summary", "Title", "Description"];
+const ORG_HEADERS = ["Organization", "Organisation", "Department", "Authority"];
+const LOCATION_HEADERS = ["Location", "State", "City"];
+const VALUE_HEADERS = [
+  "ESTIMATED COST",
+  "Estimated Cost",
+  "Tender Est. Cost",
+  "Tender Amount",
+  "Value",
+];
+const EMD_HEADERS = ["EMD", "EMD Amount"];
+const DEADLINE_HEADERS = ["Deadline", "Last Date", "Closing Date"];
+const SOURCE_HEADERS = ["Source"];
+const STATUS_HEADERS = ["Screening Status", "Status"];
+const REASON_HEADERS = ["Screening Reason", "Reason"];
+
+const OUTPUT_HEADERS = [
+  "Canonical ID",
+  "Tender247 ID",
+  "BidAssist ID",
+  "Tender Name",
+  "Source",
+  "Organization",
+  "Location",
+  "Deadline",
+  "Estimated Cost",
+  "EMD Amount",
+  "Source Refs",
+  "Screening Status",
+  "Screening Reason",
+];
+
+export class ScreeningOutputInvalidError extends Error {
+  readonly code:
+    | "SCREENING_OUTPUT_INVALID"
+    | "SCREENING_OUTPUT_RECONCILIATION_FAILED"
+    | "SCREENING_OUTPUT_MISSING";
+  constructor(
+    message: string,
+    code:
+      | "SCREENING_OUTPUT_INVALID"
+      | "SCREENING_OUTPUT_RECONCILIATION_FAILED"
+      | "SCREENING_OUTPUT_MISSING" = "SCREENING_OUTPUT_INVALID",
+  ) {
+    super(message);
+    this.name = "ScreeningOutputInvalidError";
+    this.code = code;
+  }
+}
+
+function sheetLooksLikeTenders(headerMap: Map<string, string>): boolean {
+  return (
+    hasAnyHeaders(headerMap, [...T247_ID_HEADERS, ...TITLE_HEADERS, "EMD", "Deadline"], 2) ||
+    headerMap.has(normalizeHeaderKey("T247 ID")) ||
+    headerMap.has(normalizeHeaderKey("Canonical ID")) ||
+    headerMap.has(normalizeHeaderKey("Tender Name"))
+  );
+}
+
+function digitsT247(raw: string): string {
+  const id = raw.replace(/^T247[-\s]*/i, "");
+  const digits = id.replace(/\D/g, "");
+  return digits || id.trim();
+}
+
+function parseWorkbookRows(
+  filePath: string,
+  defaultSource: RunSourcePortal,
+): RunWorkbookRow[] {
+  if (!fs.existsSync(filePath)) return [];
+  const workbook = XLSX.readFile(filePath, { cellDates: true });
+  const rows: RunWorkbookRow[] = [];
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) continue;
+    const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
+      header: 1,
+      defval: "",
+      raw: true,
+    });
+    if (matrix.length < 2) continue;
+    const headers = (matrix[0] ?? []).map((h) => String(h ?? "").trim());
+    const headerMap = buildHeaderMap(headers);
+    if (!sheetLooksLikeTenders(headerMap)) continue;
+    for (const raw of matrix.slice(1) as Array<Record<string, unknown> | unknown[]>) {
+      const record: Record<string, unknown> = Array.isArray(raw)
+        ? Object.fromEntries(headers.map((h, i) => [h, raw[i]]))
+        : raw;
+      const t247 = digitsT247(formatIdAsText(getField(record, headerMap, ...T247_ID_HEADERS)));
+      const ba = formatIdAsText(getField(record, headerMap, ...BA_ID_HEADERS));
+      const name = cleanCell(getField(record, headerMap, ...TITLE_HEADERS));
+      if (!t247 && !ba && !name) continue;
+      const sourceCell = cleanCell(getField(record, headerMap, ...SOURCE_HEADERS));
+      const source: RunSourcePortal =
+        /both/i.test(sourceCell)
+          ? "BOTH"
+          : /bidassist/i.test(sourceCell)
+            ? "BIDASSIST"
+            : /tender247/i.test(sourceCell)
+              ? "TENDER247"
+              : defaultSource;
+      const canonicalId = t247
+        ? `T247-${t247}`
+        : ba
+          ? ba.toUpperCase().startsWith("BA-")
+            ? ba
+            : `BA-${ba}`
+          : `NAME-${name.slice(0, 40)}`;
+      const statusRaw = cleanCell(getField(record, headerMap, ...STATUS_HEADERS));
+      rows.push({
+        canonicalId,
+        source,
+        tender247Id: t247,
+        bidAssistId: ba,
+        tenderName: name,
+        organization: cleanCell(getField(record, headerMap, ...ORG_HEADERS)),
+        location: cleanCell(getField(record, headerMap, ...LOCATION_HEADERS)),
+        deadline: cleanCell(getField(record, headerMap, ...DEADLINE_HEADERS)),
+        estimatedCost: cleanCell(getField(record, headerMap, ...VALUE_HEADERS)),
+        emdAmount: cleanCell(getField(record, headerMap, ...EMD_HEADERS)),
+        sourceRefs: sourceCell || source,
+        screeningStatus: normalizePhase1ScreeningStatus(statusRaw) ?? "",
+        screeningReason: cleanCell(getField(record, headerMap, ...REASON_HEADERS)),
+      });
+    }
+  }
+  return rows;
+}
+
+function mergeRows(left: RunWorkbookRow, right: RunWorkbookRow): RunWorkbookRow {
+  const t247 = left.tender247Id || right.tender247Id;
+  const ba = left.bidAssistId || right.bidAssistId;
+  const bothSources =
+    (left.source === "TENDER247" && right.source === "BIDASSIST") ||
+    (left.source === "BIDASSIST" && right.source === "TENDER247") ||
+    left.source === "BOTH" ||
+    right.source === "BOTH";
+  return {
+    canonicalId: t247 ? `T247-${t247}` : left.canonicalId,
+    source: bothSources ? "BOTH" : left.source,
+    tender247Id: t247,
+    bidAssistId: ba,
+    tenderName: left.tenderName || right.tenderName,
+    organization: left.organization || right.organization,
+    location: left.location || right.location,
+    deadline: left.deadline || right.deadline,
+    estimatedCost: left.estimatedCost || right.estimatedCost,
+    emdAmount: left.emdAmount || right.emdAmount,
+    sourceRefs: [left.sourceRefs, right.sourceRefs].filter(Boolean).join("; "),
+    screeningStatus: left.screeningStatus || right.screeningStatus,
+    screeningReason: left.screeningReason || right.screeningReason,
+  };
+}
+
+function dedupeKey(row: RunWorkbookRow): string {
+  if (row.tender247Id) return `T247:${row.tender247Id}`;
+  if (row.bidAssistId) return `BA:${row.bidAssistId.toLowerCase()}`;
+  return `NAME:${row.tenderName.toLowerCase()}`;
+}
+
+export function normalizeAndDedupeRunRows(options: {
+  tender247Rows: RunWorkbookRow[];
+  bidAssistRows: RunWorkbookRow[];
+}): NormalizedRunWorkbook {
+  const tender247Raw = options.tender247Rows.length;
+  const bidAssistRaw = options.bidAssistRows.length;
+  const t247Map = new Map<string, RunWorkbookRow>();
+  for (const row of options.tender247Rows) {
+    const key = dedupeKey(row);
+    if (!t247Map.has(key)) t247Map.set(key, row);
+  }
+  const baMap = new Map<string, RunWorkbookRow>();
+  for (const row of options.bidAssistRows) {
+    const key = dedupeKey(row);
+    if (!baMap.has(key)) baMap.set(key, row);
+  }
+
+  const combined = new Map<string, RunWorkbookRow>();
+  for (const row of t247Map.values()) combined.set(dedupeKey(row), { ...row });
+  for (const row of baMap.values()) {
+    const key = dedupeKey(row);
+    const existing = combined.get(key);
+    combined.set(key, existing ? mergeRows(existing, row) : { ...row });
+  }
+
+  const rows = [...combined.values()];
+  const duplicatesRemoved = tender247Raw + bidAssistRaw - rows.length;
+  return {
+    rows,
+    tender247Raw,
+    bidAssistRaw,
+    tender247Unique: t247Map.size,
+    bidAssistUnique: baMap.size,
+    combinedUnique: rows.length,
+    duplicatesRemoved: Math.max(0, duplicatesRemoved),
+  };
+}
+
+export function parseSourceWorkbook(
+  filePath: string | undefined,
+  defaultSource: RunSourcePortal,
+): RunWorkbookRow[] {
+  if (!filePath || !fs.existsSync(filePath)) return [];
+  return parseWorkbookRows(filePath, defaultSource);
+}
+
+export function writeRunWorkbook(rows: RunWorkbookRow[], outputPath: string): string {
+  ensureDir(path.dirname(outputPath));
+  const aoa: unknown[][] = [
+    OUTPUT_HEADERS,
+    ...rows.map((row) => [
+      row.canonicalId,
+      row.tender247Id,
+      row.bidAssistId,
+      row.tenderName,
+      row.source,
+      row.organization,
+      row.location,
+      row.deadline,
+      row.estimatedCost,
+      row.emdAmount,
+      row.sourceRefs,
+      row.screeningStatus,
+      row.screeningReason,
+    ]),
+  ];
+  const sheet = XLSX.utils.aoa_to_sheet(aoa);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "Tenders");
+  XLSX.writeFile(workbook, outputPath);
+  return outputPath;
+}
+
+export function readRunWorkbook(filePath: string): RunWorkbookRow[] {
+  if (!fs.existsSync(filePath)) {
+    throw new ScreeningOutputInvalidError(`Workbook not found: ${filePath}`);
+  }
+  try {
+    return parseWorkbookRows(filePath, "TENDER247");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new ScreeningOutputInvalidError(`Invalid XLSX: ${message}`);
+  }
+}
+
+export function hashFile(filePath: string): string {
+  const buf = fs.readFileSync(filePath);
+  return crypto.createHash("sha256").update(buf).digest("hex");
+}
+
+export function hashText(value: string): string {
+  return crypto.createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+export function countPhase1Statuses(
+  rows: RunWorkbookRow[],
+): Record<Phase1ScreeningStatus, number> {
+  const counts: Record<Phase1ScreeningStatus, number> = {
+    GO: 0,
+    CONDITIONAL_GO: 0,
+    PARTNER_BID: 0,
+    VERIFY: 0,
+    NO_GO: 0,
+  };
+  for (const row of rows) {
+    if (row.screeningStatus) counts[row.screeningStatus] += 1;
+  }
+  return counts;
+}
+
+export function deriveDetailScrapeIds(rows: RunWorkbookRow[]): {
+  tender247Ids: string[];
+  bidAssistIds: string[];
+} {
+  const tender247Ids: string[] = [];
+  const bidAssistIds: string[] = [];
+  for (const row of rows) {
+    if (!isDetailScrapeStatus(row.screeningStatus || null)) continue;
+    if (row.tender247Id) tender247Ids.push(row.tender247Id);
+    else if (row.bidAssistId) bidAssistIds.push(row.bidAssistId);
+  }
+  return {
+    tender247Ids: [...new Set(tender247Ids)],
+    bidAssistIds: [...new Set(bidAssistIds)],
+  };
+}
+
+export function validateScreenedWorkbook(options: {
+  inputRows: RunWorkbookRow[];
+  outputPath: string;
+}): {
+  outputRows: RunWorkbookRow[];
+  counts: Record<Phase1ScreeningStatus, number>;
+} {
+  const { inputRows, outputPath } = options;
+  if (!fs.existsSync(outputPath)) {
+    throw new ScreeningOutputInvalidError("Screened workbook file does not exist");
+  }
+  const st = fs.statSync(outputPath);
+  if (!st.isFile() || st.size <= 0) {
+    throw new ScreeningOutputInvalidError("Screened workbook is empty");
+  }
+  const header = fs.readFileSync(outputPath).subarray(0, 4);
+  if (header.length < 2 || header[0] !== 0x50 || header[1] !== 0x4b) {
+    throw new ScreeningOutputInvalidError(
+      "Screened workbook is not a valid XLSX/ZIP container",
+    );
+  }
+  const outputRows = readRunWorkbook(outputPath);
+  if (outputRows.length === 0) {
+    throw new ScreeningOutputInvalidError("Screened workbook has no data rows");
+  }
+
+  const inputIds = new Set(inputRows.map((row) => row.canonicalId));
+  const outputIds = new Set(outputRows.map((row) => row.canonicalId));
+  const missing = [...inputIds].filter((id) => !outputIds.has(id));
+  const extra = [...outputIds].filter((id) => !inputIds.has(id));
+  if (missing.length > 0) {
+    throw new ScreeningOutputInvalidError(
+      `SCREENING_OUTPUT_RECONCILIATION_FAILED missing ${missing.length} tenders (e.g. ${missing.slice(0, 5).join(", ")})`,
+      "SCREENING_OUTPUT_RECONCILIATION_FAILED",
+    );
+  }
+  if (extra.length > 0) {
+    throw new ScreeningOutputInvalidError(
+      `SCREENING_OUTPUT_RECONCILIATION_FAILED unexpected extra ${extra.length} tenders (e.g. ${extra.slice(0, 5).join(", ")})`,
+      "SCREENING_OUTPUT_RECONCILIATION_FAILED",
+    );
+  }
+  if (outputRows.length !== inputRows.length) {
+    throw new ScreeningOutputInvalidError(
+      `SCREENING_OUTPUT_RECONCILIATION_FAILED row count mismatch input=${inputRows.length} output=${outputRows.length}`,
+      "SCREENING_OUTPUT_RECONCILIATION_FAILED",
+    );
+  }
+
+  const seen = new Set<string>();
+  for (const row of outputRows) {
+    if (seen.has(row.canonicalId)) {
+      throw new ScreeningOutputInvalidError(
+        `SCREENING_OUTPUT_INVALID duplicate canonical id ${row.canonicalId}`,
+      );
+    }
+    seen.add(row.canonicalId);
+    if (!row.screeningStatus) {
+      throw new ScreeningOutputInvalidError(
+        `SCREENING_OUTPUT_INVALID missing status for ${row.canonicalId}`,
+      );
+    }
+  }
+
+  return { outputRows, counts: countPhase1Statuses(outputRows) };
+}

@@ -6,6 +6,7 @@ supabase/functions/.env
 supabase/functions/.env.local
 auth/*.json
 auth/chatgpt-profile/
+.chatgpt-browser-profile/
 !auth/.gitkeep
 downloads/*
 !downloads/.gitkeep

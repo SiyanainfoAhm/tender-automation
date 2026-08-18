@@ -1,4 +1,4 @@
-import { ALLOWED_DOCUMENT_EXTENSIONS } from "@/lib/company/types";
+import { ALLOWED_DOCUMENT_EXTENSIONS, CERTIFICATE_TYPES } from "@/lib/company/types";
 import {
   ALLOWED_DOCUMENT_MIME_TYPES,
   MAX_DOCUMENT_UPLOAD_BYTES,
@@ -75,8 +75,14 @@ export function validateDocumentMetadata(
   }
   const kind: UploadKind = metadata.uploadKind;
   if (kind === "certificate") {
-    if (!metadata.certificateType?.trim()) {
+    const certificateType = metadata.certificateType?.trim() || "";
+    if (!certificateType) {
       return new UploadError("validation", "Certificate type is required");
+    }
+    if (
+      !(CERTIFICATE_TYPES as readonly string[]).includes(certificateType)
+    ) {
+      return new UploadError("validation", "Select a valid certificate type");
     }
     if (!metadata.issuingAuthority?.trim()) {
       return new UploadError("validation", "Issuing authority is required");

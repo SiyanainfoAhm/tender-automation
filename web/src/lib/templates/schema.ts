@@ -59,8 +59,6 @@ export const bidProfileTemplateSchema = z.object({
     .max(200),
   departmentAddress: optionalLongText,
   companyAddress: optionalLongText,
-  companyLogoUrl: optionalLongText,
-  companySignatoryUrl: optionalLongText,
 });
 
 export type BidProfileTemplateFormValues = z.infer<

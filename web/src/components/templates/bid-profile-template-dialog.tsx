@@ -1,7 +1,8 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
-import { Image as ImageIcon, Loader2, X } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { FileText, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -15,10 +16,12 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  MAX_TEMPLATE_ASSET_BYTES,
-  TEMPLATE_ASSET_EXTENSIONS,
-  TEMPLATE_ASSET_MIME_TYPES,
-} from "@/lib/company/types";
+  TEMPLATE_ASSET_ACCEPT,
+  fileNameFromUrl,
+  formatTemplateAssetSize,
+  getTemplateAssetType,
+  templateAssetValidationError,
+} from "@/lib/templates/templateAsset";
 import type { BidProfileTemplate } from "@/lib/templates/types";
 import {
   createBidProfileTemplateAction,
@@ -34,38 +37,67 @@ type BidProfileTemplateDialogProps = {
   companyAddress: string;
 };
 
+function SignStampPreview({
+  assetType,
+  imageUrl,
+}: {
+  assetType: "image" | "pdf" | "file";
+  imageUrl?: string | null;
+}) {
+  const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => {
+    setImageFailed(false);
+  }, [imageUrl]);
+
+  const showImage = assetType === "image" && Boolean(imageUrl) && !imageFailed;
+
+  return (
+    <div className="flex h-12 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-background-200/70 bg-background-100">
+      {showImage ? (
+        <img
+          src={imageUrl!}
+          alt="Company Sign and Stamp"
+          className="h-12 w-16 rounded object-contain"
+          onError={() => setImageFailed(true)}
+        />
+      ) : assetType === "pdf" ? (
+        <div className="flex flex-col items-center gap-0.5">
+          <FileText className="size-5 text-red-600" />
+          <span className="text-[9px] font-semibold leading-none text-red-600">
+            PDF
+          </span>
+        </div>
+      ) : (
+        <FileText className="size-5 text-foreground-400" />
+      )}
+    </div>
+  );
+}
+
 function FilePicker({
   id,
   name,
   label,
   disabled,
-  hasExisting,
-  currentLabel,
   file,
+  existingUrl,
+  existingFileName,
   onFileChange,
-  templateId,
-  assetType,
 }: {
   id: string;
   name: string;
   label: string;
   disabled: boolean;
-  hasExisting: boolean;
-  currentLabel: string;
   file: File | null;
+  existingUrl?: string | null;
+  existingFileName?: string | null;
   onFileChange: (next: File | null) => void;
-  templateId?: string;
-  assetType: "logo" | "signatory";
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const remoteObjectUrlRef = useRef<string | null>(null);
   const [localPreviewUrl, setLocalPreviewUrl] = useState<string | null>(null);
-  const [remotePreviewUrl, setRemotePreviewUrl] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewFailed, setPreviewFailed] = useState(false);
 
   useEffect(() => {
-    if (!file) {
+    if (!file || getTemplateAssetType(null, file.name) !== "image") {
       setLocalPreviewUrl(null);
       return;
     }
@@ -74,113 +106,100 @@ function FilePicker({
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
-  useEffect(() => {
-    if (!hasExisting || !templateId) {
-      if (remoteObjectUrlRef.current) {
-        URL.revokeObjectURL(remoteObjectUrlRef.current);
-        remoteObjectUrlRef.current = null;
-      }
-      setRemotePreviewUrl(null);
-      setPreviewLoading(false);
-      setPreviewFailed(false);
-      return;
-    }
-
-    let cancelled = false;
-    setPreviewLoading(true);
-    setPreviewFailed(false);
-
-    fetch(`/api/templates/${templateId}/assets/${assetType}`, {
-      credentials: "same-origin",
-    })
-      .then(async (response) => {
-        if (response.status === 404) {
-          throw new Error("not-found");
-        }
-        if (!response.ok) {
-          throw new Error("Unable to load template asset.");
-        }
-        return response.blob();
-      })
-      .then((blob) => {
-        if (cancelled) return;
-        if (remoteObjectUrlRef.current) {
-          URL.revokeObjectURL(remoteObjectUrlRef.current);
-        }
-        const objectUrl = URL.createObjectURL(blob);
-        remoteObjectUrlRef.current = objectUrl;
-        setRemotePreviewUrl(objectUrl);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPreviewFailed(true);
-          setRemotePreviewUrl(null);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setPreviewLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-      if (remoteObjectUrlRef.current) {
-        URL.revokeObjectURL(remoteObjectUrlRef.current);
-        remoteObjectUrlRef.current = null;
-      }
-    };
-  }, [assetType, hasExisting, templateId]);
-
-  const previewUrl = localPreviewUrl || remotePreviewUrl;
+  const existingName =
+    existingFileName ||
+    (existingUrl ? fileNameFromUrl(existingUrl) : null);
+  const selectedName = file?.name || existingName;
+  const assetType = file
+    ? getTemplateAssetType(null, file.name)
+    : getTemplateAssetType(null, existingName);
+  const imageUrl =
+    file && assetType === "image"
+      ? localPreviewUrl
+      : !file && assetType === "image"
+        ? existingUrl
+        : null;
+  const hasExisting = Boolean(existingUrl);
+  const hasSelection = Boolean(file) || hasExisting;
+  const statusLabel = file
+    ? "New file selected"
+    : hasExisting
+      ? "Current uploaded file"
+      : null;
+  const chooseLabel = file
+    ? "Change File"
+    : hasExisting
+      ? "Choose Replacement"
+      : "Choose File";
+  const sizeHint =
+    file && assetType === "pdf"
+      ? `PDF document · ${formatTemplateAssetSize(file.size)}`
+      : file && assetType === "image"
+        ? formatTemplateAssetSize(file.size)
+        : !file && assetType === "pdf"
+          ? "PDF document"
+          : null;
 
   return (
     <div>
       <Label htmlFor={id} className="mb-1 block">
         {label}
       </Label>
-      <div className="flex items-center gap-3">
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-background-200/70 bg-background-100">
-          {previewLoading && !previewUrl ? (
-            <Loader2 className="size-4 animate-spin text-foreground-400" />
-          ) : previewUrl ? (
-            <img
-              src={previewUrl}
-              alt=""
-              className="h-full w-full object-contain"
-              onError={() => {
-                setPreviewFailed(true);
-                if (previewUrl === remotePreviewUrl && remoteObjectUrlRef.current) {
-                  URL.revokeObjectURL(remoteObjectUrlRef.current);
-                  remoteObjectUrlRef.current = null;
-                  setRemotePreviewUrl(null);
-                }
-              }}
-            />
+      <div className="flex items-start gap-3">
+        <SignStampPreview assetType={hasSelection ? assetType : "file"} imageUrl={imageUrl} />
+        <div className="min-w-0 flex-1">
+          {hasSelection ? (
+            <>
+              <p className="truncate text-sm font-medium text-foreground-800">
+                {selectedName}
+              </p>
+              <p className="text-xs text-foreground-400">{statusLabel}</p>
+              {sizeHint ? (
+                <p className="text-xs text-foreground-400">{sizeHint}</p>
+              ) : null}
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                {!file && existingUrl ? (
+                  <a
+                    href={existingUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-md border border-background-200/70 bg-white px-3 py-1.5 text-sm font-medium text-foreground-700 transition-colors hover:bg-background-100"
+                  >
+                    View
+                  </a>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => inputRef.current?.click()}
+                  className="rounded-md border border-background-200/70 bg-white px-3 py-1.5 text-sm font-medium text-foreground-700 transition-colors hover:bg-background-100 disabled:pointer-events-none disabled:opacity-50"
+                >
+                  {chooseLabel}
+                </button>
+              </div>
+            </>
           ) : (
-            <ImageIcon className="size-5 text-foreground-400" />
+            <>
+              <button
+                type="button"
+                disabled={disabled}
+                onClick={() => inputRef.current?.click()}
+                className="rounded-md border border-background-200/70 bg-white px-3 py-1.5 text-sm font-medium text-foreground-700 transition-colors hover:bg-background-100 disabled:pointer-events-none disabled:opacity-50"
+              >
+                Choose File
+              </button>
+              <p className="mt-1.5 text-xs text-foreground-400">
+                PDF, PNG, JPG, JPEG, WEBP
+              </p>
+            </>
           )}
         </div>
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => inputRef.current?.click()}
-          className="rounded-md border border-background-200/70 bg-white px-3 py-1.5 text-sm font-medium text-foreground-700 transition-colors hover:bg-background-100 disabled:pointer-events-none disabled:opacity-50"
-        >
-          Choose File
-        </button>
-        <span className="min-w-0 truncate text-xs text-foreground-400">
-          {file?.name ||
-            (hasExisting
-              ? previewFailed
-                ? "Unable to load preview"
-                : currentLabel
-              : "No file chosen")}
-        </span>
         <input
           ref={inputRef}
           id={id}
           name={name}
           type="file"
-          accept="image/png,image/jpeg,image/webp"
+          accept={TEMPLATE_ASSET_ACCEPT}
           disabled={disabled}
           className="sr-only"
           onChange={(e) => {
@@ -189,24 +208,9 @@ function FilePicker({
               onFileChange(null);
               return;
             }
-            const lower = next.name.toLowerCase();
-            const extOk = TEMPLATE_ASSET_EXTENSIONS.some((ext) =>
-              lower.endsWith(ext),
-            );
-            const mime = (next.type || "").toLowerCase();
-            const mimeOk =
-              !mime ||
-              TEMPLATE_ASSET_MIME_TYPES.includes(
-                mime as (typeof TEMPLATE_ASSET_MIME_TYPES)[number],
-              );
-            if (!extOk || !mimeOk) {
-              toast.error(`${label} type not allowed. Use PNG, JPG, JPEG, or WEBP.`);
-              e.target.value = "";
-              onFileChange(null);
-              return;
-            }
-            if (next.size > MAX_TEMPLATE_ASSET_BYTES) {
-              toast.error(`${label} exceeds the 5 MB limit.`);
+            const error = templateAssetValidationError(next);
+            if (error) {
+              toast.error(error);
               e.target.value = "";
               onFileChange(null);
               return;
@@ -227,6 +231,7 @@ export function BidProfileTemplateDialog({
   companyName,
   companyAddress,
 }: BidProfileTemplateDialogProps) {
+  const router = useRouter();
   const action =
     mode === "edit"
       ? updateBidProfileTemplateAction
@@ -234,8 +239,7 @@ export function BidProfileTemplateDialog({
   const [state, formAction, pending] = useActionState(action, {});
   const [isDefault, setIsDefault] = useState(Boolean(template?.isDefault));
   const [formKey, setFormKey] = useState(0);
-  const [companyLogoFile, setCompanyLogoFile] = useState<File | null>(null);
-  const [companySignatoryFile, setCompanySignatoryFile] = useState<File | null>(
+  const [companySignStampFile, setCompanySignStampFile] = useState<File | null>(
     null,
   );
   const submissionPendingRef = useRef(false);
@@ -248,8 +252,7 @@ export function BidProfileTemplateDialog({
   useEffect(() => {
     if (open) {
       setIsDefault(Boolean(template?.isDefault));
-      setCompanyLogoFile(null);
-      setCompanySignatoryFile(null);
+      setCompanySignStampFile(null);
       setFormKey((k) => k + 1);
     }
   }, [open, template?.id, template?.isDefault]);
@@ -260,6 +263,7 @@ export function BidProfileTemplateDialog({
     if (state?.ok) {
       submissionPendingRef.current = false;
       toast.success(isEditing ? "Template updated." : "Template created.");
+      router.refresh();
       onOpenChange(false);
       return;
     }
@@ -268,7 +272,7 @@ export function BidProfileTemplateDialog({
       submissionPendingRef.current = false;
       toast.error(state.error);
     }
-  }, [state, isEditing, onOpenChange]);
+  }, [state, isEditing, onOpenChange, router]);
 
   function handleClose() {
     if (pending) return;
@@ -576,38 +580,24 @@ export function BidProfileTemplateDialog({
               </div>
             </section>
 
-            <div>
+            <div className="max-w-xl">
               <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
                 Documents
               </h3>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <FilePicker
-                  id="companyLogo"
-                  name="companyLogo"
-                  label="Company Logo"
-                  currentLabel="Current logo"
-                  disabled={pending}
-                  hasExisting={Boolean(isEditing && template?.companyLogoUrl)}
-                  templateId={isEditing ? template?.id : undefined}
-                  assetType="logo"
-                  file={companyLogoFile}
-                  onFileChange={setCompanyLogoFile}
-                />
-                <FilePicker
-                  id="companySignatory"
-                  name="companySignatory"
-                  label="Company Signatory"
-                  currentLabel="Current signatory"
-                  disabled={pending}
-                  hasExisting={Boolean(
-                    isEditing && template?.companySignatoryUrl,
-                  )}
-                  templateId={isEditing ? template?.id : undefined}
-                  assetType="signatory"
-                  file={companySignatoryFile}
-                  onFileChange={setCompanySignatoryFile}
-                />
-              </div>
+              <FilePicker
+                id="companySignStamp"
+                name="companySignStamp"
+                label="Company Sign + Stamp"
+                disabled={pending}
+                existingUrl={
+                  isEditing ? template?.companySignStampUrl : null
+                }
+                existingFileName={
+                  isEditing ? template?.companySignStampFileName : null
+                }
+                file={companySignStampFile}
+                onFileChange={setCompanySignStampFile}
+              />
             </div>
           </div>
 

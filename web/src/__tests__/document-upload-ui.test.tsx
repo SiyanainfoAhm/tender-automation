@@ -111,4 +111,17 @@ describe("UploadDocumentDialog copy", () => {
     expect(screen.getAllByText(/up to 100 MB/i).length).toBeGreaterThan(0);
     expect(screen.queryByText(/up to 25 MB/i)).toBeNull();
   });
+
+  it("does not offer GST or PAN as certificate types", () => {
+    render(
+      <UploadDocumentDialog
+        open
+        onOpenChange={() => undefined}
+        kind="certificate"
+      />,
+    );
+    const select = screen.getByLabelText(/Certificate Type/i);
+    expect(select.textContent).not.toMatch(/\bGST\b/);
+    expect(select.textContent).not.toMatch(/\bPAN\b/);
+  });
 });
