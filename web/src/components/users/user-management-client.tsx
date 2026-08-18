@@ -162,6 +162,7 @@ export function UserManagementClient({
         <TeamMemberTable
           rows={filteredRows}
           canEdit={canEdit}
+          canInvite={canInvite}
           canDeactivate={canDeactivate}
           canManageRoles={canManageRoles}
           emptyMessage={

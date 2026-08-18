@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { Loader2, UserPlus } from "lucide-react";
+import { toast } from "sonner";
 
 import {
   FieldValidationHint,
@@ -29,6 +30,7 @@ import { ROLE_META } from "@/lib/rbac/permissions";
 import { USER_ROLES } from "@/lib/validations";
 import { getEmailValidationStatus } from "@/lib/validations/email-rules";
 import { getPasswordRuleStatuses } from "@/lib/validations/password-rules";
+import type { InviteUserActionResult } from "@/lib/users/invite-results";
 import { inviteCompanyUserAction } from "@/server/actions/team";
 
 export function InviteUserDialog() {
@@ -40,17 +42,35 @@ export function InviteUserDialog() {
   const [role, setRole] = useState("BID_COORDINATOR");
   const [state, formAction, pending] = useActionState(
     inviteCompanyUserAction,
-    {},
+    {} as InviteUserActionResult,
   );
+  const wasPending = useRef(false);
 
   useEffect(() => {
-    if (state?.ok) {
-      setOpen(false);
-      setEmail("");
-      setPassword("");
-      setRole("BID_COORDINATOR");
+    if (wasPending.current && !pending) {
+      if (state?.ok && state.inviteSent) {
+        toast.success("User created and invitation sent.");
+        setOpen(false);
+        setEmail("");
+        setPassword("");
+        setRole("BID_COORDINATOR");
+        setEmailTouched(false);
+        setPasswordTouched(false);
+      } else if (state?.ok && state.inviteSent === false) {
+        toast.error(
+          state.warning ||
+            "User created, but invitation email failed.",
+        );
+        setOpen(false);
+        setEmail("");
+        setPassword("");
+        setRole("BID_COORDINATOR");
+        setEmailTouched(false);
+        setPasswordTouched(false);
+      }
     }
-  }, [state?.ok]);
+    wasPending.current = pending;
+  }, [pending, state]);
 
   const emailStatus = getEmailValidationStatus(email);
   const passwordRules = getPasswordRuleStatuses(password);

@@ -5,6 +5,7 @@ import type { UserRole } from "@/lib/validations";
 import { EditUserDialog } from "./edit-user-dialog";
 import { MemberAvatar } from "./member-avatar";
 import { RemoveUserDialog } from "./remove-user-dialog";
+import { ResendInviteDialog } from "./resend-invite-dialog";
 import { RoleBadge } from "./role-badge";
 import { UserStatusBadge, type MemberStatus } from "./user-status-badge";
 import { ViewUserDialog } from "./view-user-dialog";
@@ -24,6 +25,7 @@ export type TeamMemberRow = {
 type TeamMemberTableProps = {
   rows: TeamMemberRow[];
   canEdit: boolean;
+  canInvite: boolean;
   canDeactivate: boolean;
   canManageRoles: boolean;
   emptyMessage?: string;
@@ -32,6 +34,7 @@ type TeamMemberTableProps = {
 export function TeamMemberTable({
   rows,
   canEdit,
+  canInvite,
   canDeactivate,
   canManageRoles,
   emptyMessage = "No team members match your filters.",
@@ -115,6 +118,12 @@ export function TeamMemberTable({
                             canManageRoles={canManageRoles}
                           />
                         ) : null}
+                        {canInvite ? (
+                          <ResendInviteDialog
+                            userId={row.id}
+                            fullName={row.fullName}
+                          />
+                        ) : null}
                         {canDeactivate ? (
                           <RemoveUserDialog
                             userId={row.id}
@@ -156,6 +165,12 @@ export function TeamMemberTable({
                     <EditUserDialog
                       user={row}
                       canManageRoles={canManageRoles}
+                    />
+                  ) : null}
+                  {canInvite ? (
+                    <ResendInviteDialog
+                      userId={row.id}
+                      fullName={row.fullName}
                     />
                   ) : null}
                   {canDeactivate ? (

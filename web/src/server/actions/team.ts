@@ -3,6 +3,12 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
+import { generateTemporaryPassword } from "@/lib/auth/temporary-password";
+import { sendTenderFlowUserInvite } from "@/lib/email/tenderflow-user-invite";
+import type {
+  InviteUserActionResult,
+  ResendInviteActionResult,
+} from "@/lib/users/invite-results";
 import { USER_ROLES, passwordSchema, type UserRole } from "@/lib/validations";
 import { hasPermission, requirePermissionStrict } from "@/server/auth/permissions";
 import {
@@ -15,6 +21,7 @@ import {
   createUser,
   getUserByEmail,
   getUserById,
+  resetUserPassword,
   updateUser,
 } from "@/server/repositories/userRepository";
 
@@ -28,7 +35,7 @@ const inviteSchema = z.object({
 export async function inviteCompanyUserAction(
   _prev: unknown,
   formData: FormData,
-): Promise<{ error?: string; ok?: boolean }> {
+): Promise<InviteUserActionResult> {
   try {
     const session = await requirePermissionStrict("users.invite");
     const parsed = inviteSchema.safeParse({
@@ -67,7 +74,7 @@ export async function inviteCompanyUserAction(
       invitedBy: session.user.id,
     });
 
-    await createUser({
+    const created = await createUser({
       email: parsed.data.email,
       fullName:
         parsed.data.fullName || parsed.data.email.split("@")[0] || "User",
@@ -82,11 +89,93 @@ export async function inviteCompanyUserAction(
       invitationId: invite.id,
     });
 
+    const emailResult = await sendTenderFlowUserInvite({
+      mode: "initial",
+      name: created.fullName,
+      email: created.email,
+      temporaryPassword: parsed.data.temporaryPassword,
+    });
+
     revalidatePath("/users");
-    return { ok: true };
+
+    if (!emailResult.ok) {
+      console.error("[TenderFlow invite] invitation email failed", {
+        userId: created.id,
+        email: created.email,
+      });
+      return {
+        ok: true,
+        userCreated: true,
+        inviteSent: false,
+        warning: "User created, but the invitation email could not be sent.",
+      };
+    }
+
+    console.info("[TenderFlow invite] invitation sent", {
+      userId: created.id,
+      email: created.email,
+    });
+    return { ok: true, userCreated: true, inviteSent: true };
   } catch (error) {
     return {
       error: error instanceof Error ? error.message : "Unable to invite user",
+    };
+  }
+}
+
+export async function resendTenderFlowInviteAction(
+  userId: string,
+): Promise<ResendInviteActionResult> {
+  try {
+    const session = await requirePermissionStrict("users.invite");
+    if (!userId) {
+      return { error: "User not found." };
+    }
+
+    const user = await getUserById(userId);
+    if (!user || user.companyId !== session.companyId) {
+      return { error: "User not found." };
+    }
+    if (!user.email) {
+      return { error: "This user does not have an email address." };
+    }
+
+    const temporaryPassword = generateTemporaryPassword();
+    await resetUserPassword({
+      userId: user.id,
+      temporaryPassword,
+      actorId: session.user.id,
+    });
+
+    const emailResult = await sendTenderFlowUserInvite({
+      mode: "resend",
+      name: user.fullName || user.email,
+      email: user.email,
+      temporaryPassword,
+    });
+
+    if (!emailResult.ok) {
+      console.error("[TenderFlow invite] resend email failed", {
+        userId: user.id,
+        email: user.email,
+      });
+      return {
+        error:
+          "A new temporary password was generated, but the invitation email could not be sent. Please retry Resend Invite.",
+        passwordReset: true,
+        inviteSent: false,
+      };
+    }
+
+    console.info("[TenderFlow invite] invitation sent", {
+      userId: user.id,
+      email: user.email,
+    });
+    return { ok: true, inviteSent: true };
+  } catch (error) {
+    return {
+      error:
+        error instanceof Error ? error.message : "Unable to resend invitation",
     };
   }
 }

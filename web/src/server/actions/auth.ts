@@ -20,6 +20,7 @@ import {
   profileUpdateSchema,
   signupSchema,
 } from "@/lib/validations";
+import { sendTenderFlowUserInvite } from "@/lib/email/tenderflow-user-invite";
 import {
   createUser,
   updateUser,
@@ -146,6 +147,9 @@ export async function signupAction(
 export async function createUserAction(formData: FormData): Promise<{
   error?: string;
   ok?: boolean;
+  userCreated?: boolean;
+  inviteSent?: boolean;
+  warning?: string;
 }> {
   const { requirePermissionStrict } = await import("@/server/auth/permissions");
   const session = await requirePermissionStrict("users.invite");
@@ -159,13 +163,35 @@ export async function createUserAction(formData: FormData): Promise<{
     return { error: parsed.error.issues[0]?.message || "Invalid input" };
   }
   try {
-    await createUser({
+    const created = await createUser({
       ...parsed.data,
       createdBy: session.user.id,
       companyId: session.companyId,
     });
+    const emailResult = await sendTenderFlowUserInvite({
+      mode: "initial",
+      name: created.fullName,
+      email: created.email,
+      temporaryPassword: parsed.data.password,
+    });
     revalidatePath("/users");
-    return { ok: true };
+    if (!emailResult.ok) {
+      console.error("[TenderFlow invite] invitation email failed", {
+        userId: created.id,
+        email: created.email,
+      });
+      return {
+        ok: true,
+        userCreated: true,
+        inviteSent: false,
+        warning: "User created, but the invitation email could not be sent.",
+      };
+    }
+    console.info("[TenderFlow invite] invitation sent", {
+      userId: created.id,
+      email: created.email,
+    });
+    return { ok: true, userCreated: true, inviteSent: true };
   } catch (error) {
     return {
       error: error instanceof Error ? error.message : "Unable to create user",
