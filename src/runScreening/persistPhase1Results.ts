@@ -112,6 +112,7 @@ export async function persistPhase1NoBidResults(options: {
           last_seen_at: now,
           crawled_at: null,
           supabase_synced_at: now,
+          scraped_date: options.runDate,
         },
         { onConflict: "source_portal,source_tender_id" },
       );

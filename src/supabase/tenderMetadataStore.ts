@@ -55,6 +55,7 @@ export interface VerifyTender247MetadataResult {
 export async function upsertTender247Metadata(options: {
   metadata: CompleteTenderMetadata;
   localFolderPath: string;
+  scrapedDate?: string | null;
   aiSummaryAvailable?: boolean;
   documentArchiveAvailable?: boolean;
   logger?: {
@@ -74,6 +75,7 @@ export async function upsertTender247Metadata(options: {
   const row = buildTender247SupabaseRow({
     metadata,
     localFolderPath,
+    scrapedDate: options.scrapedDate,
     aiSummaryAvailable: options.aiSummaryAvailable,
     documentArchiveAvailable: options.documentArchiveAvailable,
   });
@@ -196,6 +198,7 @@ export async function verifyTender247MetadataRow(
 export async function upsertBidassistMetadata(options: {
   metadata: BidassistMetadata;
   localFolderPath: string;
+  scrapedDate?: string | null;
   documentArchiveAvailable?: boolean;
   logger?: {
     info: (msg: string) => void;
@@ -217,6 +220,7 @@ export async function upsertBidassistMetadata(options: {
   const row = buildBidassistSupabaseRow({
     metadata,
     localFolderPath,
+    scrapedDate: options.scrapedDate,
     documentArchiveAvailable: options.documentArchiveAvailable,
   });
 

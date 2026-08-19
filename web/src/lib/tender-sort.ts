@@ -18,6 +18,9 @@ export const TENDER_SORT_COLUMNS = {
   created: "created_at",
   created_at: "created_at",
   created_date: "created_at",
+  scraped: "scraped_date",
+  scraped_date: "scraped_date",
+  scraped_date_desc: "scraped_date",
   // Legacy / default keys
   updated_at: "updated_at",
   crawled_at: "crawled_at",
@@ -31,7 +34,7 @@ export const TENDER_SORT_COLUMNS = {
 
 export type TenderSortKey = keyof typeof TENDER_SORT_COLUMNS;
 
-export const DEFAULT_TENDER_SORT_BY = "created_at" as const;
+export const DEFAULT_TENDER_SORT_BY = "scraped_date" as const;
 export const DEFAULT_TENDER_SORT_DIR = "desc" as const;
 
 export function resolveTenderSortColumn(sortBy: string | undefined): string {
@@ -46,6 +49,7 @@ export function isWhitelistedSortKey(sortBy: string | undefined): boolean {
 
 /** Canonical URL sort keys shown in the table headers. */
 export const TABLE_SORT_KEYS = [
+  "scraped",
   "created",
   "title",
   "source",
@@ -59,6 +63,8 @@ export const TABLE_SORT_KEYS = [
 export type TableSortKey = (typeof TABLE_SORT_KEYS)[number];
 
 export const TENDER_SORT_MODES = [
+  { id: "scraped_desc", label: "Scraped Date: Newest First", sort: "scraped_date", dir: "desc" },
+  { id: "scraped_asc", label: "Scraped Date: Oldest First", sort: "scraped_date", dir: "asc" },
   { id: "created_desc", label: "Created: Newest First", sort: "created_at", dir: "desc" },
   { id: "created_asc", label: "Created: Oldest First", sort: "created_at", dir: "asc" },
   { id: "closing_asc", label: "Deadline: Soonest First", sort: "closing", dir: "asc" },
@@ -71,13 +77,14 @@ export const TENDER_SORT_MODES = [
 
 export function sortModeId(sortBy: string, sortDir: "asc" | "desc"): string {
   const column = resolveTenderSortColumn(sortBy);
+  if (column === "scraped_date") return sortDir === "asc" ? "scraped_asc" : "scraped_desc";
   if (column === "created_at") return sortDir === "asc" ? "created_asc" : "created_desc";
   if (column === "closing_date") return sortDir === "asc" ? "closing_asc" : "closing_desc";
-  if (column === "tender_value") return sortDir === "desc" ? "value_desc" : "value_desc";
+  if (column === "tender_value") return "value_desc";
   if (column === "emd_amount") return "emd_desc";
   if (column === "confidence") return "match_desc";
   if (column === "effective_qualification_status") return "status_asc";
-  return "created_desc";
+  return "scraped_desc";
 }
 
 /**
@@ -96,6 +103,7 @@ export function nextSortState(options: {
 
   const startDir: "asc" | "desc" =
     options.clicked === "created" ||
+    options.clicked === "scraped" ||
     options.clicked === "value" ||
     options.clicked === "emd" ||
     options.clicked === "match"
@@ -133,6 +141,8 @@ export function normalizeSortKeyForUi(sortBy: string): TableSortKey | null {
     created: "created",
     created_at: "created",
     created_date: "created",
+    scraped: "scraped",
+    scraped_date: "scraped",
   };
   return reverse[sortBy] ?? null;
 }

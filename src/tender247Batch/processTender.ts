@@ -20,6 +20,7 @@ import {
   ensureTender247DateScopedDir,
   getActiveTender247RunContext,
   requestedDateFromDateFolder,
+  requestedDateFromDateFolderSafe,
 } from "./tender247RunContext.js";
 import {
   extractCompleteTenderMetadata,
@@ -1488,6 +1489,9 @@ async function persistTender247Metadata(options: {
   const result = await upsertTender247Metadata({
     metadata,
     localFolderPath: tenderFolder,
+    scrapedDate:
+      getActiveTender247RunContext()?.requestedDate ??
+      requestedDateFromDateFolderSafe(path.dirname(tenderFolder)),
     logger,
   });
   writeMetadataSyncMarker(tenderFolder, {

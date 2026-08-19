@@ -77,6 +77,7 @@ test("buildTender247SupabaseRow maps CompleteTenderMetadata fields", () => {
   assert.equal(row.document_archive_available, true);
   assert.equal((row.raw_metadata as CompleteTenderMetadata).t247Id, "102667034");
   assert.equal(row.content_hash.length, 64);
+  assert.equal(row.scraped_date, "2026-08-05");
 });
 
 test("mapDownloadStatus marks sync failures", () => {

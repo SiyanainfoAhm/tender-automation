@@ -2,7 +2,6 @@ import { Suspense } from "react";
 import { Clock, FileText, Target, TrendingUp, Wallet } from "lucide-react";
 
 import { CompactKpiCard } from "@/components/tenders/compact-kpi-card";
-import { TenderPageActions } from "@/components/tenders/tender-page-actions";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatIndianCurrency } from "@/lib/format";
 import { sessionHasPermission } from "@/server/auth/permissions";
@@ -96,29 +95,17 @@ export default async function TendersPage() {
   ]);
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h1 className="section-title">Tender Management</h1>
-          <p className="mt-0.5 text-sm text-foreground-500">
-            Import, screen and track tenders from all your connected portals
-          </p>
-        </div>
-        <TenderPageActions
-          canImport={sessionHasPermission(session, "tenders.import")}
-        />
-      </div>
-
-      <Suspense fallback={<TenderManagementStatsSkeleton />}>
-        <TenderManagementStats />
-      </Suspense>
-
-      <TenderExplorer
-        allCount={allCount}
-        categories={facets.categories}
-        portals={facets.portals}
-      />
-    </div>
+    <TenderExplorer
+      allCount={allCount}
+      categories={facets.categories}
+      portals={facets.portals}
+      canImport={sessionHasPermission(session, "tenders.import")}
+      stats={
+        <Suspense fallback={<TenderManagementStatsSkeleton />}>
+          <TenderManagementStats />
+        </Suspense>
+      }
+    />
   );
 }
 

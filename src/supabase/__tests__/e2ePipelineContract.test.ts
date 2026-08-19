@@ -86,6 +86,7 @@ test("1. Tender247 metadata mapper upsert payload", () => {
   assert.ok(row.raw_metadata);
   assert.ok(row.content_hash);
   assert.ok(row.supabase_synced_at);
+  assert.equal(row.scraped_date, "2026-08-05");
 });
 
 test("2. BidAssist metadata mapper upsert payload", () => {
@@ -105,6 +106,7 @@ test("2. BidAssist metadata mapper upsert payload", () => {
     (row.raw_metadata as unknown as BidassistMetadata).bidassistId,
     metadata.bidassistId,
   );
+  assert.equal(row.scraped_date, "2026-08-05");
 });
 
 test("3. Manifest limits qualification to current-run IDs", () => {

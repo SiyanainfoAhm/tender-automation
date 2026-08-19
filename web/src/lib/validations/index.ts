@@ -1,8 +1,5 @@
 import { z } from "zod";
-import {
-  CREATED_DATE_PRESETS,
-  isIsoCalendarDate,
-} from "@/lib/tender-date-filter";
+import { isIsoCalendarDate, normalizeDatePreset } from "@/lib/tender-date-filter";
 import {
   DEFAULT_TENDER_SORT_BY,
   DEFAULT_TENDER_SORT_DIR,
@@ -205,7 +202,7 @@ export const tenderFiltersSchema = z
     sortBy: z.string().optional(),
     sortDir: z.enum(["asc", "desc"]).optional(),
     /** Created/imported date preset (not deadline). */
-    date: z.enum(CREATED_DATE_PRESETS).optional(),
+    date: z.string().optional(),
     selectedDate: z.string().optional(),
   })
   .transform((data) => {
@@ -222,7 +219,7 @@ export const tenderFiltersSchema = z
     const selectedDate = isIsoCalendarDate(data.selectedDate)
       ? data.selectedDate
       : undefined;
-    const date = data.date;
+    const date = normalizeDatePreset(data.date);
     return {
       ...data,
       source: normalizeSource(data.source),

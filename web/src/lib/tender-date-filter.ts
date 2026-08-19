@@ -1,10 +1,11 @@
 /**
- * Tender list created/imported date presets in the application timezone.
- * Boundaries are IST calendar days — not UTC midnight.
+ * Tender Management scrape/source-date presets in Asia/Kolkata.
+ * Filters a SQL `date` column (scraped_date), not created_at or deadline.
  */
 
 export const APP_TIME_ZONE = "Asia/Kolkata";
 export const APP_TZ_OFFSET = "+05:30";
+export const TENDER_DATE_FILTER_FIELD = "scraped_date";
 
 export const CREATED_DATE_PRESETS = [
   "today",
@@ -28,7 +29,29 @@ export const CREATED_DATE_PRESET_LABELS: Record<CreatedDatePreset, string> = {
   custom: "Select Date",
 };
 
-const YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+const YMD_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+] as const;
+
+export function normalizeDatePreset(
+  value: string | null | undefined,
+): CreatedDatePreset | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
+  return isCreatedDatePreset(normalized) ? normalized : undefined;
+}
 
 export function isCreatedDatePreset(
   value: string | null | undefined,
@@ -38,7 +61,9 @@ export function isCreatedDatePreset(
   );
 }
 
-export function isIsoCalendarDate(value: string | null | undefined): value is string {
+export function isIsoCalendarDate(
+  value: string | null | undefined,
+): value is string {
   return Boolean(value && YMD_RE.test(value));
 }
 
@@ -60,37 +85,54 @@ function shiftYmd(ymd: string, days: number): string {
   return calendarDateInAppTz(shifted);
 }
 
-export function dayStartIso(ymd: string): string {
-  return `${ymd}T00:00:00.000${APP_TZ_OFFSET}`;
+function daysFromMonday(ymd: string): number {
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIME_ZONE,
+    weekday: "short",
+  }).format(atNoonIst(ymd));
+  const map: Record<string, number> = {
+    Mon: 0,
+    Tue: 1,
+    Wed: 2,
+    Thu: 3,
+    Fri: 4,
+    Sat: 5,
+    Sun: 6,
+  };
+  return map[weekday] ?? 0;
 }
 
-export function dayEndIso(ymd: string): string {
-  return `${ymd}T23:59:59.999${APP_TZ_OFFSET}`;
+export function formatIsoCalendarDate(ymd: string): string {
+  const match = ymd.match(YMD_RE);
+  if (!match) return "—";
+  const year = match[1];
+  const month = match[2];
+  const day = match[3];
+  return `${Number(day)} ${MONTHS[Number(month) - 1]} ${year}`;
 }
 
 export function formatCompactAppDate(
   value: string | Date | null | undefined,
 ): string {
   if (!value) return "—";
+  if (typeof value === "string") {
+    const ymd = value.trim().slice(0, 10);
+    if (YMD_RE.test(ymd) && (value.length === 10 || value[10] === "T" || value[10] === " ")) {
+      return formatIsoCalendarDate(ymd);
+    }
+  }
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: APP_TIME_ZONE,
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  }).formatToParts(date);
-  const day = parts.find((p) => p.type === "day")?.value;
-  const month = parts.find((p) => p.type === "month")?.value;
-  const year = parts.find((p) => p.type === "year")?.value;
-  if (!day || !month || !year) return "—";
-  return `${Number(day)} ${month} ${year}`;
+  return formatIsoCalendarDate(calendarDateInAppTz(date));
 }
 
 export function formatAppDateTimeTooltip(
   value: string | Date | null | undefined,
 ): string | undefined {
   if (!value) return undefined;
+  if (typeof value === "string" && YMD_RE.test(value.trim())) {
+    return formatIsoCalendarDate(value.trim());
+  }
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return undefined;
   return new Intl.DateTimeFormat("en-GB", {
@@ -104,91 +146,54 @@ export function formatAppDateTimeTooltip(
   }).format(date);
 }
 
-export type CreatedDateRange = {
-  from: string;
-  to: string;
-};
+export type ScrapedDateFilter =
+  | { mode: "eq"; value: string }
+  | { mode: "range"; gte: string; lte: string };
 
-export function resolveCreatedDateRange(options: {
+export function resolveScrapedDateFilter(options: {
   preset?: string | null;
   selectedDate?: string | null;
   now?: Date;
-}): CreatedDateRange | null {
-  const preset = options.preset;
-  if (!preset || !isCreatedDatePreset(preset)) return null;
+}): ScrapedDateFilter | null {
+  const preset = normalizeDatePreset(options.preset);
+  if (!preset) return null;
 
   const now = options.now ?? new Date();
   const today = calendarDateInAppTz(now);
-  const nowIso = now.toISOString();
 
   switch (preset) {
     case "today":
-      return { from: dayStartIso(today), to: dayEndIso(today) };
-    case "yesterday": {
-      const ymd = shiftYmd(today, -1);
-      return { from: dayStartIso(ymd), to: dayEndIso(ymd) };
-    }
+      return { mode: "eq", value: today };
+    case "yesterday":
+      return { mode: "eq", value: shiftYmd(today, -1) };
     case "this_week": {
-      const todayDate = atNoonIst(today);
-      const weekday = new Intl.DateTimeFormat("en-US", {
-        timeZone: APP_TIME_ZONE,
-        weekday: "short",
-      }).format(todayDate);
-      const daysFromMonday: Record<string, number> = {
-        Mon: 0,
-        Tue: 1,
-        Wed: 2,
-        Thu: 3,
-        Fri: 4,
-        Sat: 5,
-        Sun: 6,
-      };
-      const offset = daysFromMonday[weekday] ?? 0;
-      const monday = shiftYmd(today, -offset);
-      return { from: dayStartIso(monday), to: nowIso };
+      const monday = shiftYmd(today, -daysFromMonday(today));
+      return { mode: "range", gte: monday, lte: today };
     }
     case "last_week": {
-      const todayDate = atNoonIst(today);
-      const weekday = new Intl.DateTimeFormat("en-US", {
-        timeZone: APP_TIME_ZONE,
-        weekday: "short",
-      }).format(todayDate);
-      const daysFromMonday: Record<string, number> = {
-        Mon: 0,
-        Tue: 1,
-        Wed: 2,
-        Thu: 3,
-        Fri: 4,
-        Sat: 5,
-        Sun: 6,
+      const thisMonday = shiftYmd(today, -daysFromMonday(today));
+      return {
+        mode: "range",
+        gte: shiftYmd(thisMonday, -7),
+        lte: shiftYmd(thisMonday, -1),
       };
-      const offset = daysFromMonday[weekday] ?? 0;
-      const thisMonday = shiftYmd(today, -offset);
-      const lastMonday = shiftYmd(thisMonday, -7);
-      const lastSunday = shiftYmd(thisMonday, -1);
-      return { from: dayStartIso(lastMonday), to: dayEndIso(lastSunday) };
     }
-    case "this_month": {
-      const monthStart = `${today.slice(0, 7)}-01`;
-      return { from: dayStartIso(monthStart), to: nowIso };
-    }
+    case "this_month":
+      return { mode: "range", gte: `${today.slice(0, 7)}-01`, lte: today };
     case "last_month": {
       const thisMonthStart = atNoonIst(`${today.slice(0, 7)}-01`);
-      const lastMonthAnchor = new Date(
-        thisMonthStart.getTime() - 86_400_000,
-      );
+      const lastMonthAnchor = new Date(thisMonthStart.getTime() - 86_400_000);
       const lastMonthYmd = calendarDateInAppTz(lastMonthAnchor);
-      const lastMonthStart = `${lastMonthYmd.slice(0, 7)}-01`;
-      const lastMonthEnd = lastMonthYmd;
       return {
-        from: dayStartIso(lastMonthStart),
-        to: dayEndIso(lastMonthEnd),
+        mode: "range",
+        gte: `${lastMonthYmd.slice(0, 7)}-01`,
+        lte: lastMonthYmd,
       };
     }
     case "custom": {
       const selected = options.selectedDate?.trim();
       if (!isIsoCalendarDate(selected)) return null;
-      return { from: dayStartIso(selected), to: dayEndIso(selected) };
+      return { mode: "eq", value: selected };
     }
     default:
       return null;

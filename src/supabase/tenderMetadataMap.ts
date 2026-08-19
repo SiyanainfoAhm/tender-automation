@@ -54,6 +54,8 @@ export interface AgenttenderTenderRow {
   last_seen_at: string;
   crawled_at: string | null;
   supabase_synced_at: string;
+  /** Source/portal batch calendar date (YYYY-MM-DD), not DB insert time. */
+  scraped_date: string | null;
 }
 
 function asText(value: unknown): string | null {
@@ -79,7 +81,6 @@ function asNumber(value: unknown): number | null {
   return null;
 }
 
-/** Parse portal dates such as 17-08-2026, 17/08/2026, or 2026-08-17. */
 export function parsePortalDate(value: unknown): string | null {
   const text = asText(value);
   if (!text) {
@@ -96,6 +97,39 @@ export function parsePortalDate(value: unknown): string | null {
     return `${dmy[3]}-${month}-${day}`;
   }
   return null;
+}
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Extract YYYY-MM-DD from a downloads/<date>/… path. */
+export function scrapedDateFromFolderPath(
+  localFolderPath: string | null | undefined,
+): string | null {
+  if (!localFolderPath) return null;
+  const normalized = localFolderPath.replace(/\\/g, "/");
+  const match = normalized.match(/(?:^|\/)(\d{4}-\d{2}-\d{2})(?:\/|$)/);
+  const value = match?.[1] ?? null;
+  return value && ISO_DATE_RE.test(value) ? value : null;
+}
+
+/**
+ * Canonical scrape/source batch date. Never derived from Date.now().
+ * Preference: explicit option, then run env, then date folder path.
+ */
+export function resolveScrapedDate(options: {
+  scrapedDate?: string | null;
+  localFolderPath?: string | null;
+}): string | null {
+  const explicit = asText(options.scrapedDate);
+  if (explicit && ISO_DATE_RE.test(explicit)) return explicit;
+
+  const envDate =
+    asText(process.env.TENDER247_RUN_REQUESTED_DATE) ||
+    asText(process.env.TENDER247_DATE) ||
+    asText(process.env.DATE);
+  if (envDate && ISO_DATE_RE.test(envDate)) return envDate;
+
+  return scrapedDateFromFolderPath(options.localFolderPath);
 }
 
 export function hashMetadataContent(metadata: unknown): string {
@@ -154,6 +188,7 @@ export function mapDownloadStatus(options: {
 export function buildTender247SupabaseRow(options: {
   metadata: CompleteTenderMetadata;
   localFolderPath: string;
+  scrapedDate?: string | null;
   syncFailed?: boolean;
   /** Optional overrides from on-disk artifact detection (backfill). */
   aiSummaryAvailable?: boolean;
@@ -252,6 +287,10 @@ export function buildTender247SupabaseRow(options: {
     last_seen_at: now,
     crawled_at: metadata.processedAt || now,
     supabase_synced_at: now,
+    scraped_date: resolveScrapedDate({
+      scrapedDate: options.scrapedDate,
+      localFolderPath,
+    }),
   };
 }
 
@@ -259,6 +298,7 @@ export function buildTender247SupabaseRow(options: {
 export function buildBidassistSupabaseRow(options: {
   metadata: BidassistMetadata;
   localFolderPath: string;
+  scrapedDate?: string | null;
   documentArchiveAvailable?: boolean;
   syncFailed?: boolean;
 }): AgenttenderTenderRow {
@@ -398,6 +438,10 @@ export function buildBidassistSupabaseRow(options: {
     last_seen_at: now,
     crawled_at: metadata.downloadedAt || now,
     supabase_synced_at: now,
+    scraped_date: resolveScrapedDate({
+      scrapedDate: options.scrapedDate,
+      localFolderPath,
+    }),
   };
 }
 

@@ -224,6 +224,8 @@ export function mapTenderDetail(options: {
     downloadStatus: asString(tender.download_status),
     firstSeenAt: asString(tender.first_seen_at),
     crawledAt: asString(tender.crawled_at),
+    scrapedDate: asString(tender.scraped_date),
+    createdAt: asString(tender.created_at),
     updatedAt: asString(tender.updated_at),
     prescreenStatus: asString(tender.prescreen_status),
     prescreenReason: asString(tender.prescreen_reason),

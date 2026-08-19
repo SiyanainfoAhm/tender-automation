@@ -21,15 +21,15 @@ describe("tender sort whitelist", () => {
     expect(resolveTenderSortColumn("confidence")).toBe("confidence");
   });
 
-  it("falls back unknown sort keys to created_at", () => {
-    expect(resolveTenderSortColumn("hacked_column")).toBe("created_at");
-    expect(resolveTenderSortColumn(undefined)).toBe("created_at");
+  it("falls back unknown sort keys to scraped_date", () => {
+    expect(resolveTenderSortColumn("hacked_column")).toBe("scraped_date");
+    expect(resolveTenderSortColumn(undefined)).toBe("scraped_date");
   });
 
   it("cycles desc → asc → reset for value", () => {
     expect(
       nextSortState({
-        currentSortBy: "created_at",
+        currentSortBy: "scraped_date",
         currentSortDir: "desc",
         clicked: "value",
       }),
@@ -54,7 +54,7 @@ describe("tender sort whitelist", () => {
 
   it("normalizes legacy keys for UI active state", () => {
     expect(normalizeSortKeyForUi("tender_value")).toBe("value");
-    expect(normalizeSortKeyForUi("created_at")).toBe("created");
+    expect(normalizeSortKeyForUi("scraped_date")).toBe("scraped");
   });
 
   it("never exposes arbitrary keys in whitelist", () => {
@@ -83,11 +83,14 @@ describe("tender filter URL params", () => {
 
   it("rejects unknown sort into default", () => {
     const parsed = tenderFiltersSchema.parse({ sort: "drop_table" });
-    expect(parsed.sortBy).toBe("created_at");
+    expect(parsed.sortBy).toBe("scraped_date");
     expect(parsed.sortDir).toBe("desc");
   });
 
   it("normalizes lowercase source query params", () => {
+    expect(tenderFiltersSchema.parse({ date: "this-week" }).date).toBe(
+      "this_week",
+    );
     expect(tenderFiltersSchema.parse({ date: "yesterday" }).date).toBe(
       "yesterday",
     );

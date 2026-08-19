@@ -3,7 +3,7 @@ import "server-only";
 import { getServerSupabase } from "@/lib/db/server";
 import { PROJECT_CATEGORIES, isProjectCategory } from "@/lib/project-category";
 import { assertSupabaseOk } from "@/lib/errors/db-query";
-import { resolveCreatedDateRange } from "@/lib/tender-date-filter";
+import { resolveScrapedDateFilter, TENDER_DATE_FILTER_FIELD } from "@/lib/tender-date-filter";
 import { resolveTenderSortColumn } from "@/lib/tender-sort";
 import { qualificationStatusesForFilter } from "@/lib/tender-status";
 import type { TenderFilters } from "@/lib/validations";
@@ -51,6 +51,7 @@ export type WebTenderListRow = {
   qualified_at: string | null;
   crawled_at: string | null;
   created_at: string;
+  scraped_date: string | null;
   first_seen_at: string | null;
   updated_at: string;
   effective_qualification_status: string | null;
@@ -79,6 +80,7 @@ export const WEB_TENDER_LIST_SELECT = [
   "qualification_status",
   "confidence",
   "created_at",
+  "scraped_date",
   "first_seen_at",
   "crawled_at",
   "updated_at",
@@ -96,6 +98,8 @@ const SORTABLE: Record<string, string> = {
   first_seen_at: "first_seen_at",
   created_at: "created_at",
   created: "created_at",
+  scraped_date: "scraped_date",
+  scraped: "scraped_date",
   qualification_status: "effective_qualification_status",
   source_portal: "source_portal",
   confidence: "confidence",
@@ -343,13 +347,15 @@ export async function listTenders(filters: TenderFilters): Promise<{
     query = query.lte(dateCol, dateBounds.to);
   }
 
-  const createdRange = resolveCreatedDateRange({
+  const scrapedFilter = resolveScrapedDateFilter({
     preset: filters.date,
     selectedDate: filters.selectedDate,
   });
-  if (createdRange) {
-    query = query.gte("created_at", createdRange.from);
-    query = query.lte("created_at", createdRange.to);
+  if (scrapedFilter?.mode === "eq") {
+    query = query.eq(TENDER_DATE_FILTER_FIELD, scrapedFilter.value);
+  } else if (scrapedFilter?.mode === "range") {
+    query = query.gte(TENDER_DATE_FILTER_FIELD, scrapedFilter.gte);
+    query = query.lte(TENDER_DATE_FILTER_FIELD, scrapedFilter.lte);
   }
 
   if (filters.q?.trim()) {
@@ -375,6 +381,9 @@ export async function listTenders(filters: TenderFilters): Promise<{
   // deterministic). Custom business rank (GO → … → NOT_EVALUATED) would need
   // a generated column / RPC — not applied here to keep queries simple.
   query = query.order(sortCol, { ascending, nullsFirst: false });
+  if (sortCol === "scraped_date") {
+    query = query.order("created_at", { ascending: false, nullsFirst: false });
+  }
   if (sortCol !== "id") {
     query = query.order("id", { ascending: true });
   }
@@ -386,6 +395,19 @@ export async function listTenders(filters: TenderFilters): Promise<{
     selectedColumns: WEB_TENDER_LIST_SELECT,
     filters: { ...filters, sortCol },
   });
+
+  if (filters.date) {
+    const filterValue =
+      scrapedFilter?.mode === "eq"
+        ? scrapedFilter.value
+        : scrapedFilter
+          ? `${scrapedFilter.gte}..${scrapedFilter.lte}`
+          : filters.selectedDate || "";
+    console.log(`TENDER_DATE_FILTER_MODE=${filters.date}`);
+    console.log(`TENDER_DATE_FILTER_VALUE=${filterValue}`);
+    console.log(`TENDER_DATE_FILTER_FIELD=${TENDER_DATE_FILTER_FIELD}`);
+    console.log(`TENDER_DATE_FILTER_RESULT_COUNT=${result.count ?? 0}`);
+  }
 
   return {
     rows: (data || []) as unknown as WebTenderListRow[],

@@ -85,6 +85,8 @@ export type TenderDetailDTO = {
   downloadStatus: string | null;
   firstSeenAt: string | null;
   crawledAt: string | null;
+  scrapedDate: string | null;
+  createdAt: string | null;
   updatedAt: string | null;
   prescreenStatus: string | null;
   prescreenReason: string | null;

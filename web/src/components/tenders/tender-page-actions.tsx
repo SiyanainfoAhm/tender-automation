@@ -15,7 +15,8 @@ function downloadCsv(rows: WebTenderListRow[], filename: string) {
     "Organization",
     "Category",
     "Status",
-    "Created",
+    "Scraped Date",
+    "Created At",
     "Closing",
     "Value",
     "EMD",
@@ -38,6 +39,7 @@ function downloadCsv(rows: WebTenderListRow[], filename: string) {
       `"${(r.organization || "").replace(/"/g, '""')}"`,
       `"${(r.project_category || "").replace(/"/g, '""')}"`,
       r.effective_qualification_status ?? "NOT_EVALUATED",
+      r.scraped_date ?? "",
       r.created_at ?? "",
       r.closing_date ?? "",
       `"${value.replace(/"/g, '""')}"`,
@@ -68,12 +70,14 @@ type TenderPageActionsProps = {
   canImport: boolean;
   rows?: WebTenderListRow[];
   page?: number;
+  disabled?: boolean;
 };
 
 export function TenderPageActions({
   canImport,
   rows = [],
   page = 1,
+  disabled = false,
 }: TenderPageActionsProps) {
   return (
     <div className="flex items-center gap-2">
@@ -82,6 +86,7 @@ export function TenderPageActions({
           type="button"
           variant="secondary"
           className="text-sm"
+          disabled={disabled}
           onClick={() =>
             exportTenderRowsCsv(rows, `tenders-page-${page}.csv`)
           }
@@ -91,8 +96,12 @@ export function TenderPageActions({
         </Button>
       ) : null}
       {canImport ? (
-        <Button asChild className="text-sm">
-          <Link href="/tenders/import">Import Tenders</Link>
+        <Button asChild={!disabled} className="text-sm" disabled={disabled}>
+          {disabled ? (
+            "Import Tenders"
+          ) : (
+            <Link href="/tenders/import">Import Tenders</Link>
+          )}
         </Button>
       ) : null}
     </div>
