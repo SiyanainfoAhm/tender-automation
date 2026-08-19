@@ -2,11 +2,12 @@ import type { TenderStatus } from "@/lib/tender-status";
 
 /**
  * Dashboard Active Bid Pipeline stages (UI buckets).
- * Maps DB qualification + bid-workspace submission into five stages.
+ * Maps DB qualification + bid-workspace submission into visible stages.
+ * CONDITIONAL_GO is Screening (not a separate May Bid stage).
  */
 export const DASHBOARD_PIPELINE_STAGES = [
   "screening",
-  "may_bid",
+  "partnership",
   "will_bid",
   "submitted",
   "won",
@@ -34,13 +35,13 @@ export const DASHBOARD_PIPELINE_META: Record<
     iconText: "text-slate-600",
     color: "#64748b",
   },
-  may_bid: {
-    label: "May Bid",
+  partnership: {
+    label: "Partnership",
     number: 2,
-    barClass: "bg-amber-500",
-    iconBg: "bg-amber-50",
-    iconText: "text-amber-600",
-    color: "#f59e0b",
+    barClass: "bg-violet-500",
+    iconBg: "bg-violet-50",
+    iconText: "text-violet-600",
+    color: "#7c3aed",
   },
   will_bid: {
     label: "Will Bid",
@@ -73,9 +74,8 @@ export const DASHBOARD_PIPELINE_META: Record<
  *
  * - Submitted bid workspace → Submitted (never inferred from GO alone)
  * - GO → Will Bid
- * - CONDITIONAL_GO → May Bid
- * - PARTNER_BID → May Bid (active partnership pursuit; wireframe has no separate stage)
- * - VERIFY / null / unknown → Screening
+ * - PARTNER_BID → Partnership
+ * - VERIFY / CONDITIONAL_GO / null / unknown → Screening
  * - NO_GO is excluded from the active pipeline
  * - Won is reserved for explicit award outcomes (none tracked yet → never returned)
  */
@@ -90,8 +90,7 @@ export function mapToDashboardPipelineStage(options: {
   const status = options.qualificationStatus as TenderStatus | null | undefined;
   if (status === "NO_GO") return null;
   if (status === "GO") return "will_bid";
-  if (status === "CONDITIONAL_GO" || status === "PARTNER_BID") return "may_bid";
-  // VERIFY, NOT_EVALUATED, null
+  if (status === "PARTNER_BID") return "partnership";
   return "screening";
 }
 
@@ -110,14 +109,14 @@ export function isPendingReviewStatus(
 }
 
 /**
- * Active Bids = May Bid / Will Bid / Submitted (incl. PARTNER_BID via may_bid).
- * Screening (VERIFY / unevaluated) is not an active bid.
+ * Active Bids = Partnership / Will Bid / Submitted.
+ * Screening (VERIFY / CONDITIONAL_GO / unevaluated) is not an active bid.
  */
 export function isActiveBidStatus(
   stage: DashboardPipelineStage | null,
 ): boolean {
   return (
-    stage === "may_bid" || stage === "will_bid" || stage === "submitted"
+    stage === "partnership" || stage === "will_bid" || stage === "submitted"
   );
 }
 

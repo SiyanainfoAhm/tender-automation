@@ -3,7 +3,10 @@
  * No AI inference — normalize and format only.
  */
 
-import { STATUS_DISPLAY_LABELS, type TenderStatus } from "@/lib/tender-status";
+import {
+  getTenderUiStatus,
+  TENDER_UI_STATUS_LABELS,
+} from "@/lib/tender-status";
 import {
   isProjectCategory,
   type ProjectCategory,
@@ -132,11 +135,7 @@ export function buildTopCategories(
 
 /** Human-readable decision / qualification status for charts and tooltips. */
 export function formatDecisionStatus(status: string | null | undefined): string {
-  if (!status || status === "NOT_EVALUATED") return "Not evaluated";
-  if (status in STATUS_DISPLAY_LABELS) {
-    return STATUS_DISPLAY_LABELS[status as TenderStatus];
-  }
-  return status.replace(/_/g, " ");
+  return TENDER_UI_STATUS_LABELS[getTenderUiStatus(status)];
 }
 
 /** Compact tender count copy for tooltips: "6 tenders". */

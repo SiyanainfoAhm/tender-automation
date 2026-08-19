@@ -35,19 +35,19 @@ describe("dashboard pipeline mapping", () => {
     ).toBe("submitted");
   });
 
-  it("maps May Bid / Partnership / Screening / excludes No Bid", () => {
+  it("maps Screening / Partnership / Will Bid / excludes No Bid", () => {
     expect(
       mapToDashboardPipelineStage({
         qualificationStatus: "CONDITIONAL_GO",
         submitted: false,
       }),
-    ).toBe("may_bid");
+    ).toBe("screening");
     expect(
       mapToDashboardPipelineStage({
         qualificationStatus: "PARTNER_BID",
         submitted: false,
       }),
-    ).toBe("may_bid");
+    ).toBe("partnership");
     expect(
       mapToDashboardPipelineStage({
         qualificationStatus: "VERIFY",

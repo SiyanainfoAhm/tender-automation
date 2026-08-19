@@ -3,33 +3,17 @@ import { Clock, FileText, Target, TrendingUp, Wallet } from "lucide-react";
 
 import { CompactKpiCard } from "@/components/tenders/compact-kpi-card";
 import { TenderPageActions } from "@/components/tenders/tender-page-actions";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatIndianCurrency } from "@/lib/format";
-import { tenderFiltersSchema } from "@/lib/validations";
 import { sessionHasPermission } from "@/server/auth/permissions";
 import { requireSession } from "@/server/auth/session";
 import { getTenderManagementKpis } from "@/server/repositories/analyticsRepository";
 import {
   getTenderExplorerFacets,
-  listTenders,
   countVisibleTenders,
 } from "@/server/repositories/tenderRepository";
 
 import { TenderExplorer, TenderExplorerSkeleton } from "./tender-explorer";
-
-function flattenSearchParams(
-  params: Record<string, string | string[] | undefined>,
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(params)) {
-    if (value === undefined) continue;
-    out[key] = Array.isArray(value) ? (value[0] ?? "") : value;
-  }
-  return out;
-}
-
-type TendersPageProps = {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-};
 
 async function TenderManagementStats() {
   try {
@@ -79,13 +63,31 @@ async function TenderManagementStats() {
   }
 }
 
-export default async function TendersPage({ searchParams }: TendersPageProps) {
-  const session = await requireSession();
-  const raw = flattenSearchParams(await searchParams);
-  const filters = tenderFiltersSchema.parse(raw);
+function TenderManagementStatsSkeleton() {
+  return (
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
+      {Array.from({ length: 5 }).map((_, index) => (
+        <div
+          key={index}
+          className="rounded-lg border border-border bg-card p-4 shadow-sm"
+        >
+          <div className="flex items-center gap-3">
+            <Skeleton className="size-9 rounded-lg" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <Skeleton className="h-5 w-16" />
+              <Skeleton className="h-3 w-24" />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
-  const [{ rows, total }, facets, allCount] = await Promise.all([
-    listTenders(filters),
+export default async function TendersPage() {
+  const session = await requireSession();
+
+  const [facets, allCount] = await Promise.all([
     getTenderExplorerFacets().catch(() => ({
       categories: [],
       portals: ["TENDER247", "BIDASSIST"] as Array<"TENDER247" | "BIDASSIST">,
@@ -103,26 +105,21 @@ export default async function TendersPage({ searchParams }: TendersPageProps) {
           </p>
         </div>
         <TenderPageActions
-          rows={rows}
-          page={filters.page}
           canImport={sessionHasPermission(session, "tenders.import")}
         />
       </div>
 
-      <Suspense fallback={null}>
+      <Suspense fallback={<TenderManagementStatsSkeleton />}>
         <TenderManagementStats />
       </Suspense>
 
-      <Suspense fallback={<TenderExplorerSkeleton />}>
-        <TenderExplorer
-          rows={rows}
-          total={total}
-          allCount={allCount || total}
-          filters={filters}
-          categories={facets.categories}
-          portals={facets.portals}
-        />
-      </Suspense>
+      <TenderExplorer
+        allCount={allCount}
+        categories={facets.categories}
+        portals={facets.portals}
+      />
     </div>
   );
 }
+
+export { TenderExplorerSkeleton };

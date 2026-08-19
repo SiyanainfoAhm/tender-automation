@@ -25,11 +25,11 @@ export const qualificationStatusStyles: Record<
   },
   CONDITIONAL_GO: {
     label: STATUS_DISPLAY_LABELS.CONDITIONAL_GO,
-    shortLabel: "May Bid",
-    bg: "bg-violet-100",
-    text: "text-violet-700",
-    border: "border-violet-200",
-    dot: "bg-violet-500",
+    shortLabel: "Screening",
+    bg: "bg-sky-100",
+    text: "text-sky-700",
+    border: "border-sky-200",
+    dot: "bg-sky-600",
   },
   PARTNER_BID: {
     label: STATUS_DISPLAY_LABELS.PARTNER_BID,

@@ -1,5 +1,9 @@
 import { z } from "zod";
 import {
+  CREATED_DATE_PRESETS,
+  isIsoCalendarDate,
+} from "@/lib/tender-date-filter";
+import {
   DEFAULT_TENDER_SORT_BY,
   DEFAULT_TENDER_SORT_DIR,
   isWhitelistedSortKey,
@@ -110,6 +114,7 @@ export const DATE_TYPES = [
   "bid_submission_date",
   "crawled_at",
   "first_seen_at",
+  "created_at",
 ] as const;
 
 export const VALUE_BANDS = [
@@ -152,14 +157,7 @@ export const tenderFiltersSchema = z
   .object({
     q: z.string().optional(),
     source: z.string().optional().default("ALL"),
-    status: z
-      .union([
-        z.enum(QUALIFICATION_STATUSES),
-        z.literal("NOT_EVALUATED"),
-        z.literal("ALL"),
-      ])
-      .optional()
-      .default("ALL"),
+    status: z.string().optional().default("ALL"),
     downloadStatus: z.string().optional(),
     dateType: z.enum(DATE_TYPES).optional().default("closing_date"),
     from: z.string().optional(),
@@ -201,9 +199,14 @@ export const tenderFiltersSchema = z
     sort: z.string().optional(),
     /** Preferred URL param: direction=asc|desc */
     direction: z.enum(["asc", "desc"]).optional(),
+    /** Alias used in shareable URLs: order=desc */
+    order: z.enum(["asc", "desc"]).optional(),
     /** Legacy aliases */
     sortBy: z.string().optional(),
     sortDir: z.enum(["asc", "desc"]).optional(),
+    /** Created/imported date preset (not deadline). */
+    date: z.enum(CREATED_DATE_PRESETS).optional(),
+    selectedDate: z.string().optional(),
   })
   .transform((data) => {
     const requested = data.sort || data.sortBy;
@@ -211,17 +214,23 @@ export const tenderFiltersSchema = z
       ? (requested as string)
       : DEFAULT_TENDER_SORT_BY;
     const sortDir =
-      data.direction || data.sortDir || DEFAULT_TENDER_SORT_DIR;
+      data.direction || data.order || data.sortDir || DEFAULT_TENDER_SORT_DIR;
     let quickDate = data.quickDate;
     if (!quickDate && data.closingPreset && data.closingPreset !== "ALL") {
       quickDate = data.closingPreset;
     }
+    const selectedDate = isIsoCalendarDate(data.selectedDate)
+      ? data.selectedDate
+      : undefined;
+    const date = data.date;
     return {
       ...data,
       source: normalizeSource(data.source),
       sortBy,
       sortDir,
       quickDate,
+      date,
+      selectedDate,
     };
   });
 

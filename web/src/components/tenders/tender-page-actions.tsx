@@ -15,6 +15,7 @@ function downloadCsv(rows: WebTenderListRow[], filename: string) {
     "Organization",
     "Category",
     "Status",
+    "Created",
     "Closing",
     "Value",
     "EMD",
@@ -37,6 +38,7 @@ function downloadCsv(rows: WebTenderListRow[], filename: string) {
       `"${(r.organization || "").replace(/"/g, '""')}"`,
       `"${(r.project_category || "").replace(/"/g, '""')}"`,
       r.effective_qualification_status ?? "NOT_EVALUATED",
+      r.created_at ?? "",
       r.closing_date ?? "",
       `"${value.replace(/"/g, '""')}"`,
       `"${emd.replace(/"/g, '""')}"`,
@@ -63,28 +65,31 @@ export function exportTenderRowsCsv(
 }
 
 type TenderPageActionsProps = {
-  rows: WebTenderListRow[];
-  page: number;
   canImport: boolean;
+  rows?: WebTenderListRow[];
+  page?: number;
 };
 
 export function TenderPageActions({
-  rows,
-  page,
   canImport,
+  rows = [],
+  page = 1,
 }: TenderPageActionsProps) {
   return (
     <div className="flex items-center gap-2">
-      <Button
-        type="button"
-        variant="secondary"
-        className="text-sm"
-        onClick={() => exportTenderRowsCsv(rows, `tenders-page-${page}.csv`)}
-        disabled={rows.length === 0}
-      >
-        <Download className="size-4" />
-        Export
-      </Button>
+      {rows.length > 0 ? (
+        <Button
+          type="button"
+          variant="secondary"
+          className="text-sm"
+          onClick={() =>
+            exportTenderRowsCsv(rows, `tenders-page-${page}.csv`)
+          }
+        >
+          <Download className="size-4" />
+          Export
+        </Button>
+      ) : null}
       {canImport ? (
         <Button asChild className="text-sm">
           <Link href="/tenders/import">Import Tenders</Link>

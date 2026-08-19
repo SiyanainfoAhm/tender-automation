@@ -3,7 +3,9 @@ import "server-only";
 import { getServerSupabase } from "@/lib/db/server";
 import { PROJECT_CATEGORIES, isProjectCategory } from "@/lib/project-category";
 import { assertSupabaseOk } from "@/lib/errors/db-query";
+import { resolveCreatedDateRange } from "@/lib/tender-date-filter";
 import { resolveTenderSortColumn } from "@/lib/tender-sort";
+import { qualificationStatusesForFilter } from "@/lib/tender-status";
 import type { TenderFilters } from "@/lib/validations";
 import { startOfDay, endOfDay, subDays, addDays, formatISO } from "date-fns";
 
@@ -48,12 +50,14 @@ export type WebTenderListRow = {
   manual_review_required: boolean | null;
   qualified_at: string | null;
   crawled_at: string | null;
+  created_at: string;
+  first_seen_at: string | null;
   updated_at: string;
   effective_qualification_status: string | null;
   chat_url: string | null;
 };
 
-/** Columns that exist on agenttender_web_tender_list — query only these. */
+/** Columns needed for the tender table — avoid RFP text, AI JSON, archives. */
 export const WEB_TENDER_LIST_SELECT = [
   "id",
   "source_portal",
@@ -61,43 +65,24 @@ export const WEB_TENDER_LIST_SELECT = [
   "folder_id",
   "title",
   "organization",
-  "department",
   "authority",
   "category",
   "project_category",
   "city",
   "state",
   "location_text",
-  "published_date",
-  "opening_date",
   "closing_date",
-  "bid_submission_date",
   "tender_value",
   "tender_value_text",
   "emd_amount",
   "emd_text",
-  "currency",
-  "source_url",
-  "download_status",
   "qualification_status",
-  "prescreen_status",
-  "prescreen_reason_code",
-  "prescreen_reason",
-  "chatgpt_eligible",
-  "decision_source",
-  "prescreened_at",
-  "prescreen_rules_version",
-  "decision_label",
-  "verdict",
-  "reason",
-  "required_action",
   "confidence",
-  "manual_review_required",
-  "qualified_at",
+  "created_at",
+  "first_seen_at",
   "crawled_at",
   "updated_at",
   "effective_qualification_status",
-  "chat_url",
 ].join(",");
 
 const SORTABLE: Record<string, string> = {
@@ -109,6 +94,8 @@ const SORTABLE: Record<string, string> = {
   updated_at: "updated_at",
   crawled_at: "crawled_at",
   first_seen_at: "first_seen_at",
+  created_at: "created_at",
+  created: "created_at",
   qualification_status: "effective_qualification_status",
   source_portal: "source_portal",
   confidence: "confidence",
@@ -220,10 +207,11 @@ export async function listTenders(filters: TenderFilters): Promise<{
   }
 
   if (filters.status && filters.status !== "ALL") {
-    if (filters.status === "NOT_EVALUATED") {
+    const statusFilter = qualificationStatusesForFilter(filters.status);
+    if (statusFilter.kind === "null") {
       query = query.is("effective_qualification_status", null);
-    } else {
-      query = query.eq("effective_qualification_status", filters.status);
+    } else if (statusFilter.kind === "in") {
+      query = query.in("effective_qualification_status", statusFilter.values);
     }
   }
 
@@ -355,6 +343,15 @@ export async function listTenders(filters: TenderFilters): Promise<{
     query = query.lte(dateCol, dateBounds.to);
   }
 
+  const createdRange = resolveCreatedDateRange({
+    preset: filters.date,
+    selectedDate: filters.selectedDate,
+  });
+  if (createdRange) {
+    query = query.gte("created_at", createdRange.from);
+    query = query.lte("created_at", createdRange.to);
+  }
+
   if (filters.q?.trim()) {
     const q = filters.q.trim();
     query = query.or(
@@ -365,7 +362,6 @@ export async function listTenders(filters: TenderFilters): Promise<{
         `organization.ilike.%${q}%`,
         `authority.ilike.%${q}%`,
         `department.ilike.%${q}%`,
-        `description.ilike.%${q}%`,
         `city.ilike.%${q}%`,
         `state.ilike.%${q}%`,
         `category.ilike.%${q}%`,

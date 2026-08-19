@@ -13,8 +13,8 @@ import {
   ChevronRight,
   ClipboardCheck,
   FileText,
-  Filter,
   FolderKanban,
+  Handshake,
   Percent,
   Search,
   Send,
@@ -68,7 +68,7 @@ const KPI_ICON_BG = {
 
 const PIPELINE_ICONS = {
   screening: Search,
-  may_bid: Filter,
+  partnership: Handshake,
   will_bid: CheckCircle2,
   submitted: Send,
   won: Trophy,

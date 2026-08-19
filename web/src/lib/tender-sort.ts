@@ -15,6 +15,9 @@ export const TENDER_SORT_COLUMNS = {
   emd: "emd_amount",
   match: "confidence",
   confidence: "confidence",
+  created: "created_at",
+  created_at: "created_at",
+  created_date: "created_at",
   // Legacy / default keys
   updated_at: "updated_at",
   crawled_at: "crawled_at",
@@ -28,7 +31,7 @@ export const TENDER_SORT_COLUMNS = {
 
 export type TenderSortKey = keyof typeof TENDER_SORT_COLUMNS;
 
-export const DEFAULT_TENDER_SORT_BY = "updated_at" as const;
+export const DEFAULT_TENDER_SORT_BY = "created_at" as const;
 export const DEFAULT_TENDER_SORT_DIR = "desc" as const;
 
 export function resolveTenderSortColumn(sortBy: string | undefined): string {
@@ -43,6 +46,7 @@ export function isWhitelistedSortKey(sortBy: string | undefined): boolean {
 
 /** Canonical URL sort keys shown in the table headers. */
 export const TABLE_SORT_KEYS = [
+  "created",
   "title",
   "source",
   "status",
@@ -54,9 +58,31 @@ export const TABLE_SORT_KEYS = [
 
 export type TableSortKey = (typeof TABLE_SORT_KEYS)[number];
 
+export const TENDER_SORT_MODES = [
+  { id: "created_desc", label: "Created: Newest First", sort: "created_at", dir: "desc" },
+  { id: "created_asc", label: "Created: Oldest First", sort: "created_at", dir: "asc" },
+  { id: "closing_asc", label: "Deadline: Soonest First", sort: "closing", dir: "asc" },
+  { id: "closing_desc", label: "Deadline: Latest First", sort: "closing", dir: "desc" },
+  { id: "value_desc", label: "Value: High to Low", sort: "value", dir: "desc" },
+  { id: "emd_desc", label: "EMD: High to Low", sort: "emd", dir: "desc" },
+  { id: "match_desc", label: "Match: High to Low", sort: "match", dir: "desc" },
+  { id: "status_asc", label: "Status", sort: "status", dir: "asc" },
+] as const;
+
+export function sortModeId(sortBy: string, sortDir: "asc" | "desc"): string {
+  const column = resolveTenderSortColumn(sortBy);
+  if (column === "created_at") return sortDir === "asc" ? "created_asc" : "created_desc";
+  if (column === "closing_date") return sortDir === "asc" ? "closing_asc" : "closing_desc";
+  if (column === "tender_value") return sortDir === "desc" ? "value_desc" : "value_desc";
+  if (column === "emd_amount") return "emd_desc";
+  if (column === "confidence") return "match_desc";
+  if (column === "effective_qualification_status") return "status_asc";
+  return "created_desc";
+}
+
 /**
- * Cycle: unsorted/default → asc → desc → reset to default.
- * Clicking a different column starts at asc.
+ * Cycle: unsorted/default → desc for created, otherwise asc → desc → reset.
+ * Clicking a different column starts at a natural default for that field.
  */
 export function nextSortState(options: {
   currentSortBy: string;
@@ -68,11 +94,22 @@ export function nextSortState(options: {
     TENDER_SORT_COLUMNS[options.currentSortBy as TenderSortKey] ===
       TENDER_SORT_COLUMNS[options.clicked];
 
+  const startDir: "asc" | "desc" =
+    options.clicked === "created" ||
+    options.clicked === "value" ||
+    options.clicked === "emd" ||
+    options.clicked === "match"
+      ? "desc"
+      : "asc";
+
   if (!isActive) {
-    return { sortBy: options.clicked, sortDir: "asc" };
+    return { sortBy: options.clicked, sortDir: startDir };
   }
-  if (options.currentSortDir === "asc") {
-    return { sortBy: options.clicked, sortDir: "desc" };
+  if (options.currentSortDir === startDir) {
+    return {
+      sortBy: options.clicked,
+      sortDir: startDir === "desc" ? "asc" : "desc",
+    };
   }
   return { reset: true };
 }
@@ -93,6 +130,9 @@ export function normalizeSortKeyForUi(sortBy: string): TableSortKey | null {
     emd_amount: "emd",
     match: "match",
     confidence: "match",
+    created: "created",
+    created_at: "created",
+    created_date: "created",
   };
   return reverse[sortBy] ?? null;
 }

@@ -46,7 +46,7 @@ import type {
 } from "@/lib/dashboard/types";
 import { getServerSupabase } from "@/lib/db/server";
 import { formatIndianCurrency, formatRelativeTime } from "@/lib/format";
-import { STATUS_DISPLAY_LABELS, DECISION_CHART_COLORS, type TenderStatus } from "@/lib/tender-status";
+import { getTenderUiStatus, TENDER_UI_STATUS_COLORS, TENDER_UI_STATUS_LABELS, type TenderUiStatus } from "@/lib/tender-status";
 import { listExpiringDocuments } from "@/server/repositories/documentRepository";
 
 type TenderRow = {
@@ -173,11 +173,7 @@ function volumeSubtitle(range: DashboardTimeRange): string {
 }
 
 function statusLabel(status: string | null): string {
-  if (!status) return "Not evaluated";
-  if (status in STATUS_DISPLAY_LABELS) {
-    return STATUS_DISPLAY_LABELS[status as TenderStatus];
-  }
-  return status.replace(/_/g, " ");
+  return TENDER_UI_STATUS_LABELS[getTenderUiStatus(status)];
 }
 
 function buildStatusDistribution(
@@ -185,7 +181,7 @@ function buildStatusDistribution(
 ): DashboardStatusSlice[] {
   const map = new Map<string, number>();
   for (const row of rows) {
-    const key = row.effective_qualification_status || "NOT_EVALUATED";
+    const key = getTenderUiStatus(row.effective_qualification_status);
     map.set(key, (map.get(key) || 0) + 1);
   }
   return [...map.entries()]
@@ -193,11 +189,9 @@ function buildStatusDistribution(
     .sort((a, b) => b[1] - a[1])
     .map(([key, count]) => ({
       key,
-      label: statusLabel(key === "NOT_EVALUATED" ? null : key),
+      label: TENDER_UI_STATUS_LABELS[key as TenderUiStatus],
       count,
-      color:
-        DECISION_CHART_COLORS[key as TenderStatus | "NOT_EVALUATED"] ??
-        "#94a3b8",
+      color: TENDER_UI_STATUS_COLORS[key as TenderUiStatus] ?? "#94a3b8",
     }));
 }
 
@@ -492,7 +486,8 @@ function buildPipeline(
         iconText: meta.iconText,
       };
     },
-  );
+  ).filter((stage) => stage.key !== "partnership" || stage.count > 0)
+    .map((stage, index) => ({ ...stage, number: index + 1 }));
 
   const total = stages.reduce((sum, s) => sum + s.count, 0);
   return { stages, total };

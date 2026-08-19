@@ -17,7 +17,7 @@ import {
 
 import { ChartTooltipContent } from "@/components/charts/chart-tooltip";
 import { formatDecisionStatus } from "@/lib/analytics/category-display";
-import { DECISION_CHART_COLORS, type TenderStatus } from "@/lib/tender-status";
+import { TENDER_UI_STATUS_COLORS, getTenderUiStatus } from "@/lib/tender-status";
 import { cn } from "@/lib/utils";
 
 type AnalyticsData = Awaited<
@@ -41,7 +41,7 @@ export function AnalyticsCharts({ data }: AnalyticsChartsProps) {
       label: formatDecisionStatus(entry.status),
       fullName: formatDecisionStatus(entry.status),
       fill:
-        DECISION_CHART_COLORS[entry.status as TenderStatus | "NOT_EVALUATED"] ??
+        TENDER_UI_STATUS_COLORS[getTenderUiStatus(entry.status)] ??
         "#94a3b8",
     }));
 

@@ -13,6 +13,8 @@ import {
   ACTIONABLE_STATUSES,
   MANUAL_REVIEW_STATUSES,
   QUALIFIED_STATUSES,
+  getTenderUiStatus,
+  qualificationStatusesForFilter,
 } from "@/lib/tender-status";
 import { isProjectCategory } from "@/lib/project-category";
 import { AppError } from "@/lib/errors/app-error";
@@ -364,10 +366,11 @@ export async function getAnalytics(options: {
     query = query.eq("source_portal", options.source);
   }
   if (options.status && options.status !== "ALL") {
-    if (options.status === "NOT_EVALUATED") {
+    const statusFilter = qualificationStatusesForFilter(options.status);
+    if (statusFilter.kind === "null") {
       query = query.is("effective_qualification_status", null);
-    } else {
-      query = query.eq("effective_qualification_status", options.status);
+    } else if (statusFilter.kind === "in") {
+      query = query.in("effective_qualification_status", statusFilter.values);
     }
   }
   if (options.category && isProjectCategory(options.category)) {
@@ -427,7 +430,7 @@ export async function getAnalytics(options: {
     if (row.effective_qualification_status === "GO") qualifiedCount += 1;
     if (row.manual_review_required) manualReviewCount += 1;
 
-    const st = row.effective_qualification_status || "NOT_EVALUATED";
+    const st = getTenderUiStatus(row.effective_qualification_status);
     statusMap.set(st, (statusMap.get(st) || 0) + 1);
     sourceMap.set(
       row.source_portal,

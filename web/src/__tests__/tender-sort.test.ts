@@ -21,15 +21,23 @@ describe("tender sort whitelist", () => {
     expect(resolveTenderSortColumn("confidence")).toBe("confidence");
   });
 
-  it("falls back unknown sort keys to updated_at", () => {
-    expect(resolveTenderSortColumn("hacked_column")).toBe("updated_at");
-    expect(resolveTenderSortColumn(undefined)).toBe("updated_at");
+  it("falls back unknown sort keys to created_at", () => {
+    expect(resolveTenderSortColumn("hacked_column")).toBe("created_at");
+    expect(resolveTenderSortColumn(undefined)).toBe("created_at");
   });
 
-  it("cycles asc → desc → reset", () => {
+  it("cycles desc → asc → reset for value", () => {
     expect(
       nextSortState({
-        currentSortBy: "updated_at",
+        currentSortBy: "created_at",
+        currentSortDir: "desc",
+        clicked: "value",
+      }),
+    ).toEqual({ sortBy: "value", sortDir: "desc" });
+
+    expect(
+      nextSortState({
+        currentSortBy: "value",
         currentSortDir: "desc",
         clicked: "value",
       }),
@@ -37,16 +45,8 @@ describe("tender sort whitelist", () => {
 
     expect(
       nextSortState({
-        currentSortBy: "value",
-        currentSortDir: "asc",
-        clicked: "value",
-      }),
-    ).toEqual({ sortBy: "value", sortDir: "desc" });
-
-    expect(
-      nextSortState({
         currentSortBy: "tender_value",
-        currentSortDir: "desc",
+        currentSortDir: "asc",
         clicked: "value",
       }),
     ).toEqual({ reset: true });
@@ -54,7 +54,7 @@ describe("tender sort whitelist", () => {
 
   it("normalizes legacy keys for UI active state", () => {
     expect(normalizeSortKeyForUi("tender_value")).toBe("value");
-    expect(normalizeSortKeyForUi("updated_at")).toBeNull();
+    expect(normalizeSortKeyForUi("created_at")).toBe("created");
   });
 
   it("never exposes arbitrary keys in whitelist", () => {
@@ -83,13 +83,22 @@ describe("tender filter URL params", () => {
 
   it("rejects unknown sort into default", () => {
     const parsed = tenderFiltersSchema.parse({ sort: "drop_table" });
-    expect(parsed.sortBy).toBe("updated_at");
+    expect(parsed.sortBy).toBe("created_at");
     expect(parsed.sortDir).toBe("desc");
   });
 
   it("normalizes lowercase source query params", () => {
-    expect(tenderFiltersSchema.parse({ source: "tender247" }).source).toBe(
-      "TENDER247",
+    expect(tenderFiltersSchema.parse({ date: "yesterday" }).date).toBe(
+      "yesterday",
     );
+    const custom = tenderFiltersSchema.parse({
+      date: "custom",
+      selectedDate: "2026-08-17",
+      status: "screening",
+      order: "desc",
+    });
+    expect(custom.selectedDate).toBe("2026-08-17");
+    expect(custom.status).toBe("screening");
+    expect(custom.sortDir).toBe("desc");
   });
 });

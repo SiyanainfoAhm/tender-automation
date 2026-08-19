@@ -34,8 +34,8 @@ export const CLASSIFICATION_ACTION_META: Record<
     idleClass: "bg-white border-border text-foreground-600 hover:border-emerald-300",
   },
   CONDITIONAL_GO: {
-    label: "May Bid",
-    toast: "Tender marked May Bid.",
+    label: "Screening",
+    toast: "Tender marked Screening.",
     activeClass: "bg-violet-50 border-violet-500 text-violet-700",
     idleClass: "bg-white border-border text-foreground-600 hover:border-violet-300",
   },
@@ -88,7 +88,7 @@ export function classificationLabel(status: TenderStatus | null | undefined): st
 
 /**
  * Visual pipeline only. Submitted is never inferred from GO.
- * VERIFY / May Bid / Partnership / No Bid stay on Screening.
+ * VERIFY / CONDITIONAL_GO / Partnership / No Bid stay on Screening.
  */
 export function derivePipelineStage(options: {
   qualificationStatus: TenderStatus | null;

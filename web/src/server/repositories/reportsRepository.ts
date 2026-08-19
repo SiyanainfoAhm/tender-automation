@@ -68,7 +68,7 @@ const PIPELINE_META: Array<{
 }> = [
   { key: "new", label: "New", color: "#94a3b8", barClass: "bg-slate-300" },
   { key: "screening", label: "Screening", color: "#64748b", barClass: "bg-slate-400" },
-  { key: "mayBid", label: "May Bid", color: "#f59e0b", barClass: "bg-amber-500" },
+  { key: "mayBid", label: "Partnership", color: "#7c3aed", barClass: "bg-violet-500" },
   { key: "willBid", label: "Will Bid", color: "#10b981", barClass: "bg-emerald-500" },
   { key: "submitted", label: "Submitted", color: "#3b82f6", barClass: "bg-blue-500" },
   { key: "won", label: "Won", color: "#16a34a", barClass: "bg-green-600" },
@@ -106,7 +106,7 @@ function exclusiveFunnelKey(options: {
     won: false,
   });
   if (mapped === "will_bid") return "willBid";
-  if (mapped === "may_bid") return "mayBid";
+  if (mapped === "partnership") return "mayBid";
   if (mapped === "screening") {
     if (!options.qualificationStatus) return "new";
     return "screening";

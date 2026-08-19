@@ -11,9 +11,9 @@ import {
 import { ChartTooltipContent } from "@/components/charts/chart-tooltip";
 import { formatDecisionStatus } from "@/lib/analytics/category-display";
 import {
-  DECISION_CHART_COLORS,
+  getTenderUiStatus,
   TENDER_STATUSES,
-  type TenderStatus,
+  TENDER_UI_STATUS_COLORS,
 } from "@/lib/tender-status";
 
 type QualificationChartProps = {
@@ -21,17 +21,27 @@ type QualificationChartProps = {
 };
 
 export function QualificationChart({ byStatus }: QualificationChartProps) {
-  const data = Object.entries(byStatus)
-    .filter(([, count]) => count > 0)
-    .map(([status, count]) => ({
-      status,
+  const merged = new Map<
+    string,
+    { status: string; label: string; fullName: string; count: number; fill: string }
+  >();
+  for (const [status, count] of Object.entries(byStatus)) {
+    if (count <= 0) continue;
+    const ui = getTenderUiStatus(status);
+    const existing = merged.get(ui);
+    if (existing) {
+      existing.count += count;
+      continue;
+    }
+    merged.set(ui, {
+      status: ui,
       label: formatDecisionStatus(status),
       fullName: formatDecisionStatus(status),
       count,
-      fill:
-        DECISION_CHART_COLORS[status as TenderStatus | "NOT_EVALUATED"] ??
-        "#94a3b8",
-    }));
+      fill: TENDER_UI_STATUS_COLORS[ui],
+    });
+  }
+  const data = [...merged.values()];
 
   const total = data.reduce((sum, item) => sum + item.count, 0);
 
