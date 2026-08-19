@@ -1,11 +1,15 @@
 /**
  * Persist Phase-1 NO_GO rows as screened-out tenders (no detail artifacts).
  */
+import path from "node:path";
 import { getSupabaseAdminClient, isSupabaseConfigured } from "../supabase/client.js";
 import { upsertQualificationResult } from "../supabase/qualificationResultStore.js";
 import { resolveRunCompanyId } from "../company/siyanaCompany.js";
 import type { RunWorkbookRow } from "./runWorkbook.js";
 import { isPhase1NoBid, PHASE1_STATUS_DISPLAY } from "./phase1Statuses.js";
+import { screeningDir, writeJson } from "./screeningManifest.js";
+import { runCorrelationIdForDate } from "./phase1DetailQueue.js";
+import { PHASE1_SCREENING_POLICY_VERSION } from "./screeningPolicy.js";
 
 export type Phase1PersistResult = {
   attempted: number;
@@ -26,6 +30,8 @@ function sourceTenderId(row: RunWorkbookRow): string {
 export async function persistPhase1NoBidResults(options: {
   rows: RunWorkbookRow[];
   runDate: string;
+  dateFolder?: string;
+  screenedWorkbookPath?: string;
   companyId?: string;
   logger?: { info: (msg: string) => void; warn?: (msg: string) => void };
 }): Promise<Phase1PersistResult> {
@@ -36,6 +42,26 @@ export async function persistPhase1NoBidResults(options: {
     skipped: 0,
     errors: [],
   };
+  if (options.dateFolder) {
+    const runCorrelationId = runCorrelationIdForDate(options.runDate);
+    writeJson(path.join(screeningDir(options.dateFolder), "phase1-no-bid-decisions.json"), {
+      screeningRunId: runCorrelationId,
+      source: "run-screened-siyana.xlsx",
+      sourcePath: options.screenedWorkbookPath ?? null,
+      count: noBid.length,
+      decisions: noBid.map((row) => ({
+        tender247Id: row.tender247Id,
+        canonicalId: row.canonicalId,
+        status: "NO_BID",
+        screeningReason: row.screeningReason,
+        source: row.source,
+        runCorrelationId,
+        screeningWorkbookSource:
+          options.screenedWorkbookPath ?? "run-screened-siyana.xlsx",
+      })),
+      updatedAt: new Date().toISOString(),
+    });
+  }
   if (noBid.length === 0) return result;
   if (!isSupabaseConfigured()) {
     options.logger?.warn?.(
@@ -115,7 +141,7 @@ export async function persistPhase1NoBidResults(options: {
         rawResponse: row.screeningReason,
         rawResult: rawMetadata,
         chatUrl: null,
-        promptVersion: "phase1-run-excel-v1",
+        promptVersion: PHASE1_SCREENING_POLICY_VERSION,
         modelName: "chatgpt-project-run-screening",
       });
       if (!upserted.ok) {

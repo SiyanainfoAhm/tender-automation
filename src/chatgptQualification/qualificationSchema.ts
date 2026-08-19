@@ -48,6 +48,15 @@ export function buildEvidenceAwareQualificationPrompt(
     evidence.documentsAvailable &&
     evidence.aiSummaryAvailable;
 
+  const aiUnavailableLines = evidence.aiSummaryAvailable
+    ? []
+    : [
+        "AI Summary unavailable for this run.",
+        "Evaluate using available evidence only.",
+        "Do not claim AI Summary was reviewed.",
+        "If missing evidence prevents a mandatory-gate determination, return VERIFY.",
+      ];
+
   const useLines = isFull
     ? [
         "Use:",
@@ -67,6 +76,8 @@ export function buildEvidenceAwareQualificationPrompt(
             ]
           : []),
         "",
+        ...aiUnavailableLines,
+        ...(aiUnavailableLines.length > 0 ? [""] : []),
         "Evaluate using the available evidence only.",
         "Do not claim an unavailable attachment was reviewed.",
         "If missing source evidence prevents a reliable mandatory-gate decision,",
@@ -208,8 +219,12 @@ export function buildQualificationPrompt(
             "Use:",
             "1. Consolidated Siyana credentials in Project Sources.",
             "2. The attached tender metadata.",
-            "3. The attached AI Summary, when provided.",
             "4. The attached complete tender-document archive.",
+            "",
+            "AI Summary unavailable for this run.",
+            "Evaluate using available evidence only.",
+            "Do not claim AI Summary was reviewed.",
+            "If missing evidence prevents a mandatory-gate determination, return VERIFY.",
             "",
             "No AI Summary was available for this tender. Analyse the complete",
             "tender documents directly.",
@@ -1335,6 +1350,11 @@ export function isValidSavedQualificationResult(filePath: string): boolean {
     }
 
     const tenderFolder = path.dirname(filePath);
+    const folderName = path.basename(tenderFolder);
+    const folderId = folderName.match(/^T247-(\d+)$/i)?.[1] ?? null;
+    if (folderId && folderId !== id) {
+      return false;
+    }
     const responsePath = path.join(tenderFolder, "qualification-response.txt");
     if (!fs.existsSync(responsePath) || fs.statSync(responsePath).size <= 0) {
       return false;
@@ -1363,7 +1383,11 @@ export function isValidSavedQualificationResult(filePath: string): boolean {
       }
     }
 
-    const validated = validateQualificationResult(data, id, portal);
+    const validated = validateQualificationResult(
+      data,
+      folderId || id,
+      portal,
+    );
     if (!validated.ok) {
       return false;
     }

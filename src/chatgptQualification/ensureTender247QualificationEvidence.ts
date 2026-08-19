@@ -1,6 +1,7 @@
 /**
- * Tender247 GPT qualification evidence — partial evidence allowed.
- * At least one real artifact (metadata, documents, or AI Summary) → GPT ready.
+ * Tender247 GPT qualification evidence.
+ * Ready to submit only when metadata.json and Tender_All_Documents.zip are valid.
+ * AI_Summary.pdf is optional.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -371,7 +372,7 @@ export async function ensureTender247QualificationEvidence(options: {
     docsAvailable,
     aiAvailable,
   );
-  const gptReady = evidenceCount >= 1;
+  const gptReady = metaAvailable && docsAvailable;
   const readiness: Tender247EvidenceReport["readiness"] = gptReady
     ? evidenceMode === "FULL"
       ? "FULL"
@@ -427,7 +428,7 @@ export async function ensureTender247QualificationEvidence(options: {
     metadataRepairAttempted: metadata.repaired || !metadata.supabaseFound,
     documentsCreatedLocally: archive.created,
     localDocumentCount,
-    notReadyReason: gptReady ? null : "NO_USABLE_QUALIFICATION_EVIDENCE",
+    notReadyReason: gptReady ? null : "MISSING_CORE_QUALIFICATION_ARTIFACTS",
   };
 
   // When partial, missingFiles should only list unavailable (not blocking) items

@@ -71,6 +71,7 @@ export default async function CompanyProfilePage() {
                       : "",
                   serviceScope: prefs?.serviceScope || [],
                   excludedScope: prefs?.excludedScope || [],
+                  screeningPolicies: prefs?.screeningPolicies || {},
                 }}
               />
             </TabsContent>

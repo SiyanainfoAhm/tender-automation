@@ -34,6 +34,13 @@ export interface TenderArtifactState {
   documentsZipValid: boolean;
   complete: boolean;
   ready: boolean;
+  /** metadata.json + valid Tender_All_Documents.zip */
+  coreReady: boolean;
+  /**
+   * Eligible for individual ChatGPT qualification: valid metadata.json +
+   * valid Tender_All_Documents.zip. AI_Summary.pdf is optional.
+   */
+  qualificationReady: boolean;
   missing: TenderArtifactMissing[];
 }
 
@@ -144,6 +151,8 @@ export function inspectTenderArtifactState(
   const aiSummaryValid = isValidAiSummaryPdf(aiSummaryPath);
   const documentsZipValid = isValidDocumentsZipFile(documentsZipPath);
   const complete = metadataValid && aiSummaryValid && documentsZipValid;
+  const coreReady = metadataValid && documentsZipValid;
+  const qualificationReady = coreReady;
   const missing: TenderArtifactMissing[] = [];
   if (!metadataValid) missing.push("metadata");
   if (!aiSummaryValid) missing.push("aiSummary");
@@ -160,6 +169,8 @@ export function inspectTenderArtifactState(
     documentsZipValid,
     complete,
     ready: complete,
+    coreReady,
+    qualificationReady,
     missing,
   };
 }
@@ -178,9 +189,9 @@ export function pendingTimeoutReasonFromState(
   const docs = !state.documentsZipValid;
   const meta = !state.metadataValid;
   if (ai && docs) return "PENDING_TIMEOUT_AI_AND_DOCUMENTS";
-  if (ai) return "PENDING_TIMEOUT_AI";
   if (docs) return "PENDING_TIMEOUT_DOCUMENTS";
   if (meta) return "PENDING_TIMEOUT_METADATA";
+  if (ai) return "PENDING_TIMEOUT_AI";
   return "PENDING_TIMEOUT";
 }
 
@@ -220,13 +231,23 @@ export function listT247TenderDirs(
   return out;
 }
 
+export function isTenderSafeToSkipReopen(
+  tenderDir: string,
+  t247Id?: string,
+): boolean {
+  const state = inspectTenderArtifactState(tenderDir, t247Id);
+  return state.qualificationReady;
+}
+
 /**
  * Resume/recovery discovery: filesystem artifacts are authoritative.
  * Manifest completed / outer T247-id.zip cannot hide an incomplete folder.
+ * AI_Summary.pdf is optional: core-ready tenders are not recrawled to
+ * fetch a missing summary.
  */
 export function discoverIncompleteTenders(dateFolder: string): string[] {
   return listT247TenderDirs(dateFolder)
-    .filter(({ tenderDir }) => !inspectTenderArtifactState(tenderDir).complete)
+    .filter(({ tenderDir, t247Id }) => !isTenderSafeToSkipReopen(tenderDir, t247Id))
     .map(({ t247Id }) => t247Id);
 }
 

@@ -5,7 +5,8 @@ export type TenderBatchStatus =
   | "partial"
   | "failed"
   | "dropped_non_it"
-  | "ambiguous_manual_review";
+  | "ambiguous_manual_review"
+  | "skipped_no_bid";
 
 export type ArtifactStepStatus =
   | "missing"
@@ -132,4 +133,5 @@ export interface ProcessTenderResult {
   pendingReason?: string | null;
   artifactComplete?: boolean;
   chatgptSkipped?: boolean;
+  completeWithAiMissing?: boolean;
 }

@@ -12,7 +12,12 @@ import {
 } from "./ensureTender247QualificationEvidence.js";
 import {
   inspectTenderArtifactState,
+  isTenderSafeToSkipReopen,
 } from "../tender247Batch/tenderArtifactState.js";
+import {
+  isDetailScrapeCrawlStatus,
+} from "../runScreening/phase1Statuses.js";
+import { loadPhase1DecisionsFromDisk } from "../runScreening/phase1DetailQueue.js";
 import type { GptReadinessReport } from "./types.js";
 
 export { isReadableZipArchive } from "../tender247Batch/canonicalTenderArchive.js";
@@ -153,7 +158,8 @@ type ReadinessLogger = {
 
 /**
  * Normalize local documents + repair metadata BEFORE declaring NOT_READY.
- * GPT may proceed with partial evidence (metadata, documents, or AI Summary).
+ * GPT submits only when metadata.json and Tender_All_Documents.zip are valid.
+ * AI_Summary.pdf is optional.
  */
 export async function preparePhase1TenderReadiness(options: {
   dateFolder: string;
@@ -182,7 +188,7 @@ export async function preparePhase1TenderReadiness(options: {
     readiness: evidence.readiness,
     availableFiles: evidence.availableFiles,
     notReadyReason: evidence.notReadyReason,
-    missingFiles: evidence.gptReady ? evidence.missingFiles : ["NO_USABLE_QUALIFICATION_EVIDENCE"],
+    missingFiles: evidence.gptReady ? evidence.missingFiles : ["MISSING_CORE_QUALIFICATION_ARTIFACTS"],
   };
 }
 
@@ -199,34 +205,47 @@ export async function buildGptReadinessReport(
   const manifestPath = path.join(dateFolder, "crawl-manifest.json");
   const manifest = loadManifest(manifestPath);
 
-  const expected =
-    manifest?.expectedCount && manifest.expectedCount > 0
-      ? manifest.expectedCount
-      : 0;
+  const phase1Decisions = loadPhase1DecisionsFromDisk(dateFolder);
+  const phase1CandidateIds = phase1Decisions
+    ? [...phase1Decisions.values()]
+        .filter((row) => isDetailScrapeCrawlStatus(row.status))
+        .map((row) => row.tender247Id)
+    : [];
 
   const candidateIds = new Set<string>();
-  if (manifest?.tenders) {
-    for (const id of Object.keys(manifest.tenders)) {
-      candidateIds.add(id);
+  if (phase1CandidateIds.length > 0) {
+    for (const id of phase1CandidateIds) candidateIds.add(id);
+  } else {
+    if (manifest?.tenders) {
+      for (const id of Object.keys(manifest.tenders)) {
+        candidateIds.add(id);
+      }
+    }
+
+    if (fs.existsSync(dateFolder)) {
+      for (const name of fs.readdirSync(dateFolder)) {
+        if (isTempOrIncompleteName(name)) {
+          continue;
+        }
+        const folderMatch = name.match(/^T247-(\d+)$/i);
+        if (folderMatch) {
+          candidateIds.add(folderMatch[1]!);
+          continue;
+        }
+        const zipMatch = name.match(/^T247-(\d+)\.zip$/i);
+        if (zipMatch) {
+          candidateIds.add(zipMatch[1]!);
+        }
+      }
     }
   }
 
-  if (fs.existsSync(dateFolder)) {
-    for (const name of fs.readdirSync(dateFolder)) {
-      if (isTempOrIncompleteName(name)) {
-        continue;
-      }
-      const folderMatch = name.match(/^T247-(\d+)$/i);
-      if (folderMatch) {
-        candidateIds.add(folderMatch[1]!);
-        continue;
-      }
-      const zipMatch = name.match(/^T247-(\d+)\.zip$/i);
-      if (zipMatch) {
-        candidateIds.add(zipMatch[1]!);
-      }
-    }
-  }
+  const expected =
+    phase1CandidateIds.length > 0
+      ? phase1CandidateIds.length
+      : manifest?.expectedCount && manifest.expectedCount > 0
+        ? manifest.expectedCount
+        : candidateIds.size;
 
   const readyIds: string[] = [];
   const readyFullIds: string[] = [];
@@ -244,12 +263,12 @@ export async function buildGptReadinessReport(
         path.join(dateFolder, `T247-${id}`),
         id,
       );
-      if (!artifacts.complete) {
+      if (!artifacts.qualificationReady) {
         missingTenderIds.push(id);
         continue;
       }
       readyIds.push(id);
-      if (prepared.evidenceMode === "FULL") {
+      if (artifacts.complete) {
         readyFullIds.push(id);
       } else {
         readyPartialIds.push(id);
@@ -260,6 +279,7 @@ export async function buildGptReadinessReport(
   }
 
   if (
+    phase1CandidateIds.length === 0 &&
     expected > readyIds.length &&
     missingTenderIds.length < expected - readyIds.length
   ) {
@@ -307,7 +327,7 @@ export function saveGptReadinessReport(
     readyFullTenderIds: report.readyFullTenderIds,
     readyPartialTenderIds: report.readyPartialTenderIds,
     readyForQualification: report.readyForQualification,
-    note: "Ready = at least one usable artifact (metadata, Tender_All_Documents.zip, or AI_Summary.pdf)",
+    note: "Ready = valid metadata.json + valid Tender_All_Documents.zip (AI_Summary.pdf optional)",
     checkedAt: report.checkedAt,
   };
   fs.writeFileSync(outPath, JSON.stringify(publicReport, null, 2), "utf8");
@@ -360,7 +380,7 @@ export function tryResolvePhase1TenderUploadFiles(
   }
 
   const artifacts = inspectTenderArtifactState(tenderFolder, t247Id);
-  if (!artifacts.complete) {
+  if (!isTenderSafeToSkipReopen(tenderFolder, t247Id)) {
     return null;
   }
 
@@ -371,9 +391,9 @@ export function tryResolvePhase1TenderUploadFiles(
 
   return {
     metadataPath: artifacts.metadataPath,
-    aiSummaryPath: artifacts.aiSummaryPath,
+    aiSummaryPath: artifacts.aiSummaryValid ? artifacts.aiSummaryPath : null,
     documentZipPath,
-    aiSummaryAvailable: true,
+    aiSummaryAvailable: artifacts.aiSummaryValid,
   };
 }
 
@@ -385,16 +405,12 @@ export function getMissingPhase1Files(
   const tenderFolder = path.join(dateFolder, `T247-${t247Id}`);
   const missing: string[] = [];
   const documentZipPath = findTenderAllDocumentsZip(tenderFolder);
-  const aiSummary = findAiSummaryPdfLocal(tenderFolder);
 
   if (!documentZipPath) {
     missing.push("Tender_All_Documents.zip");
   }
   if (!hasMetadataForChatGpt({ dateFolder, t247Id })) {
     missing.push("metadata");
-  }
-  if (!aiSummary) {
-    missing.push("AI_Summary.pdf");
   }
   return missing;
 }

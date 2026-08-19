@@ -386,9 +386,9 @@ export function printTender247CompleteRunSummary(
   console.log(
     `CHATGPT_RETRY_PENDING=${summary.chatgptRetryPending ?? 0}`,
   );
-  console.log(
-    `CHATGPT_TOTAL_VALID_QUALIFICATIONS_AVAILABLE=${summary.chatgptSuccess}`,
-  );
+    console.log(
+      `CHATGPT_TOTAL_VALID_QUALIFICATIONS_AVAILABLE=${summary.chatgptSuccess}`,
+    );
   // Legacy aliases — CHATGPT_ATTEMPTED means actual GPT submissions this run.
   console.log(`CHATGPT_ATTEMPTED=${summary.chatgptSubmittedThisRun ?? summary.chatgptAttempted}`);
   console.log(
@@ -766,7 +766,20 @@ export async function runTender247CompletePipeline(
     let runStatus: Tender247CompleteRunStatus = "SUCCESS";
     if (exitCode !== 0 && chatgptFailed === 0 && processingErrors.length > 0) {
       runStatus = "FAILED_FATAL";
-    } else if (chatgptFailed > 0 || (chatgptSummary?.remainingQueued ?? 0) > 0) {
+    } else if (
+      chatgptFailed > 0 ||
+      (chatgptSummary?.remainingQueued ?? 0) > 0 ||
+      (chatgptSummary?.gptUnaccountedIds?.length ?? 0) > 0
+    ) {
+      runStatus = "COMPLETED_WITH_FAILURES";
+    } else if (
+      (chatgptSummary?.gptReadyTotal ?? 0) > 0 &&
+      (chatgptSummary?.completedThisRun ?? 0) +
+        (chatgptSummary?.reusedExistingValid ?? 0) +
+        (chatgptSummary?.pending ?? 0) +
+        chatgptFailed <
+        (chatgptSummary?.gptReadyTotal ?? 0)
+    ) {
       runStatus = "COMPLETED_WITH_FAILURES";
     } else if (exitCode !== 0) {
       runStatus = "FAILED_FATAL";

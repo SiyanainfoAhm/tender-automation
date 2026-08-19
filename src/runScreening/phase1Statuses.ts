@@ -22,24 +22,85 @@ export const PHASE1_STATUS_DISPLAY: Record<Phase1ScreeningStatus, string> = {
   NO_GO: "No Bid",
 };
 
-/** Statuses that enter expensive Tender247 detail scraping. */
+/** Workbook / ChatGPT Phase-1 tokens used for Tender247 detail selection. */
+export const PHASE1_CRAWL_STATUSES = [
+  "NO_BID",
+  "VERIFY",
+  "MAY_BID",
+  "WILL_BID",
+] as const;
+
+export type Phase1CrawlStatus = (typeof PHASE1_CRAWL_STATUSES)[number];
+
+/**
+ * Statuses that enter expensive Tender247 detail scraping.
+ * ChatGPT Phase-1 tokens: VERIFY / MAY_BID / WILL_BID only.
+ * Canonical aliases (VERIFY / CONDITIONAL_GO / GO) map onto those tokens.
+ * PARTNER_BID is not a Phase-1 crawl status.
+ */
 export const DETAIL_SCRAPE_STATUSES = new Set<Phase1ScreeningStatus>([
   "VERIFY",
   "CONDITIONAL_GO",
   "GO",
-  "PARTNER_BID",
 ]);
 
+export const DETAIL_SCRAPE_CRAWL_STATUSES = new Set<Phase1CrawlStatus>([
+  "VERIFY",
+  "MAY_BID",
+  "WILL_BID",
+]);
+
+export function normalizeStatusToken(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_")
+    .replace(/[^\w]/g, "");
+}
+
+export function normalizePhase1CrawlStatus(
+  value: unknown,
+): Phase1CrawlStatus | null {
+  const key = normalizeStatusToken(value);
+  switch (key) {
+    case "NO_BID":
+    case "NOBID":
+    case "NO_GO":
+    case "NOGO":
+      return "NO_BID";
+    case "VERIFY":
+    case "SCREENING":
+      return "VERIFY";
+    case "MAY_BID":
+    case "MAYBID":
+    case "CONDITIONAL_GO":
+    case "CONDITIONALGO":
+      return "MAY_BID";
+    case "WILL_BID":
+    case "WILLBID":
+    case "GO":
+      return "WILL_BID";
+    default:
+      return null;
+  }
+}
+
+export function isDetailScrapeCrawlStatus(
+  status: Phase1CrawlStatus | null | undefined,
+): status is "VERIFY" | "MAY_BID" | "WILL_BID" {
+  return Boolean(status && DETAIL_SCRAPE_CRAWL_STATUSES.has(status));
+}
+
 export function isDetailScrapeStatus(
-  status: Phase1ScreeningStatus | null | undefined,
+  status: Phase1ScreeningStatus | Phase1CrawlStatus | null | undefined,
 ): boolean {
-  return Boolean(status && DETAIL_SCRAPE_STATUSES.has(status));
+  return isDetailScrapeCrawlStatus(normalizePhase1CrawlStatus(status));
 }
 
 export function isPhase1NoBid(
-  status: Phase1ScreeningStatus | null | undefined,
+  status: Phase1ScreeningStatus | Phase1CrawlStatus | null | undefined,
 ): boolean {
-  return status === "NO_GO";
+  return normalizePhase1CrawlStatus(status) === "NO_BID";
 }
 
 /**

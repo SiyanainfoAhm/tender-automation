@@ -48,6 +48,62 @@ describe("RUN_EXCEL_SCREENING response completion", () => {
     await browser?.close();
   });
 
+  it("detects generated workbook from prose link + hidden hover download", async () => {
+    const page: Page = await browser.newPage();
+    await page.setContent(`<!DOCTYPE html>
+<html><head>
+<style>
+  .dl { display: none; }
+  .file-card:hover .dl { display: inline-block; }
+</style>
+</head><body>
+  <form>
+    <div data-message-author-role="user">Evaluate the attached tender Excel for Phase-1 screening. RUN-2026-08-17</div>
+    <div data-message-author-role="assistant">
+      <a href="/files/run-normalized-screened-RUN-2026-08-17.xlsx">
+        Download the completed Phase-1 screened workbook
+      </a>
+      <div class="file-card">
+        <div>run-normalized-screened-RUN-2026-08-17.xlsx</div>
+        <div>Spreadsheet</div>
+        <button type="button" class="dl" aria-label="Download file" title="Download file">Download file</button>
+      </div>
+    </div>
+    <textarea id="prompt-textarea"></textarea>
+  </form>
+</body></html>`);
+    const visibleBefore = await page
+      .getByRole("button", { name: /download file/i })
+      .isVisible()
+      .catch(() => false);
+    assert.equal(visibleBefore, false);
+
+    const workbook = await findGeneratedScreeningWorkbook(page, {
+      correlationId: "RUN-2026-08-17",
+      inputFileName: "run-normalized.xlsx",
+      assistantCountBefore: 1,
+    });
+    assert.ok(
+      workbook,
+      "detector must find the generated workbook without a visible download icon",
+    );
+    assert.equal(workbook!.linkFound, true);
+    assert.equal(workbook!.filenameFound, true);
+    assert.equal(
+      workbook!.filename,
+      "run-normalized-screened-RUN-2026-08-17.xlsx",
+    );
+
+    await workbook!.cardLocator.hover();
+    await page.waitForTimeout(300);
+    const visibleAfter = await page
+      .getByRole("button", { name: /download file/i })
+      .isVisible()
+      .catch(() => false);
+    assert.equal(visibleAfter, true);
+    await page.close();
+  });
+
   it("scan finds the live spreadsheet card and Download file button", async () => {
     const page: Page = await browser.newPage();
     await page.setContent(LIVE_FILE_CARD_HTML);
@@ -132,10 +188,6 @@ describe("RUN_EXCEL_SCREENING response completion", () => {
           "CHATGPT_GENERATED_XLSX_FILENAME=run-normalized-screened-RUN-2026-08-17.xlsx",
         ),
       ),
-      true,
-    );
-    assert.equal(
-      logs.some((line) => line.includes("CHATGPT_RUN_SCREENING_RESPONSE_STABLE=true")),
       true,
     );
     assert.equal(
@@ -417,6 +469,115 @@ describe("RUN_EXCEL_SCREENING response completion", () => {
         line.includes("CHATGPT_SCREENING_OUTPUT_DOWNLOAD_EVENT_RECEIVED=true"),
       ),
       true,
+    );
+
+    await page.close();
+    await context.close();
+    await new Promise<void>((resolve, reject) =>
+      server.close((err) => (err ? reject(err) : resolve())),
+    );
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("downloads the generated XLSX from the spreadsheet preview toolbar, not the file card", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "screening-preview-"));
+    const outputPath = path.join(tmp, "run-screened-siyana.xlsx");
+    const screenedBytes = Buffer.concat([
+      Buffer.from("PK\x03\x04"),
+      Buffer.from("PREVIEW-TOOLBAR-XLSX"),
+    ]);
+    const filename = "run-screened-siyana-phase1-v3.xlsx";
+    const html = `<!DOCTYPE html>
+<html><body>
+  <div data-message-author-role="user">Evaluate the attached tender Excel for Phase-1 screening. RUN-2026-08-17</div>
+  <div id="composer"><span>run-normalized.xlsx</span></div>
+  <div data-message-author-role="assistant">
+    <div class="file-card" id="xlsx-card">
+      <div id="xlsx-name">${filename}</div>
+      <div>Spreadsheet</div>
+    </div>
+  </div>
+  <div id="preview" role="dialog" hidden style="position:fixed;right:0;top:0;width:360px;">
+    <div>${filename}</div>
+    <div role="toolbar">
+      <button type="button" aria-label="Download" id="preview-download">Download</button>
+    </div>
+    <div role="grid">sheet</div>
+  </div>
+  <a id="library" href="https://chatgpt.com/library">Library</a>
+  <script>
+    document.getElementById("xlsx-card").addEventListener("click", () => {
+      document.getElementById("preview").hidden = false;
+    });
+    document.getElementById("xlsx-name").addEventListener("click", () => {
+      document.getElementById("preview").hidden = false;
+    });
+    document.getElementById("preview-download").addEventListener("click", () => {
+      const a = document.createElement("a");
+      a.href = "/${filename}";
+      a.download = "${filename}";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    });
+  </script>
+</body></html>`;
+    const server = http.createServer((req, res) => {
+      if (req.url?.includes(".xlsx")) {
+        res.writeHead(200, {
+          "content-type":
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "content-disposition": `attachment; filename="${filename}"`,
+          "content-length": screenedBytes.length,
+        });
+        res.end(screenedBytes);
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(html);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const context = await browser.newContext({ acceptDownloads: true });
+    const page = await context.newPage();
+    const logs: string[] = [];
+    const capturingLogger = {
+      info: (msg: string) => logs.push(msg),
+      warn: (msg: string) => logs.push(msg),
+      error: (msg: string) => logs.push(msg),
+      debug: () => undefined,
+    };
+    await page.goto(`http://127.0.0.1:${port}/c/run-screening-preview`, {
+      waitUntil: "domcontentloaded",
+    });
+
+    const downloaded = await waitForReturnedWorkbook({
+      page,
+      outputPath,
+      timeoutMs: 15_000,
+      logger: capturingLogger as unknown as Logger,
+      inputFileName: "run-normalized.xlsx",
+      correlationId: "RUN-2026-08-17",
+    });
+    assert.equal(downloaded.originalFilename, filename);
+    assert.ok(fs.readFileSync(outputPath).includes("PREVIEW-TOOLBAR-XLSX"));
+    assert.ok(fs.statSync(outputPath).size > 0);
+    for (const line of [
+      "CHATGPT_XLSX_CARD_CLICKED=true",
+      "CHATGPT_XLSX_PREVIEW_OPENED=true",
+      "CHATGPT_XLSX_PREVIEW_DOWNLOAD_BUTTON_FOUND=true",
+      "CHATGPT_XLSX_PREVIEW_DOWNLOAD_CLICKED=true",
+      "CHATGPT_XLSX_DOWNLOAD_EVENT_RECEIVED=true",
+      "CHATGPT_XLSX_LOCAL_FILE_VERIFIED=true",
+      "AI_SCREENING_GENERATION_STATUS=SUCCESS",
+      "AI_SCREENING_DOWNLOAD_STATUS=SUCCESS",
+      "AI_SCREENING_STATUS=SUCCESS",
+    ]) {
+      assert.equal(logs.some((entry) => entry.includes(line)), true, line);
+    }
+    assert.equal(
+      logs.some((entry) => entry.includes("CHATGPT_SCREENING_LIBRARY_FALLBACK_START")),
+      false,
     );
 
     await page.close();

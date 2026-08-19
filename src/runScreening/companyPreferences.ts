@@ -5,6 +5,12 @@
 import crypto from "node:crypto";
 import { resolveRunCompanyId } from "../company/siyanaCompany.js";
 import { getSupabaseAdminClient, isSupabaseConfigured } from "../supabase/client.js";
+import {
+  leftoverCustomRules,
+  parseScreeningPolicies,
+  PHASE1_SCREENING_POLICY_VERSION,
+  type TenderScreeningPreferenceSnapshot,
+} from "./screeningPolicy.js";
 
 export type CompanyScreeningProfile = {
   id: string;
@@ -101,10 +107,31 @@ function mapPrefs(
   };
 }
 
+export function toTenderScreeningPreferenceSnapshot(
+  snapshot: CompanyPreferenceSnapshot,
+): TenderScreeningPreferenceSnapshot {
+  const { company, preferences } = snapshot;
+  return {
+    companyId: company.id,
+    companyName: company.name,
+    financial: {
+      maxEmdInr: preferences.maxEmdInr,
+      minTenderValueInr: preferences.minTenderValueInr,
+      maxTenderValueInr: preferences.maxTenderValueInr,
+    },
+    preferredScopes: [...preferences.serviceScope],
+    excludedScopes: [...preferences.excludedScope],
+    policies: parseScreeningPolicies(preferences.extras),
+    customRules: leftoverCustomRules(preferences.extras),
+    screeningPolicyVersion: PHASE1_SCREENING_POLICY_VERSION,
+  };
+}
+
 export function hashPreferenceSnapshot(snapshot: CompanyPreferenceSnapshot): string {
   const payload = JSON.stringify({
     company: snapshot.company,
     preferences: snapshot.preferences,
+    screening: toTenderScreeningPreferenceSnapshot(snapshot),
   });
   return crypto.createHash("sha256").update(payload).digest("hex");
 }

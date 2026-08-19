@@ -8,6 +8,7 @@ import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import {
   evaluateExistingQualificationReuse,
+  hasValidExistingQualification,
 } from "../existingQualificationReuse.js";
 import {
   computeQualificationInputFingerprint,
@@ -198,5 +199,71 @@ describe("existing qualification reuse", () => {
 
     assert.equal(decision.reuse, false);
     assert.equal(decision.reason, "EXISTING_MISSING_INPUT_HASH");
+  });
+
+  it("resume does not reuse skipped tenders with no qualification result", () => {
+    const dateFolder = makeDateFolder();
+    const t247Id = "100053264";
+    const tenderFolder = path.join(dateFolder, `T247-${t247Id}`);
+    const docs = path.join(tenderFolder, "documents");
+    fs.mkdirSync(docs, { recursive: true });
+    fs.writeFileSync(
+      path.join(tenderFolder, "metadata.json"),
+      JSON.stringify({ sourceTenderId: t247Id, title: "Test" }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(docs, "Tender_All_Documents.zip"), minimalZip("zip"));
+    fs.writeFileSync(
+      path.join(tenderFolder, "chatgpt-state.json"),
+      JSON.stringify({
+        t247Id,
+        status: "skipped",
+        qualificationStatus: null,
+        chatUrl: null,
+        resultPath: null,
+      }),
+      "utf8",
+    );
+
+    const decision = evaluateExistingQualificationReuse({
+      dateFolder,
+      sourceTenderId: t247Id,
+      resumeMode: true,
+    });
+
+    assert.equal(decision.reuse, false);
+    assert.equal(decision.found, false);
+    assert.equal(decision.reason, "NO_EXISTING_RESULT");
+    assert.equal(hasValidExistingQualification({ dateFolder, sourceTenderId: t247Id }), false);
+  });
+
+  it("resume does not reuse a result that belongs to a different tender", () => {
+    const dateFolder = makeDateFolder();
+    seedReadyTender({
+      dateFolder,
+      t247Id: "102379065",
+      status: "VERIFY",
+      withHash: true,
+    });
+    const resultPath = path.join(
+      dateFolder,
+      "T247-102379065",
+      "qualification-result.json",
+    );
+    const parsed = JSON.parse(fs.readFileSync(resultPath, "utf8")) as {
+      t247Id: string;
+      sourceTenderId: string;
+    };
+    parsed.t247Id = "999999999";
+    parsed.sourceTenderId = "999999999";
+    fs.writeFileSync(resultPath, JSON.stringify(parsed, null, 2), "utf8");
+
+    const decision = evaluateExistingQualificationReuse({
+      dateFolder,
+      sourceTenderId: "102379065",
+      resumeMode: true,
+    });
+    assert.equal(decision.reuse, false);
+    assert.equal(decision.reason, "EXISTING_INVALID");
   });
 });

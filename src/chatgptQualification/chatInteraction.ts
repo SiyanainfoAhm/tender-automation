@@ -50,9 +50,9 @@ import {
 import type { AppConfig } from "../config.js";
 import {
   countAssistantMessages,
-  findGeneratedScreeningWorkbook,
   isScreeningGenerationActive,
-  SCREENING_STABILITY_POLLS,
+  logScreeningScanDiagnostics,
+  scanGeneratedScreeningOutput,
 } from "./assistantSpreadsheetAttachment.js";
 import {
   assertRunExcelScreeningPreSend,
@@ -3581,7 +3581,7 @@ export async function waitForAssistantResponse(options: {
       const assistantCount = await countAssistantMessages(page);
       const generating = await isScreeningGenerationActive(page);
       const newAssistant = assistantCount > assistantCountBefore;
-      const responseStarted = newAssistant || generating;
+      const responseStarted = newAssistant || generating || assistantCount > 0;
       if (responseStarted && !responseActiveLogged) {
         responseActiveLogged = true;
         logger.info("CHATGPT_RESPONSE_STARTED=true");
@@ -3592,17 +3592,23 @@ export async function waitForAssistantResponse(options: {
         }
       }
 
-      const workbook =
-        responseStarted
-          ? await findGeneratedScreeningWorkbook(page, {
-              correlationId: expectedT247Id,
-              inputFileName: options.inputWorkbookFileName,
-              assistantCountBefore,
-            })
-          : null;
+      const { workbook, diagnostics } = await scanGeneratedScreeningOutput(page, {
+        correlationId: expectedT247Id,
+        inputFileName: options.inputWorkbookFileName,
+        assistantCountBefore,
+      });
 
-      if (elapsedSec === 0 || elapsedSec % 10 === 0) {
-        const waitLine = `CHATGPT_RUN_SCREENING_WAIT elapsedSec=${elapsedSec} xlsx=${Boolean(workbook)} generating=${generating}`;
+      const generatedOutputFound = Boolean(workbook);
+      const responseReady =
+        (newAssistant || assistantCount > 0) &&
+        !generating &&
+        generatedOutputFound;
+
+      const heartbeat = elapsedSec === 0 || elapsedSec % 10 === 0;
+      if (heartbeat && !responseReady) {
+        logger.info("CHATGPT_RUN_SCREENING_OUTPUT_SCAN_START");
+        console.log("CHATGPT_RUN_SCREENING_OUTPUT_SCAN_START");
+        const waitLine = `CHATGPT_RUN_SCREENING_WAIT elapsedSec=${elapsedSec} xlsx=${generatedOutputFound} generating=${generating}`;
         logger.info(waitLine);
         console.log(waitLine);
         logger.info(
@@ -3611,56 +3617,57 @@ export async function waitForAssistantResponse(options: {
         console.log(
           `[AI SCREENING] Waiting for generated XLSX... elapsed=${elapsedSec}s`,
         );
+        const emit = (message: string) => {
+          logger.info(message);
+          console.log(message);
+        };
+        logScreeningScanDiagnostics(diagnostics, emit);
       }
 
-      if (!responseStarted) {
-        await page.waitForTimeout(1000);
-        continue;
-      }
-
-      if (workbook && !generating) {
-        if (
-          previousText !== workbook.filename
-        ) {
-          previousText = workbook.filename;
-          stableChecks = 0;
+      if (responseReady && workbook) {
+        logger.info("CHATGPT_RUN_SCREENING_OUTPUT_SCAN_START");
+        console.log("CHATGPT_RUN_SCREENING_OUTPUT_SCAN_START");
+        logScreeningScanDiagnostics(diagnostics, (message) => {
+          logger.info(message);
+          console.log(message);
+        });
+        if (workbook.linkFound) {
+          logger.info("CHATGPT_SCREENING_DOWNLOAD_LINK_FOUND=true");
+          console.log("CHATGPT_SCREENING_DOWNLOAD_LINK_FOUND=true");
+          logger.info("CHATGPT_GENERATED_WORKBOOK_LINK_FOUND=true");
+          console.log("CHATGPT_GENERATED_WORKBOOK_LINK_FOUND=true");
+        }
+        if (workbook.filenameFound || workbook.cardFound) {
+          logger.info("CHATGPT_SCREENING_FILENAME_FOUND=true");
+          console.log("CHATGPT_SCREENING_FILENAME_FOUND=true");
+          logger.info(`CHATGPT_SCREENING_FILENAME=${workbook.filename}`);
+          console.log(`CHATGPT_SCREENING_FILENAME=${workbook.filename}`);
           logger.info("CHATGPT_GENERATED_XLSX_FOUND=true");
           console.log("CHATGPT_GENERATED_XLSX_FOUND=true");
-          logger.info(
-            `CHATGPT_GENERATED_XLSX_FILENAME=${workbook.filename}`,
-          );
-          console.log(
-            `CHATGPT_GENERATED_XLSX_FILENAME=${workbook.filename}`,
-          );
-          logger.info("CHATGPT_GENERATION_ACTIVE=false");
-          console.log("CHATGPT_GENERATION_ACTIVE=false");
-          logger.info("CHATGPT_RUN_SCREENING_STAGE=GENERATED_XLSX_DETECTED");
+          logger.info(`CHATGPT_GENERATED_XLSX_FILENAME=${workbook.filename}`);
+          console.log(`CHATGPT_GENERATED_XLSX_FILENAME=${workbook.filename}`);
         }
-        stableChecks += 1;
-        logger.info(
-          `CHATGPT_RESPONSE_STABILITY_CHECK=${stableChecks}/${SCREENING_STABILITY_POLLS}`,
-        );
-        console.log(
-          `CHATGPT_RESPONSE_STABILITY_CHECK=${stableChecks}/${SCREENING_STABILITY_POLLS}`,
-        );
-        if (stableChecks >= SCREENING_STABILITY_POLLS) {
-          logger.info("CHATGPT_RUN_SCREENING_RESPONSE_STABLE=true");
-          console.log("CHATGPT_RUN_SCREENING_RESPONSE_STABLE=true");
-          logger.info("CHATGPT_RUN_SCREENING_RESPONSE_COMPLETE=true");
-          console.log("CHATGPT_RUN_SCREENING_RESPONSE_COMPLETE=true");
-          logger.info("CHATGPT_RESPONSE_COMPLETE=true");
-          console.log("CHATGPT_RESPONSE_COMPLETE=true");
-          logger.info("CHATGPT_RESPONSE_COMPLETE_REASON=SCREENING_XLSX");
-          console.log("CHATGPT_RESPONSE_COMPLETE_REASON=SCREENING_XLSX");
-          return {
-            status: "complete",
-            text: "",
-            reason: "SCREENING_XLSX",
-            outputFilename: workbook.filename,
-          };
+        if (workbook.cardFound) {
+          logger.info("CHATGPT_SCREENING_FILE_CARD_FOUND=true");
+          console.log("CHATGPT_SCREENING_FILE_CARD_FOUND=true");
+          logger.info("CHATGPT_GENERATED_WORKBOOK_CARD_FOUND=true");
+          console.log("CHATGPT_GENERATED_WORKBOOK_CARD_FOUND=true");
         }
-      } else {
-        stableChecks = 0;
+        logger.info(`CHATGPT_GENERATION_INDICATOR_VISIBLE=${generating}`);
+        console.log(`CHATGPT_GENERATION_INDICATOR_VISIBLE=${generating}`);
+        logger.info("CHATGPT_RUN_SCREENING_STAGE=GENERATED_XLSX_DETECTED");
+        logger.info("CHATGPT_RUN_SCREENING_RESPONSE_COMPLETE=true");
+        console.log("CHATGPT_RUN_SCREENING_RESPONSE_COMPLETE=true");
+        logger.info("CHATGPT_RESPONSE_COMPLETE=true");
+        console.log("CHATGPT_RESPONSE_COMPLETE=true");
+        logger.info("CHATGPT_RESPONSE_COMPLETE_REASON=SCREENING_XLSX");
+        console.log("CHATGPT_RESPONSE_COMPLETE_REASON=SCREENING_XLSX");
+        return {
+          status: "complete",
+          text: "",
+          reason: "SCREENING_XLSX",
+          outputFilename: workbook.filename,
+        };
       }
 
       await page.waitForTimeout(1000);
@@ -3949,11 +3956,13 @@ export async function waitForAssistantResponse(options: {
 
   try {
     if (isRunScreening) {
-      const workbook = await findGeneratedScreeningWorkbook(page, {
-        correlationId: expectedT247Id,
-        inputFileName: options.inputWorkbookFileName,
-        assistantCountBefore,
-      });
+      const workbook = (
+        await scanGeneratedScreeningOutput(page, {
+          correlationId: expectedT247Id,
+          inputFileName: options.inputWorkbookFileName,
+          assistantCountBefore,
+        })
+      ).workbook;
       if (workbook) {
         logger.info("CHATGPT_GENERATED_XLSX_FOUND=true");
         logger.info(`CHATGPT_GENERATED_XLSX_FILENAME=${workbook.filename}`);

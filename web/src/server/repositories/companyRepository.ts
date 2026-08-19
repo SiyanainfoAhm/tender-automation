@@ -3,6 +3,11 @@ import "server-only";
 import { getServerSupabase } from "@/lib/db/server";
 import { SIYANA_COMPANY_ID } from "@/lib/company/types";
 import { parseStoredScopeList } from "@/lib/company/scope-chips";
+import {
+  mergeScreeningPoliciesIntoExtras,
+  parseScreeningPolicies,
+  type ScreeningPolicies,
+} from "@/lib/company/screening-policies";
 
 export type CompanyRecord = {
   id: string;
@@ -26,6 +31,7 @@ export type CompanyBidPreferences = {
   serviceScope: string[];
   excludedScope: string[];
   extras: Record<string, unknown>;
+  screeningPolicies: ScreeningPolicies;
   updatedAt: string;
 };
 
@@ -59,6 +65,9 @@ function mapPrefs(row: Record<string, unknown>): CompanyBidPreferences {
     serviceScope: parseStoredScopeList(service),
     excludedScope: parseStoredScopeList(excluded),
     extras: (row.extras as Record<string, unknown>) || {},
+    screeningPolicies: parseScreeningPolicies(
+      (row.extras as Record<string, unknown>) || {},
+    ),
     updatedAt: String(row.updated_at),
   };
 }
@@ -127,10 +136,14 @@ export async function upsertCompanyBidPreferences(
     maxTenderValueInr?: number | null;
     serviceScope?: string[];
     excludedScope?: string[];
+    screeningPolicies?: ScreeningPolicies;
   },
 ): Promise<CompanyBidPreferences> {
   const supabase = getServerSupabase();
   const existing = await getCompanyBidPreferences(companyId);
+  const extras = patch.screeningPolicies
+    ? mergeScreeningPoliciesIntoExtras(existing?.extras, patch.screeningPolicies)
+    : existing?.extras ?? {};
   const payload = {
     company_id: companyId,
     max_emd_inr: patch.maxEmdInr ?? existing?.maxEmdInr ?? null,
@@ -140,6 +153,7 @@ export async function upsertCompanyBidPreferences(
       patch.maxTenderValueInr ?? existing?.maxTenderValueInr ?? null,
     service_scope: patch.serviceScope ?? existing?.serviceScope ?? [],
     excluded_scope: patch.excludedScope ?? existing?.excludedScope ?? [],
+    extras,
     updated_at: new Date().toISOString(),
   };
 

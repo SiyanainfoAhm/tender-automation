@@ -26,6 +26,11 @@ import {
   MAX_DOCUMENT_UPLOAD_SIZE_MB,
 } from "@/lib/company/types";
 import { parseStoredScopeList } from "@/lib/company/scope-chips";
+import {
+  parseScreeningPolicyValue,
+  SCREENING_POLICY_FIELDS,
+  type ScreeningPolicies,
+} from "@/lib/company/screening-policies";
 
 const companyProfileSchema = z.object({
   name: z.string().trim().min(1).max(200),
@@ -74,6 +79,17 @@ const bidPreferencesSchema = z.object({
 
 function parseScopeList(raw: string | undefined): string[] {
   return parseStoredScopeList(raw);
+}
+
+function parsePoliciesFromForm(formData: FormData): ScreeningPolicies {
+  const policies: ScreeningPolicies = {};
+  for (const field of SCREENING_POLICY_FIELDS) {
+    const parsed = parseScreeningPolicyValue(
+      formData.get(`screeningPolicy.${field.key}`),
+    );
+    if (parsed) policies[field.key] = parsed;
+  }
+  return policies;
 }
 
 export async function updateCompanyProfileAction(
@@ -137,6 +153,7 @@ export async function updateBidPreferencesAction(
       maxTenderValueInr: parsed.data.maxTenderValueInr,
       serviceScope: parseScopeList(parsed.data.serviceScope),
       excludedScope: parseScopeList(parsed.data.excludedScope),
+      screeningPolicies: parsePoliciesFromForm(formData),
     });
 
     revalidatePath("/company-profile");

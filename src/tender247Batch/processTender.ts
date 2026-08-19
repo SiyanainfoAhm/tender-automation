@@ -38,6 +38,7 @@ import { waitForAllActiveDownloads } from "../tenderDetails/downloadHelpers.js";
 import { verifyCurrentTenderId } from "./verifyCurrentTenderId.js";
 import {
   inspectTenderArtifactState,
+  isTenderSafeToSkipReopen,
   pendingTimeoutReasonFromState,
 } from "./tenderArtifactState.js";
 import {
@@ -45,6 +46,12 @@ import {
   runFinalTenderAdvanceGate,
   type FinalTenderAdvanceGateResult,
 } from "./finalTenderAdvanceGate.js";
+import {
+  isAiSummaryTerminalFailure,
+  resolveAiSummaryStage,
+  saveAiSummaryStage,
+  shouldSkipAiSummaryRetry,
+} from "./aiSummaryStage.js";
 import {
   assertSingleTender247DetailPage,
   closeExtraTender247DetailPages,
@@ -66,6 +73,11 @@ import {
   fetchTender247Metadata,
   upsertTender247Metadata,
 } from "../supabase/tenderMetadataStore.js";
+import {
+  assertOpenSingleTenderDetailsAllowed,
+  loadPhase1DecisionsFromDisk,
+  lookupScreeningDecision,
+} from "../runScreening/phase1DetailQueue.js";
 import {
   buildTender247PrescreenInput,
   runAndPersistPrescreen,
@@ -150,35 +162,134 @@ export async function processLiveTender(
 
   logger.info(`[${index}/${total}] START T247-${t247Id}`);
 
-  // -------- LEVEL A: skip only when metadata + AI + validated canonical docs ZIP exist --------
+  const phase1Decisions = loadPhase1DecisionsFromDisk(dateFolder);
+  if (phase1Decisions) {
+    const decision = lookupScreeningDecision(phase1Decisions, t247Id);
+    if (!decision) {
+      throw new AutomationError(
+        "T247_SCREENING_DECISION_MISSING",
+        `T247_SCREENING_DECISION_MISSING:${t247Id}`,
+      );
+    }
+    logger.info(`[T247 ${t247Id}] PHASE1_STATUS=${decision.status}`);
+    if (decision.status === "NO_BID") {
+      logger.error(`T247_REFUSING_TO_SCRAPE_NO_BID id=${t247Id}`);
+      const folder = path.join(dateFolder, `T247-${t247Id}`);
+      if (fs.existsSync(folder)) {
+        logger.info(`T247_EXISTING_FOLDER_NO_BID_SKIPPED=${t247Id}`);
+      }
+      logger.info(`[T247 ${t247Id}] DETAIL_SCRAPE_ALLOWED=false`);
+      return {
+        t247Id,
+        status: "skipped_no_bid",
+        zipPath: null,
+        zipSize: 0,
+        documentsDownloaded: 0,
+        corrigendaDownloaded: 0,
+        aiSummaryDownloaded: false,
+        allDocumentsDownloaded: false,
+        securityCodeCaptured: false,
+        metadataStatus: "missing",
+        aiSummaryStatus: "missing",
+        allDocumentsStatus: "missing",
+        metadataPath: null,
+        aiSummaryPath: null,
+        allDocumentsPath: null,
+        lastCompletedStep: null,
+        error: null,
+        failedDocuments: [],
+        pendingReason: null,
+        artifactComplete: false,
+        chatgptSkipped: true,
+      };
+    }
+    logger.info(`[T247 ${t247Id}] DETAIL_SCRAPE_ALLOWED=true`);
+  }
+
+  // -------- LEVEL A: skip reopen when core artifacts are ready and AI is
+  // present or has already reached an explicit terminal failure --------
   let resume = inspectTenderResumeState(dateFolder, t247Id);
-  if (resume.allDocumentsValid && resume.metadataValid && resume.aiSummaryValid) {
+  if (isTenderSafeToSkipReopen(resume.tenderFolder, t247Id)) {
+    const artifacts = inspectTenderArtifactState(resume.tenderFolder, t247Id);
+    const aiStage = resolveAiSummaryStage({
+      tenderDir: resume.tenderFolder,
+      aiSummaryValid: artifacts.aiSummaryValid,
+    });
     logger.info(`TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id}`);
+    if (!artifacts.aiSummaryValid && isAiSummaryTerminalFailure(aiStage)) {
+      t247Event(logger, t247Id, "AI_SUMMARY_DOWNLOAD_FAILED");
+      t247Event(logger, t247Id, "AI_SUMMARY_NON_BLOCKING=true");
+      t247Event(logger, t247Id, `AI_SUMMARY_STATUS=${aiStage}`);
+      t247Event(logger, t247Id, "AI_SUMMARY_RECOVERY_PENDING=true");
+      saveAiSummaryStage({
+        tenderDir: resume.tenderFolder,
+        t247Id,
+        aiStage,
+        aiSummaryValid: false,
+      });
+    }
     const zipOk =
       fs.existsSync(resume.zipPath) && fs.statSync(resume.zipPath).size > 0;
-    return {
+    if (!zipOk && artifacts.coreReady) {
+      try {
+        logger.info("ZIP_CREATE_FROM_EXISTING_FOLDER");
+        const zipResult = await createTenderZip({
+          tenderFolderPath: resume.tenderFolder,
+          zipPath: resume.zipPath,
+          t247Id,
+          logger,
+        });
+        zipPath = zipResult.zipPath;
+        zipSize = zipResult.sizeBytes;
+        lastCompletedStep = "zip";
+      } catch (error) {
+        logger.warn(
+          `ZIP from existing folder failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    } else if (zipOk) {
+      zipPath = resume.zipPath;
+      zipSize = fs.statSync(resume.zipPath).size;
+    }
+    if (
+      artifacts.complete &&
+      !config.keepUnzippedTenderFolders &&
+      fs.existsSync(resume.tenderFolder)
+    ) {
+      removeDirectoryRecursive(resume.tenderFolder);
+    }
+    return buildResult({
       t247Id,
       status: "completed",
-      zipPath: zipOk ? resume.zipPath : null,
-      zipSize: zipOk ? fs.statSync(resume.zipPath).size : 0,
-      documentsDownloaded: 1,
-      corrigendaDownloaded: 0,
-      aiSummaryDownloaded: resume.aiSummaryValid,
-      allDocumentsDownloaded: true,
+      zipPath: zipPath || (zipOk ? resume.zipPath : null),
+      zipSize: zipSize || (zipOk ? fs.statSync(resume.zipPath).size : 0),
+      aiSummaryDownloaded: artifacts.aiSummaryValid,
+      allDocumentsDownloaded: artifacts.documentsZipValid,
       securityCodeCaptured: true,
-      metadataStatus: "complete",
-      aiSummaryStatus: resume.aiSummaryValid ? "complete" : "unavailable",
-      allDocumentsStatus: "complete",
-      metadataPath: resume.metadataValid ? resume.metadataPath : null,
-      aiSummaryPath: resume.aiSummaryPath,
-      allDocumentsPath: resume.allDocumentsPath,
-      lastCompletedStep: "zip",
+      metadataStatus: artifacts.metadataValid ? "complete" : "missing",
+      aiSummaryStatus: artifacts.aiSummaryValid
+        ? "complete"
+        : isAiSummaryTerminalFailure(aiStage)
+          ? "failed"
+          : "unavailable",
+      allDocumentsStatus: artifacts.documentsZipValid ? "complete" : "missing",
+      metadataPath: artifacts.metadataValid ? artifacts.metadataPath : null,
+      aiSummaryPath: artifacts.aiSummaryValid ? artifacts.aiSummaryPath : null,
+      allDocumentsPath: artifacts.documentsZipValid
+        ? artifacts.documentsZipPath
+        : null,
+      lastCompletedStep: lastCompletedStep || "zip",
       error: null,
-      failedDocuments: [],
       pendingReason: null,
-      artifactComplete: true,
+      artifactComplete: artifacts.complete,
       chatgptSkipped: false,
-    };
+      completeWithAiMissing:
+        artifacts.coreReady &&
+        !artifacts.aiSummaryValid &&
+        isAiSummaryTerminalFailure(aiStage),
+    });
   }
 
   // -------- LEVEL B: partial folder resume without opening if already complete enough --------
@@ -317,6 +428,10 @@ export async function processLiveTender(
 
   // Need live detail page for missing steps
   try {
+    if (phase1Decisions) {
+      const decision = lookupScreeningDecision(phase1Decisions, t247Id);
+      assertOpenSingleTenderDetailsAllowed(decision?.status, t247Id);
+    }
     await closeExtraTender247DetailPages(context, listPage);
     assertSingleTender247DetailPage(context, listPage, logger);
     await listPage.bringToFront().catch(() => undefined);
@@ -333,6 +448,10 @@ export async function processLiveTender(
         tenderId: t247Id,
         config,
         logger,
+        dateFolder,
+        phase1ScreeningStatus: phase1Decisions
+          ? lookupScreeningDecision(phase1Decisions, t247Id)?.status
+          : undefined,
       });
       detailPage = resolved.detailPage;
       titleHint = options.titleHint ?? resolved.item.listTitle;
@@ -583,7 +702,13 @@ export async function processLiveTender(
         ),
         maxRetries: Math.min(1, config.documentDownloadMaxRetries),
         logger,
-        skipAiSummary: resume.aiSummaryValid,
+        skipAiSummary: shouldSkipAiSummaryRetry(
+          resume.aiSummaryValid,
+          resolveAiSummaryStage({
+            tenderDir: resume.tenderFolder,
+            aiSummaryValid: resume.aiSummaryValid,
+          }),
+        ),
         skipAllDocuments: resume.allDocumentsValid,
         keepDebugFiles: config.keepDebugFiles,
         documentStage,
@@ -703,6 +828,10 @@ export async function processLiveTender(
         const retryMissing = async () => {
           if (!detailPage || detailPage.isClosed()) return;
           const current = inspectTenderArtifactState(resume.tenderFolder, t247Id);
+          const aiStage = resolveAiSummaryStage({
+            tenderDir: resume.tenderFolder,
+            aiSummaryValid: current.aiSummaryValid,
+          });
           if (current.ready) return;
           await downloadRequiredTenderFiles({
             detailPage,
@@ -717,7 +846,7 @@ export async function processLiveTender(
             ),
             maxRetries: Math.min(1, config.documentDownloadMaxRetries),
             logger,
-            skipAiSummary: current.aiSummaryValid,
+            skipAiSummary: shouldSkipAiSummaryRetry(current.aiSummaryValid, aiStage),
             skipAllDocuments: current.documentsZipValid,
             keepDebugFiles: config.keepDebugFiles,
             documentStage,
@@ -783,7 +912,7 @@ export async function processLiveTender(
   const artifactsAfterGate =
     lastGate?.state ?? inspectTenderArtifactState(resume.tenderFolder, t247Id);
   try {
-    if (artifactsAfterGate.complete) {
+    if (artifactsAfterGate.coreReady) {
       if (
         fs.existsSync(resume.zipPath) &&
         fs.statSync(resume.zipPath).size <= 0
@@ -807,7 +936,17 @@ export async function processLiveTender(
       zipPath = zipResult.zipPath;
       zipSize = zipResult.sizeBytes;
       lastCompletedStep = "zip";
-      if (!config.keepUnzippedTenderFolders) {
+      const aiStageAfterZip = resolveAiSummaryStage({
+        tenderDir: resume.tenderFolder,
+        aiSummaryValid: artifactsAfterGate.aiSummaryValid,
+      });
+      const keepForAiRecovery =
+        !artifactsAfterGate.aiSummaryValid &&
+        isAiSummaryTerminalFailure(aiStageAfterZip);
+      if (keepForAiRecovery) {
+        t247Event(logger, t247Id, "AI_SUMMARY_RECOVERY_PENDING=true");
+      }
+      if (!config.keepUnzippedTenderFolders && artifactsAfterGate.complete) {
         removeDirectoryRecursive(resume.tenderFolder);
       }
     } else if (!artifactsAfterGate.documentsZipValid) {
@@ -933,13 +1072,40 @@ export async function processLiveTender(
 
   const pendingTimeout =
     lastGate?.pendingTimeout === true || terminalKind === "pending_timeout";
+  const aiStageFinal = resolveAiSummaryStage({
+    tenderDir: resume.tenderFolder,
+    aiSummaryValid: aiOk,
+    explicitStage: lastGate?.aiStage,
+  });
+  if (!aiOk && isAiSummaryTerminalFailure(aiStageFinal)) {
+    saveAiSummaryStage({
+      tenderDir: resume.tenderFolder,
+      t247Id,
+      aiStage: aiStageFinal,
+      aiSummaryValid: false,
+    });
+  }
+  const completeWithAiMissing =
+    lastGate?.completeWithAiMissing === true ||
+    (Boolean(lastGate?.safeToAdvance) &&
+      !pendingTimeout &&
+      metadataOk &&
+      allDocsOk &&
+      !aiOk &&
+      isAiSummaryTerminalFailure(aiStageFinal));
   const gateComplete =
-    (lastGate?.ready === true || artifactsAfterGate.complete) &&
-    metadataOk &&
-    aiOk &&
-    allDocsOk;
+    ((lastGate?.ready === true || artifactsAfterGate.complete) &&
+      metadataOk &&
+      aiOk &&
+      allDocsOk) ||
+    completeWithAiMissing;
 
-  if (gateComplete && (!aiOk || !allDocsOk || !metadataOk)) {
+  if (gateComplete && (!allDocsOk || !metadataOk)) {
+    throw new Error(
+      `T247_COMPLETED_WITHOUT_REQUIRED_ARTIFACTS: ${t247Id}`,
+    );
+  }
+  if (gateComplete && !aiOk && !completeWithAiMissing) {
     throw new Error(
       `T247_COMPLETED_WITHOUT_REQUIRED_ARTIFACTS: ${t247Id}`,
     );
@@ -950,7 +1116,16 @@ export async function processLiveTender(
   let artifactComplete = false;
   let chatgptSkipped = false;
 
-  if (gateComplete) {
+  if (completeWithAiMissing && metadataOk && allDocsOk) {
+    status = "completed";
+    artifactComplete = false;
+    chatgptSkipped = false;
+    metadataStatus = "complete";
+    aiSummaryStatus = "failed";
+    allDocumentsStatus = "complete";
+    t247Event(logger, t247Id, "AI_SUMMARY_DOWNLOAD_FAILED");
+    t247Event(logger, t247Id, "AI_SUMMARY_NON_BLOCKING=true");
+  } else if (gateComplete) {
     status = "completed";
     artifactComplete = true;
     chatgptSkipped = false;
@@ -975,12 +1150,15 @@ export async function processLiveTender(
     chatgptSkipped = true;
   }
 
-  if (status === "completed") {
-    if (!aiOk || !allDocsOk || !metadataOk) {
-      throw new Error(
-        `T247_COMPLETED_WITHOUT_REQUIRED_ARTIFACTS: ${t247Id}`,
-      );
-    }
+  if (status === "completed" && (!allDocsOk || !metadataOk)) {
+    throw new Error(
+      `T247_COMPLETED_WITHOUT_REQUIRED_ARTIFACTS: ${t247Id}`,
+    );
+  }
+  if (status === "completed" && !aiOk && !completeWithAiMissing) {
+    throw new Error(
+      `T247_COMPLETED_WITHOUT_REQUIRED_ARTIFACTS: ${t247Id}`,
+    );
   }
 
   logger.info(`[${index}/${total}] COMPLETE status=${status}`);
@@ -1011,6 +1189,7 @@ export async function processLiveTender(
     pendingReason,
     artifactComplete,
     chatgptSkipped,
+    completeWithAiMissing,
   });
 }
 
@@ -1193,12 +1372,14 @@ function buildResult(input: {
   pendingReason?: string | null;
   artifactComplete?: boolean;
   chatgptSkipped?: boolean;
+  completeWithAiMissing?: boolean;
 }): ProcessTenderResult {
   const artifactComplete = Boolean(input.artifactComplete);
+  const completeWithAiMissing = Boolean(input.completeWithAiMissing);
   const chatgptSkipped =
     input.chatgptSkipped ??
-    (input.status !== "completed" || !artifactComplete);
-  if (input.status === "completed" && !artifactComplete) {
+    (input.status !== "completed" || (!artifactComplete && !completeWithAiMissing));
+  if (input.status === "completed" && !artifactComplete && !completeWithAiMissing) {
     throw new Error(
       `T247_COMPLETED_WITHOUT_REQUIRED_ARTIFACTS: ${input.t247Id}`,
     );
@@ -1238,6 +1419,7 @@ function buildResult(input: {
     pendingReason: input.pendingReason ?? null,
     artifactComplete,
     chatgptSkipped,
+    completeWithAiMissing: completeWithAiMissing || undefined,
   };
 }
 

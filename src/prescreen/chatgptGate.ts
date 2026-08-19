@@ -14,6 +14,30 @@ export type ChatgptPrescreenGateResult = {
  * Hard gate before materializing ChatGPT metadata / opening ChatGPT.
  * When PRESCREEN_ENABLED=false, always allows.
  */
+export const PHASE1_IGNORED_QUALIFICATION_PRESCREEN_REASONS = [
+  "AMBIGUOUS_SCOPE",
+  "EMD_ABOVE_LIMIT",
+  "TENDER_VALUE_ABOVE_LIMIT",
+  "MISSING_REQUIRED_SUMMARY",
+  "NON_IT_SCOPE",
+  "INSUFFICIENT_LEAD_TIME",
+  "CLOSING_DATE_EXPIRED",
+  "CLOSING_DATE_TODAY",
+] as const;
+
+/**
+ * Phase-1 VERIFY / MAY_BID / WILL_BID is the business screen.
+ * Individual qualification must not re-apply company preference rules.
+ */
+export function isPhase1IgnoredQualificationPrescreenReason(
+  reasonCode: string | null | undefined,
+): boolean {
+  const code = String(reasonCode || "").trim().toUpperCase();
+  return (PHASE1_IGNORED_QUALIFICATION_PRESCREEN_REASONS as readonly string[]).includes(
+    code,
+  );
+}
+
 export async function assertPrescreenAllowsChatgpt(options: {
   sourcePortal: PrescreenSourcePortal;
   sourceTenderId: string;
@@ -23,7 +47,31 @@ export async function assertPrescreenAllowsChatgpt(options: {
    * prescreen rows must not silently drop them from the queue.
    */
   allowMissingPrescreenRow?: boolean;
+  /**
+   * Phase-1 workbook already admitted this tender (VERIFY / MAY_BID / WILL_BID).
+   * Business prescreen reasons must not skip individual qualification.
+   */
+  phase1Admitted?: boolean;
 }): Promise<ChatgptPrescreenGateResult> {
+  const label =
+    options.sourcePortal === "TENDER247"
+      ? `T247-${options.sourceTenderId}`
+      : options.sourceTenderId.toUpperCase().startsWith("BA-")
+        ? options.sourceTenderId
+        : `BA-${options.sourceTenderId}`;
+
+  if (options.phase1Admitted) {
+    options.logger.info(`CHATGPT_PHASE1_ADMITTED=${label}`);
+    options.logger.info("CHATGPT_BUSINESS_PRESCREEN_IGNORED=true");
+    return {
+      allowed: true,
+      skipped: false,
+      reasonCode: null,
+      status: "PHASE1_ADMITTED",
+      message: "Phase-1 workbook is authoritative for business screening",
+    };
+  }
+
   const config = loadPrescreenConfig();
   if (!config.enabled) {
     return {
@@ -34,13 +82,6 @@ export async function assertPrescreenAllowsChatgpt(options: {
       message: null,
     };
   }
-
-  const label =
-    options.sourcePortal === "TENDER247"
-      ? `T247-${options.sourceTenderId}`
-      : options.sourceTenderId.toUpperCase().startsWith("BA-")
-        ? options.sourceTenderId
-        : `BA-${options.sourceTenderId}`;
 
   const gate = await getTenderPrescreenGate({
     sourcePortal: options.sourcePortal,

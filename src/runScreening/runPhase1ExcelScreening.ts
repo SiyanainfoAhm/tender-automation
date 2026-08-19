@@ -9,15 +9,19 @@ import { AutomationError } from "../browserUtils.js";
 import { resolveRunCompanyId } from "../company/siyanaCompany.js";
 import { buildTenderScreeningPrompt } from "./buildScreeningPrompt.js";
 import {
+  hashPreferenceSnapshot,
+  loadCompanyPreferenceSnapshot,
+  toTenderScreeningPreferenceSnapshot,
+  type CompanyPreferenceSnapshot,
+} from "./companyPreferences.js";
+import {
   createLiveChatGptExcelScreeningClient,
   type ChatGptExcelScreeningClient,
 } from "./chatgptExcelScreening.js";
-import {
-  hashPreferenceSnapshot,
-  loadCompanyPreferenceSnapshot,
-  type CompanyPreferenceSnapshot,
-} from "./companyPreferences.js";
+import { logActiveScreeningRules, PHASE1_SCREENING_POLICY_VERSION } from "./screeningPolicy.js";
 import { persistPhase1NoBidResults } from "./persistPhase1Results.js";
+import { enforcePhase1ScreeningDecisions } from "./phase1DecisionGuard.js";
+import { runCorrelationIdForDate } from "./phase1DetailQueue.js";
 import {
   deriveDetailScrapeIds,
   hashFile,
@@ -28,6 +32,7 @@ import {
   ScreeningOutputInvalidError,
   validateScreenedWorkbook,
   writeRunWorkbook,
+  countPhase1Statuses,
   type RunWorkbookRow,
 } from "./runWorkbook.js";
 import {
@@ -63,6 +68,32 @@ export type Phase1ExcelScreeningResult = {
 function log(logger: Logger | undefined, message: string): void {
   console.log(message);
   logger?.info(message);
+}
+
+function applyDeterministicPhase1Guard(options: {
+  inputRows: RunWorkbookRow[];
+  outputRows: RunWorkbookRow[];
+  snapshot: CompanyPreferenceSnapshot;
+  runDate: string;
+  screenedPath: string;
+  logger?: Logger;
+}): { outputRows: RunWorkbookRow[]; counts: Phase1ScreeningManifest["counts"] } {
+  const enforced = enforcePhase1ScreeningDecisions({
+    inputRows: options.inputRows,
+    outputRows: options.outputRows,
+    snapshot: options.snapshot,
+    runDate: options.runDate,
+    log: (message) => log(options.logger, message),
+  });
+  writeRunWorkbook(enforced.rows, options.screenedPath);
+  if (enforced.corrected > 0) {
+    log(options.logger, `PHASE1_DECISIONS_CORRECTED=${enforced.corrected}`);
+  }
+  log(options.logger, "PHASE1_HARD_GATE_GUARD=APPLIED");
+  return {
+    outputRows: enforced.rows,
+    counts: countPhase1Statuses(enforced.rows),
+  };
 }
 
 function newestMatching(dateFolder: string, pattern: RegExp): string | undefined {
@@ -186,7 +217,9 @@ export async function runPhase1ExcelScreening(options: {
   const snapshot =
     options.companySnapshot ?? (await loadCompanyPreferenceSnapshot(resolveRunCompanyId()));
   log(logger, "[AI SCREENING] Company preferences loaded");
+  const screeningSnapshot = toTenderScreeningPreferenceSnapshot(snapshot);
   const preferencesHash = hashPreferenceSnapshot(snapshot);
+  const companyPreferenceSnapshotHash = preferencesHash;
   const prompt = buildTenderScreeningPrompt({
     companySnapshot: snapshot,
     runDate: dateIso,
@@ -194,11 +227,20 @@ export async function runPhase1ExcelScreening(options: {
     inputRowCount: normalized.combinedUnique,
   });
   const screeningPromptHash = hashText(prompt);
+  logActiveScreeningRules(screeningSnapshot, (message) => log(logger, message));
   const dir = screeningDir(dateFolder);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "company-preferences-snapshot.json"),
-    JSON.stringify(snapshot, null, 2),
+    JSON.stringify(
+      {
+        ...snapshot,
+        screening: screeningSnapshot,
+        screeningPolicyVersion: PHASE1_SCREENING_POLICY_VERSION,
+      },
+      null,
+      2,
+    ),
     "utf8",
   );
   fs.writeFileSync(path.join(dir, "chatgpt-screening-prompt.txt"), prompt, "utf8");
@@ -212,12 +254,23 @@ export async function runPhase1ExcelScreening(options: {
     existingManifest?.status === "complete" &&
     existingManifest.inputWorkbookHash === inputWorkbookHash &&
     existingManifest.preferencesHash === preferencesHash &&
-    existingManifest.screeningPromptHash === screeningPromptHash
+    (existingManifest.companyPreferenceSnapshotHash ?? existingManifest.preferencesHash) ===
+      companyPreferenceSnapshotHash &&
+    existingManifest.screeningPromptHash === screeningPromptHash &&
+    existingManifest.screeningPolicyVersion === PHASE1_SCREENING_POLICY_VERSION
   ) {
     try {
       const validated = validateScreenedWorkbook({
         inputRows: normalized.rows,
         outputPath: existingScreened!,
+      });
+      const guarded = applyDeterministicPhase1Guard({
+        inputRows: normalized.rows,
+        outputRows: validated.outputRows,
+        snapshot,
+        runDate: dateIso,
+        screenedPath: existingScreened!,
+        logger,
       });
       log(logger, "[AI SCREENING] Resuming valid screened workbook");
       return await finalizeScreening({
@@ -228,10 +281,11 @@ export async function runPhase1ExcelScreening(options: {
         screenedPath: existingScreened!,
         inputWorkbookHash,
         preferencesHash,
+        companyPreferenceSnapshotHash,
         screeningPromptHash,
         inputRows: normalized.rows,
-        outputRows: validated.outputRows,
-        counts: validated.counts,
+        outputRows: guarded.outputRows,
+        counts: guarded.counts,
         logger,
         persistResults: options.persistResults,
       });
@@ -290,16 +344,24 @@ export async function runPhase1ExcelScreening(options: {
       inputRows: normalized.rows,
       outputPath: screenedPath,
     });
+    const guarded = applyDeterministicPhase1Guard({
+      inputRows: normalized.rows,
+      outputRows: validated.outputRows,
+      snapshot,
+      runDate: dateIso,
+      screenedPath,
+      logger,
+    });
     log(logger, `SCREENING_INPUT_ROWS=${normalized.combinedUnique}`);
-    log(logger, `SCREENING_OUTPUT_ROWS=${validated.outputRows.length}`);
+    log(logger, `SCREENING_OUTPUT_ROWS=${guarded.outputRows.length}`);
     log(logger, "SCREENING_ROW_RECONCILIATION=PASS");
     log(logger, "[AI SCREENING] Reconciliation = PASS");
     log(logger, "[AI SCREENING] Workbook validation=PASS");
     log(logger, "CHATGPT_SCREENING_OUTPUT_VALID=true");
-    log(logger, `[AI SCREENING] NO_BID = ${validated.counts.NO_GO}`);
-    log(logger, `[AI SCREENING] VERIFY = ${validated.counts.VERIFY}`);
-    log(logger, `[AI SCREENING] MAY_BID = ${validated.counts.CONDITIONAL_GO}`);
-    log(logger, `[AI SCREENING] WILL_BID = ${validated.counts.GO}`);
+    log(logger, `[AI SCREENING] NO_BID = ${guarded.counts.NO_GO}`);
+    log(logger, `[AI SCREENING] VERIFY = ${guarded.counts.VERIFY}`);
+    log(logger, `[AI SCREENING] MAY_BID = ${guarded.counts.CONDITIONAL_GO}`);
+    log(logger, `[AI SCREENING] WILL_BID = ${guarded.counts.GO}`);
 
     return await finalizeScreening({
       dateFolder,
@@ -309,10 +371,11 @@ export async function runPhase1ExcelScreening(options: {
       screenedPath,
       inputWorkbookHash,
       preferencesHash,
+      companyPreferenceSnapshotHash,
       screeningPromptHash,
       inputRows: normalized.rows,
-      outputRows: validated.outputRows,
-      counts: validated.counts,
+      outputRows: guarded.outputRows,
+      counts: guarded.counts,
       logger,
       persistResults: options.persistResults,
     });
@@ -341,6 +404,8 @@ export async function runPhase1ExcelScreening(options: {
       inputWorkbook: normalizedPath,
       inputWorkbookHash,
       preferencesHash,
+      companyPreferenceSnapshotHash,
+      screeningPolicyVersion: PHASE1_SCREENING_POLICY_VERSION,
       screeningPromptHash,
       screenedWorkbook: fs.existsSync(screenedPath) ? screenedPath : null,
       screenedWorkbookHash: fs.existsSync(screenedPath) ? hashFile(screenedPath) : null,
@@ -365,6 +430,7 @@ async function finalizeScreening(options: {
   screenedPath: string;
   inputWorkbookHash: string;
   preferencesHash: string;
+  companyPreferenceSnapshotHash: string;
   screeningPromptHash: string;
   inputRows: RunWorkbookRow[];
   outputRows: RunWorkbookRow[];
@@ -374,10 +440,13 @@ async function finalizeScreening(options: {
 }): Promise<Phase1ExcelScreeningResult> {
   const shortlist = deriveDetailScrapeIds(options.outputRows);
   const noBidRows = options.outputRows.filter((row) => row.screeningStatus === "NO_GO");
+  const screeningRunId = runCorrelationIdForDate(options.dateIso);
   if (options.persistResults !== false) {
     await persistPhase1NoBidResults({
       rows: options.outputRows,
       runDate: options.dateIso,
+      dateFolder: options.dateFolder,
+      screenedWorkbookPath: options.screenedPath,
       companyId: options.snapshot.company.id,
       logger: options.logger,
     });
@@ -387,11 +456,14 @@ async function finalizeScreening(options: {
     companyId: options.snapshot.company.id,
     companyName: options.snapshot.company.name,
     runDate: options.dateIso,
+    screeningRunId,
     stage: "SHORTLIST_READY",
     status: "complete",
     inputWorkbook: options.normalizedPath,
     inputWorkbookHash: options.inputWorkbookHash,
     preferencesHash: options.preferencesHash,
+    companyPreferenceSnapshotHash: options.companyPreferenceSnapshotHash,
+    screeningPolicyVersion: PHASE1_SCREENING_POLICY_VERSION,
     screeningPromptHash: options.screeningPromptHash,
     screenedWorkbook: options.screenedPath,
     screenedWorkbookHash: hashFile(options.screenedPath),
@@ -405,9 +477,13 @@ async function finalizeScreening(options: {
     stage: "SHORTLIST_READY",
     aiScreeningComplete: true,
     shortlistReady: true,
+    screeningRunId,
     updatedAt: new Date().toISOString(),
   });
   log(options.logger, "AI_SCREENING_COMPLETE=true");
+  log(options.logger, `SCREENING_RUN_ID=${screeningRunId}`);
+  log(options.logger, `FILTERED_OUT=${options.counts.NO_GO}`);
+  log(options.logger, `FILTER_PASSED=${shortlist.tender247Ids.length + shortlist.bidAssistIds.length}`);
   log(options.logger, `SHORTLIST_NO_BID=${options.counts.NO_GO}`);
   log(options.logger, `SHORTLIST_VERIFY=${options.counts.VERIFY}`);
   log(options.logger, `SHORTLIST_MAY_BID=${options.counts.CONDITIONAL_GO}`);

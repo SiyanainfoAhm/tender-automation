@@ -14,6 +14,11 @@ import {
   DEFAULT_SERVICE_SCOPE_SUGGESTIONS,
   parseStoredScopeList,
 } from "@/lib/company/scope-chips";
+import {
+  SCREENING_POLICY_FIELDS,
+  SCREENING_POLICY_VALUES,
+  type ScreeningPolicies,
+} from "@/lib/company/screening-policies";
 
 type BidPreferencesFormProps = {
   canEdit: boolean;
@@ -23,6 +28,7 @@ type BidPreferencesFormProps = {
     maxTenderValueInr: string;
     serviceScope: string[];
     excludedScope: string[];
+    screeningPolicies?: ScreeningPolicies;
   };
 };
 
@@ -119,6 +125,37 @@ export function BidPreferencesForm({
         customPlaceholder="Add custom excluded scope"
         emptyLabel="No exclusions selected"
       />
+
+      <section className="space-y-3">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
+          Phase-1 screening policies
+        </p>
+        <p className="text-[11px] text-text-muted">
+          Optional. Leave unset to omit the rule from ChatGPT. Saved values
+          are the only company decisions used at screening time.
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          {SCREENING_POLICY_FIELDS.map((field) => (
+            <div key={field.key} className="space-y-1.5">
+              <Label htmlFor={`screeningPolicy.${field.key}`}>{field.label}</Label>
+              <select
+                id={`screeningPolicy.${field.key}`}
+                name={`screeningPolicy.${field.key}`}
+                defaultValue={initial.screeningPolicies?.[field.key] ?? ""}
+                disabled={!canEdit || pending}
+                className="flex h-9 w-full rounded-md border border-border bg-white px-3 text-sm"
+              >
+                <option value="">Not configured</option>
+                {SCREENING_POLICY_VALUES.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ))}
+        </div>
+      </section>
 
       {canEdit ? (
         <div className="flex justify-end">

@@ -51,7 +51,7 @@ test("TEST A: AI Summary only → PARTIAL, one attachment", async () => {
     attemptDocumentDownload: false,
   });
 
-  assert.equal(evidence.gptReady, true);
+  assert.equal(evidence.gptReady, false);
   assert.equal(evidence.evidenceCount, 1);
   assert.equal(evidence.evidenceMode, "PARTIAL");
   assert.equal(evidence.aiSummary.available, true);
@@ -90,7 +90,7 @@ test("TEST B: PDF document only → canonical ZIP, one attachment", async () => 
     attemptDocumentDownload: false,
   });
 
-  assert.equal(evidence.gptReady, true);
+  assert.equal(evidence.gptReady, false);
   assert.equal(evidence.documents.available, true);
   assert.ok(
     fs.existsSync(path.join(tenderFolder, "documents", CANONICAL_ARCHIVE_NAME)),
@@ -115,7 +115,7 @@ test("TEST C: metadata only → PARTIAL evidence", async () => {
     attemptDocumentDownload: false,
   });
 
-  assert.equal(evidence.gptReady, true);
+  assert.equal(evidence.gptReady, false);
   assert.equal(evidence.metadata.available, true);
   assert.equal(evidence.evidenceMode, "PARTIAL");
   assert.equal(evidence.evidenceCount, 1);
@@ -142,6 +142,20 @@ test("TEST D: metadata + ZIP → STRONG_PARTIAL evidence", async () => {
   assert.ok(evidence.availableFiles.includes("metadata"));
   assert.ok(
     evidence.availableFiles.some((f) => /Tender_All_Documents/i.test(f)),
+  );
+
+  const prompt = buildEvidenceAwareQualificationPrompt("TENDER247", t247Id, {
+    metadataAvailable: true,
+    documentsAvailable: true,
+    aiSummaryAvailable: false,
+    evidenceMode: "STRONG_PARTIAL",
+  });
+  assert.match(prompt, /AI Summary unavailable for this run/i);
+  assert.match(prompt, /Evaluate using available evidence only/i);
+  assert.match(prompt, /Do not claim AI Summary was reviewed/i);
+  assert.match(
+    prompt,
+    /If missing evidence prevents a mandatory-gate determination, return VERIFY/i,
   );
 });
 
@@ -179,7 +193,7 @@ test("TEST F: zero evidence → NOT_READY", async () => {
 
   assert.equal(evidence.gptReady, false);
   assert.equal(evidence.evidenceMode, "NONE");
-  assert.equal(evidence.notReadyReason, "NO_USABLE_QUALIFICATION_EVIDENCE");
+  assert.equal(evidence.notReadyReason, "MISSING_CORE_QUALIFICATION_ARTIFACTS");
 });
 
 test("findAiSummaryPdf accepts duplicate-suffix variants", () => {

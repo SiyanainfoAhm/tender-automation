@@ -7,9 +7,8 @@
  * or an explicit terminal failure is recorded.
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import type { BrowserContext, Download, Page } from "playwright";
+import type { BrowserContext, Download, Locator, Page } from "playwright";
 import { AutomationError } from "../browserUtils.js";
 import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
@@ -35,6 +34,13 @@ import {
 } from "../chatgptQualification/assistantSpreadsheetAttachment.js";
 import { ensureDir } from "../fileUtils.js";
 import { RUN_NORMALIZED_FILE } from "./runWorkbook.js";
+import {
+  downloadFromSpreadsheetPreview,
+  downloadGeneratedChatGptXlsx,
+  downloadFailedError,
+  previewOpenFailedError,
+  type ScreeningArtifactStatus,
+} from "./chatgptXlsxPreviewDownload.js";
 import {
   loadScreeningChatCheckpoint,
   saveScreeningChatCheckpoint,
@@ -93,6 +99,67 @@ async function closeScreeningContext(
   await context.close().catch(() => undefined);
 }
 
+async function clickForWorkbookDownload(
+  page: Page,
+  control: Locator,
+  logger: Logger,
+  timeoutMs: number,
+): Promise<Download | null> {
+  const downloadPromise = page
+    .waitForEvent("download", { timeout: timeoutMs })
+    .catch(() => null);
+  await control.scrollIntoViewIfNeeded().catch(() => undefined);
+  await control.click({ force: true, timeout: 8_000 }).catch((error) => {
+    logger.warn(
+      `CHATGPT_SCREENING_OUTPUT_DOWNLOAD_CLICK_FAILED=${String(error)}`,
+    );
+  });
+  return downloadPromise;
+}
+
+async function tryLegacyCardDownload(
+  page: Page,
+  workbook: GeneratedScreeningWorkbook,
+  outputPath: string,
+  logger: Logger,
+  inputFileName: string,
+): Promise<{ outputPath: string; originalFilename: string } | null> {
+  const revealed = await revealDownloadControl(page, workbook);
+  const controls: Locator[] = [
+    page.getByRole("button", { name: /download file/i }),
+    page.locator('button[aria-label="Download file"]'),
+    page.locator('button[aria-label*="download" i]'),
+  ];
+  if (workbook.downloadLinkLocator) controls.push(workbook.downloadLinkLocator);
+  if (revealed) controls.push(revealed);
+
+  for (const control of controls) {
+    const count = await control.count().catch(() => 0);
+    if (count === 0) continue;
+    const candidate = control.last();
+    if (!(await candidate.isVisible().catch(() => false))) continue;
+    const download = await clickForWorkbookDownload(page, candidate, logger, 8_000);
+    if (!download) continue;
+    log(logger, "CHATGPT_XLSX_DOWNLOAD_EVENT_RECEIVED=true");
+    log(logger, "CHATGPT_SCREENING_OUTPUT_DOWNLOAD_EVENT_RECEIVED=true");
+    const suggested =
+      download.suggestedFilename?.() || workbook.filename || "run-screened.xlsx";
+    if (inputFileName && suggested.toLowerCase() === inputFileName.toLowerCase()) {
+      logger.warn(`CHATGPT_SCREENING_IGNORED_INPUT_DOWNLOAD=${suggested}`);
+      continue;
+    }
+    const saved = await saveScreeningDownload(download, outputPath, logger);
+    if (saved) {
+      const size = fs.statSync(outputPath).size;
+      log(logger, "CHATGPT_XLSX_LOCAL_FILE_VERIFIED=true");
+      log(logger, `CHATGPT_XLSX_DOWNLOADED_PATH=${outputPath}`);
+      log(logger, `CHATGPT_XLSX_DOWNLOADED_FILE_SIZE=${size}`);
+      return finishScreeningDownload(logger, outputPath, suggested);
+    }
+  }
+  return null;
+}
+
 export async function downloadGeneratedWorkbook(options: {
   page: Page;
   workbook: GeneratedScreeningWorkbook;
@@ -104,64 +171,79 @@ export async function downloadGeneratedWorkbook(options: {
 }): Promise<{ outputPath: string; originalFilename: string }> {
   const { page, workbook, outputPath, logger, inputFileName } = options;
   ensureDir(path.dirname(outputPath));
+  let artifactStatus: ScreeningArtifactStatus = "GENERATED";
+  log(logger, "AI_SCREENING_GENERATION_STATUS=SUCCESS");
+  log(logger, `CHATGPT_SCREENING_ARTIFACT_STATUS=${artifactStatus}`);
   log(logger, "CHATGPT_RUN_SCREENING_STAGE=GENERATED_XLSX_DOWNLOADING");
   log(logger, "CHATGPT_GENERATED_XLSX_DOWNLOAD_START");
   log(logger, "CHATGPT_SCREENING_OUTPUT_DOWNLOAD_START");
+  log(logger, "AI_SCREENING_DOWNLOAD_STATUS=DOWNLOADING");
 
-  const downloadPromise = page
-    .waitForEvent("download", { timeout: 120_000 })
-    .catch(() => null);
-
-  const control = await revealDownloadControl(page, workbook);
-  if (!control) {
-    throw new AutomationError(
-      "SCREENING_OUTPUT_MISSING",
-      "SCREENING_OUTPUT_MISSING: generated workbook card found but no download control",
-    );
-  }
-  await control.scrollIntoViewIfNeeded().catch(() => undefined);
-  await control.click({ timeout: 8_000 }).catch((error) => {
-    logger.warn(`CHATGPT_SCREENING_OUTPUT_DOWNLOAD_CLICK_FAILED=${String(error)}`);
+  const previewAttempt = await downloadGeneratedChatGptXlsx({
+    page,
+    expectedFilename: workbook.filename,
+    cardLocator: workbook.cardLocator,
+    finalOutputPath: outputPath,
+    logger,
   });
-
-  const download = await downloadPromise;
-  if (download) {
-    log(logger, "CHATGPT_GENERATED_XLSX_DOWNLOAD_EVENT_RECEIVED");
-    log(logger, "CHATGPT_SCREENING_OUTPUT_DOWNLOAD_EVENT_RECEIVED=true");
-    const suggested =
-      download.suggestedFilename?.() || workbook.filename || "run-screened.xlsx";
-    log(logger, `CHATGPT_SCREENING_OUTPUT_SUGGESTED_FILENAME=${suggested}`);
-    if (
-      inputFileName &&
-      suggested.toLowerCase() === inputFileName.toLowerCase()
-    ) {
-      throw new AutomationError(
-        "SCREENING_OUTPUT_MISSING",
-        "SCREENING_OUTPUT_MISSING: refused to download the input workbook",
-      );
-    }
-    const tmpPath = path.join(
-      os.tmpdir(),
-      `chatgpt-screening-${Date.now()}-${suggested}`,
+  if ("outputPath" in previewAttempt) {
+    artifactStatus = "DOWNLOADED";
+    log(logger, `CHATGPT_SCREENING_ARTIFACT_STATUS=${artifactStatus}`);
+    log(logger, "AI_SCREENING_DOWNLOAD_STATUS=SUCCESS");
+    log(logger, "AI_SCREENING_STATUS=SUCCESS");
+    return finishScreeningDownload(
+      logger,
+      previewAttempt.outputPath,
+      previewAttempt.originalFilename,
     );
-    log(logger, "CHATGPT_SCREENING_OUTPUT_DOWNLOADING");
-    const saved = await saveScreeningDownload(download, tmpPath, logger);
-    if (saved) {
-      fs.copyFileSync(tmpPath, outputPath);
-      return finishScreeningDownload(logger, outputPath, suggested);
-    }
+  }
+  const previewOpened = previewAttempt.previewOpened;
+
+  log(logger, "CHATGPT_XLSX_PREVIEW_DOWNLOAD_FALLBACK=legacy_card_or_href");
+  const legacy = await tryLegacyCardDownload(
+    page,
+    workbook,
+    outputPath,
+    logger,
+    inputFileName,
+  );
+  if (legacy) {
+    log(logger, "AI_SCREENING_DOWNLOAD_STATUS=SUCCESS");
+    log(logger, "AI_SCREENING_STATUS=SUCCESS");
+    return legacy;
   }
 
-  log(logger, "CHATGPT_SCREENING_OUTPUT_DOWNLOAD_EVENT_RECEIVED=false");
+  const stillPreview = await downloadFromSpreadsheetPreview(
+    page,
+    workbook.filename,
+    outputPath,
+    logger,
+  );
+  if (stillPreview) {
+    log(logger, "AI_SCREENING_DOWNLOAD_STATUS=SUCCESS");
+    log(logger, "AI_SCREENING_STATUS=SUCCESS");
+    return finishScreeningDownload(
+      logger,
+      stillPreview.outputPath,
+      stillPreview.originalFilename,
+    );
+  }
+
   const href = await resolveAssistantSpreadsheetHref(
     page,
-    control,
+    workbook.cardLocator,
     inputFileName,
   );
   if (href) {
     log(logger, `CHATGPT_SCREENING_OUTPUT_DOWNLOAD_FALLBACK_HREF=${href}`);
     const saved = await saveScreeningHrefDownload(page, href, outputPath, logger);
     if (saved) {
+      const size = fs.statSync(outputPath).size;
+      log(logger, "CHATGPT_XLSX_LOCAL_FILE_VERIFIED=true");
+      log(logger, `CHATGPT_XLSX_DOWNLOADED_PATH=${outputPath}`);
+      log(logger, `CHATGPT_XLSX_DOWNLOADED_FILE_SIZE=${size}`);
+      log(logger, "AI_SCREENING_DOWNLOAD_STATUS=SUCCESS");
+      log(logger, "AI_SCREENING_STATUS=SUCCESS");
       return finishScreeningDownload(logger, outputPath, workbook.filename);
     }
   }
@@ -182,10 +264,14 @@ export async function downloadGeneratedWorkbook(options: {
     }
   }
 
-  throw new AutomationError(
-    "SCREENING_OUTPUT_MISSING",
-    "SCREENING_OUTPUT_MISSING: generated workbook was visible but could not be downloaded",
-  );
+  log(logger, "AI_SCREENING_GENERATION_STATUS=SUCCESS");
+  log(logger, "AI_SCREENING_DOWNLOAD_STATUS=FAILED");
+  log(logger, "CHATGPT_SCREENING_ARTIFACT_STATUS=DOWNLOAD_FAILED");
+  log(logger, "CHATGPT_SCREENING_OUTPUT_DOWNLOAD_EVENT_RECEIVED=false");
+  if (!previewOpened) {
+    throw previewOpenFailedError(workbook.filename);
+  }
+  throw downloadFailedError(workbook.filename, "DOWNLOAD_EVENT_TIMEOUT");
 }
 
 export async function waitForReturnedWorkbook(options: {
@@ -299,6 +385,8 @@ function isTerminalScreeningFailure(error: unknown): boolean {
   if (!(error instanceof AutomationError)) return false;
   return (
     error.code === "SCREENING_OUTPUT_MISSING" ||
+    error.code === "CHATGPT_XLSX_PREVIEW_OPEN_FAILED" ||
+    error.code === "CHATGPT_XLSX_DOWNLOAD_FAILED" ||
     error.code === "CHATGPT_RATE_LIMITED" ||
     error.code === "CHATGPT_CONVERSATION_URL_LOST" ||
     error.code === "CHATGPT_RESPONSE_WAIT_WITHOUT_SUBMISSION" ||

@@ -12,6 +12,7 @@ import {
   parseSecurityCodeFromUrl,
   type LiveTenderCard,
 } from "./liveListCards.js";
+import { expandTender247Row, readTender247CardTitle } from "../tenderDetails/tender247Expansion.js";
 
 export interface OpenedLiveTender {
   detailPage: Page;
@@ -177,27 +178,17 @@ async function tryOpenDetailControl(
     }
   }
 
-  // 3) Eye / view by aria or title
-  const eyeNamed = row
-    .locator(
-      '[aria-label*="view" i], [aria-label*="eye" i], [title*="view" i], [title*="eye" i]',
-    )
-    .first();
-  if (await eyeNamed.isVisible().catch(() => false)) {
-    logger.info(`OPEN_VIA_ARIA_VIEW for T247-${t247Id}`);
-    await clickControl(eyeNamed, logger, page);
-    return true;
-  }
-
-  // 4) Lower-right SVG geometry (heart | eye | share) — middle = eye
-  const eyeSvg = await findEyeByLowerRightGeometry(row, t247Id, logger);
-  if (eyeSvg) {
-    logger.info(`OPEN_VIA_EYE_SVG for T247-${t247Id}`);
-    await clickControl(eyeSvg, logger, page);
-    return true;
-  }
-
-  return false;
+  // 3) Explicit View/Eye, else title span — never generic SVG / right-cursor
+  const titleHint = card.titleHint || (await readTender247CardTitle(row));
+  await expandTender247Row({
+    page,
+    row,
+    t247Id,
+    titleHint,
+    logger,
+    context: page.context(),
+  });
+  return true;
 }
 
 async function clickControl(
@@ -223,63 +214,3 @@ async function clickControl(
   }
 }
 
-interface SvgCandidate {
-  index: number;
-  locator: Locator;
-  centerX: number;
-  centerY: number;
-}
-
-async function findEyeByLowerRightGeometry(
-  completeTenderRow: Locator,
-  t247Id: string,
-  logger: Logger,
-): Promise<Locator | null> {
-  const rowBox = await completeTenderRow.boundingBox();
-  if (!rowBox) {
-    return null;
-  }
-
-  const svgs = completeTenderRow.locator("svg");
-  const svgCount = await svgs.count();
-  const candidates: SvgCandidate[] = [];
-
-  for (let i = 0; i < svgCount; i += 1) {
-    const svg = svgs.nth(i);
-    const box = await svg.boundingBox().catch(() => null);
-    if (!box || box.width < 8 || box.height < 8) {
-      continue;
-    }
-    const centerX = box.x + box.width / 2;
-    const centerY = box.y + box.height / 2;
-    const inRight = centerX >= rowBox.x + rowBox.width * 0.55;
-    const inLower = centerY >= rowBox.y + rowBox.height * 0.45;
-    if (!inRight || !inLower) {
-      continue;
-    }
-    candidates.push({ index: i, locator: svg, centerX, centerY });
-  }
-
-  if (candidates.length < 3) {
-    logger.warn(
-      `Eye geometry: only ${candidates.length} lower-right SVGs for T247-${t247Id}`,
-    );
-    if (candidates.length === 0) {
-      return null;
-    }
-    // Best effort: rightmost mid-height among candidates
-    candidates.sort((a, b) => a.centerX - b.centerX);
-    const mid = candidates[Math.floor(candidates.length / 2)]!;
-    return mid.locator;
-  }
-
-  candidates.sort((a, b) => a.centerX - b.centerX || a.centerY - b.centerY);
-  // Prefer a horizontal triplet: take three rightmost and pick middle
-  const rightThree = candidates.slice(-3);
-  rightThree.sort((a, b) => a.centerX - b.centerX);
-  const eye = rightThree[1]!;
-  logger.info(
-    `Eye geometry: selected middle of right-three SVGs for T247-${t247Id}`,
-  );
-  return eye.locator;
-}

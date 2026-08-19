@@ -113,7 +113,8 @@ export async function processSurvivorsInParallel(options: {
 
       if (
         result.status === "dropped_non_it" ||
-        result.status === "ambiguous_manual_review"
+        result.status === "ambiguous_manual_review" ||
+        result.status === "skipped_no_bid"
       ) {
         return {
           evidenceMode: "NONE",
@@ -140,7 +141,7 @@ export async function processSurvivorsInParallel(options: {
       return {
         evidenceMode: complete
           ? "FULL"
-          : pendingTimeout || partial
+          : result.completeWithAiMissing || pendingTimeout || partial
             ? "PARTIAL"
             : "NONE",
         metadataOk: result.metadataStatus === "complete",
@@ -151,7 +152,13 @@ export async function processSurvivorsInParallel(options: {
         complete,
         pendingTimeout,
         dropped: failed,
-        safeToAdvance: complete || pendingTimeout || failed || partial,
+        safeToAdvance:
+          complete ||
+          pendingTimeout ||
+          failed ||
+          partial ||
+          result.status === "completed" ||
+          result.completeWithAiMissing === true,
       };
     },
   });

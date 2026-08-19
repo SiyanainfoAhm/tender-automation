@@ -19,11 +19,14 @@ export type Phase1ScreeningManifest = {
   companyId: string;
   companyName: string;
   runDate: string;
+  screeningRunId?: string | null;
   stage: RunScreeningStage;
   status: "complete" | "pending" | "failed";
   inputWorkbook: string;
   inputWorkbookHash: string;
   preferencesHash: string;
+  companyPreferenceSnapshotHash?: string;
+  screeningPolicyVersion?: string | null;
   screeningPromptHash: string;
   screenedWorkbook: string | null;
   screenedWorkbookHash: string | null;
@@ -58,6 +61,7 @@ export type Phase1RunState = {
   stage: RunScreeningStage;
   aiScreeningComplete: boolean;
   shortlistReady: boolean;
+  screeningRunId?: string | null;
   error?: string | null;
   updatedAt: string;
 };
@@ -128,7 +132,7 @@ export function assertAiScreeningCompleteForDetailCrawl(dateFolder: string): voi
   const state = loadRunState(dateFolder);
   if (!state?.aiScreeningComplete || state.stage === "AI_SCREENING_FAILED") {
     throw new Error(
-      "T247_DETAIL_CRAWL_BLOCKED=true: run-level AI screening not complete",
+      "DETAIL_CRAWL_BLOCKED_SCREENING_NOT_COMPLETE: T247_DETAIL_CRAWL_BLOCKED=true: run-level AI screening not complete",
     );
   }
 }

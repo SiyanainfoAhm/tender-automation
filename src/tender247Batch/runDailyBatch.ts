@@ -57,6 +57,7 @@ import {
   discoverCompleteTenderIds,
   discoverIncompleteTenders,
   inspectTenderArtifactState,
+  isTenderSafeToSkipReopen,
   listT247TenderDirs,
   pendingTimeoutMessage,
   pendingTimeoutReasonFromState,
@@ -77,6 +78,7 @@ import {
   assertAiScreeningCompleteForDetailCrawl,
   runPhase1ExcelScreening,
 } from "../runScreening/runPhase1ExcelScreening.js";
+import { buildPhase1DetailQueue, allowTender247DetailScrape } from "../runScreening/phase1DetailQueue.js";
 import { saveRunState } from "../runScreening/screeningManifest.js";
 
 // HARD GUARD: runDailyBatch must NEVER import or call ensureTodayTendersSelected.
@@ -269,11 +271,6 @@ async function runDailyBatchBody(options: {
       skipChatGpt: dryRunDate,
     });
 
-    // Detail crawl only for Phase-1 shortlist (VERIFY / CONDITIONAL_GO / GO / PARTNER_BID)
-    // plus any incomplete T247-* folders discovered from disk.
-    const survivingIds = new Set(phase1.tender247DetailIds);
-    const incompleteAtStart = discoverIncompleteTenders(dateFolder);
-
     if (dryRunDate) {
       console.log("TENDER247_DRY_RUN_DATE_COMPLETE=true");
       console.log(`REQUESTED_DATE=${dateIso}`);
@@ -288,15 +285,28 @@ async function runDailyBatchBody(options: {
       return;
     }
 
-    if (!dryRunDate && !phase1.aiScreeningComplete) {
+    if (!phase1.aiScreeningComplete) {
       throw new AutomationError(
-        "T247_DETAIL_CRAWL_BLOCKED",
-        phase1.error || "run-level AI screening not complete",
+        "DETAIL_CRAWL_BLOCKED_SCREENING_NOT_COMPLETE",
+        phase1.error ||
+          "DETAIL_CRAWL_BLOCKED_SCREENING_NOT_COMPLETE: run-level AI screening not complete",
       );
     }
-    if (!dryRunDate) {
-      assertAiScreeningCompleteForDetailCrawl(dateFolder);
-    }
+    assertAiScreeningCompleteForDetailCrawl(dateFolder);
+
+    logger.info("DETAIL_CRAWL_START");
+    const phase1Queue = buildPhase1DetailQueue({
+      dateFolder,
+      runDate: dateIso,
+      logger,
+    });
+    // Rebuild from zero — never append to a pre-screen / incomplete-folder queue.
+    const survivingIds = new Set(
+      phase1Queue.crawlCandidates.map((row) => row.tender247Id),
+    );
+    const incompleteAtStart = discoverIncompleteTenders(dateFolder).filter((id) =>
+      survivingIds.has(id),
+    );
 
     if (survivingIds.size === 0 && incompleteAtStart.length === 0) {
       logger.warn(
@@ -368,9 +378,36 @@ async function runDailyBatchBody(options: {
     let documentDownloadCount = 0;
 
     // Filesystem artifacts are authoritative. Manifest "completed" / outer T247-<id>.zip
-    // cannot hide a folder missing metadata, AI_Summary.pdf, or Tender_All_Documents.zip.
-    const completeAtStart = discoverCompleteTenderIds(dateFolder);
+    // cannot hide a folder missing metadata or Tender_All_Documents.zip.
+    // AI-summary-only gaps after explicit FAILED/UNAVAILABLE/NOT_FOUND skip sequential recrawl.
+    const skipReopenAtStart = listT247TenderDirs(dateFolder)
+      .filter(
+        ({ t247Id, tenderDir }) =>
+          survivingIds.has(t247Id) && isTenderSafeToSkipReopen(tenderDir, t247Id),
+      )
+      .map(({ t247Id }) => t247Id);
+    for (const id of skipReopenAtStart) {
+      processedIds.add(id);
+      const zipPath = path.join(dateFolder, `T247-${id}.zip`);
+      if (fs.existsSync(zipPath) && fs.statSync(zipPath).size > 0) {
+        createdZips.push(zipPath);
+      }
+      const tenderDir = path.join(dateFolder, `T247-${id}`);
+      const state = inspectTenderArtifactState(tenderDir, id);
+      if (state.complete) {
+        logger.info(`TENDER247_ALREADY_COMPLETED_SKIP=T247-${id}`);
+      } else {
+        logger.info(`TENDER247_ALREADY_COMPLETED_SKIP=T247-${id}`);
+        logger.info(`[T247 ${id}] AI_SUMMARY_DOWNLOAD_FAILED`);
+        logger.info(`[T247 ${id}] AI_SUMMARY_NON_BLOCKING=true`);
+        logger.info(`[T247 ${id}] AI_SUMMARY_RECOVERY_PENDING=true`);
+      }
+    }
+    const completeAtStart = discoverCompleteTenderIds(dateFolder).filter((id) =>
+      survivingIds.has(id),
+    );
     for (const id of completeAtStart) {
+      if (processedIds.has(id)) continue;
       processedIds.add(id);
       const zipPath = path.join(dateFolder, `T247-${id}.zip`);
       if (fs.existsSync(zipPath) && fs.statSync(zipPath).size > 0) {
@@ -391,12 +428,24 @@ async function runDailyBatchBody(options: {
     let batchIncomplete = false;
     const concurrencyCfg = loadTender247ConcurrencyConfig();
 
-    // Sequential detail/download: Excel survivors plus incomplete T247-* folders.
+    // Sequential detail/download: Phase-1 screened shortlist only.
     const recoveryFirst = incompleteAtStart.filter((id) => !processedIds.has(id));
     const survivorRest = [...survivingIds].filter(
       (id) => !processedIds.has(id) && !recoveryFirst.includes(id),
     );
-    let survivorQueue = [...new Set([...recoveryFirst, ...survivorRest])];
+    let survivorQueue = [...new Set([...recoveryFirst, ...survivorRest])].filter(
+      (id) => {
+        if (!survivingIds.has(id)) return false;
+        return allowTender247DetailScrape(
+          phase1Queue.decisionsByTenderId,
+          id,
+          (message) => {
+            logger.info(message);
+            console.log(message);
+          },
+        );
+      },
+    );
     if (maxTenders < Infinity) {
       survivorQueue = survivorQueue.slice(0, Math.max(0, maxTenders - processedIds.size));
     }
@@ -405,6 +454,7 @@ async function runDailyBatchBody(options: {
       stage: "DETAIL_CRAWL_STARTED",
       aiScreeningComplete: true,
       shortlistReady: true,
+      screeningRunId: phase1Queue.screeningRunId,
       updatedAt: new Date().toISOString(),
     });
     logger.info("T247_PHASE=ARTIFACT_ACQUISITION");
@@ -424,6 +474,7 @@ async function runDailyBatchBody(options: {
       `PIPELINE_PHASE1_SHORTLIST=${survivingIds.size}`,
     );
     console.log(`PIPELINE_DETAIL_QUEUE=${survivorQueue.length}`);
+    console.log("DETAIL_CRAWL_START");
 
     const parallel = await processSurvivorsInParallel({
       listPage,
@@ -536,6 +587,14 @@ async function runDailyBatchBody(options: {
           t247Id,
           state,
           startedIncomplete ? "recovered" : "complete",
+        );
+      } else if (isTenderSafeToSkipReopen(tenderDir, t247Id)) {
+        recordRecoveryItem(
+          recoveryReport,
+          t247Id,
+          state,
+          startedIncomplete ? "recovered" : "complete",
+          "AI_SUMMARY_RECOVERY_PENDING",
         );
       } else {
         const reason =

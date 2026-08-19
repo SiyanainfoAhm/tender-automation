@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { shouldSkipChatgptForPrescreenDecision } from "../chatgptGate.js";
+import {
+  shouldSkipChatgptForPrescreenDecision,
+  isExplicitPrescreenChatgptBlock,
+  isPhase1IgnoredQualificationPrescreenReason,
+  assertPrescreenAllowsChatgpt,
+} from "../chatgptGate.js";
 import type { SelectPassedForChatgptResult } from "../selectPassedForChatgpt.js";
 
 /** Pure selection helper mirroring selectPassedForChatgpt limit behavior. */
@@ -100,4 +105,27 @@ test("runSourceEndToEnd filters PASSED before launching ChatGPT", async () => {
   const filterIdx = src.indexOf("E2E_PRESCREEN_FILTER_START");
   const launchIdx = src.indexOf("session = await launchChatGptPersistentSession");
   assert.ok(filterIdx >= 0 && launchIdx > filterIdx);
+});
+
+test("Phase-1 admitted tenders ignore business qualification prescreen reasons", async () => {
+  assert.equal(isPhase1IgnoredQualificationPrescreenReason("MISSING_REQUIRED_SUMMARY"), true);
+  assert.equal(isPhase1IgnoredQualificationPrescreenReason("AMBIGUOUS_SCOPE"), true);
+  assert.equal(isPhase1IgnoredQualificationPrescreenReason("EMD_ABOVE_LIMIT"), true);
+  assert.equal(isPhase1IgnoredQualificationPrescreenReason("TENDER_VALUE_ABOVE_LIMIT"), true);
+  assert.equal(
+    isExplicitPrescreenChatgptBlock({
+      status: "MANUAL_REVIEW",
+      chatgptEligible: false,
+    }),
+    true,
+  );
+  const gate = await assertPrescreenAllowsChatgpt({
+    sourcePortal: "TENDER247",
+    sourceTenderId: "102379065",
+    logger: { info: () => undefined },
+    phase1Admitted: true,
+  });
+  assert.equal(gate.allowed, true);
+  assert.equal(gate.skipped, false);
+  assert.equal(gate.status, "PHASE1_ADMITTED");
 });

@@ -97,6 +97,8 @@ export function evaluateExistingQualificationReuse(options: {
     };
   }
 
+  const state = loadChatGptTenderState(tenderFolder);
+
   if (!found) {
     log("CHATGPT_EXISTING_QUALIFICATION_REUSE=false");
     return {
@@ -113,7 +115,8 @@ export function evaluateExistingQualificationReuse(options: {
   }
 
   const valid = isValidSavedQualificationResult(resultPath);
-  if (!valid || !isCanonicalStatus(status)) {
+  const belongsToTender = resultBelongsToTender(resultPath, t247Id);
+  if (!valid || !isCanonicalStatus(status) || !belongsToTender) {
     log("CHATGPT_EXISTING_QUALIFICATION_REUSE=false");
     log("CHATGPT_EXISTING_QUALIFICATION_INVALID=true");
     return {
@@ -168,7 +171,6 @@ export function evaluateExistingQualificationReuse(options: {
     };
   }
 
-  const state = loadChatGptTenderState(tenderFolder);
   if (
     state?.status === "failed" ||
     state?.status === "not_ready" ||
@@ -204,6 +206,32 @@ export function evaluateExistingQualificationReuse(options: {
     reason: "EXISTING_VALID_QUALIFICATION",
     fingerprint,
   };
+}
+
+function resultBelongsToTender(resultPath: string, t247Id: string): boolean {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(resultPath, "utf8")) as {
+      t247Id?: string;
+      sourceTenderId?: string;
+    };
+    const resultId = String(parsed.sourceTenderId ?? parsed.t247Id ?? "")
+      .replace(/^T247-/i, "")
+      .trim();
+    return resultId === t247Id;
+  } catch {
+    return false;
+  }
+}
+
+/** True only when a valid reusable individual qualification exists on disk. */
+export function hasValidExistingQualification(options: {
+  dateFolder: string;
+  sourceTenderId: string;
+}): boolean {
+  return evaluateExistingQualificationReuse({
+    ...options,
+    resumeMode: true,
+  }).reuse;
 }
 
 export function logSkipExistingDetails(options: {

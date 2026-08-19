@@ -85,6 +85,8 @@ export interface QualifyTenderOutcome {
   error: string | null;
   missingFiles?: string[];
   retryAfterMs?: number;
+  /** True when this skip is an actual valid existing qualification. */
+  reusedExistingValid?: boolean;
   /** Epoch ms when the qualification prompt was successfully submitted (this run). */
   submittedAt?: number;
   /** Candidate attempt number (1 = first, 2 = controlled retry). */
@@ -180,6 +182,7 @@ export async function qualifySingleTender(options: {
       qualification,
       chatUrl: loadChatGptTenderState(tenderFolder)?.chatUrl ?? null,
       error: null,
+      reusedExistingValid: true,
     };
   }
 
@@ -210,37 +213,20 @@ export async function qualifySingleTender(options: {
     console.log(`QUALIFICATION_REPROCESSED=true T247-${t247Id}`);
   }
 
+  logger.info(`CHATGPT_PHASE1_ADMITTED=T247-${t247Id}`);
+  logger.info("CHATGPT_QUALIFICATION_PRESCREEN=ARTIFACTS_ONLY");
   const prescreenGate = await assertPrescreenAllowsChatgpt({
     sourcePortal: "TENDER247",
     sourceTenderId: t247Id,
     logger,
     allowMissingPrescreenRow: true,
+    phase1Admitted: true,
   });
   if (!prescreenGate.allowed) {
-    upsertQualificationManifestEntry(
-      dateFolder,
-      dateIso,
-      {
-        t247Id,
-        status: "skipped",
-        qualificationStatus: null,
-        chatUrl: null,
-        resultPath: null,
-        responsePath: null,
-        updatedAt: new Date().toISOString(),
-        error: `prescreen:${prescreenGate.reasonCode ?? "BLOCKED"}`,
-      },
-      totals,
+    throw new AutomationError(
+      "CHATGPT_PHASE1_PRESCREEN_UNEXPECTED_BLOCK",
+      `Phase-1 admitted tender T247-${t247Id} was blocked by qualification prescreen`,
     );
-    return {
-      t247Id,
-      status: "skipped",
-      resultPath: null,
-      responsePath: null,
-      qualification: null,
-      chatUrl: null,
-      error: `prescreen:${prescreenGate.reasonCode ?? "BLOCKED"}`,
-    };
   }
 
   const existingState = loadChatGptTenderState(tenderFolder);
@@ -403,14 +389,12 @@ export async function qualifySingleTender(options: {
     });
 
     const crawlArtifacts = inspectTenderArtifactState(tenderFolder, t247Id);
-    if (!crawlArtifacts.complete) {
-      const missingFiles = crawlArtifacts.missing.map((name) =>
-        name === "aiSummary"
-          ? "AI_Summary.pdf"
-          : name === "documents"
-            ? "Tender_All_Documents.zip"
-            : "metadata.json",
-      );
+    if (!crawlArtifacts.coreReady) {
+      const missingFiles = crawlArtifacts.missing
+        .filter((name) => name !== "aiSummary")
+        .map((name) =>
+          name === "documents" ? "Tender_All_Documents.zip" : "metadata.json",
+        );
       logger.warn(
         `CHATGPT_TENDER_NOT_READY=T247-${t247Id} reason=ARTIFACTS_INCOMPLETE ${missingFiles.join(",")}`,
       );
@@ -452,7 +436,7 @@ export async function qualifySingleTender(options: {
 
     if (!evidence.gptReady) {
       const missingFiles = [
-        evidence.notReadyReason ?? "NO_USABLE_QUALIFICATION_EVIDENCE",
+        evidence.notReadyReason ?? "MISSING_CORE_QUALIFICATION_ARTIFACTS",
       ];
       logger.warn(
         `CHATGPT_TENDER_NOT_READY=T247-${t247Id} reason=${missingFiles.join(",")}`,

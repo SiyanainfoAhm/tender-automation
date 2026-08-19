@@ -184,16 +184,21 @@ test("preference snapshot hash and prompt change when database values change", (
   assert.match(promptB, /localOfficeRequired: true/);
   assert.notEqual(promptA, promptB);
 
-  assert.match(promptA, /authoritative Phase-1 tender screening rules/);
+  assert.match(promptA, /The database is authoritative/);
   assert.match(promptA, /FINANCIAL PREFERENCES/);
   assert.match(promptA, /PREFERRED SERVICE SCOPE/);
   assert.match(promptA, /EXCLUDED SCOPE/);
-  assert.match(promptA, /Maximum EMD: INR 15,00,000/);
-  assert.match(promptA, /Maximum Tender Value: INR 5,00,00,000/);
+  assert.match(promptA, /Maximum EMD:\nINR 15,00,000/);
+  assert.match(promptA, /Maximum Tender Value:\nINR 5,00,00,000/);
   assert.match(promptA, /Run correlation ID: RUN-2026-08-18/);
+  assert.match(promptA, /Phase-1 screening policy version: SIYANA_PHASE1_V4/);
   assert.match(promptA, /\nNO_BID\nVERIFY\nMAY_BID\nWILL_BID\n/);
   assert.doesNotMatch(promptA, /Allowed Phase-1 statuses \(use these stored values/);
   assert.doesNotMatch(promptA, /Use NO_GO only/);
+  assert.doesNotMatch(
+    promptA,
+    /Use VERIFY when the scope appears relevant but the Excel does not\n  contain enough information to determine qualification/,
+  );
 });
 
 test("20 raw tenders dedupe to 18, ChatGPT returns 18, NO_GO never enters detail crawler", async () => {

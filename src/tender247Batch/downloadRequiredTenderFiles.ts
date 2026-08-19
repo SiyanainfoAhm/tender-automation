@@ -35,6 +35,11 @@ import {
   inspectTenderArtifactState,
   isValidAiSummaryPdf,
 } from "./tenderArtifactState.js";
+import {
+  loadAiSummaryStage,
+  mapCaptureStatusToAiStage,
+  saveAiSummaryStage,
+} from "./aiSummaryStage.js";
 
 const ARTIFACT_ATTEMPTS = 3;
 
@@ -121,19 +126,89 @@ export async function downloadRequiredTenderFiles(options: {
     sectionFound: false,
     scrollContainerFound: false,
   };
-  try {
-    ai = await captureAiSummaryArtifact({
-      detailPage,
-      context,
-      tenderFolder,
+  const existingAi = inspectTenderArtifactState(tenderFolder, t247Id);
+  if (options.skipAiSummary) {
+    if (existingAi.aiSummaryValid) {
+      ai = {
+        attempted: true,
+        available: true,
+        status: "complete",
+        method: "NATIVE_DOWNLOAD",
+        path: existingAi.aiSummaryPath,
+        size: fs.existsSync(existingAi.aiSummaryPath)
+          ? fs.statSync(existingAi.aiSummaryPath).size
+          : 0,
+        sectionFound: true,
+        scrollContainerFound: true,
+      };
+      saveAiSummaryStage({
+        tenderDir: tenderFolder,
+        t247Id,
+        aiStage: "COMPLETE",
+        aiSummaryValid: true,
+      });
+    } else {
+      const saved = loadAiSummaryStage(tenderFolder);
+      const skippedStatus =
+        saved?.aiStage === "UNAVAILABLE" || saved?.aiSummaryStatus === "UNAVAILABLE"
+          ? "unavailable"
+          : "failed";
+      ai = {
+        attempted: true,
+        available: false,
+        status: skippedStatus,
+        method: "UNAVAILABLE",
+        path: null,
+        size: 0,
+        sectionFound: false,
+        scrollContainerFound: false,
+      };
+      saveAiSummaryStage({
+        tenderDir: tenderFolder,
+        t247Id,
+        aiStage: saved?.aiStage && saved.aiStage !== "COMPLETE"
+          ? saved.aiStage
+          : mapCaptureStatusToAiStage(skippedStatus),
+        aiSummaryValid: false,
+      });
+    }
+  } else {
+    saveAiSummaryStage({
+      tenderDir: tenderFolder,
       t247Id,
-      timeoutMs: aiTimeoutMs,
-      logger,
-      skipIfPresent: options.skipAiSummary,
+      aiStage: "DOWNLOADING",
+      aiSummaryValid: false,
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.warn(`T247_AI_SUMMARY_COMPLETE=false ${message}`);
+    try {
+      ai = await captureAiSummaryArtifact({
+        detailPage,
+        context,
+        tenderFolder,
+        t247Id,
+        timeoutMs: aiTimeoutMs,
+        logger,
+        skipIfPresent: false,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`T247_AI_SUMMARY_COMPLETE=false ${message}`);
+      ai = {
+        attempted: true,
+        available: false,
+        status: "failed",
+        method: "UNAVAILABLE",
+        path: null,
+        size: 0,
+        sectionFound: false,
+        scrollContainerFound: false,
+      };
+    }
+    saveAiSummaryStage({
+      tenderDir: tenderFolder,
+      t247Id,
+      aiStage: mapCaptureStatusToAiStage(ai.status),
+      aiSummaryValid: ai.available && isValidAiSummaryPdf(ai.path || existingAi.aiSummaryPath),
+    });
   }
   logger.info(`T247_AI_SUMMARY_COMPLETE=${ai.available}`);
   logger.info(`T247_AI_SUMMARY_FILE_VERIFIED=${ai.available && isValidArtifact(ai.path)}`);
@@ -283,8 +358,14 @@ export async function downloadRequiredTenderFiles(options: {
   const aiValid = disk.aiSummaryValid && isValidAiSummaryPdf(disk.aiSummaryPath);
   const aiResult: ArtifactResult = aiValid
     ? { status: "success", path: disk.aiSummaryPath }
-    : ai.status === "unavailable"
-      ? { status: "unavailable", reason: "AI Summary not available on the tender page" }
+    : ai.status === "unavailable" || ai.status === "failed"
+      ? {
+          status: "unavailable",
+          reason:
+            ai.status === "unavailable"
+              ? "AI Summary not available on the tender page"
+              : "AI_Summary.pdf download failed",
+        }
       : { status: "retryable_failure", reason: "AI_Summary.pdf missing or invalid on disk" };
   const documentsResult: ArtifactResult = disk.documentsZipValid
     ? { status: "success", path: disk.documentsZipPath }
