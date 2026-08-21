@@ -285,8 +285,18 @@ export function resolveChatGptAuthPath(config: AppConfig): string | undefined {
   return undefined;
 }
 
-/** Prefer tender247.json, fall back to tender247-session.json. */
+/** Prefer account-scoped storageState, then legacy tender247.json paths. */
 export function resolveTender247AuthPath(config: AppConfig): string | undefined {
+  try {
+    // Dynamic import avoided — use optional active context via env path override.
+    const accountPath = process.env.TENDER247_STORAGE_STATE_PATH?.trim();
+    if (accountPath) {
+      const resolved = resolveProjectPath(accountPath);
+      if (fs.existsSync(resolved)) return resolved;
+    }
+  } catch {
+    // ignore
+  }
   if (fs.existsSync(config.tender247AuthPath)) {
     return config.tender247AuthPath;
   }

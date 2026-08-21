@@ -30,6 +30,7 @@
     "crawl:bidassist": "tsx src/bidassist/runBidassistCrawler.ts",
     "test:supabase:tender247": "tsx src/supabase/testTender247Connection.ts",
     "backfill:tender247:supabase": "tsx src/supabase/backfillTender247Metadata.ts",
+    "backfill:tender247:artifacts": "tsx src/supabase/backfillTenderArtifactUploads.ts",
     "backfill:bidassist:supabase": "tsx src/supabase/backfillBidAssistDocumentMetadata.ts",
     "backfill:prescreen": "tsx src/prescreen/backfillPrescreenResults.ts",
     "e2e:tender247": "tsx src/pipeline/runSourceEndToEnd.ts --source=tender247",

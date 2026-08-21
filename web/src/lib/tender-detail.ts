@@ -29,6 +29,8 @@ export type TenderArchiveDocument = {
   kind: string;
   sizeLabel: string | null;
   downloadable: boolean;
+  /** Public Azure Blob URL when available. */
+  url?: string | null;
 };
 
 export type TenderQualificationDTO = {
@@ -63,9 +65,11 @@ export type TenderDetailDTO = {
   department: string | null;
   sourcePortal: TenderSource;
   sourceTenderId: string;
+  folderId: string | null;
   sourceUrl: string | null;
   projectCategory: string | null;
   sourceCategory: string | null;
+  tenderType: string | null;
   qualificationStatus: TenderStatus | null;
   description: string | null;
   scopeText: string | null;
@@ -101,6 +105,19 @@ export type TenderDetailDTO = {
   archiveDocuments: TenderArchiveDocument[];
   activity: TenderActivityEvent[];
   extractedRequirements: ExtractedRequirement[];
+  /** Manual / extended fields from raw_metadata */
+  tenderEstCost: number | null;
+  tenderFee: number | null;
+  processingFee: number | null;
+  finalCost: number | null;
+  msmeExemption: boolean;
+  startupExemption: boolean;
+  exemptionTypes: string[];
+  contacts: Array<{ name: string; mobile: string; email?: string | null }>;
+  notes: string | null;
+  decisionReason: string | null;
+  lostReason: string | null;
+  disqualificationReason: string | null;
 };
 
 export function displayDash(value: string | null | undefined): string {

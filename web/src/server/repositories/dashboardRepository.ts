@@ -1,52 +1,49 @@
 import "server-only";
 
 import {
-  addDays,
   differenceInCalendarDays,
+  endOfDay,
+  endOfMonth,
+  endOfQuarter,
   endOfWeek,
   format,
-  formatISO,
   parseISO,
   startOfDay,
   startOfMonth,
+  startOfQuarter,
   startOfWeek,
-  subDays,
+  subMonths,
 } from "date-fns";
 
 import {
   DASHBOARD_PIPELINE_META,
   DASHBOARD_PIPELINE_STAGES,
-  isActionableQualificationStatus,
-  isActiveBidStatus,
-  isPendingReviewStatus,
+  isWonQualificationStatus,
   mapToDashboardPipelineStage,
   type DashboardPipelineStage,
 } from "@/lib/dashboard/pipeline";
-import {
-  formatActiveBidsComparison,
-  formatPendingReviewComparison,
-  formatPeriodCountComparison,
-  formatWinRateComparison,
-  formatWinRateValue,
-  type DashboardKpiMetric,
-} from "@/lib/dashboard/kpi-format";
-import {
-  dashboardRangeDays,
-  dashboardTrendGranularity,
-  type DashboardTimeRange,
+import type {
+  DashboardDateBasis,
+  DashboardPeriod,
 } from "@/lib/dashboard/time-range";
 import type {
-  DashboardActivityItem,
+  DashboardCategoryRow,
   DashboardDeadlineItem,
   DashboardExpiringDocument,
+  DashboardFinancialExposure,
   DashboardOverview,
   DashboardPipelineStageRow,
-  DashboardStatusSlice,
+  DashboardSourcePill,
   DashboardVolumePoint,
+  DashboardWonPortfolio,
 } from "@/lib/dashboard/types";
 import { getServerSupabase } from "@/lib/db/server";
-import { formatIndianCurrency, formatRelativeTime } from "@/lib/format";
-import { getTenderUiStatus, TENDER_UI_STATUS_COLORS, TENDER_UI_STATUS_LABELS, type TenderUiStatus } from "@/lib/tender-status";
+import { formatIndianCurrency } from "@/lib/format";
+import {
+  getTenderUiStatus,
+  TENDER_UI_STATUS_LABELS,
+} from "@/lib/tender-status";
+import { listCompanyExperience } from "@/server/repositories/experienceRepository";
 import { listExpiringDocuments } from "@/server/repositories/documentRepository";
 
 type TenderRow = {
@@ -56,10 +53,15 @@ type TenderRow = {
   source_portal: string | null;
   closing_date: string | null;
   tender_value: number | string | null;
+  emd_amount: number | string | null;
+  project_category: string | null;
+  category: string | null;
   effective_qualification_status: string | null;
   manual_review_required: boolean | null;
   first_seen_at: string | null;
   crawled_at: string | null;
+  created_at: string | null;
+  scraped_date: string | null;
   qualified_at: string | null;
   updated_at: string | null;
 };
@@ -69,130 +71,75 @@ function toNumber(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function eventTime(row: TenderRow): Date | null {
-  const raw = row.first_seen_at || row.crawled_at || row.updated_at;
+function parseDate(raw: string | null | undefined): Date | null {
   if (!raw) return null;
-  const d = parseISO(raw);
+  const d = parseISO(raw.length === 10 ? `${raw}T12:00:00+05:30` : raw);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function tenderBasisDate(
+  row: TenderRow,
+  basis: DashboardDateBasis,
+): Date | null {
+  if (basis === "scraped") {
+    return (
+      parseDate(row.scraped_date) ||
+      parseDate(row.first_seen_at) ||
+      parseDate(row.crawled_at) ||
+      parseDate(row.created_at)
+    );
+  }
+  return (
+    parseDate(row.created_at) ||
+    parseDate(row.first_seen_at) ||
+    parseDate(row.crawled_at) ||
+    parseDate(row.scraped_date)
+  );
 }
 
 function inRange(date: Date | null, from: Date, to: Date): boolean {
   if (!date) return false;
-  return date.getTime() >= from.getTime() && date.getTime() <= to.getTime();
+  const t = date.getTime();
+  return t >= from.getTime() && t <= to.getTime();
 }
 
-function parseDate(raw: string | null | undefined): Date | null {
-  if (!raw) return null;
-  const d = parseISO(raw);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function formatPipelineValueLabel(value: number): string {
-  if (value <= 0) return "—";
-  return formatIndianCurrency(value).replace(/^₹/, "");
-}
-
-function bucketKey(
-  date: Date,
-  granularity: "day" | "week" | "month",
-): { key: string; label: string } {
-  if (granularity === "day") {
-    return {
-      key: format(date, "yyyy-MM-dd"),
-      label: format(date, "dd MMM"),
-    };
+export function resolveDashboardPeriodBounds(
+  period: DashboardPeriod,
+  now = new Date(),
+): { from: Date; to: Date } {
+  const to = endOfDay(now);
+  switch (period) {
+    case "today":
+      return { from: startOfDay(now), to };
+    case "week":
+      return {
+        from: startOfWeek(now, { weekStartsOn: 1 }),
+        to: endOfWeek(now, { weekStartsOn: 1 }),
+      };
+    case "month":
+      return { from: startOfMonth(now), to: endOfMonth(now) };
+    case "quarter":
+      return { from: startOfQuarter(now), to: endOfQuarter(now) };
   }
-  if (granularity === "week") {
-    const start = startOfWeek(date, { weekStartsOn: 1 });
-    return {
-      key: format(start, "yyyy-MM-dd"),
-      label: format(start, "dd MMM"),
-    };
-  }
-  const start = startOfMonth(date);
-  return {
-    key: format(start, "yyyy-MM"),
-    label: format(start, "MMM yyyy"),
-  };
 }
 
-function buildVolumeTrend(
-  rows: TenderRow[],
-  from: Date,
-  to: Date,
-  range: DashboardTimeRange,
-): DashboardVolumePoint[] {
-  const granularity = dashboardTrendGranularity(range);
-  const buckets = new Map<string, { label: string; count: number }>();
-
-  // Seed empty buckets so the chart has a continuous axis.
-  if (granularity === "day") {
-    let cursor = startOfDay(from);
-    const end = startOfDay(to);
-    while (cursor.getTime() <= end.getTime()) {
-      const { key, label } = bucketKey(cursor, "day");
-      buckets.set(key, { label, count: 0 });
-      cursor = addDays(cursor, 1);
-    }
-  } else if (granularity === "week") {
-    let cursor = startOfWeek(from, { weekStartsOn: 1 });
-    const end = endOfWeek(to, { weekStartsOn: 1 });
-    while (cursor.getTime() <= end.getTime()) {
-      const { key, label } = bucketKey(cursor, "week");
-      buckets.set(key, { label, count: 0 });
-      cursor = addDays(cursor, 7);
-    }
-  } else {
-    let cursor = startOfMonth(from);
-    while (cursor.getTime() <= to.getTime()) {
-      const { key, label } = bucketKey(cursor, "month");
-      buckets.set(key, { label, count: 0 });
-      cursor = startOfMonth(addDays(cursor, 32));
-    }
-  }
-
-  for (const row of rows) {
-    const t = eventTime(row);
-    if (!inRange(t, from, to) || !t) continue;
-    const { key, label } = bucketKey(t, granularity);
-    const existing = buckets.get(key) || { label, count: 0 };
-    existing.count += 1;
-    buckets.set(key, existing);
-  }
-
-  return [...buckets.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([, v]) => ({ label: v.label, count: v.count }));
+function moneyLabel(value: number): string {
+  if (value <= 0) return "₹0";
+  return formatIndianCurrency(value);
 }
 
-function volumeSubtitle(range: DashboardTimeRange): string {
-  const g = dashboardTrendGranularity(range);
-  if (g === "day") return "Daily imports in selected range";
-  if (g === "week") return "Weekly imports & decisions";
-  return "Monthly imports & decisions";
+function sourceLabel(portal: string | null): string {
+  const key = String(portal || "").toUpperCase();
+  if (key === "TENDER247") return "Tender247";
+  if (key === "BIDASSIST") return "BidAssist";
+  if (key === "GEM") return "GeM";
+  if (key === "CPPP") return "CPPP";
+  return portal || "Other";
 }
 
-function statusLabel(status: string | null): string {
-  return TENDER_UI_STATUS_LABELS[getTenderUiStatus(status)];
-}
-
-function buildStatusDistribution(
-  rows: TenderRow[],
-): DashboardStatusSlice[] {
-  const map = new Map<string, number>();
-  for (const row of rows) {
-    const key = getTenderUiStatus(row.effective_qualification_status);
-    map.set(key, (map.get(key) || 0) + 1);
-  }
-  return [...map.entries()]
-    .filter(([, count]) => count > 0)
-    .sort((a, b) => b[1] - a[1])
-    .map(([key, count]) => ({
-      key,
-      label: TENDER_UI_STATUS_LABELS[key as TenderUiStatus],
-      count,
-      color: TENDER_UI_STATUS_COLORS[key as TenderUiStatus] ?? "#94a3b8",
-    }));
+function categoryLabel(row: TenderRow): string {
+  const raw = String(row.project_category || row.category || "Other").trim();
+  return raw || "Other";
 }
 
 async function loadExpiringDocuments(
@@ -232,13 +179,13 @@ async function loadExpiringDocuments(
 
 async function loadSubmittedWorkspaces(
   companyId: string | null,
-): Promise<Map<string, { submittedAt: Date | null }>> {
-  const out = new Map<string, { submittedAt: Date | null }>();
+): Promise<Set<string>> {
+  const out = new Set<string>();
   if (!companyId) return out;
   const supabase = getServerSupabase();
   const { data, error } = await supabase
     .from("agenttender_bid_workspaces")
-    .select("tender_id, submitted_at")
+    .select("tender_id")
     .eq("company_id", companyId)
     .eq("submission_status", "submitted");
   if (error) {
@@ -246,203 +193,19 @@ async function loadSubmittedWorkspaces(
     return out;
   }
   for (const row of data || []) {
-    out.set(String(row.tender_id), {
-      submittedAt: parseDate(row.submitted_at as string | null),
-    });
+    out.add(String(row.tender_id));
   }
   return out;
-}
-
-async function loadRecentActivity(
-  from: Date,
-): Promise<DashboardActivityItem[]> {
-  const supabase = getServerSupabase();
-  const fromIso = formatISO(from);
-
-  const { data: activityRows, error: activityError } = await supabase
-    .from("agenttender_tender_activity")
-    .select(
-      "id, event_type, summary, created_at, actor_user_id, tender_id",
-    )
-    .gte("created_at", fromIso)
-    .order("created_at", { ascending: false })
-    .limit(12);
-
-  if (activityError) {
-    console.error("[dashboard] activity failed", activityError.message);
-  }
-
-  const rows = activityRows || [];
-  const tenderIds = [...new Set(rows.map((r) => String(r.tender_id)))];
-  const actorIds = [
-    ...new Set(
-      rows
-        .map((r) => r.actor_user_id as string | null)
-        .filter((id): id is string => Boolean(id)),
-    ),
-  ];
-
-  const tenderMap = new Map<
-    string,
-    { title: string; ref: string }
-  >();
-  const actorMap = new Map<string, string>();
-
-  if (tenderIds.length > 0) {
-    const { data: tenders } = await supabase
-      .from("agenttender_tenders")
-      .select("id, title, source_tender_id")
-      .in("id", tenderIds);
-    for (const t of tenders || []) {
-      tenderMap.set(String(t.id), {
-        title: String(t.title || "Tender"),
-        ref: String(t.source_tender_id || ""),
-      });
-    }
-  }
-
-  if (actorIds.length > 0) {
-    const { data: users } = await supabase
-      .from("agenttender_users")
-      .select("id, full_name, email")
-      .in("id", actorIds);
-    for (const u of users || []) {
-      actorMap.set(
-        String(u.id),
-        String(u.full_name || u.email || "Team member"),
-      );
-    }
-  }
-
-  const items: DashboardActivityItem[] = rows.map((row) => {
-    const tender = tenderMap.get(String(row.tender_id));
-    const actor = row.actor_user_id
-      ? actorMap.get(String(row.actor_user_id)) || "Team member"
-      : "AI Assistant";
-    const ref = tender?.ref ? ` Tender #${tender.ref}` : "";
-    const eventType = String(row.event_type);
-    let kind: DashboardActivityItem["kind"] = "other";
-    let sentence = `${actor} ${String(row.summary || "updated a tender")}${ref}`;
-
-    if (eventType.includes("import") || eventType === "tender_imported") {
-      kind = "imported";
-      sentence = `${actor} imported${ref || " a tender"}`;
-    } else if (
-      eventType.includes("qualif") ||
-      eventType === "ai_evaluation_completed"
-    ) {
-      kind = "qualification";
-      sentence = `${actor} completed qualification analysis${ref}`;
-    } else if (eventType.includes("document") || eventType.includes("upload")) {
-      kind = "document";
-      sentence = `${actor} uploaded a document${ref}`;
-    } else if (
-      eventType.includes("status") ||
-      eventType.includes("classif") ||
-      eventType.includes("decision")
-    ) {
-      kind = "status";
-      sentence = `${actor} ${String(row.summary || "updated status")}${ref}`;
-    }
-
-    const occurredAt = String(row.created_at);
-    return {
-      id: String(row.id),
-      kind,
-      sentence,
-      occurredAt,
-      relativeTime: formatRelativeTime(occurredAt),
-    };
-  });
-
-  // Fallback: derive from recent tender imports / qualifications when activity table is sparse.
-  if (items.length < 4) {
-    const { data: recent } = await supabase
-      .from("agenttender_web_tender_list")
-      .select(
-        "id, title, source_tender_id, first_seen_at, crawled_at, qualified_at, effective_qualification_status",
-      )
-      .gte("first_seen_at", fromIso)
-      .order("first_seen_at", { ascending: false })
-      .limit(8);
-
-    for (const row of recent || []) {
-      const ref = row.source_tender_id
-        ? ` Tender #${row.source_tender_id}`
-        : "";
-      const importedAt = String(row.first_seen_at || row.crawled_at || "");
-      if (importedAt) {
-        items.push({
-          id: `imported:${row.id}`,
-          kind: "imported",
-          sentence: `System imported${ref}`,
-          occurredAt: importedAt,
-          relativeTime: formatRelativeTime(importedAt),
-        });
-      }
-      if (row.qualified_at) {
-        const status = row.effective_qualification_status
-          ? statusLabel(String(row.effective_qualification_status))
-          : "qualification";
-        items.push({
-          id: `qualified:${row.id}`,
-          kind: "qualification",
-          sentence: `AI Assistant completed ${status} analysis${ref}`,
-          occurredAt: String(row.qualified_at),
-          relativeTime: formatRelativeTime(String(row.qualified_at)),
-        });
-      }
-    }
-  }
-
-  const seen = new Set<string>();
-  return items
-    .sort(
-      (a, b) =>
-        parseISO(b.occurredAt).getTime() - parseISO(a.occurredAt).getTime(),
-    )
-    .filter((item) => {
-      if (seen.has(item.id)) return false;
-      seen.add(item.id);
-      return true;
-    })
-    .slice(0, 8);
-}
-
-function buildUpcomingDeadlines(
-  rows: TenderRow[],
-): DashboardDeadlineItem[] {
-  const today = startOfDay(new Date());
-  return rows
-    .filter((row) => row.closing_date)
-    .map((row) => {
-      const closing = startOfDay(parseISO(String(row.closing_date)));
-      const daysLeft = differenceInCalendarDays(closing, today);
-      return { row, closing, daysLeft };
-    })
-    .filter((item) => item.daysLeft >= 0 && item.daysLeft <= 45)
-    .sort((a, b) => a.daysLeft - b.daysLeft)
-    .slice(0, 6)
-    .map(({ row, closing, daysLeft }) => ({
-      id: row.id,
-      title: row.title || "Untitled tender",
-      reference: row.source_tender_id
-        ? String(row.source_tender_id)
-        : row.id.slice(0, 8),
-      closingDate: String(row.closing_date),
-      monthLabel: format(closing, "MMM").toUpperCase(),
-      dayLabel: format(closing, "d"),
-      status: row.effective_qualification_status,
-      statusLabel: statusLabel(row.effective_qualification_status),
-      daysLeft,
-      href: `/tenders/${row.id}`,
-    }));
 }
 
 function buildPipeline(
   rows: TenderRow[],
   submittedIds: Set<string>,
-): { stages: DashboardPipelineStageRow[]; total: number } {
+): {
+  stages: DashboardPipelineStageRow[];
+  total: number;
+  valueTotal: number;
+} {
   const aggregates = new Map<
     DashboardPipelineStage,
     { count: number; value: number }
@@ -455,7 +218,7 @@ function buildPipeline(
     const stage = mapToDashboardPipelineStage({
       qualificationStatus: row.effective_qualification_status,
       submitted: submittedIds.has(row.id),
-      won: false,
+      won: isWonQualificationStatus(row.effective_qualification_status),
     });
     if (!stage) continue;
     const bucket = aggregates.get(stage)!;
@@ -463,10 +226,11 @@ function buildPipeline(
     bucket.value += toNumber(row.tender_value);
   }
 
-  const maxCount = Math.max(
-    1,
-    ...[...aggregates.values()].map((b) => b.count),
+  const valueTotal = [...aggregates.values()].reduce(
+    (sum, b) => sum + b.value,
+    0,
   );
+  const valueDenom = Math.max(valueTotal, 1);
 
   const stages: DashboardPipelineStageRow[] = DASHBOARD_PIPELINE_STAGES.map(
     (key) => {
@@ -478,160 +242,358 @@ function buildPipeline(
         number: meta.number,
         count: bucket.count,
         totalValue: bucket.value,
-        valueLabel: formatPipelineValueLabel(bucket.value),
-        progress: Math.round((bucket.count / maxCount) * 100),
+        valueLabel: moneyLabel(bucket.value),
+        progress: Math.round((bucket.value / valueDenom) * 100),
         color: meta.color,
         barClass: meta.barClass,
         iconBg: meta.iconBg,
         iconText: meta.iconText,
       };
     },
-  ).filter((stage) => stage.key !== "partnership" || stage.count > 0)
+  )
+    .filter((stage) => stage.key !== "partnership" || stage.count > 0)
     .map((stage, index) => ({ ...stage, number: index + 1 }));
 
   const total = stages.reduce((sum, s) => sum + s.count, 0);
-  return { stages, total };
+  return { stages, total, valueTotal };
 }
 
-/**
- * Count tenders that entered the active bid path during [from, to].
- * Uses qualified_at for actionable qualifications and submitted_at for submissions.
- * This is an event count for comparison — not a reconstructed historical snapshot.
- */
-function countEnteredActiveInPeriod(
+function buildVolumeTrend(
   rows: TenderRow[],
-  submittedMap: Map<string, { submittedAt: Date | null }>,
-  from: Date,
-  to: Date,
-): number {
-  const ids = new Set<string>();
+  basis: DashboardDateBasis,
+  now: Date,
+): DashboardVolumePoint[] {
+  const points: DashboardVolumePoint[] = [];
+  for (let i = 11; i >= 0; i -= 1) {
+    const monthStart = startOfMonth(subMonths(now, i));
+    const key = format(monthStart, "yyyy-MM");
+    points.push({
+      key,
+      label: format(monthStart, "MMM"),
+      count: 0,
+      value: 0,
+    });
+  }
+  const index = new Map(points.map((p) => [p.key, p]));
   for (const row of rows) {
-    const qualifiedAt = parseDate(row.qualified_at);
-    if (
-      inRange(qualifiedAt, from, to) &&
-      isActionableQualificationStatus(row.effective_qualification_status)
-    ) {
-      ids.add(row.id);
-    }
-    const submitted = submittedMap.get(row.id);
-    if (submitted && inRange(submitted.submittedAt, from, to)) {
-      ids.add(row.id);
+    const d = tenderBasisDate(row, basis);
+    if (!d) continue;
+    const key = format(startOfMonth(d), "yyyy-MM");
+    const bucket = index.get(key);
+    if (!bucket) continue;
+    bucket.count += 1;
+    bucket.value += toNumber(row.tender_value);
+  }
+  return points;
+}
+
+function buildCategories(rows: TenderRow[]): {
+  categories: DashboardCategoryRow[];
+  total: number;
+  sources: DashboardSourcePill[];
+} {
+  const catMap = new Map<string, { count: number; value: number }>();
+  const sourceMap = new Map<string, number>();
+  for (const row of rows) {
+    const cat = categoryLabel(row);
+    const existing = catMap.get(cat) || { count: 0, value: 0 };
+    existing.count += 1;
+    existing.value += toNumber(row.tender_value);
+    catMap.set(cat, existing);
+
+    const src = sourceLabel(row.source_portal);
+    sourceMap.set(src, (sourceMap.get(src) || 0) + 1);
+  }
+  const maxValue = Math.max(
+    1,
+    ...[...catMap.values()].map((c) => c.value),
+  );
+  const categories = [...catMap.entries()]
+    .map(([label, stats]) => ({
+      key: label.toLowerCase().replace(/\s+/g, "_"),
+      label,
+      count: stats.count,
+      totalValue: stats.value,
+      valueLabel: moneyLabel(stats.value),
+      progress: Math.round((stats.value / maxValue) * 100),
+    }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8);
+  const sources = [...sourceMap.entries()]
+    .map(([label, count]) => ({
+      key: label.toLowerCase(),
+      label,
+      count,
+    }))
+    .sort((a, b) => b.count - a.count);
+  const total = rows.length;
+  return { categories, total, sources };
+}
+
+function buildFinancialExposure(
+  rows: TenderRow[],
+  bankGuaranteeDocs: DashboardExpiringDocument[],
+): DashboardFinancialExposure {
+  const activePipeline = rows.filter((row) => {
+    const stage = mapToDashboardPipelineStage({
+      qualificationStatus: row.effective_qualification_status,
+      submitted: false,
+      won: isWonQualificationStatus(row.effective_qualification_status),
+    });
+    return stage != null && stage !== "under_evaluation";
+  });
+
+  let emdTotal = 0;
+  let emdCount = 0;
+  for (const row of activePipeline) {
+    const emd = toNumber(row.emd_amount);
+    if (emd > 0) {
+      emdTotal += emd;
+      emdCount += 1;
     }
   }
-  return ids.size;
-}
 
-function buildKpiCards(options: {
-  range: DashboardTimeRange;
-  totalCurrent: number;
-  totalPrevious: number;
-  activeSnapshot: number;
-  enteredActiveCurrent: number;
-  enteredActivePrevious: number;
-  pendingSnapshot: number;
-  pendingOverdue: number;
-  winRateCurrent: number | null;
-  winRatePrevious: number | null;
-  decidedCurrent: number;
-  decidedPrevious: number;
-}): DashboardKpiMetric[] {
-  const totalDelta = options.totalCurrent - options.totalPrevious;
-  const enteredDelta =
-    options.enteredActiveCurrent - options.enteredActivePrevious;
+  const pbgExpiring = bankGuaranteeDocs.filter(
+    (d) => d.daysLeft >= 0 && d.daysLeft <= 90,
+  );
+  const pbgExpired = bankGuaranteeDocs.filter((d) => d.daysLeft < 0);
 
-  return [
+  const breakdown = [
     {
-      key: "totalTenders",
-      label: "Total Tenders",
-      value: options.totalCurrent.toLocaleString("en-IN"),
-      comparison: formatPeriodCountComparison({
-        delta: totalDelta,
-        range: options.range,
-        emptyCurrent: options.totalCurrent === 0,
-        emptyLabel: "No tenders in this period",
-      }),
+      key: "tender_fees",
+      label: "Tender Fees",
+      count: 0,
+      totalValue: 0,
+      valueLabel: "₹0",
+      progress: 0,
     },
     {
-      key: "activeBids",
-      label: "Active Bids",
-      value: options.activeSnapshot.toLocaleString("en-IN"),
-      comparison: formatActiveBidsComparison({
-        snapshotValue: options.activeSnapshot,
-        enteredDelta,
-        range: options.range,
-      }),
+      key: "emd",
+      label: "EMD / Bid Security",
+      count: emdCount,
+      totalValue: emdTotal,
+      valueLabel: moneyLabel(emdTotal),
+      progress: emdTotal > 0 ? 100 : 0,
     },
     {
-      key: "winRate",
-      label: "Win Rate",
-      value: formatWinRateValue(options.winRateCurrent),
-      comparison: formatWinRateComparison({
-        currentRate: options.winRateCurrent,
-        previousRate: options.winRatePrevious,
-        decidedCount: options.decidedCurrent,
-        previousDecidedCount: options.decidedPrevious,
-      }),
+      key: "processing",
+      label: "Processing Fees",
+      count: 0,
+      totalValue: 0,
+      valueLabel: "₹0",
+      progress: 0,
     },
     {
-      key: "pendingReview",
-      label: "Pending Review",
-      value: options.pendingSnapshot.toLocaleString("en-IN"),
-      comparison: formatPendingReviewComparison({
-        pendingCount: options.pendingSnapshot,
-        overdueCount: options.pendingOverdue,
-      }),
+      key: "pbg",
+      label: "Performance Guarantee",
+      count: bankGuaranteeDocs.length,
+      totalValue: 0,
+      valueLabel: bankGuaranteeDocs.length
+        ? `${bankGuaranteeDocs.length} docs`
+        : "₹0",
+      progress: bankGuaranteeDocs.length > 0 ? 40 : 0,
     },
   ];
+
+  return {
+    totalFees: emdTotal,
+    totalFeesLabel: moneyLabel(emdTotal),
+    pendingFees: emdTotal,
+    pendingFeesLabel: moneyLabel(emdTotal),
+    refundable: emdTotal,
+    refundableLabel: moneyLabel(emdTotal),
+    returned: 0,
+    returnedLabel: "₹0",
+    activePbg: 0,
+    activePbgLabel: bankGuaranteeDocs.length
+      ? `${bankGuaranteeDocs.length} guarantees on file`
+      : "₹0",
+    expiredPbg: 0,
+    expiredPbgLabel:
+      pbgExpired.length > 0 ? `${pbgExpired.length} expired` : "₹0",
+    pbgExpiring90d: 0,
+    pbgExpiring90dLabel:
+      pbgExpiring.length > 0
+        ? `${pbgExpiring.length} need renewal`
+        : "None",
+    pbgExpiringCount: pbgExpiring.length,
+    breakdown,
+  };
+}
+
+function buildWonPortfolio(
+  rows: TenderRow[],
+  experiences: Awaited<ReturnType<typeof listCompanyExperience>>,
+): DashboardWonPortfolio {
+  const wonRows = rows.filter((row) =>
+    isWonQualificationStatus(row.effective_qualification_status),
+  );
+  const wonValue = wonRows.reduce(
+    (sum, row) => sum + toNumber(row.tender_value),
+    0,
+  );
+
+  const ongoing = experiences.filter((e) => e.projectStatus === "ongoing");
+  const completed = experiences.filter((e) => e.projectStatus === "completed");
+  const experienceValue = experiences.reduce(
+    (sum, e) => sum + (Number(e.projectValueInr) || 0),
+    0,
+  );
+  const inExecutionValue = ongoing.reduce(
+    (sum, e) => sum + (Number(e.projectValueInr) || 0),
+    0,
+  );
+
+  const statusBuckets = [
+    {
+      key: "won",
+      label: "Won",
+      count: wonRows.length,
+      totalValue: wonValue,
+      color: "#16a34a",
+    },
+    {
+      key: "awarded",
+      label: "Awarded",
+      count: experiences.length,
+      totalValue: experienceValue,
+      color: "#059669",
+    },
+    {
+      key: "in_execution",
+      label: "In Execution",
+      count: ongoing.length,
+      totalValue: inExecutionValue,
+      color: "#0ea5e9",
+    },
+    {
+      key: "completed",
+      label: "Completed",
+      count: completed.length,
+      totalValue: completed.reduce(
+        (sum, e) => sum + (Number(e.projectValueInr) || 0),
+        0,
+      ),
+      color: "#64748b",
+    },
+    {
+      key: "terminated",
+      label: "Terminated",
+      count: 0,
+      totalValue: 0,
+      color: "#dc2626",
+    },
+  ];
+  const maxValue = Math.max(1, ...statusBuckets.map((b) => b.totalValue));
+
+  return {
+    activeProjects: ongoing.length || wonRows.length,
+    inExecutionValue,
+    inExecutionValueLabel: moneyLabel(inExecutionValue || wonValue),
+    completed: completed.length,
+    milestonesDone: completed.length,
+    milestonesTotal: Math.max(experiences.length, wonRows.length, 1),
+    byStatus: statusBuckets.map((b) => ({
+      ...b,
+      valueLabel: moneyLabel(b.totalValue),
+      progress: Math.round((b.totalValue / maxValue) * 100),
+    })),
+  };
+}
+
+function buildUpcomingDeadlines(
+  rows: TenderRow[],
+  submittedIds: Set<string>,
+): DashboardDeadlineItem[] {
+  const today = startOfDay(new Date());
+  return rows
+    .filter((row) => {
+      if (!row.closing_date) return false;
+      if (isWonQualificationStatus(row.effective_qualification_status)) {
+        return false;
+      }
+      if (row.effective_qualification_status === "NO_GO") return false;
+      return true;
+    })
+    .map((row) => {
+      const closing = startOfDay(parseISO(String(row.closing_date)));
+      const daysLeft = differenceInCalendarDays(closing, today);
+      let urgency: DashboardDeadlineItem["urgency"] = "ok";
+      if (daysLeft < 0) urgency = "overdue";
+      else if (daysLeft <= 3) urgency = "urgent";
+      else if (daysLeft <= 7) urgency = "soon";
+      const status = row.effective_qualification_status;
+      const stage = mapToDashboardPipelineStage({
+        qualificationStatus: status,
+        submitted: submittedIds.has(row.id),
+      });
+      return { row, closing, daysLeft, urgency, stage };
+    })
+    .filter((item) => item.daysLeft <= 45)
+    .sort((a, b) => a.daysLeft - b.daysLeft)
+    .slice(0, 8)
+    .map(({ row, closing, daysLeft, urgency }) => ({
+      id: row.id,
+      title: row.title || "Untitled tender",
+      reference: row.source_tender_id
+        ? String(row.source_tender_id)
+        : row.id.slice(0, 8),
+      closingDate: String(row.closing_date),
+      monthLabel: format(closing, "MMM").toUpperCase(),
+      dayLabel: format(closing, "d"),
+      status: row.effective_qualification_status,
+      statusLabel:
+        TENDER_UI_STATUS_LABELS[
+          getTenderUiStatus(row.effective_qualification_status)
+        ],
+      daysLeft,
+      urgency,
+      valueLabel: moneyLabel(toNumber(row.tender_value)),
+      href: `/tenders/${row.id}`,
+    }));
 }
 
 /**
- * Aggregated dashboard payload for the overview UI.
+ * Executive dashboard aggregate.
  *
- * Field audit (production columns):
- * - Imported/seen: first_seen_at | crawled_at on agenttender_web_tender_list
- * - Qualification: effective_qualification_status, qualified_at, manual_review_required
- * - Submitted: agenttender_bid_workspaces.submission_status / submitted_at (company-scoped)
- * - Won/lost: not tracked yet (no award outcome column) → Win Rate stays "—" until decided
- * - Tender value: tender_value
- * - Deadline: closing_date
- * - Document expiry: agenttender_company_documents.expiry_date (via listExpiringDocuments)
+ * Date fields:
+ * - scraped → scraped_date (fallback first_seen_at / crawled_at / created_at)
+ * - created → created_at (fallback first_seen_at / crawled_at / scraped_date)
  *
- * Time-range behavior:
- * - Total Tenders: imported in selected window; comparison vs preceding equal window
- * - Active Bids: live snapshot; comparison = net entered-active events in window vs prior
- * - Win Rate: Won/decided when award data exists; else "—" / Small sample / No decided bids
- * - Pending Review: live VERIFY snapshot; comparison = overdue by closing_date < today
- * - Pipeline / deadlines / expiry banner: live (range-independent)
- * - Volume / status / activity: range-filtered
+ * Won: qualification_status WON/AWARDED when present; execution portfolio also
+ * uses agenttender_company_experience (no separate award table yet).
+ * Financial exposure: disclosed EMD on active pipeline + Bank Guarantee docs.
  */
 export async function getDashboardOverview(options: {
-  range: DashboardTimeRange;
+  period: DashboardPeriod;
+  dateBasis: DashboardDateBasis;
   companyId: string | null;
+  /** @deprecated */
+  range?: DashboardPeriod;
 }): Promise<DashboardOverview> {
+  const period = options.period || options.range || "month";
+  const dateBasis = options.dateBasis || "scraped";
   const supabase = getServerSupabase();
   const now = new Date();
-  const today = startOfDay(now);
-  const days = dashboardRangeDays(options.range);
-  const rangeTo = now;
-  const rangeFrom = startOfDay(subDays(now, days - 1));
-  const priorTo = subDays(rangeFrom, 1);
-  const priorFrom = startOfDay(subDays(priorTo, days - 1));
+  const { from, to } = resolveDashboardPeriodBounds(period, now);
 
   const [
     listRes,
-    submittedMap,
+    submittedIds,
     expiringDocuments,
-    recentActivity,
+    experiences,
   ] = await Promise.all([
     supabase
       .from("agenttender_web_tender_list")
       .select(
-        "id, title, source_tender_id, source_portal, closing_date, tender_value, effective_qualification_status, manual_review_required, first_seen_at, crawled_at, qualified_at, updated_at",
+        "id, title, source_tender_id, source_portal, closing_date, tender_value, emd_amount, project_category, category, effective_qualification_status, manual_review_required, first_seen_at, crawled_at, created_at, scraped_date, qualified_at, updated_at",
       )
       .limit(8000),
     loadSubmittedWorkspaces(options.companyId),
     loadExpiringDocuments(options.companyId),
-    loadRecentActivity(rangeFrom),
+    options.companyId
+      ? listCompanyExperience(options.companyId).catch(() => [])
+      : Promise.resolve([]),
   ]);
 
   if (listRes.error) {
@@ -639,97 +601,162 @@ export async function getDashboardOverview(options: {
   }
 
   const allRows = (listRes.data || []) as TenderRow[];
-  const submittedIds = new Set(submittedMap.keys());
-
-  const currentRows = allRows.filter((row) =>
-    inRange(eventTime(row), rangeFrom, rangeTo),
-  );
-  const priorRows = allRows.filter((row) =>
-    inRange(eventTime(row), priorFrom, priorTo),
+  const periodRows = allRows.filter((row) =>
+    inRange(tenderBasisDate(row, dateBasis), from, to),
   );
 
-  // Active Bids: live snapshot across all tenders (not limited to imports in range).
-  const activeSnapshot = allRows.filter((row) => {
+  const imported = periodRows.length;
+  const declined = periodRows.filter(
+    (row) => row.effective_qualification_status === "NO_GO",
+  ).length;
+  const wonInPeriod = periodRows.filter((row) =>
+    isWonQualificationStatus(row.effective_qualification_status),
+  );
+  const contractsAwarded = wonInPeriod.length;
+  const contractsAwardedValue = wonInPeriod.reduce(
+    (sum, row) => sum + toNumber(row.tender_value),
+    0,
+  );
+
+  const { stages: pipeline, total: pipelineTotal, valueTotal: pipelineValueTotal } =
+    buildPipeline(allRows, submittedIds);
+
+  const activePipelineRows = allRows.filter((row) => {
     const stage = mapToDashboardPipelineStage({
       qualificationStatus: row.effective_qualification_status,
       submitted: submittedIds.has(row.id),
+      won: isWonQualificationStatus(row.effective_qualification_status),
     });
-    return isActiveBidStatus(stage);
-  }).length;
-
-  const enteredActiveCurrent = countEnteredActiveInPeriod(
-    allRows,
-    submittedMap,
-    rangeFrom,
-    rangeTo,
-  );
-  const enteredActivePrevious = countEnteredActiveInPeriod(
-    allRows,
-    submittedMap,
-    priorFrom,
-    priorTo,
-  );
-
-  // Pending Review: live VERIFY snapshot (+ non-GO manual review flags).
-  const pendingRows = allRows.filter((row) =>
-    isPendingReviewStatus(
-      row.effective_qualification_status,
-      row.manual_review_required,
-    ),
-  );
-  const pendingSnapshot = pendingRows.length;
-  const pendingOverdue = pendingRows.filter((row) => {
-    const closing = parseDate(row.closing_date);
-    if (!closing) return false;
-    return startOfDay(closing).getTime() < today.getTime();
-  }).length;
-
-  /*
-   * Win rate: award outcomes are not stored yet
-   * (bid workspace only has not_submitted | submitted).
-   * Formula reserved: won / (won + lost) among decided bids in the period.
-   * Until award fields exist, decidedCount = 0 → "—" / "No decided bids".
-   */
-  const winRateCurrent: number | null = null;
-  const winRatePrevious: number | null = null;
-  const decidedCurrent = 0;
-  const decidedPrevious = 0;
-
-  const kpiCards = buildKpiCards({
-    range: options.range,
-    totalCurrent: currentRows.length,
-    totalPrevious: priorRows.length,
-    activeSnapshot,
-    enteredActiveCurrent,
-    enteredActivePrevious,
-    pendingSnapshot,
-    pendingOverdue,
-    winRateCurrent,
-    winRatePrevious,
-    decidedCurrent,
-    decidedPrevious,
+    return stage != null;
   });
 
-  const { stages: pipeline, total: pipelineTotal } = buildPipeline(
-    allRows,
-    submittedIds,
+  const submittedCount = allRows.filter((row) => submittedIds.has(row.id)).length;
+  const wonAll = allRows.filter((row) =>
+    isWonQualificationStatus(row.effective_qualification_status),
+  );
+  const decided = submittedCount + wonAll.length;
+  const winRate =
+    decided > 0 ? (wonAll.length / Math.max(decided, 1)) * 100 : null;
+
+  const emdCommitted = activePipelineRows.reduce(
+    (sum, row) => sum + toNumber(row.emd_amount),
+    0,
   );
 
+  const bankGuaranteeDocs = expiringDocuments.filter((d) =>
+    /guarantee|pbg|bank/i.test(d.name),
+  );
+
+  const financialExposure = buildFinancialExposure(
+    allRows,
+    bankGuaranteeDocs.length > 0 ? bankGuaranteeDocs : expiringDocuments,
+  );
+  const wonPortfolio = buildWonPortfolio(allRows, experiences);
+  const { categories, total: categoryTotal, sources } =
+    buildCategories(periodRows.length > 0 ? periodRows : allRows);
+  const volumeTrend = buildVolumeTrend(allRows, dateBasis, now);
+  const upcomingDeadlines = buildUpcomingDeadlines(allRows, submittedIds);
+
+  const periodPhrase =
+    period === "today"
+      ? "today"
+      : period === "week"
+        ? "this week"
+        : period === "quarter"
+          ? "this quarter"
+          : "this month";
+
   return {
-    range: options.range,
-    kpiCards,
+    period,
+    dateBasis,
+    range: period,
+    summaryStats: [
+      {
+        key: "imported",
+        label: `Tenders imported ${periodPhrase}`,
+        value: imported.toLocaleString("en-IN"),
+        supporting: `Based on ${dateBasis === "scraped" ? "scraped" : "created"} date`,
+      },
+      {
+        key: "declined",
+        label: `Bids declined ${periodPhrase}`,
+        value: declined.toLocaleString("en-IN"),
+        supporting: "No Bid outcomes in period",
+      },
+      {
+        key: "awarded",
+        label: `Contracts awarded ${periodPhrase}`,
+        value: contractsAwarded.toLocaleString("en-IN"),
+        supporting:
+          contractsAwarded > 0
+            ? moneyLabel(contractsAwardedValue)
+            : "No award outcomes recorded yet",
+      },
+    ],
+    kpiCards: [
+      {
+        key: "pipelineTenders",
+        label: "Pipeline Tenders",
+        value: pipelineTotal.toLocaleString("en-IN"),
+        supporting: `worth ${moneyLabel(pipelineValueTotal)}`,
+        tone: "blue",
+      },
+      {
+        key: "pipelineValue",
+        label: "Pipeline Value",
+        value: moneyLabel(pipelineValueTotal),
+        supporting: `${pipelineTotal} live opportunities`,
+        tone: "green",
+      },
+      {
+        key: "winRate",
+        label: "Win Rate",
+        value: winRate == null ? "—" : `${winRate.toFixed(1)}%`,
+        supporting:
+          decided > 0
+            ? `${wonAll.length} won / ${decided} decided`
+            : "No decided bids yet",
+        tone: "violet",
+      },
+      {
+        key: "wonProjects",
+        label: "Won Projects",
+        value: String(
+          Math.max(wonAll.length, wonPortfolio.activeProjects, experiences.length),
+        ),
+        supporting: wonPortfolio.inExecutionValueLabel,
+        tone: "green",
+      },
+      {
+        key: "emdCommitted",
+        label: "EMD Committed",
+        value: moneyLabel(emdCommitted),
+        supporting: "Active pipeline bid security",
+        tone: "orange",
+      },
+      {
+        key: "activePbg",
+        label: "Active PBG",
+        value: financialExposure.activePbgLabel,
+        supporting:
+          financialExposure.pbgExpiringCount > 0
+            ? `${financialExposure.pbgExpiringCount} expiring ≤ 90d`
+            : "Bank guarantees on file",
+        tone: "orange",
+      },
+    ],
     expiringDocuments,
     pipeline,
     pipelineTotal,
-    tenderVolumeTrend: buildVolumeTrend(
-      allRows,
-      rangeFrom,
-      rangeTo,
-      options.range,
-    ),
-    volumeSubtitle: volumeSubtitle(options.range),
-    tenderStatusDistribution: buildStatusDistribution(currentRows),
-    recentActivity,
-    upcomingDeadlines: buildUpcomingDeadlines(allRows),
+    pipelineValueTotal,
+    pipelineValueLabel: moneyLabel(pipelineValueTotal),
+    volumeTrend,
+    volumeSubtitle: "12-month rolling view of tender intake",
+    categories,
+    categoryTotal,
+    sources,
+    financialExposure,
+    wonPortfolio,
+    upcomingDeadlines,
   };
 }

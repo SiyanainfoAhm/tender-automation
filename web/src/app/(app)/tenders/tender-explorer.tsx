@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
+  Eye,
   FileSearch,
   Filter,
   MapPin,
@@ -18,7 +19,6 @@ import {
 } from "lucide-react";
 
 import { CategoryCapsule } from "@/components/tenders/category-capsule";
-import { MatchScore } from "@/components/tenders/match-score";
 import { TenderLoadingOverlay } from "@/components/tenders/tender-loading-overlay";
 import {
   exportTenderRowsCsv,
@@ -44,20 +44,18 @@ import { getDeadlineMeta } from "@/lib/tender-deadline";
 import {
   CREATED_DATE_PRESET_LABELS,
   CREATED_DATE_PRESETS,
-  formatAppDateTimeTooltip,
   formatCompactAppDate,
   type CreatedDatePreset,
 } from "@/lib/tender-date-filter";
 import {
   nextSortState,
   normalizeSortKeyForUi,
-  sortModeId,
-  TENDER_SORT_MODES,
   type TableSortKey,
 } from "@/lib/tender-sort";
 import {
   getTenderUiStatus,
   TENDER_LIST_STATUS_FILTERS,
+  TENDER_STATUSES,
 } from "@/lib/tender-status";
 import { tenderFiltersSchema, type TenderFilters } from "@/lib/validations";
 import { cn } from "@/lib/utils";
@@ -69,8 +67,10 @@ import type {
 type TenderExplorerProps = {
   allCount: number;
   categories: TenderExplorerFacet[];
-  portals: Array<"TENDER247" | "BIDASSIST">;
+  portals: Array<"TENDER247" | "BIDASSIST" | "MANUAL">;
+  cities: TenderExplorerFacet[];
   canImport: boolean;
+  canCreate: boolean;
   stats: React.ReactNode;
 };
 
@@ -187,6 +187,9 @@ function panelFilterCount(filters: TenderFilters): number {
     filters.source && filters.source !== "ALL",
     filters.status && filters.status !== "ALL",
     Boolean(filters.category?.trim()),
+    Boolean(filters.city?.trim()),
+    Boolean(filters.date),
+    Boolean(filters.closingDate),
   ].filter(Boolean).length;
 }
 
@@ -194,7 +197,11 @@ function hasActiveFilters(filters: TenderFilters): boolean {
   return Boolean(
     filters.q?.trim() ||
       panelFilterCount(filters) > 0 ||
-      filters.date ||
+      filters.selectedDate ||
+      filters.createdFrom ||
+      filters.createdTo ||
+      filters.closingFrom ||
+      filters.closingTo ||
       filters.quickDate ||
       (filters.closingPreset && filters.closingPreset !== "ALL") ||
       (filters.valueBand && filters.valueBand !== "ALL") ||
@@ -214,15 +221,8 @@ function locationLine(row: WebTenderListRow): string {
 function normalizeStatusChip(value: string | undefined): string {
   if (!value || value === "ALL") return "ALL";
   const lower = value.toLowerCase().replace(/[\s-]+/g, "_");
-  if (lower === "not_evaluated") return "not_evaluated";
-  if (
-    lower === "screening" ||
-    lower === "will_bid" ||
-    lower === "partnership" ||
-    lower === "no_bid"
-  ) {
-    return lower;
-  }
+  const known = TENDER_LIST_STATUS_FILTERS.some((item) => item.value === lower);
+  if (known) return lower;
   return getTenderUiStatus(value);
 }
 
@@ -302,7 +302,7 @@ function TableRowSkeleton() {
       <td className="px-4 py-3">
         <Skeleton className="size-4 rounded" />
       </td>
-      {Array.from({ length: 7 }).map((_, index) => (
+      {Array.from({ length: 8 }).map((_, index) => (
         <td key={index} className="px-4 py-3">
           <Skeleton className="h-4 w-full max-w-[140px]" />
           {index === 0 ? <Skeleton className="mt-2 h-3 w-24" /> : null}
@@ -316,7 +316,9 @@ export function TenderExplorer({
   allCount,
   categories,
   portals,
+  cities,
   canImport,
+  canCreate,
   stats,
 }: TenderExplorerProps) {
   const router = useRouter();
@@ -336,6 +338,7 @@ export function TenderExplorer({
     title: "Updating tenders",
     description: "Applying filters, please wait...",
   });
+  const [refreshToken, setRefreshToken] = React.useState(0);
   const [localQ, setLocalQ] = React.useState(filters.q ?? "");
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(
     () => new Set(),
@@ -413,7 +416,7 @@ export function TenderExplorer({
     return () => {
       controller.abort();
     };
-  }, [queryKey]);
+  }, [queryKey, refreshToken]);
 
   React.useEffect(() => {
     setSelectedIds(new Set());
@@ -424,10 +427,16 @@ export function TenderExplorer({
     filters.source,
     filters.status,
     filters.category,
+    filters.city,
     filters.sortBy,
     filters.sortDir,
     filters.date,
     filters.selectedDate,
+    filters.createdFrom,
+    filters.createdTo,
+    filters.closingDate,
+    filters.closingFrom,
+    filters.closingTo,
   ]);
 
   const navigate = React.useCallback(
@@ -467,12 +476,42 @@ export function TenderExplorer({
   const selectedRows = rows.filter((row) => selectedIds.has(row.id));
   const currentStatus = normalizeStatusChip(filters.status);
   const dateValue = filters.date ?? "all";
+  const closingDateValue = filters.closingDate ?? "all";
   const dateTriggerLabel =
-    filters.date === "custom" && filters.selectedDate
-      ? formatCompactAppDate(`${filters.selectedDate}T12:00:00+05:30`)
-      : filters.date
-        ? CREATED_DATE_PRESET_LABELS[filters.date]
-        : "All dates";
+    filters.date === "custom" && (filters.createdFrom || filters.createdTo)
+      ? [
+          filters.createdFrom
+            ? formatCompactAppDate(`${filters.createdFrom}T12:00:00+05:30`)
+            : "…",
+          filters.createdTo
+            ? formatCompactAppDate(`${filters.createdTo}T12:00:00+05:30`)
+            : "…",
+        ].join(" – ")
+      : filters.date === "custom" && filters.selectedDate
+        ? formatCompactAppDate(`${filters.selectedDate}T12:00:00+05:30`)
+        : filters.date
+          ? CREATED_DATE_PRESET_LABELS[filters.date]
+          : "All Dates";
+  const closingTriggerLabel =
+    filters.closingDate === "custom" &&
+    (filters.closingFrom || filters.closingTo)
+      ? [
+          filters.closingFrom
+            ? formatCompactAppDate(`${filters.closingFrom}T12:00:00+05:30`)
+            : "…",
+          filters.closingTo
+            ? formatCompactAppDate(`${filters.closingTo}T12:00:00+05:30`)
+            : "…",
+        ].join(" – ")
+      : filters.closingDate
+        ? CREATED_DATE_PRESET_LABELS[filters.closingDate]
+        : "All Dates";
+
+  function refreshList() {
+    listCache.clear();
+    setRefreshToken((value) => value + 1);
+    router.refresh();
+  }
 
   const onSort = React.useCallback(
     (clicked: TableSortKey) => {
@@ -554,7 +593,9 @@ export function TenderExplorer({
           </div>
           <TenderPageActions
             canImport={canImport}
+            canCreate={canCreate}
             disabled={isUpdating}
+            onCreated={refreshList}
           />
         </div>
 
@@ -565,7 +606,7 @@ export function TenderExplorer({
         <div className="relative min-w-[220px] max-w-md flex-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-foreground-400" />
           <Input
-            placeholder="Search by title, reference no. or organization..."
+            placeholder="Search by name, tender ID or reference no..."
             value={localQ}
             onChange={(e) => setLocalQ(e.target.value)}
             disabled={isUpdating}
@@ -589,78 +630,6 @@ export function TenderExplorer({
           ) : null}
         </Button>
 
-        <Select
-          value={dateValue}
-          disabled={isUpdating}
-          onValueChange={(value) => {
-            if (value === "all") {
-              navigate({
-                date: undefined,
-                selectedDate: undefined,
-                page: "1",
-              });
-              return;
-            }
-            if (value === "custom") {
-              navigate({ date: "custom", page: "1" });
-              return;
-            }
-            navigate({
-              date: value === "custom" ? "custom" : value.replace(/_/g, "-"),
-              selectedDate: undefined,
-              page: "1",
-            });
-          }}
-        >
-          <SelectTrigger className="h-9 w-[168px] text-sm">
-            <SelectValue placeholder="Date">{dateTriggerLabel}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All dates</SelectItem>
-            {CREATED_DATE_PRESETS.map((preset) => (
-              <SelectItem key={preset} value={preset}>
-                {CREATED_DATE_PRESET_LABELS[preset as CreatedDatePreset]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-
-        {filters.date === "custom" ? (
-          <div className="flex items-center gap-2">
-            <Input
-              type="date"
-              value={filters.selectedDate ?? ""}
-              onChange={(event) =>
-                navigate({
-                  date: "custom",
-                  selectedDate: event.target.value || undefined,
-                  page: "1",
-                })
-              }
-              className="h-9 w-[160px] text-sm"
-              disabled={isUpdating}
-              aria-label="Select created date"
-            />
-            {filters.selectedDate ? (
-              <Button
-                type="button"
-                variant="ghost"
-                className="h-9 px-2 text-xs"
-                disabled={isUpdating}
-                onClick={() =>
-                  navigate({
-                    date: undefined,
-                    selectedDate: undefined,
-                    page: "1",
-                  })
-                }
-              >
-                Clear date
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
-
         {filtersActive ? (
           <Button
             type="button"
@@ -674,40 +643,34 @@ export function TenderExplorer({
           </Button>
         ) : null}
 
-        <div className="ml-auto flex flex-wrap items-center gap-3">
-          <Select
-            value={sortModeId(filters.sortBy, filters.sortDir)}
-            disabled={isUpdating}
-            onValueChange={(value) => {
-              const mode = TENDER_SORT_MODES.find((item) => item.id === value);
-              if (!mode || value === "scraped_desc") {
-                navigate({
-                  sort: undefined,
-                  direction: undefined,
-                  order: undefined,
-                  page: "1",
-                });
-                return;
-              }
-              navigate({
-                sort: mode.sort,
-                direction: mode.dir,
-                order: undefined,
-                page: "1",
-              });
-            }}
-          >
-            <SelectTrigger className="h-9 w-[190px] text-sm">
-              <SelectValue placeholder="Sort" />
-            </SelectTrigger>
-            <SelectContent>
-              {TENDER_SORT_MODES.map((mode) => (
-                <SelectItem key={mode.id} value={mode.id}>
-                  {mode.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          {(
+            [
+              { key: "closing" as const, label: "Deadline" },
+              { key: "value" as const, label: "Value" },
+              { key: "created" as const, label: "Created" },
+            ] as const
+          ).map((item) => (
+            <Button
+              key={item.key}
+              type="button"
+              variant={uiSortKey === item.key ? "default" : "secondary"}
+              className="h-9 gap-1 text-sm"
+              disabled={isUpdating}
+              onClick={() => onSort(item.key)}
+            >
+              {item.label}
+              {uiSortKey === item.key ? (
+                filters.sortDir === "asc" ? (
+                  <ArrowUp className="size-3.5" />
+                ) : (
+                  <ArrowDown className="size-3.5" />
+                )
+              ) : (
+                <ArrowUpDown className="size-3.5 opacity-50" />
+              )}
+            </Button>
+          ))}
         </div>
       </div>
 
@@ -715,16 +678,39 @@ export function TenderExplorer({
         <div className="flex flex-wrap items-center gap-2">
           {filters.date ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-background-100 px-2.5 py-1 text-xs text-foreground-700">
-              Date: {dateTriggerLabel}
+              Created: {dateTriggerLabel}
               <button
                 type="button"
                 disabled={isUpdating}
                 className="rounded-full p-0.5 hover:bg-background-200 disabled:opacity-50"
-                aria-label="Clear date filter"
+                aria-label="Clear created date filter"
                 onClick={() =>
                   navigate({
                     date: undefined,
                     selectedDate: undefined,
+                    createdFrom: undefined,
+                    createdTo: undefined,
+                    page: "1",
+                  })
+                }
+              >
+                <X className="size-3" />
+              </button>
+            </span>
+          ) : null}
+          {filters.closingDate ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-background-100 px-2.5 py-1 text-xs text-foreground-700">
+              Closing: {closingTriggerLabel}
+              <button
+                type="button"
+                disabled={isUpdating}
+                className="rounded-full p-0.5 hover:bg-background-200 disabled:opacity-50"
+                aria-label="Clear closing date filter"
+                onClick={() =>
+                  navigate({
+                    closingDate: undefined,
+                    closingFrom: undefined,
+                    closingTo: undefined,
                     page: "1",
                   })
                 }
@@ -749,6 +735,20 @@ export function TenderExplorer({
               </button>
             </span>
           ) : null}
+          {filters.city ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-background-100 px-2.5 py-1 text-xs text-foreground-700">
+              City: {filters.city}
+              <button
+                type="button"
+                disabled={isUpdating}
+                className="rounded-full p-0.5 hover:bg-background-200 disabled:opacity-50"
+                aria-label="Clear city filter"
+                onClick={() => navigate({ city: undefined, page: "1" })}
+              >
+                <X className="size-3" />
+              </button>
+            </span>
+          ) : null}
           {filters.category ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-background-100 px-2.5 py-1 text-xs text-foreground-700">
               Category: {filters.category}
@@ -767,98 +767,286 @@ export function TenderExplorer({
       ) : null}
 
       {filtersOpen ? (
-        <div className="space-y-4 rounded-lg border border-border bg-card p-5 shadow-sm">
-          <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+        <div className="space-y-4 rounded-lg border border-border bg-card p-5">
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
             <div className="space-y-2">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
                 Status
               </p>
-              <div className="flex flex-wrap gap-1.5">
-                {TENDER_LIST_STATUS_FILTERS.map((option) => (
-                  <FilterCapsule
-                    key={option.value}
-                    active={currentStatus === option.value}
-                    disabled={isUpdating}
-                    onClick={() =>
-                      navigate({
-                        status:
-                          option.value === "ALL" ? undefined : option.value,
-                        page: "1",
-                      })
-                    }
-                  >
-                    {option.label}
-                  </FilterCapsule>
-                ))}
-              </div>
+              <Select
+                value={currentStatus}
+                disabled={isUpdating}
+                onValueChange={(value) =>
+                  navigate({
+                    status: value === "ALL" ? undefined : value,
+                    page: "1",
+                  })
+                }
+              >
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue placeholder="All" />
+                </SelectTrigger>
+                <SelectContent>
+                  {TENDER_LIST_STATUS_FILTERS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="space-y-2">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
-                Category
+                City / Location
               </p>
-              <div className="flex flex-wrap gap-1.5">
-                <FilterCapsule
-                  active={!filters.category}
-                  disabled={isUpdating}
-                  onClick={() =>
-                    navigate({ category: undefined, page: "1" })
+              <Select
+                value={filters.city || "ALL"}
+                disabled={isUpdating}
+                onValueChange={(value) =>
+                  navigate({
+                    city: value === "ALL" ? undefined : value,
+                    page: "1",
+                  })
+                }
+              >
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue placeholder="All cities" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">All Cities</SelectItem>
+                  {cities.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
+                Created Date
+              </p>
+              <Select
+                value={dateValue}
+                disabled={isUpdating}
+                onValueChange={(value) => {
+                  if (value === "all") {
+                    navigate({
+                      date: undefined,
+                      selectedDate: undefined,
+                      createdFrom: undefined,
+                      createdTo: undefined,
+                      page: "1",
+                    });
+                    return;
                   }
-                >
-                  All
-                </FilterCapsule>
-                {categories.map((option) => (
-                  <FilterCapsule
-                    key={option.value}
-                    active={filters.category === option.value}
+                  navigate({
+                    date: value,
+                    selectedDate: undefined,
+                    createdFrom: undefined,
+                    createdTo: undefined,
+                    page: "1",
+                  });
+                }}
+              >
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue placeholder="All Dates" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Dates</SelectItem>
+                  {CREATED_DATE_PRESETS.map((preset) => (
+                    <SelectItem key={preset} value={preset}>
+                      {CREATED_DATE_PRESET_LABELS[preset as CreatedDatePreset]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {filters.date === "custom" ? (
+                <div className="grid grid-cols-2 gap-2">
+                  <Input
+                    type="date"
+                    value={filters.createdFrom ?? filters.selectedDate ?? ""}
                     disabled={isUpdating}
-                    onClick={() =>
+                    aria-label="Created from"
+                    onChange={(event) =>
                       navigate({
-                        category:
-                          filters.category === option.value
-                            ? undefined
-                            : option.value,
+                        date: "custom",
+                        createdFrom: event.target.value || undefined,
+                        selectedDate: undefined,
                         page: "1",
                       })
                     }
-                  >
-                    {option.label}
-                  </FilterCapsule>
-                ))}
-              </div>
+                    className="h-9 text-sm"
+                  />
+                  <Input
+                    type="date"
+                    value={filters.createdTo ?? ""}
+                    disabled={isUpdating}
+                    aria-label="Created to"
+                    onChange={(event) =>
+                      navigate({
+                        date: "custom",
+                        createdTo: event.target.value || undefined,
+                        selectedDate: undefined,
+                        page: "1",
+                      })
+                    }
+                    className="h-9 text-sm"
+                  />
+                </div>
+              ) : null}
             </div>
 
             <div className="space-y-2">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
-                Portal
+                Closing Date
               </p>
-              <div className="flex flex-wrap gap-1.5">
-                <FilterCapsule
-                  active={!filters.source || filters.source === "ALL"}
-                  disabled={isUpdating}
-                  onClick={() => navigate({ source: undefined, page: "1" })}
-                >
-                  All
-                </FilterCapsule>
-                {portals.map((portal) => (
-                  <FilterCapsule
-                    key={portal}
-                    active={filters.source === portal}
+              <Select
+                value={closingDateValue}
+                disabled={isUpdating}
+                onValueChange={(value) => {
+                  if (value === "all") {
+                    navigate({
+                      closingDate: undefined,
+                      closingFrom: undefined,
+                      closingTo: undefined,
+                      page: "1",
+                    });
+                    return;
+                  }
+                  navigate({
+                    closingDate: value,
+                    closingFrom: undefined,
+                    closingTo: undefined,
+                    page: "1",
+                  });
+                }}
+              >
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue placeholder="All Dates" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Dates</SelectItem>
+                  {CREATED_DATE_PRESETS.map((preset) => (
+                    <SelectItem key={preset} value={preset}>
+                      {CREATED_DATE_PRESET_LABELS[preset as CreatedDatePreset]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {filters.closingDate === "custom" ? (
+                <div className="grid grid-cols-2 gap-2">
+                  <Input
+                    type="date"
+                    value={filters.closingFrom ?? ""}
                     disabled={isUpdating}
-                    onClick={() =>
+                    aria-label="Closing from"
+                    onChange={(event) =>
                       navigate({
-                        source:
-                          portal === "TENDER247" ? "tender247" : "bidassist",
+                        closingDate: "custom",
+                        closingFrom: event.target.value || undefined,
                         page: "1",
                       })
                     }
-                  >
-                    {portal === "TENDER247" ? "Tender247" : "BidAssist"}
-                  </FilterCapsule>
-                ))}
-              </div>
+                    className="h-9 text-sm"
+                  />
+                  <Input
+                    type="date"
+                    value={filters.closingTo ?? ""}
+                    disabled={isUpdating}
+                    aria-label="Closing to"
+                    onChange={(event) =>
+                      navigate({
+                        closingDate: "custom",
+                        closingTo: event.target.value || undefined,
+                        page: "1",
+                      })
+                    }
+                    className="h-9 text-sm"
+                  />
+                </div>
+              ) : null}
             </div>
           </div>
+
+          {(categories.length > 0 || portals.length > 0) ? (
+            <div className="grid grid-cols-1 gap-5 border-t border-border pt-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
+                  Category
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  <FilterCapsule
+                    active={!filters.category}
+                    disabled={isUpdating}
+                    onClick={() =>
+                      navigate({ category: undefined, page: "1" })
+                    }
+                  >
+                    All
+                  </FilterCapsule>
+                  {categories.map((option) => (
+                    <FilterCapsule
+                      key={option.value}
+                      active={filters.category === option.value}
+                      disabled={isUpdating}
+                      onClick={() =>
+                        navigate({
+                          category:
+                            filters.category === option.value
+                              ? undefined
+                              : option.value,
+                          page: "1",
+                        })
+                      }
+                    >
+                      {option.label}
+                    </FilterCapsule>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
+                  Portal
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  <FilterCapsule
+                    active={!filters.source || filters.source === "ALL"}
+                    disabled={isUpdating}
+                    onClick={() => navigate({ source: undefined, page: "1" })}
+                  >
+                    All
+                  </FilterCapsule>
+                  {portals.map((portal) => (
+                    <FilterCapsule
+                      key={portal}
+                      active={filters.source === portal}
+                      disabled={isUpdating}
+                      onClick={() =>
+                        navigate({
+                          source:
+                            portal === "TENDER247"
+                              ? "tender247"
+                              : portal === "BIDASSIST"
+                                ? "bidassist"
+                                : "manual",
+                          page: "1",
+                        })
+                      }
+                    >
+                      {portal === "TENDER247"
+                        ? "Tender247"
+                        : portal === "BIDASSIST"
+                          ? "BidAssist"
+                          : "Manual"}
+                    </FilterCapsule>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -962,7 +1150,7 @@ export function TenderExplorer({
           className="overflow-hidden rounded-lg border border-border bg-card shadow-sm"
         >
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px]">
+            <table className="w-full min-w-[1100px]">
               <thead>
                 <tr className="border-b border-background-200/70 bg-background-50">
                   <th className="w-10 px-4 py-3">
@@ -976,18 +1164,15 @@ export function TenderExplorer({
                     />
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-foreground-500">
-                    Tender
+                    Tender Name
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-foreground-500">
                     Category
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-foreground-500">
-                    Value / EMD
-                  </th>
                   <th className="px-4 py-3 text-left">
                     <SortControl
-                      label="Match"
-                      sortKey="match"
+                      label="Est. Value"
+                      sortKey="value"
                       activeKey={uiSortKey}
                       direction={filters.sortDir}
                       disabled={isUpdating}
@@ -996,8 +1181,8 @@ export function TenderExplorer({
                   </th>
                   <th className="px-4 py-3 text-left">
                     <SortControl
-                      label="Scraped Date"
-                      sortKey="scraped"
+                      label="EMD"
+                      sortKey="emd"
                       activeKey={uiSortKey}
                       direction={filters.sortDir}
                       disabled={isUpdating}
@@ -1024,6 +1209,9 @@ export function TenderExplorer({
                       onSort={onSort}
                     />
                   </th>
+                  <th className="w-14 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-foreground-500">
+                    Action
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -1044,7 +1232,12 @@ export function TenderExplorer({
                       const status = row.effective_qualification_status;
                       const reference = row.folder_id || row.source_tender_id;
                       const place = locationLine(row);
-                      const scrapedStamp = row.scraped_date;
+                      const portal =
+                        row.source_portal === "TENDER247" ||
+                        row.source_portal === "BIDASSIST" ||
+                        row.source_portal === "MANUAL"
+                          ? (row.source_portal as TenderSource)
+                          : "MANUAL";
 
                       return (
                         <tr
@@ -1073,19 +1266,24 @@ export function TenderExplorer({
                               aria-label={`Select ${row.title}`}
                             />
                           </td>
-                          <td className="max-w-[340px] px-4 py-3">
+                          <td className="max-w-[360px] px-4 py-3">
                             <p className="line-clamp-1 text-sm font-medium text-foreground-800 group-hover:text-primary-600">
                               {row.title}
                             </p>
-                            <div className="mt-1 flex items-center gap-2">
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
                               <SourceBadge
-                                source={row.source_portal as TenderSource}
+                                source={portal}
                                 size="sm"
                                 className="rounded px-1.5 py-0.5 normal-case tracking-normal"
                               />
                               <span className="truncate text-xs text-foreground-500">
-                                {reference}
+                                ID: {row.source_tender_id}
                               </span>
+                              {reference && reference !== row.source_tender_id ? (
+                                <span className="truncate text-xs text-foreground-500">
+                                  Ref: {reference}
+                                </span>
+                              ) : null}
                             </div>
                             {place ? (
                               <p className="mt-0.5 line-clamp-1 flex items-center gap-1 text-xs text-foreground-400">
@@ -1105,19 +1303,10 @@ export function TenderExplorer({
                             <p className="text-sm font-semibold text-foreground-800">
                               {value.label}
                             </p>
-                            <p className="text-xs text-foreground-400">
-                              EMD: {emd.label}
-                            </p>
                           </td>
                           <td className="px-4 py-3">
-                            <MatchScore confidence={row.confidence} />
-                          </td>
-                          <td className="px-4 py-3">
-                            <p
-                              className="text-sm text-foreground-700"
-                              title={formatAppDateTimeTooltip(scrapedStamp)}
-                            >
-                              {formatCompactAppDate(scrapedStamp)}
+                            <p className="text-sm text-foreground-700">
+                              {emd.label}
                             </p>
                           </td>
                           <td className="px-4 py-3">
@@ -1136,7 +1325,22 @@ export function TenderExplorer({
                             ) : null}
                           </td>
                           <td className="px-4 py-3">
-                            {status ? (
+                            {status &&
+                            (
+                              [
+                                "GO",
+                                "CONDITIONAL_GO",
+                                "PARTNER_BID",
+                                "VERIFY",
+                                "NO_GO",
+                                "WON",
+                                "LOST",
+                                "DISQUALIFIED",
+                                "SUBMITTED",
+                              ] as const
+                            ).includes(
+                              status as (typeof TENDER_STATUSES)[number],
+                            ) ? (
                               <StatusBadge
                                 status={status as QualificationStatus}
                                 size="sm"
@@ -1144,9 +1348,25 @@ export function TenderExplorer({
                             ) : (
                               <span className="inline-flex items-center gap-1.5 rounded-md bg-background-200 px-2 py-0.5 text-[11px] font-medium text-foreground-600">
                                 <span className="size-1.5 rounded-full bg-foreground-400" />
-                                Not evaluated
+                                Under Evaluation
                               </span>
                             )}
+                          </td>
+                          <td
+                            className="px-4 py-3"
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="size-8"
+                              disabled={isUpdating}
+                              aria-label={`View ${row.title}`}
+                              onClick={() => router.push(`/tenders/${row.id}`)}
+                            >
+                              <Eye className="size-4" />
+                            </Button>
                           </td>
                         </tr>
                       );

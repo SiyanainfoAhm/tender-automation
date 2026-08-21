@@ -25,11 +25,11 @@ export const qualificationStatusStyles: Record<
   },
   CONDITIONAL_GO: {
     label: STATUS_DISPLAY_LABELS.CONDITIONAL_GO,
-    shortLabel: "Screening",
-    bg: "bg-sky-100",
-    text: "text-sky-700",
-    border: "border-sky-200",
-    dot: "bg-sky-600",
+    shortLabel: "May Bid",
+    bg: "bg-amber-100",
+    text: "text-amber-700",
+    border: "border-amber-200",
+    dot: "bg-amber-500",
   },
   PARTNER_BID: {
     label: STATUS_DISPLAY_LABELS.PARTNER_BID,
@@ -41,7 +41,7 @@ export const qualificationStatusStyles: Record<
   },
   VERIFY: {
     label: STATUS_DISPLAY_LABELS.VERIFY,
-    shortLabel: "Screening",
+    shortLabel: "Verify",
     bg: "bg-sky-100",
     text: "text-sky-700",
     border: "border-sky-200",
@@ -55,9 +55,41 @@ export const qualificationStatusStyles: Record<
     border: "border-rose-200",
     dot: "bg-rose-500",
   },
+  WON: {
+    label: STATUS_DISPLAY_LABELS.WON,
+    shortLabel: "Won",
+    bg: "bg-emerald-100",
+    text: "text-emerald-800",
+    border: "border-emerald-300",
+    dot: "bg-emerald-600",
+  },
+  LOST: {
+    label: STATUS_DISPLAY_LABELS.LOST,
+    shortLabel: "Lost",
+    bg: "bg-rose-100",
+    text: "text-rose-800",
+    border: "border-rose-300",
+    dot: "bg-rose-600",
+  },
+  DISQUALIFIED: {
+    label: STATUS_DISPLAY_LABELS.DISQUALIFIED,
+    shortLabel: "Disqualified",
+    bg: "bg-red-100",
+    text: "text-red-800",
+    border: "border-red-300",
+    dot: "bg-red-600",
+  },
+  SUBMITTED: {
+    label: STATUS_DISPLAY_LABELS.SUBMITTED,
+    shortLabel: "Submitted",
+    bg: "bg-blue-100",
+    text: "text-blue-800",
+    border: "border-blue-300",
+    dot: "bg-blue-600",
+  },
 };
 
-export type TenderSource = "TENDER247" | "BIDASSIST";
+export type TenderSource = "TENDER247" | "BIDASSIST" | "MANUAL";
 
 export type SourceStyle = {
   label: string;
@@ -78,5 +110,11 @@ export const sourceStyles: Record<TenderSource, SourceStyle> = {
     bg: "bg-purple-100",
     text: "text-purple-800",
     border: "border-purple-200",
+  },
+  MANUAL: {
+    label: "Manual",
+    bg: "bg-slate-100",
+    text: "text-slate-800",
+    border: "border-slate-200",
   },
 };

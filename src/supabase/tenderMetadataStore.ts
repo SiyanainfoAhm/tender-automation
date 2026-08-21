@@ -9,6 +9,7 @@ import {
   buildTender247SupabaseRow,
   type AgenttenderTenderRow,
 } from "./tenderMetadataMap.js";
+import { mergeNullOnlyRecord } from "./mergeTenderNullOnly.js";
 import { validateBidAssistUpsertPayload } from "../bidassist/bidassistDocumentMetadataExtractor.js";
 
 const TABLE = "agenttender_tenders";
@@ -82,6 +83,74 @@ export async function upsertTender247Metadata(options: {
 
   try {
     const client = getSupabaseAdminClient();
+    const { data: existing } = await client
+      .from(TABLE)
+      .select("*")
+      .eq("source_portal", SOURCE)
+      .eq("source_tender_id", String(metadata.t247Id))
+      .maybeSingle();
+
+    // Crawl enriches GPT-Excel rows: fill missing fields only; never wipe screening status.
+    const alwaysUpdate: Array<keyof AgenttenderTenderRow> = [
+      "local_folder_path",
+      "ai_summary_available",
+      "document_archive_available",
+      "download_status",
+      "content_hash",
+      "last_seen_at",
+      "crawled_at",
+      "supabase_synced_at",
+      "raw_metadata",
+      "metadata_version",
+    ];
+
+    let payload: Record<string, unknown> = { ...row };
+    if (existing) {
+      const { next, updatedKeys } = mergeNullOnlyRecord(
+        existing as Record<string, unknown>,
+        row as unknown as Record<string, unknown>,
+        alwaysUpdate as string[],
+      );
+      // Preserve GPT Excel / qualification status unless empty.
+      if (
+        existing.qualification_status &&
+        String(existing.qualification_status).trim()
+      ) {
+        delete next.qualification_status;
+      }
+      payload = {
+        ...next,
+        source_portal: SOURCE,
+        source_tender_id: String(metadata.t247Id),
+        updated_at: new Date().toISOString(),
+      };
+      logger?.info?.(
+        `SUPABASE_METADATA_NULL_ONLY_MERGE=T247-${metadata.t247Id} keys=${updatedKeys.join(",") || "none"}`,
+      );
+
+      const { data, error } = await client
+        .from(TABLE)
+        .update(payload)
+        .eq("id", existing.id)
+        .select("id")
+        .maybeSingle();
+
+      if (error) {
+        logger?.error?.(`SUPABASE_METADATA_UPSERT_FAILED=${error.message}`);
+        return {
+          ok: false,
+          id: null,
+          contentHash: row.content_hash,
+          error: error.message,
+        };
+      }
+      const id = data && typeof data.id === "string" ? data.id : String(existing.id);
+      logger?.info(
+        `SUPABASE_METADATA_UPSERTED=T247-${metadata.t247Id} hash=${row.content_hash.slice(0, 12)}`,
+      );
+      return { ok: true, id, contentHash: row.content_hash, error: null };
+    }
+
     const { data, error } = await client
       .from(TABLE)
       .upsert(

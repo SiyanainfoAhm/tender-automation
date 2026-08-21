@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { Download } from "lucide-react";
+import { Download, Plus } from "lucide-react";
 
+import { AddManualTenderModal } from "@/components/tenders/add-manual-tender-modal";
 import { Button } from "@/components/ui/button";
 import { formatEmdAmount, formatTenderValue } from "@/lib/format-inr";
 import type { WebTenderListRow } from "@/server/repositories/tenderRepository";
@@ -20,7 +22,6 @@ function downloadCsv(rows: WebTenderListRow[], filename: string) {
     "Closing",
     "Value",
     "EMD",
-    "Match",
     "Tender ID",
   ];
   const csvRows = rows.map((r) => {
@@ -44,7 +45,6 @@ function downloadCsv(rows: WebTenderListRow[], filename: string) {
       r.closing_date ?? "",
       `"${value.replace(/"/g, '""')}"`,
       `"${emd.replace(/"/g, '""')}"`,
-      r.confidence ?? "",
       r.source_tender_id,
     ].join(",");
   });
@@ -68,19 +68,25 @@ export function exportTenderRowsCsv(
 
 type TenderPageActionsProps = {
   canImport: boolean;
+  canCreate?: boolean;
   rows?: WebTenderListRow[];
   page?: number;
   disabled?: boolean;
+  onCreated?: () => void;
 };
 
 export function TenderPageActions({
   canImport,
+  canCreate = false,
   rows = [],
   page = 1,
   disabled = false,
+  onCreated,
 }: TenderPageActionsProps) {
+  const [manualOpen, setManualOpen] = useState(false);
+
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       {rows.length > 0 ? (
         <Button
           type="button"
@@ -95,6 +101,18 @@ export function TenderPageActions({
           Export
         </Button>
       ) : null}
+      {canCreate ? (
+        <Button
+          type="button"
+          variant="secondary"
+          className="text-sm"
+          disabled={disabled}
+          onClick={() => setManualOpen(true)}
+        >
+          <Plus className="size-4" />
+          Add Manual Tender
+        </Button>
+      ) : null}
       {canImport ? (
         <Button asChild={!disabled} className="text-sm" disabled={disabled}>
           {disabled ? (
@@ -104,6 +122,12 @@ export function TenderPageActions({
           )}
         </Button>
       ) : null}
+
+      <AddManualTenderModal
+        open={manualOpen}
+        onOpenChange={setManualOpen}
+        onCreated={() => onCreated?.()}
+      />
     </div>
   );
 }

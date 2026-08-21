@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { AutomationError, captureErrorScreenshot } from "../browserUtils.js";
+import {
+  getActiveTender247AccountContext,
+  resolveTender247LoginCredentials,
+} from "../company/tender247Accounts.js";
 import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import { dismissTender247BlockingOverlays } from "./dismissPromotionalPopups.js";
@@ -38,8 +42,12 @@ export async function loginToTender247(
 ): Promise<void> {
   const dashboardUrl = config.tender247Url.trim() || DASHBOARD_URL;
 
-  const emailConfigured = Boolean(process.env.TENDER247_EMAIL?.trim());
-  const passwordConfigured = Boolean(process.env.TENDER247_PASSWORD?.trim());
+  const emailConfigured = Boolean(
+    resolveTender247LoginCredentials().email,
+  );
+  const passwordConfigured = Boolean(
+    resolveTender247LoginCredentials().password,
+  );
   logger.info(`TENDER247_EMAIL_CONFIGURED=${emailConfigured}`);
   logger.info(`TENDER247_PASSWORD_CONFIGURED=${passwordConfigured}`);
 
@@ -273,12 +281,11 @@ async function fillAndSubmitLoginForm(
   logger: Logger,
   config: AppConfig,
 ): Promise<void> {
-  const email = process.env.TENDER247_EMAIL?.trim() ?? "";
-  const password = process.env.TENDER247_PASSWORD?.trim() ?? "";
+  const { email, password } = resolveTender247LoginCredentials();
   if (!email || !password) {
     throw new AutomationError(
       "TENDER247_CREDENTIALS_NOT_CONFIGURED",
-      "TENDER247_EMAIL / TENDER247_PASSWORD are not set in .env",
+      "Tender247 credentials missing. Set account via --account-id or TENDER247_EMAIL / TENDER247_PASSWORD in .env",
     );
   }
 
@@ -815,9 +822,17 @@ export async function persistAuthState(
   config: AppConfig,
   logger: Logger,
 ): Promise<void> {
-  fs.mkdirSync(config.authDir, { recursive: true });
+  const account = getActiveTender247AccountContext();
+  const primary = account?.storageStatePath || config.tender247AuthPath;
+  const sessionPath = account
+    ? path.join(path.dirname(primary), "session-mirror.json")
+    : config.tender247SessionPath;
 
-  const primary = config.tender247AuthPath;
+  fs.mkdirSync(path.dirname(primary), { recursive: true });
+  if (account?.profileDir) {
+    fs.mkdirSync(account.profileDir, { recursive: true });
+  }
+
   await context.storageState({
     path: primary,
     indexedDB: true,
@@ -826,7 +841,6 @@ export async function persistAuthState(
     `Auth storage refreshed: ${path.relative(process.cwd(), primary)} (indexedDB included)`,
   );
 
-  const sessionPath = config.tender247SessionPath;
   if (sessionPath && sessionPath !== primary) {
     await context.storageState({
       path: sessionPath,

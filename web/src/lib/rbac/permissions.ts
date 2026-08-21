@@ -149,6 +149,8 @@ export const ROLE_PERMISSIONS: Record<UserRole, PermissionKey[]> = {
     "company.view",
     "company.preferences.edit",
     "settings.view",
+    "settings.edit",
+    "integrations.manage",
   ),
   TECHNICAL_LEAD: pick(
     "tenders.view",

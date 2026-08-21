@@ -176,6 +176,75 @@ export async function getTenderManagementKpis(): Promise<TenderManagementKpis> {
   };
 }
 
+/** Status summary cards for Tender Management list page. */
+export type TenderListStatusCounts = {
+  totalTenders: number;
+  verify: number;
+  underEvaluation: number;
+  willBid: number;
+  mayBid: number;
+  noBid: number;
+  partnership: number;
+  submitted: number;
+  closingSoon: number;
+  won: number;
+};
+
+export async function getTenderListStatusCounts(): Promise<TenderListStatusCounts> {
+  const supabase = getServerSupabase();
+  const todayDate = formatISO(startOfDay(new Date()), {
+    representation: "date",
+  });
+  const in3 = formatISO(addDays(startOfDay(new Date()), 3), {
+    representation: "date",
+  });
+
+  const [statusRes, closingRes, submittedRes] = await Promise.all([
+    supabase
+      .from("agenttender_web_tender_list")
+      .select("effective_qualification_status"),
+    supabase
+      .from("agenttender_web_tender_list")
+      .select("id", { count: "exact", head: true })
+      .gte("closing_date", todayDate)
+      .lte("closing_date", in3),
+    supabase
+      .from("agenttender_bid_workspaces")
+      .select("tender_id", { count: "exact", head: true })
+      .eq("submission_status", "submitted"),
+  ]);
+
+  if (statusRes.error) {
+    assertSupabaseOk(statusRes, {
+      queryName: "tenderListStatusCounts.status",
+      selectedColumns: "effective_qualification_status",
+    });
+  }
+
+  const byStatus = aggregateStatusCounts(
+    (statusRes.data || []).map((row) => ({
+      effective_qualification_status: row.effective_qualification_status as
+        | string
+        | null,
+    })),
+  );
+
+  const totalTenders = (statusRes.data || []).length;
+
+  return {
+    totalTenders,
+    verify: byStatus.VERIFY || 0,
+    underEvaluation: byStatus.NOT_EVALUATED || 0,
+    willBid: byStatus.GO || 0,
+    mayBid: byStatus.CONDITIONAL_GO || 0,
+    noBid: byStatus.NO_GO || 0,
+    partnership: byStatus.PARTNER_BID || 0,
+    submitted: submittedRes.count ?? 0,
+    closingSoon: closingRes.count ?? 0,
+    won: byStatus.WON || 0,
+  };
+}
+
 export type OperationalListKey =
   | "closingSoon"
   | "recentlyQualified"

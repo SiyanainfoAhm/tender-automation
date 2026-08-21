@@ -34,10 +34,10 @@ export const CLASSIFICATION_ACTION_META: Record<
     idleClass: "bg-white border-border text-foreground-600 hover:border-emerald-300",
   },
   CONDITIONAL_GO: {
-    label: "Screening",
-    toast: "Tender marked Screening.",
-    activeClass: "bg-violet-50 border-violet-500 text-violet-700",
-    idleClass: "bg-white border-border text-foreground-600 hover:border-violet-300",
+    label: "May Bid",
+    toast: "Tender marked May Bid.",
+    activeClass: "bg-amber-50 border-amber-500 text-amber-700",
+    idleClass: "bg-white border-border text-foreground-600 hover:border-amber-300",
   },
   PARTNER_BID: {
     label: "Partnership",
@@ -59,6 +59,10 @@ export const CLASSIFICATION_DECISION_LABELS: Record<TenderStatus, string> = {
   PARTNER_BID: "PARTNER BID",
   VERIFY: "VERIFY",
   NO_GO: "NO-GO",
+  WON: "WON",
+  LOST: "LOST",
+  DISQUALIFIED: "DISQUALIFIED",
+  SUBMITTED: "SUBMITTED",
 };
 
 export const CLASSIFICATION_REQUIRED_ACTIONS: Record<TenderStatus, string> = {
@@ -69,6 +73,10 @@ export const CLASSIFICATION_REQUIRED_ACTIONS: Record<TenderStatus, string> = {
     "Obtain approval, partner evidence and the required agreement before bid lock.",
   VERIFY: "Hold the decision and obtain the missing source or clarification.",
   NO_GO: "Record the exact reason and close the tender.",
+  WON: "Record award details and move into project handover.",
+  LOST: "Record the lost reason and close the opportunity.",
+  DISQUALIFIED: "Record the disqualification reason and archive the tender.",
+  SUBMITTED: "Track submission confirmation and await evaluation results.",
 };
 
 export function isTenderStatus(value: string | null | undefined): value is TenderStatus {

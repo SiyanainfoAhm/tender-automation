@@ -48,6 +48,9 @@ export interface AgenttenderTenderRow {
   document_archive_available: boolean;
   download_status: AgenttenderDownloadStatus;
   qualification_status: string | null;
+  /** Public Azure URLs for crawl artifacts (optional). */
+  documents_zip_url?: string | null;
+  ai_summary_url?: string | null;
   raw_metadata: CompleteTenderMetadata | Record<string, unknown>;
   metadata_version: number;
   content_hash: string;

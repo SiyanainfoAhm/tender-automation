@@ -513,6 +513,53 @@ async function readAzureBlob(azure: AzureConfig, blobName: string) {
   return response;
 }
 
+/** Authenticated blob stream — Azure account disallows anonymous/public access. */
+async function handleBlobRead(
+  req: Request,
+  body: {
+    storageUrl?: string;
+    blobName?: string;
+    disposition?: string;
+    fileName?: string;
+  },
+) {
+  const azure = requireAzureConfig();
+  await authenticate(req);
+
+  const explicitBlob = String(body.blobName || "").trim();
+  const storageUrl = String(body.storageUrl || "").trim();
+  let blobName = explicitBlob || blobNameFromUrl(azure, storageUrl || null);
+  if (!blobName) {
+    throw new HttpError(400, "storageUrl or blobName is required.");
+  }
+  // Prevent path escape outside the configured container namespace space.
+  if (blobName.includes("..")) {
+    throw new HttpError(400, "Invalid blob path.");
+  }
+
+  const dispositionMode =
+    String(body.disposition || "inline").trim() === "attachment"
+      ? "attachment"
+      : "inline";
+  const fileName =
+    String(body.fileName || "").trim() ||
+    blobName.split("/").pop() ||
+    "document";
+
+  const azureResponse = await readAzureBlob(azure, blobName);
+  const headers = new Headers({
+    ...corsHeaders,
+    "Content-Type":
+      azureResponse.headers.get("content-type") || "application/octet-stream",
+    "Cache-Control": "private, max-age=300",
+    "Content-Disposition": `${dispositionMode}; filename="${fileName.replace(/"/g, "")}"`,
+  });
+  const contentLength = azureResponse.headers.get("content-length");
+  if (contentLength) headers.set("Content-Length", contentLength);
+
+  return new Response(azureResponse.body, { status: 200, headers });
+}
+
 function serviceSupabase() {
   const url = Deno.env.get("SUPABASE_URL")?.trim();
   const key =
@@ -2218,6 +2265,114 @@ async function handleWorkspaceDocumentDelete(
   return json({ success: true, documentId });
 }
 
+function requireServiceRole(req: Request) {
+  const auth = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "").trim();
+  const key =
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim() ||
+    Deno.env.get("SUPABASE_SECRET_KEY")?.trim();
+  if (!auth || !key || auth !== key) {
+    throw new HttpError(401, "Service role authentication required.");
+  }
+}
+
+function sanitizeTenderArtifactFileName(fileName: string) {
+  const trimmed = fileName.trim().replace(/[/\\]/g, "");
+  const lastDot = trimmed.lastIndexOf(".");
+  const base = lastDot > 0 ? trimmed.slice(0, lastDot) : trimmed;
+  const ext = lastDot > 0 ? trimmed.slice(lastDot) : "";
+  const safeBase =
+    base
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "file";
+  const safeExt = ext.toLowerCase().replace(/[^a-z0-9.]/g, "");
+  return `${safeBase}${safeExt}`;
+}
+
+function buildTenderArtifactBlobName(options: {
+  sourcePortal: string;
+  sourceTenderId: string;
+  runDate: string;
+  fileName: string;
+  companyKey?: string | null;
+}) {
+  const portal = options.sourcePortal.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  const id = options.sourceTenderId.replace(/[^a-zA-Z0-9_-]/g, "");
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(options.runDate)
+    ? options.runDate
+    : "undated";
+  const company =
+    String(options.companyKey || "siyana")
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "siyana";
+  // Company-scoped; never include Tender247 account. metadata.json is not uploaded.
+  return `companies/${company}/tender-artifacts/${portal}/${date}/${id}/${sanitizeTenderArtifactFileName(options.fileName)}`;
+}
+
+/** Pipeline upload for Tender_All_Documents.zip / AI_Summary.pdf (metadata stays in DB). */
+async function handleUploadTenderArtifact(req: Request, formData: FormData) {
+  requireServiceRole(req);
+  const azure = requireAzureConfig();
+
+  const sourcePortal = String(formData.get("sourcePortal") ?? "").trim().toUpperCase();
+  const sourceTenderId = String(formData.get("sourceTenderId") ?? "").trim();
+  const runDate = String(formData.get("runDate") ?? "").trim();
+  const artifactKind = String(formData.get("artifactKind") ?? "").trim();
+  const providedBlobName = String(formData.get("blobName") ?? "").trim();
+  const file = formData.get("file");
+
+  if (sourcePortal !== "TENDER247" && sourcePortal !== "BIDASSIST") {
+    throw new HttpError(400, "Invalid sourcePortal.");
+  }
+  if (!sourceTenderId) throw new HttpError(400, "sourceTenderId is required.");
+  if (!(file instanceof File) || file.size <= 0) {
+    throw new HttpError(400, "A non-empty file is required.");
+  }
+  if (file.size > MAX_COMPANY_DOCUMENT_BYTES) {
+    throw new HttpError(400, "File exceeds the maximum allowed size.");
+  }
+
+  const allowedKinds = new Set(["documents_zip", "ai_summary"]);
+  if (!allowedKinds.has(artifactKind)) {
+    throw new HttpError(400, "Invalid artifactKind.");
+  }
+
+  const companyKey = String(formData.get("companyKey") ?? "").trim() || "siyana";
+  const blobName =
+    providedBlobName &&
+    (providedBlobName.startsWith("companies/") ||
+      providedBlobName.startsWith("tender-artifacts/")) &&
+    !providedBlobName.includes("..")
+      ? providedBlobName
+      : buildTenderArtifactBlobName({
+          sourcePortal,
+          sourceTenderId,
+          runDate,
+          fileName: file.name || `${artifactKind}.bin`,
+          companyKey,
+        });
+
+  const uploaded = await uploadAzureBlob(azure, blobName, file, {
+    contentType: file.type || "application/octet-stream",
+    contentDisposition: "attachment",
+  });
+
+  console.info("[tender-automation-tender-artifacts] upload complete", {
+    sourcePortal,
+    sourceTenderId,
+    artifactKind,
+    blobName: uploaded.blobName,
+  });
+
+  return json({
+    success: true,
+    storageUrl: uploaded.storageUrl,
+    blobName: uploaded.blobName,
+    artifactKind,
+  });
+}
+
 class HttpError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -2252,6 +2407,9 @@ Deno.serve(async (req) => {
       const formData = await req.formData();
       const action = String(formData.get("action") ?? "");
       if (action === "upload") return await handleUpload(req, formData);
+      if (action === "upload-tender-artifact") {
+        return await handleUploadTenderArtifact(req, formData);
+      }
       if (action === "template-assets-save") {
         return await handleTemplateAssetsSave(req, formData);
       }
@@ -2276,6 +2434,9 @@ Deno.serve(async (req) => {
     }
     if (body?.action === "document-read") {
       return await handleDocumentRead(req, body);
+    }
+    if (body?.action === "blob-read") {
+      return await handleBlobRead(req, body);
     }
     if (body?.action === "delete") return await handleDelete(req, body);
     if (body?.action === "template-assets-delete") {

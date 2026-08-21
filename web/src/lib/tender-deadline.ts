@@ -46,8 +46,8 @@ export function getDeadlineMeta(
   if (days < 0) {
     return {
       dateLabel,
-      relativeLabel: "Closed",
-      relativeClassName: "text-foreground-400",
+      relativeLabel: "Past due",
+      relativeClassName: "text-rose-600",
       isClosed: true,
     };
   }

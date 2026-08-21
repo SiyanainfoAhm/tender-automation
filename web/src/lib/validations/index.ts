@@ -102,6 +102,10 @@ export const QUALIFICATION_STATUSES = [
   "PARTNER_BID",
   "VERIFY",
   "NO_GO",
+  "WON",
+  "LOST",
+  "DISQUALIFIED",
+  "SUBMITTED",
 ] as const;
 
 export const DATE_TYPES = [
@@ -142,11 +146,14 @@ export const CLOSING_PRESETS = [
   "overdue",
 ] as const;
 
-function normalizeSource(raw: string | undefined): "TENDER247" | "BIDASSIST" | "ALL" {
+function normalizeSource(
+  raw: string | undefined,
+): "TENDER247" | "BIDASSIST" | "MANUAL" | "ALL" {
   if (!raw || raw === "ALL" || raw.toLowerCase() === "all") return "ALL";
   const upper = raw.toUpperCase().replace(/-/g, "");
   if (upper === "TENDER247") return "TENDER247";
   if (upper === "BIDASSIST") return "BIDASSIST";
+  if (upper === "MANUAL") return "MANUAL";
   return "ALL";
 }
 
@@ -201,9 +208,15 @@ export const tenderFiltersSchema = z
     /** Legacy aliases */
     sortBy: z.string().optional(),
     sortDir: z.enum(["asc", "desc"]).optional(),
-    /** Created/imported date preset (not deadline). */
+    /** Created/imported date preset — filters `created_at` (not scraped/published). */
     date: z.string().optional(),
     selectedDate: z.string().optional(),
+    createdFrom: z.string().optional(),
+    createdTo: z.string().optional(),
+    /** Closing deadline date preset / custom range. */
+    closingDate: z.string().optional(),
+    closingFrom: z.string().optional(),
+    closingTo: z.string().optional(),
   })
   .transform((data) => {
     const requested = data.sort || data.sortBy;
@@ -220,6 +233,19 @@ export const tenderFiltersSchema = z
       ? data.selectedDate
       : undefined;
     const date = normalizeDatePreset(data.date);
+    const createdFrom = isIsoCalendarDate(data.createdFrom)
+      ? data.createdFrom
+      : undefined;
+    const createdTo = isIsoCalendarDate(data.createdTo)
+      ? data.createdTo
+      : undefined;
+    const closingDate = normalizeDatePreset(data.closingDate);
+    const closingFrom = isIsoCalendarDate(data.closingFrom)
+      ? data.closingFrom
+      : undefined;
+    const closingTo = isIsoCalendarDate(data.closingTo)
+      ? data.closingTo
+      : undefined;
     return {
       ...data,
       source: normalizeSource(data.source),
@@ -228,6 +254,11 @@ export const tenderFiltersSchema = z
       quickDate,
       date,
       selectedDate,
+      createdFrom,
+      createdTo,
+      closingDate,
+      closingFrom,
+      closingTo,
     };
   });
 

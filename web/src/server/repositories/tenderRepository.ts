@@ -3,15 +3,19 @@ import "server-only";
 import { getServerSupabase } from "@/lib/db/server";
 import { PROJECT_CATEGORIES, isProjectCategory } from "@/lib/project-category";
 import { assertSupabaseOk } from "@/lib/errors/db-query";
-import { resolveScrapedDateFilter, TENDER_DATE_FILTER_FIELD } from "@/lib/tender-date-filter";
+import {
+  resolveClosingDateFilter,
+  resolveCreatedAtFilter,
+} from "@/lib/tender-date-filter";
 import { resolveTenderSortColumn } from "@/lib/tender-sort";
-import { qualificationStatusesForFilter } from "@/lib/tender-status";
+import { qualificationStatusesForFilter, type TenderStatus } from "@/lib/tender-status";
 import type { TenderFilters } from "@/lib/validations";
 import { startOfDay, endOfDay, subDays, addDays, formatISO } from "date-fns";
+import { randomUUID } from "crypto";
 
 export type WebTenderListRow = {
   id: string;
-  source_portal: "TENDER247" | "BIDASSIST";
+  source_portal: "TENDER247" | "BIDASSIST" | "MANUAL";
   source_tender_id: string;
   folder_id: string | null;
   title: string;
@@ -211,11 +215,20 @@ export async function listTenders(filters: TenderFilters): Promise<{
   }
 
   if (filters.status && filters.status !== "ALL") {
-    const statusFilter = qualificationStatusesForFilter(filters.status);
-    if (statusFilter.kind === "null") {
-      query = query.is("effective_qualification_status", null);
-    } else if (statusFilter.kind === "in") {
-      query = query.in("effective_qualification_status", statusFilter.values);
+    const statusKey = String(filters.status).toLowerCase().replace(/[\s-]+/g, "_");
+    if (statusKey === "submitted") {
+      const submittedIds = await listSubmittedTenderIds();
+      if (submittedIds.length === 0) {
+        return { rows: [], total: 0, page, pageSize };
+      }
+      query = query.in("id", submittedIds);
+    } else {
+      const statusFilter = qualificationStatusesForFilter(filters.status);
+      if (statusFilter.kind === "null") {
+        query = query.is("effective_qualification_status", null);
+      } else if (statusFilter.kind === "in") {
+        query = query.in("effective_qualification_status", statusFilter.values);
+      }
     }
   }
 
@@ -347,15 +360,29 @@ export async function listTenders(filters: TenderFilters): Promise<{
     query = query.lte(dateCol, dateBounds.to);
   }
 
-  const scrapedFilter = resolveScrapedDateFilter({
+  const createdAtFilter = resolveCreatedAtFilter({
     preset: filters.date,
     selectedDate: filters.selectedDate,
+    from: filters.createdFrom,
+    to: filters.createdTo,
   });
-  if (scrapedFilter?.mode === "eq") {
-    query = query.eq(TENDER_DATE_FILTER_FIELD, scrapedFilter.value);
-  } else if (scrapedFilter?.mode === "range") {
-    query = query.gte(TENDER_DATE_FILTER_FIELD, scrapedFilter.gte);
-    query = query.lte(TENDER_DATE_FILTER_FIELD, scrapedFilter.lte);
+  if (createdAtFilter?.gte) {
+    query = query.gte("created_at", createdAtFilter.gte);
+  }
+  if (createdAtFilter?.lte) {
+    query = query.lte("created_at", createdAtFilter.lte);
+  }
+
+  const closingFilter = resolveClosingDateFilter({
+    preset: filters.closingDate,
+    from: filters.closingFrom,
+    to: filters.closingTo,
+  });
+  if (closingFilter?.mode === "eq") {
+    query = query.eq("closing_date", closingFilter.value);
+  } else if (closingFilter?.mode === "range") {
+    query = query.gte("closing_date", closingFilter.gte);
+    query = query.lte("closing_date", closingFilter.lte);
   }
 
   if (filters.q?.trim()) {
@@ -395,19 +422,6 @@ export async function listTenders(filters: TenderFilters): Promise<{
     selectedColumns: WEB_TENDER_LIST_SELECT,
     filters: { ...filters, sortCol },
   });
-
-  if (filters.date) {
-    const filterValue =
-      scrapedFilter?.mode === "eq"
-        ? scrapedFilter.value
-        : scrapedFilter
-          ? `${scrapedFilter.gte}..${scrapedFilter.lte}`
-          : filters.selectedDate || "";
-    console.log(`TENDER_DATE_FILTER_MODE=${filters.date}`);
-    console.log(`TENDER_DATE_FILTER_VALUE=${filterValue}`);
-    console.log(`TENDER_DATE_FILTER_FIELD=${TENDER_DATE_FILTER_FIELD}`);
-    console.log(`TENDER_DATE_FILTER_RESULT_COUNT=${result.count ?? 0}`);
-  }
 
   return {
     rows: (data || []) as unknown as WebTenderListRow[],
@@ -487,29 +501,37 @@ export type TenderExplorerFacet = {
 
 export async function getTenderExplorerFacets(): Promise<{
   categories: TenderExplorerFacet[];
-  portals: Array<"TENDER247" | "BIDASSIST">;
+  portals: Array<"TENDER247" | "BIDASSIST" | "MANUAL">;
+  cities: TenderExplorerFacet[];
 }> {
   const supabase = getServerSupabase();
   const data = assertSupabaseOk(
     await supabase
       .from("agenttender_tenders")
-      .select("project_category, source_portal")
+      .select("project_category, source_portal, city")
       .limit(5000),
     {
       queryName: "getTenderExplorerFacets",
-      selectedColumns: "project_category, source_portal",
+      selectedColumns: "project_category, source_portal, city",
     },
   );
 
-  const portals = new Set<"TENDER247" | "BIDASSIST">();
+  const portals = new Set<"TENDER247" | "BIDASSIST" | "MANUAL">();
   const present = new Set<string>();
+  const cities = new Set<string>();
   for (const row of data || []) {
-    if (row.source_portal === "TENDER247" || row.source_portal === "BIDASSIST") {
+    if (
+      row.source_portal === "TENDER247" ||
+      row.source_portal === "BIDASSIST" ||
+      row.source_portal === "MANUAL"
+    ) {
       portals.add(row.source_portal);
     }
     if (isProjectCategory(row.project_category)) {
       present.add(row.project_category);
     }
+    const city = String(row.city || "").trim();
+    if (city) cities.add(city);
   }
 
   const categories = PROJECT_CATEGORIES.filter((label) => present.has(label)).map(
@@ -519,6 +541,123 @@ export async function getTenderExplorerFacets(): Promise<{
   return {
     categories,
     portals: [...portals].sort(),
+    cities: [...cities]
+      .sort((a, b) => a.localeCompare(b))
+      .slice(0, 80)
+      .map((value) => ({ value, label: value })),
+  };
+}
+
+async function listSubmittedTenderIds(): Promise<string[]> {
+  const supabase = getServerSupabase();
+  const { data, error } = await supabase
+    .from("agenttender_bid_workspaces")
+    .select("tender_id")
+    .eq("submission_status", "submitted");
+  if (error) {
+    console.error("[tenders] submitted filter failed", error.message);
+    return [];
+  }
+  return (data || [])
+    .map((row) => String(row.tender_id || ""))
+    .filter(Boolean);
+}
+
+export type CreateManualTenderInput = {
+  title: string;
+  referenceNo: string;
+  portal: "MANUAL" | "TENDER247" | "BIDASSIST";
+  portalLink?: string | null;
+  category: string;
+  tenderType?: string | null;
+  organization: string;
+  department?: string | null;
+  location: string;
+  initialStatus?: TenderStatus | null;
+  /** Business creation / publication date → `published_date`. */
+  creationDate: string;
+  deadline: string;
+  estimatedValue: number;
+  tenderEstCost?: number | null;
+  emd?: number | null;
+  tenderFee?: number | null;
+  processingFee?: number | null;
+  finalCost?: number | null;
+  msmeExemption?: boolean;
+  startupExemption?: boolean;
+  exemptionTypes?: string[];
+  contacts: Array<{ name: string; mobile: string; email?: string | null }>;
+  description: string;
+  notes?: string | null;
+  noBidReason?: string | null;
+};
+
+export async function createManualTender(
+  input: CreateManualTenderInput,
+): Promise<{ id: string; sourceTenderId: string }> {
+  const supabase = getServerSupabase();
+  const sourceTenderId = `MAN-${randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`;
+  const primaryContact = input.contacts[0] || null;
+
+  const raw_metadata = {
+    origin: "manual_entry",
+    referenceNo: input.referenceNo,
+    tenderEstCost: input.tenderEstCost ?? null,
+    tenderFee: input.tenderFee ?? null,
+    processingFee: input.processingFee ?? null,
+    finalCost: input.finalCost ?? null,
+    msmeExemption: Boolean(input.msmeExemption),
+    startupExemption: Boolean(input.startupExemption),
+    exemptionTypes: input.exemptionTypes || [],
+    contacts: input.contacts,
+    notes: input.notes || null,
+    noBidReason: input.noBidReason || null,
+    creationDate: input.creationDate,
+  };
+
+  const row = {
+    source_portal: input.portal,
+    source_tender_id: sourceTenderId,
+    folder_id: input.referenceNo,
+    title: input.title,
+    organization: input.organization,
+    department: input.department || null,
+    authority: primaryContact?.name || null,
+    category: input.category,
+    project_category: isProjectCategory(input.category)
+      ? input.category
+      : "Other",
+    tender_type: input.tenderType || null,
+    description: input.description,
+    city: input.location,
+    location_text: input.location,
+    published_date: input.creationDate,
+    closing_date: input.deadline,
+    scraped_date: input.creationDate,
+    tender_value: input.estimatedValue,
+    tender_value_text: `₹${input.estimatedValue.toLocaleString("en-IN")}`,
+    emd_amount: input.emd ?? null,
+    emd_text:
+      input.emd != null ? `₹${input.emd.toLocaleString("en-IN")}` : null,
+    source_url: input.portalLink || null,
+    download_status: "DISCOVERED",
+    qualification_status: input.initialStatus || null,
+    raw_metadata,
+  };
+
+  const { data, error } = await supabase
+    .from("agenttender_tenders")
+    .insert(row)
+    .select("id, source_tender_id")
+    .single();
+
+  if (error) {
+    throw new Error(error.message || "Failed to create tender");
+  }
+
+  return {
+    id: String(data.id),
+    sourceTenderId: String(data.source_tender_id),
   };
 }
 

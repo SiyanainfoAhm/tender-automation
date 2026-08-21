@@ -2,6 +2,7 @@ import "server-only";
 
 import type { TenderSource } from "@/components/tenders/tender-status-styles";
 import { isTenderStatus } from "@/lib/tender-classification";
+import { toAccessibleStorageUrl } from "@/lib/storage/accessible-storage-url";
 import type {
   ExtractedRequirement,
   TenderArchiveDocument,
@@ -88,8 +89,38 @@ export function deriveScopeText(
 export function mapArchiveDocuments(
   qualification: Record<string, unknown> | null,
   archiveAvailable: boolean,
+  tender?: Record<string, unknown> | null,
 ): TenderArchiveDocument[] {
   const files: TenderArchiveDocument[] = [];
+  const documentsZipUrl = asString(tender?.documents_zip_url);
+  const aiSummaryUrl = asString(tender?.ai_summary_url);
+
+  if (documentsZipUrl) {
+    files.push({
+      name: "Tender_All_Documents.zip",
+      kind: "Tender Documents",
+      sizeLabel: null,
+      downloadable: true,
+      url: toAccessibleStorageUrl(documentsZipUrl, {
+        download: true,
+        fileName: "Tender_All_Documents.zip",
+      }),
+    });
+  }
+  if (aiSummaryUrl) {
+    files.push({
+      name: "AI_Summary.pdf",
+      kind: "AI Summary PDF",
+      sizeLabel: null,
+      downloadable: true,
+      url: toAccessibleStorageUrl(aiSummaryUrl, {
+        fileName: "AI_Summary.pdf",
+      }),
+    });
+  }
+
+  if (files.length > 0) return files;
+
   for (const item of jsonArray(qualification?.evidence_files)) {
     if (typeof item !== "string" || !item.trim()) continue;
     files.push({
@@ -97,6 +128,7 @@ export function mapArchiveDocuments(
       kind: "Evidence",
       sizeLabel: null,
       downloadable: false,
+      url: null,
     });
   }
   if (files.length === 0 && archiveAvailable) {
@@ -105,6 +137,7 @@ export function mapArchiveDocuments(
       kind: "Archive",
       sizeLabel: null,
       downloadable: false,
+      url: null,
     });
   }
   return files;
@@ -184,7 +217,11 @@ export function mapTenderDetail(options: {
   const description = asString(tender.description);
   const portal = asString(tender.source_portal);
   const sourcePortal: TenderSource =
-    portal === "BIDASSIST" ? "BIDASSIST" : "TENDER247";
+    portal === "BIDASSIST"
+      ? "BIDASSIST"
+      : portal === "MANUAL"
+        ? "MANUAL"
+        : "TENDER247";
   const qualStatus =
     (asString(qualification?.status) as TenderStatus | null) ??
     (asString(tender.qualification_status) as TenderStatus | null);
@@ -194,6 +231,34 @@ export function mapTenderDetail(options: {
     [asString(tender.city), asString(tender.state)].filter(Boolean).join(", ") ||
     null;
 
+  const rawMeta =
+    tender.raw_metadata && typeof tender.raw_metadata === "object"
+      ? (tender.raw_metadata as Record<string, unknown>)
+      : {};
+  const contactsRaw = Array.isArray(rawMeta.contacts) ? rawMeta.contacts : [];
+  const contacts = contactsRaw
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const c = item as Record<string, unknown>;
+      const name = asString(c.name);
+      const mobile = asString(c.mobile);
+      if (!name || !mobile) return null;
+      return {
+        name,
+        mobile,
+        email: asString(c.email),
+      };
+    })
+    .filter(Boolean) as Array<{
+    name: string;
+    mobile: string;
+    email?: string | null;
+  }>;
+
+  const exemptionTypes = Array.isArray(rawMeta.exemptionTypes)
+    ? rawMeta.exemptionTypes.filter((v): v is string => typeof v === "string")
+    : [];
+
   return {
     id: String(tender.id),
     title,
@@ -202,9 +267,11 @@ export function mapTenderDetail(options: {
     department: asString(tender.department),
     sourcePortal,
     sourceTenderId: asString(tender.source_tender_id) || String(tender.id),
+    folderId: asString(tender.folder_id),
     sourceUrl: asString(tender.source_url),
     projectCategory: asString(tender.project_category),
     sourceCategory: asString(tender.category),
+    tenderType: asString(tender.tender_type),
     qualificationStatus,
     description,
     scopeText: deriveScopeText(description, qualification),
@@ -240,8 +307,21 @@ export function mapTenderDetail(options: {
     archiveDocuments: mapArchiveDocuments(
       qualification,
       Boolean(tender.document_archive_available),
+      tender,
     ),
     activity: options.activity,
     extractedRequirements: mapExtractedRequirements(qualification),
+    tenderEstCost: asNumber(rawMeta.tenderEstCost),
+    tenderFee: asNumber(rawMeta.tenderFee),
+    processingFee: asNumber(rawMeta.processingFee),
+    finalCost: asNumber(rawMeta.finalCost),
+    msmeExemption: Boolean(rawMeta.msmeExemption),
+    startupExemption: Boolean(rawMeta.startupExemption),
+    exemptionTypes,
+    contacts,
+    notes: asString(rawMeta.notes),
+    decisionReason: asString(rawMeta.decisionReason) || asString(qualification?.reason),
+    lostReason: asString(rawMeta.lostReason),
+    disqualificationReason: asString(rawMeta.disqualificationReason),
   };
 }

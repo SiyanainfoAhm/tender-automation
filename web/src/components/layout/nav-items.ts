@@ -8,6 +8,7 @@ import {
   LayoutDashboard,
   Settings,
   Users,
+  Wallet,
 } from "lucide-react";
 
 export type AppNavItem = {
@@ -37,6 +38,13 @@ export const APP_MAIN_NAV: AppNavItem[] = [
     icon: FileText,
     section: "main",
     showCount: true,
+  },
+  {
+    href: "/bid-fees",
+    label: "Bid Fees",
+    icon: Wallet,
+    section: "main",
+    permission: "bids.view",
   },
   {
     href: "/documents",

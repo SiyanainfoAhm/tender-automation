@@ -14,10 +14,14 @@ import { resolveProjectPath } from "../fileUtils.js";
 export type Tender247RunContext = {
   /** YYYY-MM-DD from CLI (or one-time top-level default). */
   requestedDate: string;
-  /** Absolute downloads/<requestedDate> root for this run. */
+  /** Absolute downloads/<requestedDate> root for this run (shared tender folders). */
   downloadRoot: string;
   /** Absolute parent of date folders (…/downloads). */
   downloadsParent: string;
+  /** Optional Tender247 account id (for seed excel isolation). */
+  accountId?: string | null;
+  /** Subdir under downloadRoot for account-specific seed Excel. */
+  seedExcelSubdir?: string | null;
 };
 
 let activeContext: Tender247RunContext | null = null;
@@ -40,6 +44,10 @@ export function parseCliDateOrToday(
 export function createTender247RunContext(
   downloadRootConfig: string,
   requestedDate: string,
+  options?: {
+    accountId?: string | null;
+    seedExcelSubdir?: string | null;
+  },
 ): Tender247RunContext {
   if (!ISO_DATE_RE.test(requestedDate)) {
     throw new Error(`Invalid requestedDate=${requestedDate}; expected YYYY-MM-DD`);
@@ -50,6 +58,8 @@ export function createTender247RunContext(
     requestedDate,
     downloadRoot,
     downloadsParent,
+    accountId: options?.accountId ?? null,
+    seedExcelSubdir: options?.seedExcelSubdir ?? null,
   };
 }
 
@@ -190,10 +200,19 @@ export function ensureTender247DateScopedDir(
 }
 
 export function resolveExcelPath(context: Tender247RunContext): string {
-  return path.join(
-    context.downloadRoot,
-    `Tender247_${context.requestedDate}.xlsx`,
-  );
+  const fileName = `Tender247_${context.requestedDate}.xlsx`;
+  if (context.seedExcelSubdir) {
+    return path.join(context.downloadRoot, context.seedExcelSubdir, fileName);
+  }
+  return path.join(context.downloadRoot, fileName);
+}
+
+/** Directory that holds the account (or shared) seed Excel. */
+export function resolveSeedExcelDir(context: Tender247RunContext): string {
+  if (context.seedExcelSubdir) {
+    return path.join(context.downloadRoot, context.seedExcelSubdir);
+  }
+  return context.downloadRoot;
 }
 
 export function resolveExcelFilterReviewDir(
@@ -249,6 +268,12 @@ export function resolveTender247DateScopedPaths(
 export function logTender247RunContext(context: Tender247RunContext): void {
   console.log(`TENDER247_RUN_REQUESTED_DATE=${context.requestedDate}`);
   console.log(`TENDER247_RUN_DOWNLOAD_ROOT=${context.downloadRoot}`);
+  if (context.accountId) {
+    console.log(`TENDER247_RUN_ACCOUNT_ID=${context.accountId}`);
+  }
+  if (context.seedExcelSubdir) {
+    console.log(`TENDER247_RUN_SEED_EXCEL_DIR=${context.seedExcelSubdir}`);
+  }
 }
 
 export function assertPathsStayOnRequestedDate(

@@ -8,16 +8,33 @@ export type LogLevel = "INFO" | "WARN" | "ERROR" | "DEBUG";
 export class Logger {
   private readonly logFilePath: string;
   private readonly sourceName: string | undefined;
+  private readonly contextPrefix: string | undefined;
 
-  constructor(logRoot: string, sourceName?: string) {
+  constructor(
+    logRoot: string,
+    sourceName?: string,
+    contextPrefix?: string,
+  ) {
     const root = resolveProjectPath(logRoot);
     ensureDir(root);
     this.logFilePath = path.join(root, `${getTodayIsoDate()}.log`);
     this.sourceName = sourceName;
+    this.contextPrefix = contextPrefix?.trim() || undefined;
   }
 
   get filePath(): string {
     return this.logFilePath;
+  }
+
+  withContextPrefix(prefix: string): Logger {
+    const next = new Logger(
+      path.dirname(this.logFilePath),
+      this.sourceName,
+      prefix,
+    );
+    // Keep same file by copying path via private — recreate properly:
+    (next as unknown as { logFilePath: string }).logFilePath = this.logFilePath;
+    return next;
   }
 
   info(message: string): void {
@@ -39,7 +56,8 @@ export class Logger {
   private write(level: LogLevel, message: string): void {
     const stamp = new Date().toISOString();
     const source = this.sourceName ? ` [${this.sourceName}]` : "";
-    const line = `${stamp} ${level}${source} ${message}`;
+    const ctx = this.contextPrefix ? ` ${this.contextPrefix}` : "";
+    const line = `${stamp} ${level}${source}${ctx} ${message}`;
     console.log(line);
     fs.appendFileSync(this.logFilePath, `${line}\n`, { encoding: "utf8" });
   }

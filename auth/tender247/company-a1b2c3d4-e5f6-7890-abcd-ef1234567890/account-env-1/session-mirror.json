@@ -1,0 +1,164 @@
+{
+  "cookies": [
+    {
+      "name": "feedback",
+      "value": "true",
+      "domain": "www.tender247.com",
+      "path": "/auth",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_gcl_au",
+      "value": "1.1.2041108341.1787237048",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1795013048,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "IDE",
+      "value": "AHWqTUnHSjGian6OcGoia0LMJlDkDzpl9mL2ap39LNhBaUsl0YKJTolfhhZb2Csp",
+      "domain": ".doubleclick.net",
+      "path": "/",
+      "expires": 1821797048.550566,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_ga",
+      "value": "GA1.2.1399850453.1787237048",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1821797048.838692,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_gid",
+      "value": "GA1.2.693115750.1787237049",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1787323448,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "CLID",
+      "value": "3ac9ec00d8434011be14b2ef8e2751a1.20260820.20270820",
+      "domain": "www.clarity.ms",
+      "path": "/",
+      "expires": 1818773048.902065,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_clck",
+      "value": "enar7r%5E2%5Eg8r%5E0%5E2423",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1818773049,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_clsk",
+      "value": "152mau1%5E1787237051975%5E1%5E1%5Er.clarity.ms%2Fcollect",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1787323451,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "geo_location",
+      "value": "%7B%22ip%22%3A%22157.48.3.58%22%2C%22country%22%3A%7B%22country_id%22%3A101%2C%22region_id%22%3A38%2C%22country_name%22%3A%22India%22%2C%22isd_code%22%3A%22%2B91%22%2C%22iso3%22%3A%22IND%22%7D%7D",
+      "domain": "www.tender247.com",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga_3FYV8W34LF",
+      "value": "GS2.1.s1787237048$o1$g1$t1787237077$j31$l0$h1838153420",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1821797077.880703,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "__zlcmid",
+      "value": "1Z7okWykAZaYJEX",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1818775781,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "AWSALBCORS",
+      "value": "WPm65dd047ji8efJ1aezZ23EoYDd7XWxb+bw9pfHtunLvi4qoXk8ehJDNO7RV3MM9Ewo3GRi7gGrAdIIl7fI3IXgK/tsIAv4e92hIde1ZIZeMShmjxgXeX/MHHEw",
+      "domain": "widget-mediator.zopim.com",
+      "path": "/",
+      "expires": 1787844581.806764,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    }
+  ],
+  "origins": [
+    {
+      "origin": "https://www.tender247.com",
+      "localStorage": [
+        {
+          "name": "ZD-store",
+          "value": "{\"activeEmbed\":\"chat\",\"widgetShown\":false,\"is_chatting\":false}"
+        },
+        {
+          "name": "ZD-suid",
+          "value": "{\"id\":\"5d26d6a66bbd4fb0bfe62cb1b28e098b\",\"expiry\":1787240681276,\"tabs\":{\"count\":3,\"expiry\":1787239820328}}"
+        },
+        {
+          "name": "userData",
+          "value": "{\"person_name\":\"\",\"user_id\":980334,\"company_service_id\":\"1,3\",\"email_id\":\"hr@siyanainfo.com\",\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJVc2VyU3RhdXMiOjEsIlBlcnNvbk5hbWUiOiIiLCJVc2VySWQiOjk4MDMzNCwiQ29tcGFueVNlcnZpY2VpZHMiOiIxLDMiLCJXb3JkSGlnaGxpZ2h0IjoiRGV2ZWxvcG1lbnQgc29mdHdhcmUsIFdlYnNpdGUgRGV2ZWxvcG1lbnQgU2VydmljZSwgRVJQIiwiYmlkZGVyX25hbWUiOiJTaXlhbmEgSW5mbyBTb2x1dGlvbnMgUHJpdmF0ZSBMaW1pdGVkIiwiaXNfYmlkZGVyX2V4aXN0cyI6dHJ1ZSwiaWF0IjoxNzg3MjM3MDY2LCJleHAiOjE3ODcyNTA1OTl9.Luc1ioUwgQUgm4-lGysxKE6sWDxRPOxrE3HVM24jNXo\",\"encryptKey\":\"\",\"mail_date\":\"2026-08-20\",\"user_query_id\":0,\"tab\":0,\"isChange\":0,\"grace_period_status\":false,\"bidder_name\":\"Siyana Info Solutions Private Limited\",\"is_bidder_exists\":true}"
+        },
+        {
+          "name": "ZD-buid",
+          "value": "3fd97bd7fe024258881935889a2bca68"
+        },
+        {
+          "name": "_gcl_ls",
+          "value": "{\"schema\":\"gcl\",\"version\":1,\"gsid_dc\":{\"value\":{\"joinId\":\"90xxE4v78JE8wWr2DfAgt-zXtrsY9lwQkg\",\"lastJoinedTimeMs\":1787237048381},\"expires\":1787237348381},\"gcl_ctr\":{\"value\":{\"value\":0,\"timeouts\":0,\"errors\":0,\"eopCount\":0,\"creationTimeMs\":1787237048384},\"expires\":1795013048384}}"
+        },
+        {
+          "name": "popup_settings",
+          "value": "{\"doNotShow\":true}"
+        },
+        {
+          "name": "user_query_id",
+          "value": "139705"
+        },
+        {
+          "name": "__zlcstore",
+          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1787239781992,\"account_status\":\"offline\"}}"
+        }
+      ],
+      "indexedDB": []
+    }
+  ]
+}

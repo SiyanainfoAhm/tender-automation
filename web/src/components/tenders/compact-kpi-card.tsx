@@ -16,7 +16,7 @@ export function CompactKpiCard({
   iconClassName,
 }: CompactKpiCardProps) {
   return (
-    <div className="rounded-lg border border-border bg-card p-4 shadow-sm">
+    <div className="rounded-lg border border-border bg-card p-4">
       <div className="flex items-center gap-3">
         <div
           className={cn(

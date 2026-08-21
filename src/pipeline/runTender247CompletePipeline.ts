@@ -12,7 +12,9 @@
  *
  * Usage:
  *   npm run pipeline:tender247 -- --date=2026-08-11
- *   npm run pipeline:tender247
+ *     → if both ACCOUNT_1 and ACCOUNT_2 are in .env, runs 1 then 2 sequentially
+ *   npm run pipeline:tender247 -- --date=2026-08-11 --account-id=1
+ *     → single account only
  *   npm run pipeline:tender247 -- --date=2026-08-11 --dry-run-date
  *   npm run test:pipeline:tender247 -- --date=2026-08-11
  */
@@ -90,6 +92,10 @@ export type Tender247CompletePipelineOptions = {
   crawlLimit: number | null;
   /** Optional ChatGPT cap; null/undefined = unlimited in complete mode. */
   chatgptLimit: number | null;
+  /** Company id (defaults to Siyana). Shared preferences + tender DB. */
+  companyId: string | null;
+  /** Tender247 account id for credentials/session/seed excel. */
+  accountId: string | null;
   rawArgv: string[];
   dateSource: "cli" | "npm_config" | "env" | "india_today";
 };
@@ -191,6 +197,16 @@ export function parseTender247CompletePipelineArgs(
     resumeSkipCrawl,
     crawlLimit,
     chatgptLimit,
+    companyId:
+      getArgOrNpmConfig(argv, "company-id", env) ||
+      env.COMPANY_ID?.trim() ||
+      env.SIYANA_COMPANY_ID?.trim() ||
+      null,
+    accountId:
+      getArgOrNpmConfig(argv, "account-id", env) ||
+      getArgOrNpmConfig(argv, "tender247-account-id", env) ||
+      env.TENDER247_ACCOUNT_ID?.trim() ||
+      null,
     rawArgv: [...argv],
     dateSource: resolved.source,
   };
@@ -450,7 +466,34 @@ export async function runTender247CompletePipeline(
   options: Tender247CompletePipelineOptions,
 ): Promise<{ summary: Tender247CompleteRunSummary; exitCode: number }> {
   const config = loadConfig();
-  const logger = new Logger(config.logRoot, "TENDER247-COMPLETE");
+  const { resolveTender247RunAccount } = await import(
+    "../company/tender247Accounts.js"
+  );
+  const account = await resolveTender247RunAccount({
+    companyId: options.companyId,
+    accountId: options.accountId,
+  });
+  // Normalize so child processes and Azure paths share company/account.
+  process.env.COMPANY_ID = account.companyId;
+  process.env.TENDER247_STORAGE_STATE_PATH = account.storageStatePath;
+  if (account.username) process.env.TENDER247_EMAIL = account.username;
+  if (account.password) process.env.TENDER247_PASSWORD = account.password;
+  if (!options.accountId && account.accountId !== "legacy-env") {
+    options = { ...options, accountId: account.accountId };
+  }
+  if (!options.companyId) {
+    options = { ...options, companyId: account.companyId };
+  }
+
+  const logger = new Logger(
+    config.logRoot,
+    "TENDER247-COMPLETE",
+    account.logPrefix,
+  );
+  logger.info(`TENDER247_ACCOUNT_ID=${account.accountId}`);
+  logger.info(`TENDER247_ACCOUNT_LABEL=${account.accountLabel}`);
+  logger.info(`COMPANY_ID=${account.companyId}`);
+
   const requestedDate = options.requestedDate;
   const downloadRoot = path.join(
     resolveProjectPath(config.downloadRoot),
@@ -601,10 +644,22 @@ export async function runTender247CompletePipeline(
       if (options.resume) {
         batchArgs.push("--resume");
       }
+      if (options.accountId) {
+        batchArgs.push(`--account-id=${options.accountId}`);
+      }
+      if (options.companyId) {
+        batchArgs.push(`--company-id=${options.companyId}`);
+      }
 
       const env: NodeJS.ProcessEnv = {
         TENDER247_DATE: requestedDate,
       };
+      if (options.companyId) {
+        env.COMPANY_ID = options.companyId;
+      }
+      if (options.accountId) {
+        env.TENDER247_ACCOUNT_ID = options.accountId;
+      }
       if (options.resume) {
         env.TENDER247_RESUME = "true";
       }
@@ -927,8 +982,51 @@ function writeSummary(
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const options = parseTender247CompletePipelineArgs(argv);
-  const { exitCode } = await runTender247CompletePipeline(options);
-  process.exit(exitCode);
+
+  const { listConfiguredEnvTender247AccountSlots } = await import(
+    "../company/tender247Accounts.js"
+  );
+
+  // Explicit --account-id / TENDER247_ACCOUNT_ID → single run.
+  // Otherwise, if both env accounts are configured, run 1 then 2 sequentially.
+  const explicitAccount =
+    getArgValue(argv, "account-id") ||
+    getArgValue(argv, "tender247-account-id") ||
+    process.env.TENDER247_ACCOUNT_ID?.trim() ||
+    "";
+  const configuredSlots = listConfiguredEnvTender247AccountSlots();
+  const runSequentially =
+    !explicitAccount && configuredSlots.length > 1;
+
+  if (!runSequentially) {
+    const { exitCode } = await runTender247CompletePipeline(options);
+    process.exit(exitCode);
+    return;
+  }
+
+  console.log(
+    `TENDER247_SEQUENTIAL_ACCOUNTS=${configuredSlots.join(",")} date=${options.requestedDate}`,
+  );
+  let lastExit = 0;
+  for (const slot of configuredSlots) {
+    console.log("");
+    console.log("==================================");
+    console.log(`TENDER247_SEQUENTIAL_START account=${slot}`);
+    console.log("==================================");
+    const { exitCode } = await runTender247CompletePipeline({
+      ...options,
+      accountId: slot,
+    });
+    console.log(`TENDER247_SEQUENTIAL_DONE account=${slot} exit=${exitCode}`);
+    if (exitCode !== 0) {
+      lastExit = exitCode;
+      console.error(
+        `TENDER247_SEQUENTIAL_STOP account=${slot} failed; skipping remaining accounts`,
+      );
+      break;
+    }
+  }
+  process.exit(lastExit);
 }
 
 const thisFile = fileURLToPath(import.meta.url);

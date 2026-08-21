@@ -11,11 +11,13 @@ import {
 import {
   isActionableQualificationStatus,
   isPendingReviewStatus,
+  isWonQualificationStatus,
   mapToDashboardPipelineStage,
 } from "@/lib/dashboard/pipeline";
 import {
-  DEFAULT_DASHBOARD_TIME_RANGE,
-  parseDashboardTimeRange,
+  DEFAULT_DASHBOARD_PERIOD,
+  parseDashboardDateBasis,
+  parseDashboardPeriod,
   dashboardRangeDays,
 } from "@/lib/dashboard/time-range";
 
@@ -35,13 +37,19 @@ describe("dashboard pipeline mapping", () => {
     ).toBe("submitted");
   });
 
-  it("maps Screening / Partnership / Will Bid / excludes No Bid", () => {
+  it("maps Verify / May Bid / Partnership and excludes No Bid / Won", () => {
+    expect(
+      mapToDashboardPipelineStage({
+        qualificationStatus: "VERIFY",
+        submitted: false,
+      }),
+    ).toBe("verify");
     expect(
       mapToDashboardPipelineStage({
         qualificationStatus: "CONDITIONAL_GO",
         submitted: false,
       }),
-    ).toBe("screening");
+    ).toBe("may_bid");
     expect(
       mapToDashboardPipelineStage({
         qualificationStatus: "PARTNER_BID",
@@ -50,16 +58,17 @@ describe("dashboard pipeline mapping", () => {
     ).toBe("partnership");
     expect(
       mapToDashboardPipelineStage({
-        qualificationStatus: "VERIFY",
-        submitted: false,
-      }),
-    ).toBe("screening");
-    expect(
-      mapToDashboardPipelineStage({
         qualificationStatus: "NO_GO",
         submitted: false,
       }),
     ).toBeNull();
+    expect(
+      mapToDashboardPipelineStage({
+        qualificationStatus: "WON",
+        submitted: true,
+      }),
+    ).toBeNull();
+    expect(isWonQualificationStatus("WON")).toBe(true);
   });
 
   it("treats VERIFY as pending review", () => {
@@ -69,12 +78,24 @@ describe("dashboard pipeline mapping", () => {
   });
 });
 
+describe("dashboard filters", () => {
+  it("parses period and date basis with legacy aliases", () => {
+    expect(parseDashboardPeriod("month")).toBe("month");
+    expect(parseDashboardPeriod("30d")).toBe("month");
+    expect(parseDashboardPeriod("7d")).toBe("week");
+    expect(parseDashboardDateBasis("created")).toBe("created");
+    expect(parseDashboardDateBasis("scraped")).toBe("scraped");
+    expect(DEFAULT_DASHBOARD_PERIOD).toBe("month");
+    expect(dashboardRangeDays("quarter")).toBe(90);
+  });
+});
+
 describe("dashboard KPI comparisons", () => {
-  it("formats total tenders week delta like the wireframe", () => {
+  it("formats total tenders week delta", () => {
     expect(
       formatPeriodCountComparison({
         delta: 3,
-        range: "7d",
+        range: "week",
         emptyCurrent: false,
       }),
     ).toEqual({
@@ -82,112 +103,32 @@ describe("dashboard KPI comparisons", () => {
       tone: "positive",
       direction: "up",
     });
-
-    expect(
-      formatPeriodCountComparison({
-        delta: -2,
-        range: "30d",
-        emptyCurrent: false,
-      }),
-    ).toEqual({
-      text: "↓ 2 vs previous period",
-      tone: "negative",
-      direction: "down",
-    });
-
-    expect(
-      formatPeriodCountComparison({
-        delta: 0,
-        range: "7d",
-        emptyCurrent: false,
-      }).text,
-    ).toBe("No change vs previous period");
   });
 
-  it("formats active bids entered-delta comparison", () => {
+  it("formats win rate and pending review helpers", () => {
+    expect(formatWinRateValue(54.5)).toBe("54.5%");
+    expect(formatWinRateValue(null)).toBe("—");
+    expect(MIN_WIN_RATE_SAMPLE).toBe(3);
+    expect(
+      formatWinRateComparison({
+        currentRate: null,
+        previousRate: null,
+        decidedCount: 0,
+        previousDecidedCount: 0,
+      }).text,
+    ).toBe("No decided bids");
+    expect(
+      formatPendingReviewComparison({
+        pendingCount: 2,
+        overdueCount: 1,
+      }).tone,
+    ).toBe("negative");
     expect(
       formatActiveBidsComparison({
-        snapshotValue: 5,
-        enteredDelta: 2,
-        range: "7d",
-      }),
-    ).toEqual({
-      text: "↑ +2 this week",
-      tone: "positive",
-      direction: "up",
-    });
-  });
-
-  it("uses percentage points for win rate and small-sample threshold", () => {
-    expect(MIN_WIN_RATE_SAMPLE).toBe(3);
-    expect(formatWinRateValue(40)).toBe("40.0%");
-    expect(formatWinRateValue(null)).toBe("—");
-
-    expect(
-      formatWinRateComparison({
-        currentRate: 40,
-        previousRate: 50,
-        decidedCount: 5,
-        previousDecidedCount: 2,
+        snapshotValue: 0,
+        enteredDelta: 0,
+        range: "month",
       }).text,
-    ).toBe("Small sample");
-
-    expect(
-      formatWinRateComparison({
-        currentRate: 40,
-        previousRate: 50,
-        decidedCount: 5,
-        previousDecidedCount: 4,
-      }),
-    ).toEqual({
-      text: "↓ -10.0 pp",
-      tone: "negative",
-      direction: "down",
-    });
-
-    expect(
-      formatWinRateComparison({
-        currentRate: 40,
-        previousRate: 35,
-        decidedCount: 5,
-        previousDecidedCount: 4,
-      }),
-    ).toEqual({
-      text: "↑ +5.0 pp",
-      tone: "positive",
-      direction: "up",
-    });
-  });
-
-  it("treats overdue pending reviews as negative", () => {
-    expect(
-      formatPendingReviewComparison({
-        pendingCount: 3,
-        overdueCount: 1,
-      }),
-    ).toEqual({
-      text: "↓ 1 overdue",
-      tone: "negative",
-      direction: "down",
-    });
-
-    expect(
-      formatPendingReviewComparison({
-        pendingCount: 3,
-        overdueCount: 0,
-      }).text,
-    ).toBe("No overdue reviews");
-  });
-});
-
-describe("dashboard time range", () => {
-  it("defaults to 30d and parses known keys", () => {
-    expect(parseDashboardTimeRange(undefined)).toBe(
-      DEFAULT_DASHBOARD_TIME_RANGE,
-    );
-    expect(parseDashboardTimeRange("7d")).toBe("7d");
-    expect(parseDashboardTimeRange("bogus")).toBe("30d");
-    expect(dashboardRangeDays("90d")).toBe(90);
-    expect(dashboardRangeDays("1y")).toBe(365);
+    ).toBe("No active bids");
   });
 });

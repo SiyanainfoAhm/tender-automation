@@ -31,7 +31,7 @@ import { readExcelFilterAudit } from "./tender247Batch/excelFilterAudit.js";
 import {
   countPrescreenOutcomesForTenderIds,
 } from "./prescreen/prescreenRepository.js";
-import { resolveRequestedDate } from "./cli/requestedDate.js";
+import { resolveRequestedDate, getArgValue } from "./cli/requestedDate.js";
 
 export interface DailyPipelineSummary {
   date: string;
@@ -348,10 +348,30 @@ export function parseDailyPipelineDate(argv: string[]): string {
   return resolveRequestedDate(argv).requestedDate;
 }
 
+function parseDailyPipelineAccountArgs(argv: string[]): {
+  accountId: string | null;
+  companyId: string | null;
+} {
+  return {
+    accountId:
+      getArgValue(argv, "account-id") ||
+      getArgValue(argv, "tender247-account-id") ||
+      process.env.TENDER247_ACCOUNT_ID?.trim() ||
+      null,
+    companyId:
+      getArgValue(argv, "company-id") ||
+      process.env.COMPANY_ID?.trim() ||
+      process.env.SIYANA_COMPANY_ID?.trim() ||
+      null,
+  };
+}
+
 export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
   const config = loadConfig();
+  const argv = process.argv.slice(2);
   const logger = new Logger(config.logRoot, "DailyTenderPipeline");
-  const dateIso = parseDailyPipelineDate(process.argv.slice(2));
+  const dateIso = parseDailyPipelineDate(argv);
+  const accountArgs = parseDailyPipelineAccountArgs(argv);
   const dateFolder = path.join(config.downloadRoot, dateIso);
   ensureDir(dateFolder);
 
@@ -415,12 +435,27 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
     const tender247Script = resolveProjectPath(
       "src/tender247Batch/runDailyBatch.ts",
     );
+    const batchExtraArgs = [`--date=${dateIso}`];
+    if (accountArgs.accountId) {
+      batchExtraArgs.push(`--account-id=${accountArgs.accountId}`);
+    }
+    if (accountArgs.companyId) {
+      batchExtraArgs.push(`--company-id=${accountArgs.companyId}`);
+    }
     const exitCode = await runScriptProcess({
       scriptPath: tender247Script,
       cwd: config.projectRoot,
       logger,
       label: "tender247-batch",
-      extraArgs: [`--date=${dateIso}`],
+      extraArgs: batchExtraArgs,
+      env: {
+        ...(accountArgs.accountId
+          ? { TENDER247_ACCOUNT_ID: accountArgs.accountId }
+          : {}),
+        ...(accountArgs.companyId
+          ? { COMPANY_ID: accountArgs.companyId }
+          : {}),
+      },
     });
     summary.tender247ExitCode = exitCode;
 

@@ -19,7 +19,7 @@ import {
   type ChatGptExcelScreeningClient,
 } from "./chatgptExcelScreening.js";
 import { logActiveScreeningRules, PHASE1_SCREENING_POLICY_VERSION } from "./screeningPolicy.js";
-import { persistPhase1NoBidResults } from "./persistPhase1Results.js";
+import { persistGptScreenedWorkbookToDatabase } from "./persistPhase1Results.js";
 import { enforcePhase1ScreeningDecisions } from "./phase1DecisionGuard.js";
 import { runCorrelationIdForDate } from "./phase1DetailQueue.js";
 import {
@@ -98,15 +98,60 @@ function applyDeterministicPhase1Guard(options: {
 
 function newestMatching(dateFolder: string, pattern: RegExp): string | undefined {
   if (!fs.existsSync(dateFolder)) return undefined;
-  const matches = fs
-    .readdirSync(dateFolder)
-    .filter((name) => pattern.test(name) && !name.startsWith("~$"))
-    .map((name) => {
-      const fullPath = path.join(dateFolder, name);
-      return { fullPath, mtimeMs: fs.statSync(fullPath).mtimeMs };
-    })
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return matches[0]?.fullPath;
+
+  const accountId = process.env.TENDER247_ACCOUNT_ID?.trim() || "";
+  const preferDir = accountId
+    ? path.join(dateFolder, "accounts", accountId)
+    : null;
+
+  const candidates: Array<{ fullPath: string; mtimeMs: number }> = [];
+  const collectFrom = (dir: string, depth: number) => {
+    if (!fs.existsSync(dir) || depth > 3) return;
+    for (const name of fs.readdirSync(dir)) {
+      if (name.startsWith("~$")) continue;
+      const fullPath = path.join(dir, name);
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(fullPath);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        if (name === "accounts" || dir.includes(`${path.sep}accounts`)) {
+          collectFrom(fullPath, depth + 1);
+        }
+        continue;
+      }
+      if (pattern.test(name)) {
+        candidates.push({ fullPath, mtimeMs: stat.mtimeMs });
+      }
+    }
+  };
+
+  // Prefer this account's seed Excel so multi-account runs never cross-read.
+  if (preferDir && fs.existsSync(preferDir)) {
+    collectFrom(preferDir, 0);
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+      return candidates[0]?.fullPath;
+    }
+  }
+
+  collectFrom(dateFolder, 0);
+  for (const name of fs.readdirSync(dateFolder)) {
+    if (name.startsWith("~$") || !pattern.test(name)) continue;
+    const fullPath = path.join(dateFolder, name);
+    try {
+      const stat = fs.statSync(fullPath);
+      if (stat.isFile()) {
+        candidates.push({ fullPath, mtimeMs: stat.mtimeMs });
+      }
+    } catch {
+      // ignore
+    }
+  }
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return candidates[0]?.fullPath;
 }
 
 export async function runPhase1ExcelScreening(options: {
@@ -442,7 +487,8 @@ async function finalizeScreening(options: {
   const noBidRows = options.outputRows.filter((row) => row.screeningStatus === "NO_GO");
   const screeningRunId = runCorrelationIdForDate(options.dateIso);
   if (options.persistResults !== false) {
-    await persistPhase1NoBidResults({
+    // GPT screened workbook is the DB source of truth (not run-normalized.xlsx).
+    await persistGptScreenedWorkbookToDatabase({
       rows: options.outputRows,
       runDate: options.dateIso,
       dateFolder: options.dateFolder,

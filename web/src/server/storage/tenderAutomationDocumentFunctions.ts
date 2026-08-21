@@ -176,6 +176,23 @@ export async function invokeDocumentRead(
   });
 }
 
+export async function invokeBlobRead(options: {
+  storageUrl: string;
+  disposition?: "inline" | "attachment";
+  fileName?: string | null;
+}): Promise<Response> {
+  return invokeCompanyDocumentsRaw({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "blob-read",
+      storageUrl: options.storageUrl,
+      disposition: options.disposition || "inline",
+      fileName: options.fileName || undefined,
+    }),
+  });
+}
+
 export async function invokeTemplateAssetsSave(options: {
   templateId: string;
   templateName: string;

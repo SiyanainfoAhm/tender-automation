@@ -7,29 +7,38 @@ import {
 } from "@/lib/tender-status";
 
 describe("tender UI status mapping", () => {
-  it("maps VERIFY and CONDITIONAL_GO to Screening without a May Bid bucket", () => {
-    expect(getTenderUiStatus("VERIFY")).toBe("screening");
-    expect(getTenderUiStatus("CONDITIONAL_GO")).toBe("screening");
-    expect(getTenderUiStatus("MAY_BID")).toBe("screening");
-    expect(tenderUiStatusLabel("VERIFY")).toBe("Screening");
-    expect(tenderUiStatusLabel("CONDITIONAL_GO")).toBe("Screening");
+  it("maps VERIFY / CONDITIONAL_GO / null into pipeline buckets", () => {
+    expect(getTenderUiStatus("VERIFY")).toBe("verify");
+    expect(getTenderUiStatus("CONDITIONAL_GO")).toBe("may_bid");
+    expect(getTenderUiStatus("MAY_BID")).toBe("may_bid");
+    expect(tenderUiStatusLabel("VERIFY")).toBe("Verify");
+    expect(tenderUiStatusLabel("CONDITIONAL_GO")).toBe("May Bid");
+    expect(getTenderUiStatus(null)).toBe("under_evaluation");
   });
 
-  it("keeps partnership, will bid and no bid distinct", () => {
+  it("keeps partnership, will bid, won and no bid distinct", () => {
     expect(getTenderUiStatus("GO")).toBe("will_bid");
     expect(getTenderUiStatus("PARTNER_BID")).toBe("partnership");
     expect(getTenderUiStatus("NO_GO")).toBe("no_bid");
-    expect(getTenderUiStatus(null)).toBe("not_evaluated");
+    expect(getTenderUiStatus("WON")).toBe("won");
   });
 
-  it("expands the Screening filter to VERIFY + CONDITIONAL_GO", () => {
+  it("expands status filters to the correct DB values", () => {
     expect(qualificationStatusesForFilter("screening")).toEqual({
       kind: "in",
       values: ["VERIFY", "CONDITIONAL_GO"],
     });
-    expect(qualificationStatusesForFilter("VERIFY")).toEqual({
+    expect(qualificationStatusesForFilter("verify")).toEqual({
       kind: "in",
       values: ["VERIFY"],
+    });
+    expect(qualificationStatusesForFilter("may_bid")).toEqual({
+      kind: "in",
+      values: ["CONDITIONAL_GO"],
+    });
+    expect(qualificationStatusesForFilter("won")).toEqual({
+      kind: "in",
+      values: ["WON"],
     });
     expect(qualificationStatusesForFilter("GO")).toEqual({
       kind: "in",

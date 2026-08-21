@@ -16,10 +16,11 @@ import { getCalendarDaysUntilDeadline } from "@/lib/tender-deadline";
 describe("classification presentation", () => {
   it("maps stored enums to friendly labels", () => {
     expect(classificationLabel("GO")).toBe("Will Bid");
-    expect(classificationLabel("CONDITIONAL_GO")).toBe("Screening");
+    expect(classificationLabel("CONDITIONAL_GO")).toBe("May Bid");
     expect(classificationLabel("PARTNER_BID")).toBe("Partnership");
-    expect(classificationLabel("VERIFY")).toBe("Screening");
+    expect(classificationLabel("VERIFY")).toBe("Verify");
     expect(classificationLabel("NO_GO")).toBe("No Bid");
+    expect(classificationLabel("WON")).toBe("Won");
   });
 
   it("does not mark GO as submitted", () => {

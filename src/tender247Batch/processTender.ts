@@ -74,6 +74,7 @@ import {
   fetchTender247Metadata,
   upsertTender247Metadata,
 } from "../supabase/tenderMetadataStore.js";
+import { uploadTenderArtifactsAndPersistUrls } from "../supabase/tenderArtifactUpload.js";
 import {
   assertOpenSingleTenderDetailsAllowed,
   loadPhase1DecisionsFromDisk,
@@ -377,6 +378,29 @@ export async function processLiveTender(
         zipPath = zipResult.zipPath;
         zipSize = zipResult.sizeBytes;
         lastCompletedStep = "zip";
+        try {
+          const runDate =
+            getActiveTender247RunContext()?.requestedDate ??
+            requestedDateFromDateFolderSafe(dateFolder) ??
+            requestedDateFromDateFolder(dateFolder);
+          const artifactUpload = await uploadTenderArtifactsAndPersistUrls({
+            sourcePortal: "TENDER247",
+            sourceTenderId: t247Id,
+            tenderFolder: resume.tenderFolder,
+            runDate,
+            logger,
+          });
+          logger.info(`ARTIFACT_UPLOAD_SUCCESS=${artifactUpload.uploaded}`);
+          logger.info(`ARTIFACT_UPLOAD_FAILED=${artifactUpload.failed}`);
+        } catch (uploadError) {
+          logger.warn(
+            `ARTIFACT_UPLOAD_FAILED_BATCH=${
+              uploadError instanceof Error
+                ? uploadError.message
+                : String(uploadError)
+            }`,
+          );
+        }
         if (!config.keepUnzippedTenderFolders) {
           removeDirectoryRecursive(resume.tenderFolder);
         }
@@ -937,6 +961,31 @@ export async function processLiveTender(
       zipPath = zipResult.zipPath;
       zipSize = zipResult.sizeBytes;
       lastCompletedStep = "zip";
+
+      // GPT Excel already created/updated the tender row; upload local artifacts to Azure.
+      try {
+        const runDate =
+          getActiveTender247RunContext()?.requestedDate ??
+          requestedDateFromDateFolderSafe(dateFolder) ??
+          requestedDateFromDateFolder(dateFolder);
+        const artifactUpload = await uploadTenderArtifactsAndPersistUrls({
+          sourcePortal: "TENDER247",
+          sourceTenderId: t247Id,
+          tenderFolder: resume.tenderFolder,
+          runDate,
+          logger,
+        });
+        logger.info(`ARTIFACT_UPLOAD_SUCCESS=${artifactUpload.uploaded}`);
+        logger.info(`ARTIFACT_UPLOAD_FAILED=${artifactUpload.failed}`);
+        logger.info(`ARTIFACT_UPLOAD_SKIPPED=${artifactUpload.skipped}`);
+      } catch (uploadError) {
+        logger.warn(
+          `ARTIFACT_UPLOAD_FAILED_BATCH=${
+            uploadError instanceof Error ? uploadError.message : String(uploadError)
+          }`,
+        );
+      }
+
       const aiStageAfterZip = resolveAiSummaryStage({
         tenderDir: resume.tenderFolder,
         aiSummaryValid: artifactsAfterGate.aiSummaryValid,

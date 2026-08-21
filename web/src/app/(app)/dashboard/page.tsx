@@ -2,8 +2,10 @@ import { ErrorState } from "@/components/ui/error-state";
 import { DashboardOverviewClient } from "@/components/dashboard/dashboard-overview";
 import { isAppError } from "@/lib/errors/app-error";
 import {
-  DEFAULT_DASHBOARD_TIME_RANGE,
-  parseDashboardTimeRange,
+  DEFAULT_DASHBOARD_DATE_BASIS,
+  DEFAULT_DASHBOARD_PERIOD,
+  parseDashboardDateBasis,
+  parseDashboardPeriod,
 } from "@/lib/dashboard/time-range";
 import { requireSession } from "@/server/auth/session";
 import { getDashboardOverview } from "@/server/repositories/dashboardRepository";
@@ -17,11 +19,16 @@ export default async function DashboardPage({
 }: DashboardPageProps) {
   const session = await requireSession();
   const params = searchParams ? await searchParams : {};
-  const range = parseDashboardTimeRange(params.range) || DEFAULT_DASHBOARD_TIME_RANGE;
+  const period =
+    parseDashboardPeriod(params.period ?? params.range) ||
+    DEFAULT_DASHBOARD_PERIOD;
+  const dateBasis =
+    parseDashboardDateBasis(params.dateBasis) || DEFAULT_DASHBOARD_DATE_BASIS;
 
   try {
     const data = await getDashboardOverview({
-      range,
+      period,
+      dateBasis,
       companyId: session.user.companyId ?? null,
     });
 
@@ -29,13 +36,16 @@ export default async function DashboardPage({
   } catch (error) {
     const correlationId = isAppError(error) ? error.correlationId : undefined;
     const message =
-      error instanceof Error ? error.message : "Dashboard data could not be loaded.";
+      error instanceof Error
+        ? error.message
+        : "Dashboard data could not be loaded.";
     return (
       <div className="space-y-4">
         <div>
-          <h1 className="page-title">Dashboard</h1>
+          <h1 className="page-title">Executive Dashboard</h1>
           <p className="text-sm text-text-secondary">
-            Overview of your tender pipeline and bid activity
+            Portfolio health for leadership — pipeline, execution &amp; financial
+            exposure
           </p>
         </div>
         <ErrorState

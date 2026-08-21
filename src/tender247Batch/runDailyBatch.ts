@@ -1,27 +1,23 @@
-/**
- * Tender247 daily batch — download Excel, deterministic dedupe, ChatGPT
- * Phase-1 screening, then detail-crawl only VERIFY / May Bid / Will Bid.
- *
- * security_code is captured from real detail navigation/network only —
- * never invented.
- */
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
-  AutomationError,
-  closeBrowserSession,
-  launchBrowserSession,
-} from "../browserUtils.js";
+  finishPipelineRun,
+  markTender247AccountUsed,
+  resolveTender247RunAccount,
+  startPipelineRun,
+  withTender247AccountContextAsync,
+} from "../company/tender247Accounts.js";
+import { resolveRunCompanyId } from "../company/siyanaCompany.js";
 import { loadConfig, resolveTender247AuthPath } from "../config.js";
 import {
   createTender247RunContext,
   ensureTender247DateScopedDir,
   logTender247RunContext,
+  resolveExcelPath,
+  resolveSeedExcelDir,
   withTender247RunContextAsync,
 } from "./tender247RunContext.js";
 import {
   assertDatePropagationAgreement,
+  getArgValue,
   hasBooleanFlag,
   resolveRequestedDate,
 } from "../cli/requestedDate.js";
@@ -80,6 +76,15 @@ import {
 } from "../runScreening/runPhase1ExcelScreening.js";
 import { buildPhase1DetailQueue, allowTender247DetailScrape } from "../runScreening/phase1DetailQueue.js";
 import { saveRunState } from "../runScreening/screeningManifest.js";
+import { ensureDir } from "../fileUtils.js";
+import path from "node:path";
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
+import {
+  AutomationError,
+  closeBrowserSession,
+  launchBrowserSession,
+} from "../browserUtils.js";
 
 // HARD GUARD: runDailyBatch must NEVER import or call ensureTodayTendersSelected.
 // Calling it stalls on dashboard card diagnostics. Throw BUG_BATCH_CALLED_ENSURE_TODAY
@@ -126,24 +131,63 @@ function parseDailyBatchArgs(argv: string[]): {
   date: string;
   dryRunDate: boolean;
   resume: boolean;
+  accountId: string | null;
+  companyId: string | null;
 } {
   const resolved = resolveRequestedDate(argv);
   const dryRunDate = hasBooleanFlag(argv, "dry-run-date");
   const resume =
     hasBooleanFlag(argv, "resume") ||
     String(process.env.TENDER247_RESUME || "").toLowerCase() === "true";
-  return { date: resolved.requestedDate, dryRunDate, resume };
+  const accountId =
+    getArgValue(argv, "account-id") ||
+    getArgValue(argv, "tender247-account-id") ||
+    process.env.TENDER247_ACCOUNT_ID?.trim() ||
+    null;
+  const companyId =
+    getArgValue(argv, "company-id") ||
+    process.env.COMPANY_ID?.trim() ||
+    process.env.SIYANA_COMPANY_ID?.trim() ||
+    null;
+  return {
+    date: resolved.requestedDate,
+    dryRunDate,
+    resume,
+    accountId,
+    companyId,
+  };
 }
 
 async function runDailyBatch(): Promise<void> {
   const config = loadConfig();
-  const logger = new Logger(config.logRoot, "Tender247Batch");
   const batchArgs = parseDailyBatchArgs(process.argv.slice(2));
   const dateIso = batchArgs.date;
-  const runContext = createTender247RunContext(config.downloadRoot, dateIso);
+
+  const account = await resolveTender247RunAccount({
+    companyId: batchArgs.companyId || resolveRunCompanyId(),
+    accountId: batchArgs.accountId,
+  });
+
+  process.env.TENDER247_STORAGE_STATE_PATH = account.storageStatePath;
+  process.env.COMPANY_ID = account.companyId;
+  if (account.username) process.env.TENDER247_EMAIL = account.username;
+  if (account.password) process.env.TENDER247_PASSWORD = account.password;
+
+  const logger = new Logger(
+    config.logRoot,
+    "Tender247Batch",
+    account.logPrefix,
+  );
+  const runContext = createTender247RunContext(config.downloadRoot, dateIso, {
+    accountId: account.accountId,
+    seedExcelSubdir: account.seedExcelSubdir,
+  });
   logTender247RunContext(runContext);
   logger.info(`TENDER247_RUN_REQUESTED_DATE=${runContext.requestedDate}`);
   logger.info(`TENDER247_RUN_DOWNLOAD_ROOT=${runContext.downloadRoot}`);
+  logger.info(`TENDER247_ACCOUNT_ID=${account.accountId}`);
+  logger.info(`TENDER247_ACCOUNT_LABEL=${account.accountLabel}`);
+  logger.info(`COMPANY_ID=${account.companyId}`);
   if (batchArgs.dryRunDate) {
     console.log("TENDER247_DRY_RUN_DATE=true");
   }
@@ -154,15 +198,53 @@ async function runDailyBatch(): Promise<void> {
     );
   }
 
-  await withTender247RunContextAsync(runContext, async () => {
-    await runDailyBatchBody({
-      config,
-      logger,
-      dateIso,
-      runContext,
-      dryRunDate: batchArgs.dryRunDate,
-    });
+  const pipelineRunId = await startPipelineRun({
+    companyId: account.companyId,
+    tender247AccountId: account.accountId,
+    runDate: dateIso,
+    mode: "batch",
+    resume: batchArgs.resume,
   });
+  await markTender247AccountUsed(account.accountId);
+
+  let failed = false;
+  try {
+    await withTender247AccountContextAsync(account, async () => {
+      await withTender247RunContextAsync(runContext, async () => {
+        ensureDir(resolveSeedExcelDir(runContext));
+        await runDailyBatchBody({
+          config,
+          logger,
+          dateIso,
+          runContext,
+          dryRunDate: batchArgs.dryRunDate,
+        });
+      });
+    });
+    await finishPipelineRun({
+      runId: pipelineRunId,
+      status: "success",
+      summary: {
+        accountId: account.accountId,
+        requestedDate: dateIso,
+      },
+    });
+  } catch (error) {
+    failed = true;
+    await finishPipelineRun({
+      runId: pipelineRunId,
+      status: "failed",
+      summary: {
+        accountId: account.accountId,
+        error: safeErrorMessage(error),
+      },
+    });
+    throw error;
+  } finally {
+    if (!failed) {
+      // no-op
+    }
+  }
 }
 
 async function runDailyBatchBody(options: {
@@ -187,7 +269,7 @@ async function runDailyBatchBody(options: {
   if (!authPath) {
     throw new AutomationError(
       "TENDER247_AUTH_NOT_FOUND",
-      "Missing auth/tender247.json. Run: npm run auth:tender247",
+      "Missing Tender247 storage state. Run: npm run auth:tender247 -- --account-id=<uuid> (or legacy npm run auth:tender247)",
     );
   }
 
@@ -251,10 +333,12 @@ async function runDailyBatchBody(options: {
         `TENDER247_DATE_FILTER_MISMATCH requested=${dateIso} selected=${mailDate.selectedMailDateIso}`,
       );
     }
+    const seedDir = resolveSeedExcelDir(runContext);
+    ensureDir(seedDir);
     const excelPath = await downloadTender247DailyExcel(
       listPage,
       config,
-      dateFolder,
+      seedDir,
       logger,
       dateIso,
     );

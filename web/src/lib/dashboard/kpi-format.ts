@@ -21,7 +21,8 @@ export type DashboardKpiMetric = {
 };
 
 function periodPhrase(range: DashboardTimeRange): string {
-  return range === "7d" ? "this week" : "vs previous period";
+  if (range === "week" || range === "today") return "this week";
+  return "vs previous period";
 }
 
 /**

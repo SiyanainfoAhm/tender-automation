@@ -106,8 +106,10 @@ function exclusiveFunnelKey(options: {
     won: false,
   });
   if (mapped === "will_bid") return "willBid";
+  if (mapped === "may_bid") return "mayBid";
   if (mapped === "partnership") return "mayBid";
-  if (mapped === "screening") {
+  if (mapped === "verify") return "screening";
+  if (mapped === "under_evaluation") {
     if (!options.qualificationStatus) return "new";
     return "screening";
   }

@@ -1,5 +1,9 @@
 import type { QualificationResult } from "../chatgptQualification/types.js";
 import {
+  TENDER_DECISION_LABELS,
+  TENDER_DECISION_REQUIRED_ACTIONS,
+} from "../chatgptQualification/types.js";
+import {
   upsertQualificationResult,
   type QualificationStatus,
 } from "./qualificationResultStore.js";
@@ -8,6 +12,86 @@ import {
   buildFinancialFactsEnrichment,
   readFinancialFacts,
 } from "./financialFactsFallback.js";
+
+/**
+ * ChatGPT Phase-2 persist policy:
+ * - GO / WILL_BID → keep GO (Will Bid) in Supabase
+ * - NO_GO / NO_BID → store VERIFY so humans review instead of auto No Bid
+ *
+ * Local qualification-result.json still keeps the model’s original status.
+ * Phase-1 Excel screening NO_GO is unaffected (different persist path).
+ */
+export function qualificationStatusForSupabasePersist(
+  qualification: QualificationResult,
+): {
+  status: QualificationStatus;
+  decisionLabel: string;
+  reason: string;
+  requiredAction: string;
+  unclearCriteria: string[];
+  manualReviewRequired: boolean;
+  remappedFromNoBid: boolean;
+  rawResult: Record<string, unknown>;
+} {
+  const originalStatus = qualification.status;
+  const remappedFromNoBid = originalStatus === "NO_GO";
+
+  if (!remappedFromNoBid) {
+    return {
+      status: originalStatus as QualificationStatus,
+      decisionLabel: qualification.decisionLabel,
+      reason: qualification.reason,
+      requiredAction: qualification.requiredAction || "",
+      unclearCriteria: qualification.unclearCriteria,
+      manualReviewRequired: qualification.manualReviewRequired,
+      remappedFromNoBid: false,
+      rawResult: qualification as unknown as Record<string, unknown>,
+    };
+  }
+
+  const unclearFromFailures = qualification.failedCriteria
+    .map((item) => String(item).trim())
+    .filter(Boolean);
+  const unclearCriteria =
+    qualification.unclearCriteria.length > 0
+      ? qualification.unclearCriteria
+      : unclearFromFailures.length > 0
+        ? unclearFromFailures
+        : [
+            "ChatGPT returned No Bid — confirm before closing as No Bid",
+          ];
+
+  const reasonPrefix =
+    "ChatGPT returned No Bid; stored as VERIFY for manual review. ";
+  const reason = qualification.reason.trim().startsWith(reasonPrefix.trim())
+    ? qualification.reason
+    : `${reasonPrefix}${qualification.reason}`.trim();
+
+  return {
+    status: "VERIFY",
+    decisionLabel: TENDER_DECISION_LABELS.VERIFY,
+    reason,
+    requiredAction:
+      qualification.requiredAction?.trim() ||
+      TENDER_DECISION_REQUIRED_ACTIONS.VERIFY,
+    unclearCriteria,
+    manualReviewRequired: true,
+    remappedFromNoBid: true,
+    rawResult: {
+      ...(qualification as unknown as Record<string, unknown>),
+      status: "VERIFY",
+      decisionLabel: TENDER_DECISION_LABELS.VERIFY,
+      reason,
+      requiredAction:
+        qualification.requiredAction?.trim() ||
+        TENDER_DECISION_REQUIRED_ACTIONS.VERIFY,
+      unclearCriteria,
+      manualReviewRequired: true,
+      chatgptOriginalStatus: originalStatus,
+      supabaseStatusRemap: "NO_GO_TO_VERIFY",
+    },
+  };
+}
 
 export async function persistValidatedQualificationToSupabase(options: {
   sourcePortal: "TENDER247" | "BIDASSIST";
@@ -26,29 +110,36 @@ export async function persistValidatedQualificationToSupabase(options: {
     logger,
   } = options;
 
+  const forStore = qualificationStatusForSupabasePersist(qualification);
+  if (forStore.remappedFromNoBid) {
+    const msg = `CHATGPT_NO_BID_STORED_AS_VERIFY=true portal=${sourcePortal} tender=${sourceTenderId}`;
+    console.log(msg);
+    logger?.info?.(msg);
+  }
+
   const result = await upsertQualificationResult({
     sourcePortal,
     sourceTenderId,
-    status: qualification.status as QualificationStatus,
-    decisionLabel: qualification.decisionLabel,
+    status: forStore.status,
+    decisionLabel: forStore.decisionLabel,
     verdict: qualification.verdict,
-    reason: qualification.reason,
-    requiredAction: qualification.requiredAction || null,
+    reason: forStore.reason,
+    requiredAction: forStore.requiredAction || null,
     confidence: Number(qualification.confidence) || 0,
     matchedCriteria: qualification.matchedCriteria,
     failedCriteria: qualification.failedCriteria,
-    unclearCriteria: qualification.unclearCriteria,
+    unclearCriteria: forStore.unclearCriteria,
     missingDocuments: qualification.missingDocuments,
     conditions: qualification.conditions,
     partnershipRequiredFor: qualification.partnershipRequiredFor,
     partnershipModeAllowed: qualification.partnershipModeAllowed,
-    manualReviewRequired: qualification.manualReviewRequired,
+    manualReviewRequired: forStore.manualReviewRequired,
     requiresDetailedTenderReview: Boolean(
       qualification.requiresDetailedTenderReview,
     ),
     evidenceFiles: qualification.evidenceFiles || [],
     rawResponse,
-    rawResult: qualification as unknown as Record<string, unknown>,
+    rawResult: forStore.rawResult,
     chatUrl,
     promptVersion: "phase1-v2",
     modelName: null,

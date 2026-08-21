@@ -26,7 +26,7 @@ export const CREATED_DATE_PRESET_LABELS: Record<CreatedDatePreset, string> = {
   last_week: "Last Week",
   this_month: "This Month",
   last_month: "Last Month",
-  custom: "Select Date",
+  custom: "Custom Range",
 };
 
 const YMD_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -194,6 +194,126 @@ export function resolveScrapedDateFilter(options: {
       const selected = options.selectedDate?.trim();
       if (!isIsoCalendarDate(selected)) return null;
       return { mode: "eq", value: selected };
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Resolve Created Date filter bounds for `created_at` (timestamptz).
+ * Distinct from scraped_date / published_date.
+ */
+export function resolveCreatedAtFilter(options: {
+  preset?: string | null;
+  from?: string | null;
+  to?: string | null;
+  selectedDate?: string | null;
+  now?: Date;
+}): { gte?: string; lte?: string } | null {
+  const preset = normalizeDatePreset(options.preset);
+  if (!preset) return null;
+
+  const now = options.now ?? new Date();
+  const today = calendarDateInAppTz(now);
+
+  const dayStart = (ymd: string) => `${ymd}T00:00:00${APP_TZ_OFFSET}`;
+  const dayEnd = (ymd: string) => `${ymd}T23:59:59.999${APP_TZ_OFFSET}`;
+
+  switch (preset) {
+    case "today":
+      return { gte: dayStart(today), lte: dayEnd(today) };
+    case "yesterday": {
+      const y = shiftYmd(today, -1);
+      return { gte: dayStart(y), lte: dayEnd(y) };
+    }
+    case "this_week": {
+      const monday = shiftYmd(today, -daysFromMonday(today));
+      return { gte: dayStart(monday), lte: dayEnd(today) };
+    }
+    case "last_week": {
+      const thisMonday = shiftYmd(today, -daysFromMonday(today));
+      return {
+        gte: dayStart(shiftYmd(thisMonday, -7)),
+        lte: dayEnd(shiftYmd(thisMonday, -1)),
+      };
+    }
+    case "this_month":
+      return { gte: dayStart(`${today.slice(0, 7)}-01`), lte: dayEnd(today) };
+    case "last_month": {
+      const thisMonthStart = atNoonIst(`${today.slice(0, 7)}-01`);
+      const lastMonthAnchor = new Date(thisMonthStart.getTime() - 86_400_000);
+      const lastMonthYmd = calendarDateInAppTz(lastMonthAnchor);
+      return {
+        gte: dayStart(`${lastMonthYmd.slice(0, 7)}-01`),
+        lte: dayEnd(lastMonthYmd),
+      };
+    }
+    case "custom": {
+      const from = options.from?.trim() || options.selectedDate?.trim();
+      const to = options.to?.trim() || options.selectedDate?.trim();
+      if (!isIsoCalendarDate(from) && !isIsoCalendarDate(to)) return null;
+      const result: { gte?: string; lte?: string } = {};
+      if (isIsoCalendarDate(from)) result.gte = dayStart(from);
+      if (isIsoCalendarDate(to)) result.lte = dayEnd(to);
+      return result;
+    }
+    default:
+      return null;
+  }
+}
+
+/** Closing date (SQL `date`) preset / custom range. */
+export function resolveClosingDateFilter(options: {
+  preset?: string | null;
+  from?: string | null;
+  to?: string | null;
+  now?: Date;
+}): ScrapedDateFilter | null {
+  const preset = normalizeDatePreset(options.preset);
+  if (!preset) return null;
+
+  const now = options.now ?? new Date();
+  const today = calendarDateInAppTz(now);
+
+  switch (preset) {
+    case "today":
+      return { mode: "eq", value: today };
+    case "yesterday":
+      return { mode: "eq", value: shiftYmd(today, -1) };
+    case "this_week": {
+      const monday = shiftYmd(today, -daysFromMonday(today));
+      return { mode: "range", gte: monday, lte: today };
+    }
+    case "last_week": {
+      const thisMonday = shiftYmd(today, -daysFromMonday(today));
+      return {
+        mode: "range",
+        gte: shiftYmd(thisMonday, -7),
+        lte: shiftYmd(thisMonday, -1),
+      };
+    }
+    case "this_month":
+      return { mode: "range", gte: `${today.slice(0, 7)}-01`, lte: today };
+    case "last_month": {
+      const thisMonthStart = atNoonIst(`${today.slice(0, 7)}-01`);
+      const lastMonthAnchor = new Date(thisMonthStart.getTime() - 86_400_000);
+      const lastMonthYmd = calendarDateInAppTz(lastMonthAnchor);
+      return {
+        mode: "range",
+        gte: `${lastMonthYmd.slice(0, 7)}-01`,
+        lte: lastMonthYmd,
+      };
+    }
+    case "custom": {
+      const from = options.from?.trim();
+      const to = options.to?.trim();
+      if (isIsoCalendarDate(from) && isIsoCalendarDate(to)) {
+        return { mode: "range", gte: from, lte: to };
+      }
+      if (isIsoCalendarDate(from)) return { mode: "eq", value: from };
+      if (isIsoCalendarDate(to)) return { mode: "eq", value: to };
+      return null;
     }
     default:
       return null;

@@ -1,53 +1,85 @@
-export const DASHBOARD_TIME_RANGES = ["7d", "30d", "90d", "1y"] as const;
+export const DASHBOARD_PERIODS = [
+  "today",
+  "week",
+  "month",
+  "quarter",
+] as const;
 
-export type DashboardTimeRange = (typeof DASHBOARD_TIME_RANGES)[number];
+export type DashboardPeriod = (typeof DASHBOARD_PERIODS)[number];
 
-export const DASHBOARD_TIME_RANGE_LABELS: Record<DashboardTimeRange, string> = {
-  "7d": "7 Days",
-  "30d": "30 Days",
-  "90d": "3 Months",
-  "1y": "1 Year",
+export const DASHBOARD_PERIOD_LABELS: Record<DashboardPeriod, string> = {
+  today: "Today",
+  week: "This Week",
+  month: "This Month",
+  quarter: "This Quarter",
 };
 
-export const DEFAULT_DASHBOARD_TIME_RANGE: DashboardTimeRange = "30d";
+export const DEFAULT_DASHBOARD_PERIOD: DashboardPeriod = "month";
+
+export const DASHBOARD_DATE_BASES = ["scraped", "created"] as const;
+
+export type DashboardDateBasis = (typeof DASHBOARD_DATE_BASES)[number];
+
+export const DASHBOARD_DATE_BASIS_LABELS: Record<DashboardDateBasis, string> = {
+  scraped: "Scraped Date",
+  created: "Created Date",
+};
+
+export const DEFAULT_DASHBOARD_DATE_BASIS: DashboardDateBasis = "scraped";
+
+/** @deprecated Use DashboardPeriod — kept for tests migrating off 7d/30d keys. */
+export type DashboardTimeRange = DashboardPeriod;
+
+export const DASHBOARD_TIME_RANGES = DASHBOARD_PERIODS;
+export const DASHBOARD_TIME_RANGE_LABELS = DASHBOARD_PERIOD_LABELS;
+export const DEFAULT_DASHBOARD_TIME_RANGE = DEFAULT_DASHBOARD_PERIOD;
+
+export function parseDashboardPeriod(
+  raw: string | string[] | undefined | null,
+): DashboardPeriod {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  // Back-compat with old query params
+  if (value === "7d") return "week";
+  if (value === "30d") return "month";
+  if (value === "90d" || value === "1y") return "quarter";
+  if (
+    value &&
+    (DASHBOARD_PERIODS as readonly string[]).includes(value)
+  ) {
+    return value as DashboardPeriod;
+  }
+  return DEFAULT_DASHBOARD_PERIOD;
+}
 
 export function parseDashboardTimeRange(
   raw: string | string[] | undefined | null,
-): DashboardTimeRange {
+): DashboardPeriod {
+  return parseDashboardPeriod(raw);
+}
+
+export function parseDashboardDateBasis(
+  raw: string | string[] | undefined | null,
+): DashboardDateBasis {
   const value = Array.isArray(raw) ? raw[0] : raw;
   if (
     value &&
-    (DASHBOARD_TIME_RANGES as readonly string[]).includes(value)
+    (DASHBOARD_DATE_BASES as readonly string[]).includes(value)
   ) {
-    return value as DashboardTimeRange;
+    return value as DashboardDateBasis;
   }
-  return DEFAULT_DASHBOARD_TIME_RANGE;
+  return DEFAULT_DASHBOARD_DATE_BASIS;
 }
 
-export function dashboardRangeDays(range: DashboardTimeRange): number {
-  switch (range) {
-    case "7d":
+/** Calendar-day span helper for legacy comparison helpers. */
+export function dashboardRangeDays(period: DashboardPeriod): number {
+  switch (period) {
+    case "today":
+      return 1;
+    case "week":
       return 7;
-    case "30d":
+    case "month":
       return 30;
-    case "90d":
+    case "quarter":
       return 90;
-    case "1y":
-      return 365;
-  }
-}
-
-/** Chart bucket size for the selected range. */
-export function dashboardTrendGranularity(
-  range: DashboardTimeRange,
-): "day" | "week" | "month" {
-  switch (range) {
-    case "7d":
-      return "day";
-    case "30d":
-    case "90d":
-      return "week";
-    case "1y":
-      return "month";
   }
 }
