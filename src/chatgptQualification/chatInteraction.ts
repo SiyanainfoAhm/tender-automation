@@ -2155,16 +2155,32 @@ export async function typeComposerPrompt(
     );
   }
 
-  await composer.click({ timeout: 10_000 });
-  await page.keyboard.press("Control+A").catch(() => undefined);
-  await page.keyboard.insertText(prompt);
+  const insertOnce = async (): Promise<number> => {
+    await composer.click({ timeout: 10_000 });
+    await page.keyboard.press("Control+A").catch(() => undefined);
+    await page.keyboard.insertText(prompt);
+    return (await composer.innerText().catch(() => "")).trim().length;
+  };
+
+  let length = await insertOnce();
+  if (length < 80) {
+    logger?.warn(`CHATGPT_PROMPT_INSERT_RETRY lengthAfter=${length}`);
+    length = await insertOnce();
+  }
+  if (length < 80) {
+    throw new AutomationError(
+      "CHATGPT_PROMPT_ENTER_FAILED",
+      `Screening prompt did not remain in the composer (length=${length})`,
+    );
+  }
+
   logger?.info("CHATGPT_PROMPT_ENTERED");
 }
 
 /** Read current composer text length / presence for prompt verification. */
 export async function readComposerPromptPresence(
   page: Page,
-  expectedSnippet: RegExp = /Evaluate this tender for Siyana/i,
+  expectedSnippet: RegExp = /Evaluate this tender for Siyana|SIYANA DAILY TENDER SCREENING|Evaluate the attached tender Excel|Run correlation ID:\s*RUN-\d{4}-\d{2}-\d{2}/i,
 ): Promise<{ present: boolean; length: number; text: string }> {
   const composer = getProjectComposerLocator(page);
   const text = (await composer.innerText().catch(() => "")).trim();
@@ -2629,6 +2645,12 @@ export async function sendComposerMessage(
       }
     }
     const promptCheck = await readComposerPromptPresence(page, userMessagePattern);
+    logger?.info(
+      `CHATGPT_RUN_SCREENING_PROMPT_CHECK present=${promptCheck.present} length=${promptCheck.length} snippet=${JSON.stringify(promptCheck.text.slice(0, 120))}`,
+    );
+    console.log(
+      `CHATGPT_RUN_SCREENING_PROMPT_CHECK present=${promptCheck.present} length=${promptCheck.length}`,
+    );
     const sendEnabled = await isComposerSendEnabled(page);
     assertRunExcelScreeningPreSend({
       presence,
@@ -2880,6 +2902,7 @@ async function composerStillHasPromptText(page: Page): Promise<boolean> {
   }
   return (
     /Evaluate this tender for Siyana/i.test(text) ||
+    /SIYANA DAILY TENDER SCREENING/i.test(text) ||
     /Evaluate the attached tender Excel for Phase-1 screening/i.test(text) ||
     /\bRUN-\d{4}-\d{2}-\d{2}\b/.test(text) ||
     /Your previous status value|not valid JSON|ONE JSON object only/i.test(

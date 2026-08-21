@@ -121,6 +121,8 @@ test("unselected UI service-scope chips are not injected as preferred company sc
 
 test("VERIFY vs MAY_BID contract is encoded in the generated prompt", () => {
   const text = promptFor();
+  assert.match(text, /SIYANA DAILY TENDER SCREENING/);
+  assert.match(text, /OPERATING BRIEF/);
   assert.match(text, /PHASE-1 STATUS PRIORITY/);
   assert.match(text, /Same-day \/ expired deadline → NO_BID/);
   assert.match(
@@ -148,6 +150,9 @@ test("VERIFY vs MAY_BID contract is encoded in the generated prompt", () => {
     text,
     /If the title is generic and actual scope is unavailable from the Excel/,
   );
+  assert.match(text, /Tender Type/);
+  assert.match(text, /Dominant Scope/);
+  assert.match(text, /Summary \(counts \/ gate tallies\)/);
   assert.doesNotMatch(
     text,
     /Use VERIFY when the scope appears relevant but the Excel does not/,
@@ -294,7 +299,8 @@ test("67 normalized rows remain 67 unique rows including NO_BID", async () => {
   const prefsPath = path.join(dateFolder, "screening", "company-preferences-snapshot.json");
   const savedPrompt = fs.readFileSync(promptPath, "utf8");
   assert.match(savedPrompt, /exactly 67 tender rows/);
-  assert.match(savedPrompt, /SIYANA_PHASE1_V4/);
+  assert.match(savedPrompt, /SIYANA_PHASE1_V5/);
+  assert.match(savedPrompt, /SIYANA DAILY TENDER SCREENING/);
   const saved = JSON.parse(fs.readFileSync(prefsPath, "utf8")) as {
     screening: { preferredScopes: string[]; financial: { maxEmdInr: number } };
     screeningPolicyVersion: string;
@@ -306,12 +312,12 @@ test("67 normalized rows remain 67 unique rows including NO_BID", async () => {
     "Mobile",
   ]);
   assert.equal(saved.screening.financial.maxEmdInr, 1_500_000);
-  assert.equal(saved.screeningPolicyVersion, "SIYANA_PHASE1_V4");
+  assert.equal(saved.screeningPolicyVersion, "SIYANA_PHASE1_V5");
 
   const manifest = loadScreeningManifest(dateFolder);
   assert.equal(manifest?.inputRows, 67);
   assert.equal(manifest?.outputRows, 67);
-  assert.equal(manifest?.screeningPolicyVersion, "SIYANA_PHASE1_V4");
+  assert.equal(manifest?.screeningPolicyVersion, "SIYANA_PHASE1_V5");
   assert.ok(manifest?.inputWorkbookHash);
   assert.ok(manifest?.companyPreferenceSnapshotHash);
   assert.ok(manifest?.screeningPromptHash);

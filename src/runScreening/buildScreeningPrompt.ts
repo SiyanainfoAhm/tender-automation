@@ -17,7 +17,10 @@ function listOrNone(items: string[]): string {
   return items.map((item) => `- ${item}`).join("\n");
 }
 
-function policyValue(snapshot: TenderScreeningPreferenceSnapshot, key: keyof TenderScreeningPreferenceSnapshot["policies"]): string | null {
+function policyValue(
+  snapshot: TenderScreeningPreferenceSnapshot,
+  key: keyof TenderScreeningPreferenceSnapshot["policies"],
+): string | null {
   return snapshot.policies[key] ?? null;
 }
 
@@ -51,7 +54,9 @@ OTHER CURRENT SCREENING POLICIES
 ${lines.map((line) => `${line}`).join("\n")}${custom}`;
 }
 
-function preferredScopeInterpretation(snapshot: TenderScreeningPreferenceSnapshot): string {
+function preferredScopeInterpretation(
+  snapshot: TenderScreeningPreferenceSnapshot,
+): string {
   const itLike = hasSelectedScope(
     snapshot.preferredScopes,
     /information technology|software|system integration|mobile|website|application/i,
@@ -69,20 +74,25 @@ The following are interpretation examples only — they are NOT additional
 company preferences. Consider them relevant only insofar as they semantically
 fall inside the currently selected preferred scopes:
 
-website development; website redesign; web portal; web application;
+website / web portal; website redesign; web application;
 mobile application; Android/iOS application; ERP; HRMS; payroll; CMS;
-document management; MIS; dashboard; workflow application; e-office;
-academic ERP; examination portal; e-counselling; asset/property/land
-management systems; digital platforms; custom software development;
-application development; customization; implementation; software
-enhancement; API/integration work; AI platform; chatbot; conversational AI.
+DMS / document management; MIS; dashboard; workflow application; e-office;
+academic ERP; LMS / education systems; examination portal; e-counselling;
+asset/property/land management systems; digital platforms; custom software;
+application development; customization; implementation; software enhancement;
+API/integration work; AI platform; chatbot; conversational AI;
+relevant application AMC / O&M; digital marketing when software/portal led.
 
 Do not treat unselected UI service-scope options as company preferences.`;
 }
 
-function excludedInterpretation(snapshot: TenderScreeningPreferenceSnapshot): string {
+function excludedInterpretation(
+  snapshot: TenderScreeningPreferenceSnapshot,
+): string {
   const blocks: string[] = [];
-  if (hasSelectedScope(snapshot.excludedScopes, /scanning|digitization|digitisation/i)) {
+  if (
+    hasSelectedScope(snapshot.excludedScopes, /scanning|digitization|digitisation/i)
+  ) {
     blocks.push(`SCANNING / DIGITIZATION
 The current excluded scope includes Scanning / Digitization.
 Excluded examples: document scanning; record scanning; physical file
@@ -91,7 +101,12 @@ Potentially relevant (do not reject merely for the word "digital"):
 digital transformation; software implementation; digital platform;
 digitally enabled software system.`);
   }
-  if (hasSelectedScope(snapshot.excludedScopes, /internet|connectivity|bandwidth|leased.?line/i)) {
+  if (
+    hasSelectedScope(
+      snapshot.excludedScopes,
+      /internet|connectivity|bandwidth|leased.?line/i,
+    )
+  ) {
     blocks.push(`INTERNET / CONNECTIVITY
 The current excluded scope includes Internet / Connectivity Service.
 Typical excluded examples: internet leased line; bandwidth; MPLS;
@@ -147,8 +162,10 @@ export function buildTenderScreeningPrompt(options: {
   const manpowerHeavy = policyValue(screening, "manpowerHeavy");
   const genericTitle = policyValue(screening, "genericItTitle");
   const customSoftware = policyValue(screening, "customSoftware");
+  const eoi = policyValue(screening, "eoi");
+  const empanelment = policyValue(screening, "empanelment");
 
-  return `Evaluate the attached tender Excel for Phase-1 screening.
+  return `SIYANA DAILY TENDER SCREENING
 
 Company:
 ${companyName}
@@ -161,21 +178,93 @@ Expected unique tender rows: ${options.inputRowCount}
 
 Phase-1 screening policy version: ${PHASE1_SCREENING_POLICY_VERSION}
 
-The attached workbook has already been normalized and deduplicated by
-the application.
+================================================================
+OPERATING BRIEF
+================================================================
 
-Do not remove rows.
-Do not merge rows.
-Do not perform another deduplication pass.
-Evaluate exactly the supplied normalized rows.
+Follow this daily screening procedure. Wherever numeric limits, preferred
+scopes, excluded scopes, or named policies appear below, the CURRENT COMPANY
+BID PREFERENCES section is authoritative (loaded from the live company
+database). Do not invent older static Siyana limits.
 
-Evaluate exactly all ${options.inputRowCount} rows.
-Do not delete, merge, deduplicate or omit input rows.
+1. Read the supplied tender Excel file(s).
 
+2. Reconcile awareness:
+   - The application has already normalized and deduplicated the attached
+     workbook for this run.
+   - Do NOT delete, merge, or drop any supplied rows.
+   - If prior Project analysis is available in this ChatGPT Project, you may
+     note likely cross-day duplicates in Screening Reason, but every input
+     Canonical ID / Tender ID must remain present exactly once in the main
+     analysis sheet.
+
+3. Show processing counts (in an optional Summary sheet and/or concise
+   reasoning): input rows, preferred-fit candidates, VERIFY candidates,
+   NO_BID counts by major gate/exclusion family.
+
+4. Classify each supplied tender (add columns when helpful):
+   - Tender Type
+   - Primary Scope
+   - Procurement Model
+   - Dominant Scope
+
+5. Hard gates (use live financial/date preferences):
+   - Deadline today / already expired → NO_BID
+     (unless a contrary deadline policy is stored below)
+   - EMD above current Maximum EMD (${maxEmd}) → NO_BID
+   - Tender value above current Maximum Tender Value (${maxValue}) → NO_BID
+   - Disclosed value below a meaningful configured minimum (${minValue}) → NO_BID
+     (a stored minimum of INR 0 is not a meaningful floor)
+
+6. Exclusions / non-target dominant work (honour CURRENT excluded scopes and
+   policies; illustrative families):
+   - EOI${eoi ? ` (configured: ${eoi})` : ""}
+   - Empanelment${empanelment ? ` (configured: ${empanelment})` : ""}
+   - Scanning / digitization
+   - Pure connectivity
+   - Hardware-dominant delivery
+   - Dedicated manpower / staffing supply
+   - COTS / licence / subscription / product renewal
+   - Specialist product AMC / OEM product AMC
+   - Field / DGPS / drone survey
+   - SCADA / industrial automation as dominant scope
+   - Cybersecurity-only audit / VAPT / managed security-only
+   - Partner / JV / OEM-heavy dependency where configured policy says so
+
+7. Preferred fit (honour CURRENT preferred scopes; illustrative families):
+   - Website / web portal
+   - Mobile app
+   - ERP / HRMS
+   - CMS / DMS / MIS
+   - Custom software
+   - AI / chatbot
+   - Relevant application AMC / O&M
+   - Digital marketing when portal/software-led
+   - LMS / education systems
+
+8. Generic ambiguous IT title with no usable Excel scope → VERIFY
+   (or the configured generic-IT-title policy below).
+
+9. Manually audit all MAY_BID / WILL_BID and VERIFY candidates before
+   finalizing. Preferred-scope keywords must not override a hard gate or a
+   clearly excluded dominant scope.
+
+10. Produce one XLSX workbook. Allowed sheets:
+    - Summary (counts / gate tallies) — optional
+    - Today's Analysis / main tenders sheet — REQUIRED
+    - RFP Classification — optional helper sheet
+    - Duplicates Removed — optional notes only; do not remove supplied rows
+      from the main analysis sheet
+
+11. The main analysis sheet must contain every supplied tender row
+    (${options.inputRowCount} rows). The application already removed internal
+    duplicates before attachment; treat the attached rows as the run universe.
+
+================================================================
 CURRENT COMPANY BID PREFERENCES
+================================================================
 These values were loaded from the application database at screening time.
 The database is authoritative. Do not substitute other company rules.
-Do not use an older static Siyana prompt in place of the values below.
 
 FINANCIAL PREFERENCES
 
@@ -196,8 +285,20 @@ EXCLUDED SCOPE
 
 ${listOrNone(excludedScopes)}${otherPoliciesBlock(screening)}
 
+================================================================
 SCREENING METHOD
-----------------
+================================================================
+
+The attached workbook has already been normalized and deduplicated by
+the application.
+
+Do not remove rows.
+Do not merge rows.
+Do not perform another deduplication pass.
+Evaluate exactly the supplied normalized rows.
+
+Evaluate exactly all ${options.inputRowCount} rows.
+Do not delete, merge, deduplicate or omit input rows.
 
 PHASE-1 STATUS PRIORITY
 Apply statuses in this order. A later attractive keyword must not override an
@@ -219,7 +320,8 @@ earlier hard failure.
 3. Apply the dominant-scope rule.
    Even if an IT/software word appears, classify NO_BID when the dominant
    procurement is hardware, OEM/COTS licensing, connectivity, survey,
-   manpower, audit/compliance, infrastructure, or other excluded work.
+   manpower, audit/compliance, infrastructure, SCADA/industrial automation,
+   or other excluded work.
 
 4. Use VERIFY only as a last resort when ALL of:
    - No hard financial/date gate failed; AND
@@ -237,6 +339,7 @@ hard gate or excluded dominant scope already applies.
 
 5. Use MAY_BID / WILL_BID only when the visible scope positively matches
    the preferred software/application scope and no exclusion dominates.
+   (Phase-1 does not use the older master-prompt "GO" label.)
 
 HARD-FILTER DECISION ORDER
 1. Deadline / expiry
@@ -401,8 +504,8 @@ scope, use NO_BID immediately.
 
 MULTIPLE FAILURE RULE
 If a tender violates more than one hard rule, include the most important
-reasons. Example: NO_BID — EMD INR 27,05,000 exceeds the INR 15,00,000
-limit and the primary scope is excluded scanning/digitization work.
+reasons. Example: NO_BID — EMD exceeds the current company maximum and the
+primary scope is excluded scanning/digitization work.
 Do not stop reasoning after the first keyword if another important hard
 failure is also visible. Keep reasons concise.
 
@@ -423,16 +526,19 @@ exemption, or Startup exemption unless actually present in a supplied
 workbook field. Phase-1 is not detailed RFP qualification.
 
 OUTPUT CONTRACT
-Preserve every existing source column.
-Add/update only Screening Status and Screening Reason unless additional
-screening columns already exist and the application expects them.
-Do not restructure the workbook unnecessarily.
+Preserve every existing source column on the main analysis sheet.
+Add/update Screening Status and Screening Reason.
+You may also add classification columns when useful:
+Tender Type, Primary Scope, Procurement Model, Dominant Scope.
+Optional sheets (Summary, RFP Classification, Duplicates Removed) are
+allowed, but the main tenders analysis sheet remains mandatory and must
+keep every input row.
 Do not return only shortlisted rows.
 Do not return prose instead of XLSX.
 Return exactly one completed XLSX workbook.
 
 ROW RECONCILIATION
-The returned workbook must contain exactly ${options.inputRowCount} tender rows.
+The returned main analysis sheet must contain exactly ${options.inputRowCount} tender rows.
 Every input Canonical ID / Tender ID must remain present exactly once.
 Do not delete NO_BID rows. NO_BID remains part of the audit trail.
 `;

@@ -5,7 +5,7 @@
  * parses/render-ready values so ChatGPT never gets hardcoded Siyana numbers.
  */
 
-export const PHASE1_SCREENING_POLICY_VERSION = "SIYANA_PHASE1_V4";
+export const PHASE1_SCREENING_POLICY_VERSION = "SIYANA_PHASE1_V5";
 
 export type ScreeningPolicy = "ALLOW" | "VERIFY" | "NO_BID";
 

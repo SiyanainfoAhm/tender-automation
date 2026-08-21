@@ -191,7 +191,7 @@ test("preference snapshot hash and prompt change when database values change", (
   assert.match(promptA, /Maximum EMD:\nINR 15,00,000/);
   assert.match(promptA, /Maximum Tender Value:\nINR 5,00,00,000/);
   assert.match(promptA, /Run correlation ID: RUN-2026-08-18/);
-  assert.match(promptA, /Phase-1 screening policy version: SIYANA_PHASE1_V4/);
+  assert.match(promptA, /Phase-1 screening policy version: SIYANA_PHASE1_V5/);
   assert.match(promptA, /\nNO_BID\nVERIFY\nMAY_BID\nWILL_BID\n/);
   assert.doesNotMatch(promptA, /Allowed Phase-1 statuses \(use these stored values/);
   assert.doesNotMatch(promptA, /Use NO_GO only/);

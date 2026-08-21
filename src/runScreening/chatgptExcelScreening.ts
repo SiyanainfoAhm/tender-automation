@@ -51,7 +51,7 @@ import {
 } from "./screeningSessionGuard.js";
 
 export const RUN_SCREENING_PROMPT_PATTERN =
-  /Evaluate the attached tender Excel for Phase-1 screening/i;
+  /SIYANA DAILY TENDER SCREENING|Evaluate the attached tender Excel for Phase-1 screening|Run correlation ID:\s*RUN-\d{4}-\d{2}-\d{2}/i;
 
 export type ChatGptExcelScreeningClient = {
   screenWorkbook: (options: {
