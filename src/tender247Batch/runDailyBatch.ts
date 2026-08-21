@@ -344,6 +344,7 @@ async function runDailyBatchBody(options: {
     );
     logger.info(`TENDER247_DAILY_EXCEL_DOWNLOADED=${excelPath}`);
     logger.info("TENDER247_LOCAL_COMPANY_FILTER_BYPASSED=true");
+    logger.info("TENDER247_GPT_INPUT_SOURCE=Tender247_export");
 
     const parsedExcel = parseTender247DailyExcelRows(excelPath, logger);
     const phase1 = await runPhase1ExcelScreening({
@@ -419,6 +420,30 @@ async function runDailyBatchBody(options: {
       console.log("==================================");
       await persistAuthState(context, config, logger);
       return;
+    }
+
+    // ChatGPT screening / idle can leave Select Mail Date on "today". Detail
+    // crawl must search the requested historical Fresh list (e.g. 20, not 21).
+    logger.info("DETAIL_CRAWL_MAIL_DATE_REAPPLY=true");
+    console.log("DETAIL_CRAWL_MAIL_DATE_REAPPLY=true");
+    await listPage.bringToFront().catch(() => undefined);
+    const detailMailDate = await ensureTender247FreshListForDate(
+      listPage,
+      dateIso,
+      logger,
+      config.pageTimeoutMs,
+    );
+    logger.info(
+      `DETAIL_CRAWL_SELECTED_MAIL_DATE=${detailMailDate.selectedMailDateIso}`,
+    );
+    console.log(
+      `DETAIL_CRAWL_SELECTED_MAIL_DATE=${detailMailDate.selectedMailDateIso}`,
+    );
+    if (detailMailDate.selectedMailDateIso !== dateIso) {
+      throw new AutomationError(
+        "TENDER247_DATE_FILTER_MISMATCH",
+        `Detail crawl mail date mismatch requested=${dateIso} selected=${detailMailDate.selectedMailDateIso}`,
+      );
     }
 
     const expectedCount = await readFreshExpectedCount(

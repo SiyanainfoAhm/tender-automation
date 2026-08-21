@@ -130,22 +130,98 @@ function fixtureDateFolder(): { dateFolder: string; t247Path: string; baPath: st
   const t247Path = path.join(dateFolder, "Tender247_2026-08-18.xlsx");
   const baPath = path.join(dateFolder, "BidAssist_2026-08-18.xlsx");
 
-  const t247Rows = Array.from({ length: 11 }, (_, i) => {
+  // Tender247 is the sole GPT source of truth (18 unique + 1 exact duplicate).
+  const t247Rows = Array.from({ length: 18 }, (_, i) => {
     const id = String(1001 + i);
     return { id, name: `Tender ${id}` };
   });
   t247Rows.push({ id: "1001", name: "Tender 1001 duplicate" });
 
-  const baRows = Array.from({ length: 7 }, (_, i) => {
-    const id = String(1012 + i);
-    return { id, name: `Tender ${id}` };
+  // BidAssist may exist on disk but is not merged into GPT input.
+  const baRows = Array.from({ length: 2 }, (_, i) => {
+    const id = String(9001 + i);
+    return { id, name: `BA Tender ${id}` };
   });
-  baRows.push({ id: "1012", name: "Tender 1012 duplicate" });
 
   writeSourceWorkbook(t247Path, t247Rows, "T247 ID");
   writeSourceWorkbook(baPath, baRows, "Tender Id");
   return { dateFolder, t247Path, baPath };
 }
+
+test("ChatGPT multi-sheet workbook uses Current Analysis only (ignores Classification duplicates)", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phase1-multisheet-"));
+  const filePath = path.join(dir, "multi.xlsx");
+  const analysis = XLSX.utils.aoa_to_sheet([
+    [
+      "Canonical ID",
+      "Tender247 ID",
+      "BidAssist ID",
+      "Tender Name",
+      "Source",
+      "Organization",
+      "Location",
+      "Deadline",
+      "Estimated Cost",
+      "EMD Amount",
+      "Source Refs",
+      "Screening Status",
+      "Screening Reason",
+    ],
+    [
+      "T247-1001",
+      "1001",
+      "",
+      "CMS website redesign",
+      "TENDER247",
+      "Dept",
+      "TN",
+      "2026-09-01",
+      "1000000",
+      "10000",
+      "TENDER247",
+      "MAY_BID",
+      "Preferred website scope",
+    ],
+    [
+      "T247-1002",
+      "1002",
+      "",
+      "Hardware servers",
+      "TENDER247",
+      "Dept",
+      "TN",
+      "2026-09-01",
+      "1000000",
+      "10000",
+      "TENDER247",
+      "NO_BID",
+      "Hardware dominant",
+    ],
+  ]);
+  const classification = XLSX.utils.aoa_to_sheet([
+    ["Canonical ID", "Status", "Reason", "Tender Type"],
+    ["T247-1001", "MAY_BID", "Preferred website scope", "TENDER"],
+    ["T247-1002", "NO_BID", "Hardware dominant", "TENDER"],
+  ]);
+  const summary = XLSX.utils.aoa_to_sheet([
+    ["Run correlation ID", "RUN-2026-08-20"],
+    ["Total", "2"],
+  ]);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, analysis, "Current Analysis");
+  XLSX.utils.book_append_sheet(workbook, classification, "Classification");
+  XLSX.utils.book_append_sheet(workbook, summary, "Summary");
+  XLSX.writeFile(workbook, filePath);
+
+  const rows = readRunWorkbook(filePath);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(
+    rows.map((r) => r.canonicalId),
+    ["T247-1001", "T247-1002"],
+  );
+  assert.equal(rows[0]?.screeningStatus, "CONDITIONAL_GO");
+  assert.equal(rows[1]?.screeningStatus, "NO_GO");
+});
 
 test("normalizePhase1ScreeningStatus maps display aliases onto canonical enums", () => {
   assert.equal(normalizePhase1ScreeningStatus("No Bid"), "NO_GO");
@@ -153,6 +229,25 @@ test("normalizePhase1ScreeningStatus maps display aliases onto canonical enums",
   assert.equal(normalizePhase1ScreeningStatus("Verify"), "VERIFY");
   assert.equal(normalizePhase1ScreeningStatus("May Bid"), "CONDITIONAL_GO");
   assert.equal(normalizePhase1ScreeningStatus("Will Bid"), "GO");
+});
+
+test("Phase-1 workbook status contract coerces forbidden labels", async () => {
+  const {
+    coercePhase1WorkbookStatus,
+    toPhase1WorkbookStatusLabel,
+    normalizePhase1CrawlStatus,
+  } = await import("../phase1Statuses.js");
+  assert.equal(normalizePhase1CrawlStatus("CONDITIONAL_GO"), "MAY_BID");
+  assert.equal(normalizePhase1CrawlStatus("PARTNER_BID"), "VERIFY");
+  assert.equal(normalizePhase1CrawlStatus("GO"), "WILL_BID");
+  assert.equal(normalizePhase1CrawlStatus("NO_GO"), "NO_BID");
+  assert.equal(coercePhase1WorkbookStatus("CONDITIONAL_GO"), "CONDITIONAL_GO");
+  assert.equal(coercePhase1WorkbookStatus("PARTNER_BID"), "VERIFY");
+  assert.equal(coercePhase1WorkbookStatus("GO"), "GO");
+  assert.equal(toPhase1WorkbookStatusLabel("CONDITIONAL_GO"), "MAY_BID");
+  assert.equal(toPhase1WorkbookStatusLabel("PARTNER_BID"), "VERIFY");
+  assert.equal(toPhase1WorkbookStatusLabel("GO"), "WILL_BID");
+  assert.equal(toPhase1WorkbookStatusLabel("NO_GO"), "NO_BID");
 });
 
 test("preference snapshot hash and prompt change when database values change", () => {
@@ -168,13 +263,13 @@ test("preference snapshot hash and prompt change when database values change", (
   const promptA = buildTenderScreeningPrompt({
     companySnapshot: runA,
     runDate: "2026-08-18",
-    sourceExcelName: RUN_NORMALIZED_FILE,
+    sourceExcelName: "Tender247_2026-08-18.xlsx",
     inputRowCount: 18,
   });
   const promptB = buildTenderScreeningPrompt({
     companySnapshot: runB,
     runDate: "2026-08-18",
-    sourceExcelName: RUN_NORMALIZED_FILE,
+    sourceExcelName: "Tender247_2026-08-18.xlsx",
     inputRowCount: 18,
   });
   assert.match(promptA, /Website development/);
@@ -186,12 +281,15 @@ test("preference snapshot hash and prompt change when database values change", (
 
   assert.match(promptA, /The database is authoritative/);
   assert.match(promptA, /FINANCIAL PREFERENCES/);
-  assert.match(promptA, /PREFERRED SERVICE SCOPE/);
-  assert.match(promptA, /EXCLUDED SCOPE/);
+  assert.match(promptA, /Preferred Scope:/);
+  assert.match(promptA, /Excluded Scope:/);
   assert.match(promptA, /Maximum EMD:\nINR 15,00,000/);
   assert.match(promptA, /Maximum Tender Value:\nINR 5,00,00,000/);
-  assert.match(promptA, /Run correlation ID: RUN-2026-08-18/);
-  assert.match(promptA, /Phase-1 screening policy version: SIYANA_PHASE1_V5/);
+  assert.match(promptA, /Run correlation ID:\nRUN-2026-08-18/);
+  assert.match(promptA, /Phase-1 screening policy version:\nSIYANA_PHASE1_V7/);
+  assert.match(promptA, /STRICT PHASE-1 STATUS CONTRACT/);
+  assert.match(promptA, /Never output:\n\nPARTNER_BID/);
+  assert.match(promptA, /The concept of CONDITIONAL_GO does not exist/);
   assert.match(promptA, /\nNO_BID\nVERIFY\nMAY_BID\nWILL_BID\n/);
   assert.doesNotMatch(promptA, /Allowed Phase-1 statuses \(use these stored values/);
   assert.doesNotMatch(promptA, /Use NO_GO only/);
@@ -201,7 +299,7 @@ test("preference snapshot hash and prompt change when database values change", (
   );
 });
 
-test("20 raw tenders dedupe to 18, ChatGPT returns 18, NO_GO never enters detail crawler", async () => {
+test("Tender247 export (no local pre-filter) goes to ChatGPT; NO_GO never enters detail crawler", async () => {
   const { dateFolder, t247Path, baPath } = fixtureDateFolder();
   let chatgptCalls = 0;
   const result = await runPhase1ExcelScreening({
@@ -249,10 +347,16 @@ test("20 raw tenders dedupe to 18, ChatGPT returns 18, NO_GO never enters detail
   }
   assert.ok(result.tender247DetailIds.includes("1018"), "WILL_BID 1018 must enter crawler");
 
-  assert.ok(fs.existsSync(path.join(dateFolder, RUN_NORMALIZED_FILE)));
+  assert.ok(fs.existsSync(path.join(dateFolder, "screening", "Tender247_2026-08-18.xlsx")));
+  assert.ok(
+    fs.existsSync(path.join(dateFolder, "screening", "export-original-Tender247_2026-08-18.xlsx")),
+  );
+  assert.equal(fs.existsSync(path.join(dateFolder, RUN_NORMALIZED_FILE)), false);
   assert.ok(fs.existsSync(path.join(dateFolder, "screening", RUN_SCREENED_FILE)));
   assert.ok(fs.existsSync(t247Path));
   assert.ok(fs.existsSync(baPath));
+  assert.equal(result.inputFilename, "Tender247_2026-08-18.xlsx");
+  assert.match(result.inputWorkbookPath, /screening[/\\]Tender247_2026-08-18\.xlsx$/);
 
   const promptPath = path.join(dateFolder, "screening", "chatgpt-screening-prompt.txt");
   const prefsPath = path.join(dateFolder, "screening", "company-preferences-snapshot.json");
@@ -358,7 +462,7 @@ test("assistant text with no XLSX is SCREENING_OUTPUT_MISSING and blocks crawl",
     /T247_DETAIL_CRAWL_BLOCKED/,
   );
   const ingested = loadIngestionCounts(dateFolder);
-  assert.equal(ingested?.dailyRowsRaw, 12);
+  assert.equal(ingested?.dailyRowsRaw, 19);
   assert.equal(ingested?.dailyRowsDeduped, 18);
 });
 

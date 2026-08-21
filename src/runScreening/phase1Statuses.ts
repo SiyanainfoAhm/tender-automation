@@ -67,14 +67,20 @@ export function normalizePhase1CrawlStatus(
     case "NOBID":
     case "NO_GO":
     case "NOGO":
+    case "REJECTED":
+    case "DISQUALIFIED":
       return "NO_BID";
     case "VERIFY":
     case "SCREENING":
+    case "PARTNER_BID":
+    case "PARTNERBID":
+    case "PARTNERSHIP":
       return "VERIFY";
     case "MAY_BID":
     case "MAYBID":
     case "CONDITIONAL_GO":
     case "CONDITIONALGO":
+    case "QUALIFIED":
       return "MAY_BID";
     case "WILL_BID":
     case "WILLBID":
@@ -83,6 +89,26 @@ export function normalizePhase1CrawlStatus(
     default:
       return null;
   }
+}
+
+/**
+ * Coerce any workbook Screening Status cell onto the Phase-1 crawl contract,
+ * then onto the app canonical enum. Forbidden labels never survive as-is.
+ */
+export function coercePhase1WorkbookStatus(
+  raw: string | null | undefined,
+): Phase1ScreeningStatus | null {
+  const crawl = normalizePhase1CrawlStatus(raw);
+  if (!crawl) return null;
+  return normalizePhase1ScreeningStatus(crawl);
+}
+
+/** Write Screening Status cells using only NO_BID / VERIFY / MAY_BID / WILL_BID. */
+export function toPhase1WorkbookStatusLabel(
+  status: Phase1ScreeningStatus | Phase1CrawlStatus | "" | null | undefined,
+): string {
+  if (!status) return "";
+  return normalizePhase1CrawlStatus(status) ?? "VERIFY";
 }
 
 export function isDetailScrapeCrawlStatus(

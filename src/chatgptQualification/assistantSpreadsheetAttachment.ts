@@ -13,7 +13,7 @@ import type { Locator, Page } from "playwright";
 const SCREENED_WORKBOOK_LINK_RE =
   /download[\s\S]{0,80}screened[\s\S]{0,40}workbook/i;
 const XLSX_LOOSE_RE = /[^\s<>"'()]+\.xlsx/gi;
-const INPUT_XLSX = "run-normalized.xlsx";
+const DEFAULT_INPUT_XLSX = "Tender247.xlsx";
 
 export const SCREENING_STABILITY_POLLS = 1;
 
@@ -66,7 +66,7 @@ function normalizeChatText(raw: string): string {
 
 function extractXlsxNames(raw: string | null | undefined, inputFileName?: string): string[] {
   if (!raw) return [];
-  const input = (inputFileName || INPUT_XLSX).replace(/\s+/g, " ").trim().toLowerCase();
+  const input = (inputFileName || DEFAULT_INPUT_XLSX).replace(/\s+/g, " ").trim().toLowerCase();
   const text = normalizeChatText(raw);
   const matches = text.match(XLSX_LOOSE_RE) || [];
   const names: string[] = [];
@@ -185,7 +185,7 @@ function isScreenedOutputFilename(
 ): boolean {
   const base = path.basename(name.trim());
   if (!/\.xlsx$/i.test(base)) return false;
-  const input = (inputFileName || INPUT_XLSX).replace(/\s+/g, " ").trim().toLowerCase();
+  const input = (inputFileName || DEFAULT_INPUT_XLSX).replace(/\s+/g, " ").trim().toLowerCase();
   if (base.toLowerCase() === input) return false;
   return /screened/i.test(base);
 }
@@ -304,8 +304,12 @@ export async function scanGeneratedScreeningOutput(
   const names = extractXlsxNames(text, options.inputFileName).filter((name) =>
     isScreenedOutputFilename(name, options.inputFileName),
   );
+  const inputStem = (options.inputFileName || DEFAULT_INPUT_XLSX).replace(
+    /\.xlsx$/i,
+    "",
+  );
   const preferred = new RegExp(
-    `run-normalized-screened-${options.correlationId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.xlsx`,
+    `${inputStem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-screened-${options.correlationId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.xlsx|run-screened-siyana\\.xlsx`,
     "i",
   );
   const correlated = names.find(
@@ -397,7 +401,7 @@ export async function scanGeneratedScreeningOutput(
     workbook: {
       filename:
         screenedFilename ||
-        `run-normalized-screened-${options.correlationId}.xlsx`,
+        `${(options.inputFileName || DEFAULT_INPUT_XLSX).replace(/\.xlsx$/i, "")}-screened-${options.correlationId}.xlsx`,
       cardLocator: fileCard || downloadLink || assistant,
       assistantMessageLocator: assistant,
       downloadLinkLocator: downloadLink,
@@ -585,7 +589,7 @@ export async function resolveAssistantSpreadsheetHref(
   locator: Locator,
   inputFileName?: string,
 ): Promise<string | null> {
-  const input = (inputFileName || INPUT_XLSX).toLowerCase();
+  const input = (inputFileName || DEFAULT_INPUT_XLSX).toLowerCase();
   const candidates: Locator[] = [
     locator,
     locator.locator("xpath=ancestor::a[1]"),

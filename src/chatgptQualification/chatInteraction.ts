@@ -57,6 +57,8 @@ import {
 import {
   assertRunExcelScreeningPreSend,
   assertTenderQualificationPreSend,
+  findRunWorkbookMatches,
+  isRunWorkbookFileName,
   type ChatGptSubmissionKind,
 } from "./chatgptSubmissionKind.js";
 
@@ -2155,26 +2157,142 @@ export async function typeComposerPrompt(
     );
   }
 
-  const insertOnce = async (): Promise<number> => {
+  logger?.info(`CHATGPT_PROMPT_INSERT_START length=${prompt.length}`);
+  console.log(`CHATGPT_PROMPT_INSERT_START length=${prompt.length}`);
+
+  const clearComposerText = async (): Promise<void> => {
+    await composer.click({ timeout: 10_000 });
+    await page.keyboard.press("Control+A").catch(() => undefined);
+    await page.keyboard.press("Backspace").catch(() => undefined);
+    // Collapse any leftover selection so the UI is not stuck highlighted.
+    await page.keyboard.press("ArrowRight").catch(() => undefined);
+    await page
+      .evaluate(() => {
+        const sel = window.getSelection();
+        if (sel && sel.rangeCount > 0) sel.collapseToEnd();
+      })
+      .catch(() => undefined);
+  };
+
+  const readLength = async (): Promise<number> =>
+    (await composer.innerText().catch(() => "")).trim().length;
+
+  /** Bulk insert for long Phase-1 prompts — keyboard.insertText hangs at 10k+ chars. */
+  const insertViaDom = async (): Promise<boolean> => {
+    const ok = await page
+      .evaluate((text) => {
+        const el =
+          (document.querySelector(
+            '#prompt-textarea, [contenteditable="true"][data-virtualkeyboard], div[contenteditable="true"]',
+          ) as HTMLElement | null) ||
+          (document.querySelector('[contenteditable="true"]') as HTMLElement | null);
+        if (!el) return false;
+        el.focus();
+        try {
+          document.execCommand("selectAll", false);
+          const inserted = document.execCommand("insertText", false, text);
+          if (inserted) {
+            el.dispatchEvent(new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }));
+            return (el.innerText || "").trim().length >= Math.min(80, text.length);
+          }
+        } catch {
+          // fall through
+        }
+        // Last-resort ProseMirror-unfriendly path; still better than hanging insertText.
+        el.textContent = text;
+        el.dispatchEvent(new InputEvent("input", { bubbles: true, data: text, inputType: "insertText" }));
+        return (el.innerText || "").trim().length >= Math.min(80, text.length);
+      }, prompt)
+      .catch(() => false);
+    return ok;
+  };
+
+  const insertViaClipboard = async (): Promise<boolean> => {
+    try {
+      await page.evaluate(async (text) => {
+        await navigator.clipboard.writeText(text);
+      }, prompt);
+      await composer.click({ timeout: 5_000 });
+      await page.keyboard.press("Control+A").catch(() => undefined);
+      await page.keyboard.press("Control+V");
+      await page.waitForTimeout(300);
+      return (await readLength()) >= 80;
+    } catch {
+      return false;
+    }
+  };
+
+  const insertViaKeyboard = async (): Promise<boolean> => {
+    // Only for short prompts — long insertText freezes Playwright on Windows.
+    if (prompt.length > 2_500) return false;
     await composer.click({ timeout: 10_000 });
     await page.keyboard.press("Control+A").catch(() => undefined);
     await page.keyboard.insertText(prompt);
-    return (await composer.innerText().catch(() => "")).trim().length;
+    return (await readLength()) >= 80;
   };
 
-  let length = await insertOnce();
-  if (length < 80) {
-    logger?.warn(`CHATGPT_PROMPT_INSERT_RETRY lengthAfter=${length}`);
-    length = await insertOnce();
+  await clearComposerText();
+
+  let method = "none";
+  let length = 0;
+
+  // Prefer clipboard for long Phase-1 prompts (ProseMirror handles paste; insertText hangs).
+  if (prompt.length > 2_500) {
+    if (await insertViaClipboard()) {
+      method = "clipboard_paste";
+      length = await readLength();
+    } else if (await insertViaDom()) {
+      method = "dom_insertText";
+      length = await readLength();
+    }
+  } else if (await insertViaDom()) {
+    method = "dom_insertText";
+    length = await readLength();
+  } else if (await insertViaClipboard()) {
+    method = "clipboard_paste";
+    length = await readLength();
+  } else if (await insertViaKeyboard()) {
+    method = "keyboard_insertText";
+    length = await readLength();
   }
+
+  if (method === "none") {
+    if (await insertViaClipboard()) {
+      method = "clipboard_paste";
+    } else if (await insertViaDom()) {
+      method = "dom_insertText";
+    } else if (await insertViaKeyboard()) {
+      method = "keyboard_insertText";
+    }
+    length = await readLength();
+  }
+
+  // Ensure selection is collapsed (fixes "text selected, Send does nothing").
+  await page.keyboard.press("Escape").catch(() => undefined);
+  await page
+    .evaluate(() => {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) sel.collapseToEnd();
+    })
+    .catch(() => undefined);
+  await composer.click({ position: { x: 20, y: 20 } }).catch(() => undefined);
+  await page.keyboard.press("End").catch(() => undefined);
+
+  length = await readLength();
+  logger?.info(`CHATGPT_PROMPT_INSERT_METHOD=${method}`);
+  console.log(`CHATGPT_PROMPT_INSERT_METHOD=${method}`);
+  logger?.info(`CHATGPT_PROMPT_INSERT_LENGTH=${length}`);
+  console.log(`CHATGPT_PROMPT_INSERT_LENGTH=${length}`);
+
   if (length < 80) {
     throw new AutomationError(
       "CHATGPT_PROMPT_ENTER_FAILED",
-      `Screening prompt did not remain in the composer (length=${length})`,
+      `Screening prompt did not remain in the composer (length=${length} method=${method})`,
     );
   }
 
   logger?.info("CHATGPT_PROMPT_ENTERED");
+  console.log("CHATGPT_PROMPT_ENTERED");
 }
 
 /** Read current composer text length / presence for prompt verification. */
@@ -2190,6 +2308,153 @@ export async function readComposerPromptPresence(
     length >= 80 &&
     !/^New chat in/i.test(text);
   return { present, length, text };
+}
+
+/**
+ * True only for real ChatGPT upload-progress UI — never match the word
+ * "scanning" inside the Phase-1 prompt body (Scanning / Digitization).
+ */
+async function isComposerAttachmentUploadInProgress(page: Page): Promise<boolean> {
+  const scope = getActiveComposerContainer(page);
+  const progress = scope
+    .locator(
+      [
+        '[data-testid*="upload" i]',
+        '[aria-label*="Uploading" i]',
+        '[aria-label*="upload progress" i]',
+        '[class*="upload" i][class*="progress" i]',
+      ].join(", "),
+    )
+    .first();
+  if (await progress.isVisible().catch(() => false)) {
+    return true;
+  }
+  // Phrase-level only. Do NOT use bare /\bscanning\b/ — the screening prompt
+  // contains "Scanning / Digitization" and would block Send forever.
+  return scope
+    .getByText(/\b(uploading(\.\.\.|…)?|processing file|scanning file)\b/i)
+    .first()
+    .isVisible()
+    .catch(() => false);
+}
+
+/**
+ * Block Send until the run workbook is registered on the composer.
+ * Prevents "required input file is not available" when the chip is visible
+ * but ChatGPT has not finished attachment registration.
+ */
+export async function waitForRunExcelScreeningAttachmentReady(
+  page: Page,
+  options: {
+    expectedWorkbookName: string;
+    composerToken?: string;
+    logger?: Logger;
+    timeoutMs?: number;
+  },
+): Promise<{
+  presence: Awaited<ReturnType<typeof detectComposerAttachments>>;
+  matchedNames: string[];
+  attachmentCount: number;
+  attachmentName: string;
+}> {
+  const expected = options.expectedWorkbookName || "Tender247.xlsx";
+  const expectedStem = expected.replace(/\.xlsx$/i, "");
+  const timeoutMs =
+    options.timeoutMs ??
+    Number(process.env.CHATGPT_RUN_SCREENING_ATTACHMENT_WAIT_MS || 90_000);
+  const logger = options.logger;
+
+  logger?.info("CHATGPT_ATTACHMENT_WAIT_START");
+  console.log("CHATGPT_ATTACHMENT_WAIT_START");
+
+  const deadline = Date.now() + Math.max(5_000, timeoutMs);
+  let lastPresence = await detectComposerAttachments(page, {
+    composerToken: options.composerToken,
+  });
+  let lastMatched: string[] = [];
+  let lastCount = 0;
+  let lastName = "";
+
+  while (Date.now() < deadline) {
+    const uploading = await isComposerAttachmentUploadInProgress(page);
+
+    const presence = await detectComposerAttachments(page, {
+      composerToken: options.composerToken,
+    });
+
+    if (
+      !presence.candidates.some((name) =>
+        isRunWorkbookFileName(name, expected),
+      )
+    ) {
+      const visibleName = await page
+        .getByText(new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"))
+        .first()
+        .isVisible()
+        .catch(() => false);
+      const removeBtn = await page
+        .getByRole("button", {
+          name: new RegExp(
+            `Remove file:.*${expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+            "i",
+          ),
+        })
+        .first()
+        .isVisible()
+        .catch(() => false);
+      if (visibleName || removeBtn) {
+        presence.candidates.push(expected);
+      }
+    }
+
+    const matchedNames = [
+      ...new Set(findRunWorkbookMatches(presence, expected)),
+    ];
+    const attachmentName = matchedNames[0] || "";
+    const attachmentCount = matchedNames.length;
+    const nameOk =
+      Boolean(attachmentName) &&
+      (isRunWorkbookFileName(attachmentName, expected) ||
+        attachmentName.toLowerCase().includes(expectedStem.toLowerCase()));
+    const ready = !uploading && attachmentCount === 1 && nameOk;
+
+    lastPresence = presence;
+    lastMatched = matchedNames;
+    lastCount = attachmentCount;
+    lastName = attachmentName;
+
+    logger?.info(`CHATGPT_ATTACHMENT_COUNT=${attachmentCount}`);
+    console.log(`CHATGPT_ATTACHMENT_COUNT=${attachmentCount}`);
+    logger?.info(`CHATGPT_ATTACHMENT_NAME=${attachmentName || "(none)"}`);
+    console.log(`CHATGPT_ATTACHMENT_NAME=${attachmentName || "(none)"}`);
+    logger?.info(`CHATGPT_ATTACHMENT_READY=${ready}`);
+    console.log(`CHATGPT_ATTACHMENT_READY=${ready}`);
+    if (uploading) {
+      logger?.info("CHATGPT_ATTACHMENT_UPLOADING=true");
+      console.log("CHATGPT_ATTACHMENT_UPLOADING=true");
+    }
+
+    if (ready) {
+      return {
+        presence,
+        matchedNames,
+        attachmentCount,
+        attachmentName,
+      };
+    }
+
+    await page.waitForTimeout(500);
+  }
+
+  logger?.error(
+    `CHATGPT_ATTACHMENT_READY=false CHATGPT_ATTACHMENT_COUNT=${lastCount} CHATGPT_ATTACHMENT_NAME=${lastName || "(none)"}`,
+  );
+  console.log("CHATGPT_SEND_ALLOWED=false");
+  logger?.error("CHATGPT_SEND_ALLOWED=false");
+  throw new AutomationError(
+    "CHATGPT_PRE_SEND_ATTACHMENT_CHECK_FAILED",
+    `Cannot submit run Excel screening: workbook attachment not ready (expected=${expected} count=${lastCount} name=${lastName || "(none)"} candidates=${lastPresence.candidates.join(",")})`,
+  );
 }
 
 const COMPOSER_SEND_BUTTON_SELECTORS = [
@@ -2616,34 +2881,16 @@ export async function sendComposerMessage(
   }
 
   if (requireNewConversation && submissionKind === "RUN_EXCEL_SCREENING") {
-    const expectedWorkbookName = confirmed!.fileNames[0] || "run-normalized.xlsx";
+    const expectedWorkbookName = confirmed!.fileNames[0] || "Tender247.xlsx";
     logger?.info("CHATGPT_RUN_SCREENING_PRE_SEND_CHECK");
     console.log("CHATGPT_RUN_SCREENING_PRE_SEND_CHECK");
-    const presence = await detectComposerAttachments(page, {
+
+    const attachmentReady = await waitForRunExcelScreeningAttachmentReady(page, {
+      expectedWorkbookName,
       composerToken: confirmed!.composerIdentity,
+      logger,
     });
-    if (
-      !presence.candidates.some((name) =>
-        /\.xlsx$/i.test(name) ||
-        name.toLowerCase().includes(expectedWorkbookName.replace(/\.xlsx$/i, "").toLowerCase()),
-      )
-    ) {
-      const visibleName = await page
-        .getByText(new RegExp(expectedWorkbookName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"))
-        .first()
-        .isVisible()
-        .catch(() => false);
-      const removeBtn = await page
-        .getByRole("button", {
-          name: new RegExp(`Remove file:.*${expectedWorkbookName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i"),
-        })
-        .first()
-        .isVisible()
-        .catch(() => false);
-      if (visibleName || removeBtn) {
-        presence.candidates.push(expectedWorkbookName);
-      }
-    }
+
     const promptCheck = await readComposerPromptPresence(page, userMessagePattern);
     logger?.info(
       `CHATGPT_RUN_SCREENING_PROMPT_CHECK present=${promptCheck.present} length=${promptCheck.length} snippet=${JSON.stringify(promptCheck.text.slice(0, 120))}`,
@@ -2653,7 +2900,7 @@ export async function sendComposerMessage(
     );
     const sendEnabled = await isComposerSendEnabled(page);
     assertRunExcelScreeningPreSend({
-      presence,
+      presence: attachmentReady.presence,
       expectedWorkbookName,
       promptPresent: promptCheck.present,
       sendEnabled,
@@ -2661,6 +2908,8 @@ export async function sendComposerMessage(
     });
     logger?.info("CHATGPT_RUN_SCREENING_WORKBOOK_READY=true");
     console.log("CHATGPT_RUN_SCREENING_WORKBOOK_READY=true");
+    logger?.info("CHATGPT_SEND_ALLOWED=true");
+    console.log("CHATGPT_SEND_ALLOWED=true");
   }
 
   // Baseline MUST be captured immediately before Send
@@ -2707,6 +2956,17 @@ export async function sendComposerMessage(
     if (submissionKind === "RUN_EXCEL_SCREENING") {
       logger?.info("CHATGPT_ARTIFICIAL_SEND_DELAY_MS=0");
       console.log("CHATGPT_ARTIFICIAL_SEND_DELAY_MS=0");
+      // Final gate: attachment must still be registered with the prompt payload.
+      const expectedWorkbookName =
+        confirmed?.fileNames[0] || "Tender247.xlsx";
+      await waitForRunExcelScreeningAttachmentReady(page, {
+        expectedWorkbookName,
+        composerToken: confirmed?.composerIdentity,
+        logger,
+        timeoutMs: 30_000,
+      });
+      logger?.info("CHATGPT_SEND_ALLOWED=true");
+      console.log("CHATGPT_SEND_ALLOWED=true");
     }
     console.log("CHATGPT_SEND_CLICK_START");
     logger?.info("CHATGPT_SEND_CLICK_START");

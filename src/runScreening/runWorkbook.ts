@@ -1,6 +1,6 @@
 /**
- * Deterministic run workbook: normalize + internal/cross-source dedupe.
- * No company-preference classification.
+ * Deterministic run workbook: column normalize + exact-id dedupe only.
+ * No company-preference classification before GPT.
  */
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -16,15 +16,38 @@ import {
   normalizeHeaderKey,
 } from "../excel/types.js";
 import {
+  coercePhase1WorkbookStatus,
   isDetailScrapeStatus,
-  normalizePhase1ScreeningStatus,
+  toPhase1WorkbookStatusLabel,
   type Phase1ScreeningStatus,
 } from "./phase1Statuses.js";
 
-export const RUN_NORMALIZED_FILE = "run-normalized.xlsx";
 export const RUN_SCREENED_FILE = "run-screened-siyana.xlsx";
 
+/** @deprecated Phase-1 no longer writes/requires this before GPT. */
+export const RUN_NORMALIZED_FILE = "run-normalized.xlsx";
+
+export function expectedScreenedOutputFilename(
+  inputFileName: string,
+  correlationId: string,
+): string {
+  const stem = path.basename(inputFileName).replace(/\.xlsx$/i, "") || "tender247";
+  return `${stem}-screened-${correlationId}.xlsx`;
+}
+
 export type RunSourcePortal = "TENDER247" | "BIDASSIST" | "BOTH";
+
+export type Phase1RowClassification = {
+  tenderType: string;
+  primaryScope: string;
+  procurementModel: string;
+  dominantScope: string;
+  preferredScopeMatch: string;
+  hardGateFailed: boolean;
+  classificationConfidence: string;
+  /** Column label → true when cell is YES */
+  flags: Record<string, boolean>;
+};
 
 export type RunWorkbookRow = {
   canonicalId: string;
@@ -40,6 +63,8 @@ export type RunWorkbookRow = {
   sourceRefs: string;
   screeningStatus: Phase1ScreeningStatus | "";
   screeningReason: string;
+  /** Optional GPT classification columns used only for local status repair. */
+  classification?: Phase1RowClassification;
 };
 
 export type NormalizedRunWorkbook = {
@@ -76,6 +101,77 @@ const DEADLINE_HEADERS = ["Deadline", "Last Date", "Closing Date"];
 const SOURCE_HEADERS = ["Source"];
 const STATUS_HEADERS = ["Screening Status", "Status"];
 const REASON_HEADERS = ["Screening Reason", "Reason"];
+
+const CLASSIFICATION_FLAG_HEADERS = [
+  "EOI",
+  "Empanelment",
+  "Scanning / Digitization",
+  "Data Entry",
+  "Dedicated Manpower",
+  "Resource Augmentation",
+  "COTS / Product / Licence",
+  "Product-specific AMC",
+  "API / SaaS Subscription",
+  "Hardware Dominant",
+  "Network / Connectivity",
+  "GIS Field Survey",
+  "Cybersecurity Only",
+  "Industrial Automation / SCADA",
+  "OEM Dependency",
+  "Partner / JV Dependency",
+  "Non-IT Dominant",
+  "Hard Gate Failed",
+] as const;
+
+function isYesCell(raw: unknown): boolean {
+  return /^(yes|y|true|1)$/i.test(String(raw ?? "").trim());
+}
+
+function readPhase1Classification(
+  record: Record<string, unknown>,
+  headerMap: Map<string, string>,
+): Phase1RowClassification | undefined {
+  const tenderType = cleanCell(getField(record, headerMap, "Tender Type"));
+  const primaryScope = cleanCell(getField(record, headerMap, "Primary Scope"));
+  const procurementModel = cleanCell(
+    getField(record, headerMap, "Procurement Model"),
+  );
+  const dominantScope = cleanCell(getField(record, headerMap, "Dominant Scope"));
+  const preferredScopeMatch = cleanCell(
+    getField(record, headerMap, "Preferred Scope Match"),
+  );
+  const classificationConfidence = cleanCell(
+    getField(record, headerMap, "Classification Confidence"),
+  );
+  const flags: Record<string, boolean> = {};
+  let anyFlag = false;
+  for (const label of CLASSIFICATION_FLAG_HEADERS) {
+    const value = getField(record, headerMap, label);
+    if (value == null || String(value).trim() === "") continue;
+    anyFlag = true;
+    flags[label] = isYesCell(value);
+  }
+  if (
+    !tenderType &&
+    !primaryScope &&
+    !procurementModel &&
+    !dominantScope &&
+    !preferredScopeMatch &&
+    !anyFlag
+  ) {
+    return undefined;
+  }
+  return {
+    tenderType,
+    primaryScope,
+    procurementModel,
+    dominantScope,
+    preferredScopeMatch,
+    hardGateFailed: Boolean(flags["Hard Gate Failed"]),
+    classificationConfidence,
+    flags,
+  };
+}
 
 const OUTPUT_HEADERS = [
   "Canonical ID",
@@ -120,10 +216,92 @@ function sheetLooksLikeTenders(headerMap: Map<string, string>): boolean {
   );
 }
 
+/** ChatGPT helper sheets often repeat Canonical ID + Status — never concatenate them. */
+function isHelperScreeningSheetName(sheetName: string): boolean {
+  return /^(summary|classification|screening\s*audit|rfp\s*classification|duplicates?\s*removed|audit)$/i.test(
+    sheetName.trim(),
+  );
+}
+
+function scoreTenderSheet(sheetName: string, headerMap: Map<string, string>): number {
+  let score = 0;
+  if (/current\s*analysis|today'?s?\s*analysis|main|tenders?/i.test(sheetName)) score += 50;
+  if (isHelperScreeningSheetName(sheetName)) score -= 100;
+  if (headerMap.has(normalizeHeaderKey("Tender Name"))) score += 20;
+  if (headerMap.has(normalizeHeaderKey("Tender247 ID"))) score += 15;
+  if (headerMap.has(normalizeHeaderKey("Screening Status"))) score += 15;
+  if (headerMap.has(normalizeHeaderKey("Organization"))) score += 10;
+  if (headerMap.has(normalizeHeaderKey("Estimated Cost"))) score += 5;
+  if (headerMap.has(normalizeHeaderKey("EMD Amount"))) score += 5;
+  // Classification-only helper: Status/Reason without tender body columns.
+  if (
+    headerMap.has(normalizeHeaderKey("Status")) &&
+    !headerMap.has(normalizeHeaderKey("Tender Name")) &&
+    !headerMap.has(normalizeHeaderKey("Screening Status"))
+  ) {
+    score -= 40;
+  }
+  return score;
+}
+
 function digitsT247(raw: string): string {
   const id = raw.replace(/^T247[-\s]*/i, "");
   const digits = id.replace(/\D/g, "");
   return digits || id.trim();
+}
+
+function parseSheetRows(
+  matrix: unknown[][],
+  defaultSource: RunSourcePortal,
+): RunWorkbookRow[] {
+  if (matrix.length < 2) return [];
+  const headers = (matrix[0] ?? []).map((h) => String(h ?? "").trim());
+  const headerMap = buildHeaderMap(headers);
+  if (!sheetLooksLikeTenders(headerMap)) return [];
+  const rows: RunWorkbookRow[] = [];
+  for (const raw of matrix.slice(1) as Array<Record<string, unknown> | unknown[]>) {
+    const record: Record<string, unknown> = Array.isArray(raw)
+      ? Object.fromEntries(headers.map((h, i) => [h, raw[i]]))
+      : raw;
+    const t247 = digitsT247(formatIdAsText(getField(record, headerMap, ...T247_ID_HEADERS)));
+    const ba = formatIdAsText(getField(record, headerMap, ...BA_ID_HEADERS));
+    const name = cleanCell(getField(record, headerMap, ...TITLE_HEADERS));
+    if (!t247 && !ba && !name) continue;
+    const sourceCell = cleanCell(getField(record, headerMap, ...SOURCE_HEADERS));
+    const source: RunSourcePortal =
+      /both/i.test(sourceCell)
+        ? "BOTH"
+        : /bidassist/i.test(sourceCell)
+          ? "BIDASSIST"
+          : /tender247/i.test(sourceCell)
+            ? "TENDER247"
+            : defaultSource;
+    const canonicalId = t247
+      ? `T247-${t247}`
+      : ba
+        ? ba.toUpperCase().startsWith("BA-")
+          ? ba
+          : `BA-${ba}`
+        : `NAME-${name.slice(0, 40)}`;
+    const statusRaw = cleanCell(getField(record, headerMap, ...STATUS_HEADERS));
+    rows.push({
+      canonicalId,
+      source,
+      tender247Id: t247,
+      bidAssistId: ba,
+      tenderName: name,
+      organization: cleanCell(getField(record, headerMap, ...ORG_HEADERS)),
+      location: cleanCell(getField(record, headerMap, ...LOCATION_HEADERS)),
+      deadline: cleanCell(getField(record, headerMap, ...DEADLINE_HEADERS)),
+      estimatedCost: cleanCell(getField(record, headerMap, ...VALUE_HEADERS)),
+      emdAmount: cleanCell(getField(record, headerMap, ...EMD_HEADERS)),
+      sourceRefs: sourceCell || source,
+      screeningStatus: coercePhase1WorkbookStatus(statusRaw) ?? "",
+      screeningReason: cleanCell(getField(record, headerMap, ...REASON_HEADERS)),
+      classification: readPhase1Classification(record, headerMap),
+    });
+  }
+  return rows;
 }
 
 function parseWorkbookRows(
@@ -132,8 +310,14 @@ function parseWorkbookRows(
 ): RunWorkbookRow[] {
   if (!fs.existsSync(filePath)) return [];
   const workbook = XLSX.readFile(filePath, { cellDates: true });
-  const rows: RunWorkbookRow[] = [];
+  type Candidate = {
+    sheetName: string;
+    score: number;
+    rows: RunWorkbookRow[];
+  };
+  const candidates: Candidate[] = [];
   for (const sheetName of workbook.SheetNames) {
+    if (isHelperScreeningSheetName(sheetName)) continue;
     const sheet = workbook.Sheets[sheetName];
     if (!sheet) continue;
     const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
@@ -145,49 +329,26 @@ function parseWorkbookRows(
     const headers = (matrix[0] ?? []).map((h) => String(h ?? "").trim());
     const headerMap = buildHeaderMap(headers);
     if (!sheetLooksLikeTenders(headerMap)) continue;
-    for (const raw of matrix.slice(1) as Array<Record<string, unknown> | unknown[]>) {
-      const record: Record<string, unknown> = Array.isArray(raw)
-        ? Object.fromEntries(headers.map((h, i) => [h, raw[i]]))
-        : raw;
-      const t247 = digitsT247(formatIdAsText(getField(record, headerMap, ...T247_ID_HEADERS)));
-      const ba = formatIdAsText(getField(record, headerMap, ...BA_ID_HEADERS));
-      const name = cleanCell(getField(record, headerMap, ...TITLE_HEADERS));
-      if (!t247 && !ba && !name) continue;
-      const sourceCell = cleanCell(getField(record, headerMap, ...SOURCE_HEADERS));
-      const source: RunSourcePortal =
-        /both/i.test(sourceCell)
-          ? "BOTH"
-          : /bidassist/i.test(sourceCell)
-            ? "BIDASSIST"
-            : /tender247/i.test(sourceCell)
-              ? "TENDER247"
-              : defaultSource;
-      const canonicalId = t247
-        ? `T247-${t247}`
-        : ba
-          ? ba.toUpperCase().startsWith("BA-")
-            ? ba
-            : `BA-${ba}`
-          : `NAME-${name.slice(0, 40)}`;
-      const statusRaw = cleanCell(getField(record, headerMap, ...STATUS_HEADERS));
-      rows.push({
-        canonicalId,
-        source,
-        tender247Id: t247,
-        bidAssistId: ba,
-        tenderName: name,
-        organization: cleanCell(getField(record, headerMap, ...ORG_HEADERS)),
-        location: cleanCell(getField(record, headerMap, ...LOCATION_HEADERS)),
-        deadline: cleanCell(getField(record, headerMap, ...DEADLINE_HEADERS)),
-        estimatedCost: cleanCell(getField(record, headerMap, ...VALUE_HEADERS)),
-        emdAmount: cleanCell(getField(record, headerMap, ...EMD_HEADERS)),
-        sourceRefs: sourceCell || source,
-        screeningStatus: normalizePhase1ScreeningStatus(statusRaw) ?? "",
-        screeningReason: cleanCell(getField(record, headerMap, ...REASON_HEADERS)),
-      });
-    }
+    const rows = parseSheetRows(matrix, defaultSource);
+    if (!rows.length) continue;
+    candidates.push({
+      sheetName,
+      score: scoreTenderSheet(sheetName, headerMap),
+      rows,
+    });
   }
-  return rows;
+  if (!candidates.length) return [];
+  // Prefer a single main analysis sheet so Classification-style helpers never double-count.
+  candidates.sort((a, b) => b.score - a.score || b.rows.length - a.rows.length);
+  const best = candidates[0]!;
+  if (candidates.length > 1 && best.score >= 30) {
+    return best.rows;
+  }
+  // Legacy multi-sheet inputs (e.g. Non-GeM + GeM) without a clear analysis winner.
+  if (candidates.every((c) => c.score < 30)) {
+    return candidates.flatMap((c) => c.rows);
+  }
+  return best.rows;
 }
 
 function mergeRows(left: RunWorkbookRow, right: RunWorkbookRow): RunWorkbookRow {
@@ -283,7 +444,7 @@ export function writeRunWorkbook(rows: RunWorkbookRow[], outputPath: string): st
       row.estimatedCost,
       row.emdAmount,
       row.sourceRefs,
-      row.screeningStatus,
+      toPhase1WorkbookStatusLabel(row.screeningStatus),
       row.screeningReason,
     ]),
   ];
@@ -351,9 +512,12 @@ export function deriveDetailScrapeIds(rows: RunWorkbookRow[]): {
 export function validateScreenedWorkbook(options: {
   inputRows: RunWorkbookRow[];
   outputPath: string;
+  /** When true, empty Screening Status does not throw (caller may repair). */
+  allowMissingStatus?: boolean;
 }): {
   outputRows: RunWorkbookRow[];
   counts: Record<Phase1ScreeningStatus, number>;
+  missingStatusIds: string[];
 } {
   const { inputRows, outputPath } = options;
   if (!fs.existsSync(outputPath)) {
@@ -376,11 +540,11 @@ export function validateScreenedWorkbook(options: {
 
   const inputIds = new Set(inputRows.map((row) => row.canonicalId));
   const outputIds = new Set(outputRows.map((row) => row.canonicalId));
-  const missing = [...inputIds].filter((id) => !outputIds.has(id));
+  const missingIds = [...inputIds].filter((id) => !outputIds.has(id));
   const extra = [...outputIds].filter((id) => !inputIds.has(id));
-  if (missing.length > 0) {
+  if (missingIds.length > 0) {
     throw new ScreeningOutputInvalidError(
-      `SCREENING_OUTPUT_RECONCILIATION_FAILED missing ${missing.length} tenders (e.g. ${missing.slice(0, 5).join(", ")})`,
+      `SCREENING_OUTPUT_RECONCILIATION_FAILED missing ${missingIds.length} tenders (e.g. ${missingIds.slice(0, 5).join(", ")})`,
       "SCREENING_OUTPUT_RECONCILIATION_FAILED",
     );
   }
@@ -398,6 +562,7 @@ export function validateScreenedWorkbook(options: {
   }
 
   const seen = new Set<string>();
+  const missingStatusIds: string[] = [];
   for (const row of outputRows) {
     if (seen.has(row.canonicalId)) {
       throw new ScreeningOutputInvalidError(
@@ -406,11 +571,19 @@ export function validateScreenedWorkbook(options: {
     }
     seen.add(row.canonicalId);
     if (!row.screeningStatus) {
-      throw new ScreeningOutputInvalidError(
-        `SCREENING_OUTPUT_INVALID missing status for ${row.canonicalId}`,
-      );
+      missingStatusIds.push(row.canonicalId);
     }
   }
 
-  return { outputRows, counts: countPhase1Statuses(outputRows) };
+  if (missingStatusIds.length > 0 && !options.allowMissingStatus) {
+    throw new ScreeningOutputInvalidError(
+      `SCREENING_OUTPUT_INVALID missing status for ${missingStatusIds[0]}`,
+    );
+  }
+
+  return {
+    outputRows,
+    counts: countPhase1Statuses(outputRows),
+    missingStatusIds,
+  };
 }

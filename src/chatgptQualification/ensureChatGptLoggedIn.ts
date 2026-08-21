@@ -75,6 +75,13 @@ export async function launchChatGptPersistentSession(options: {
   // locator timeout to CHATGPT_RESPONSE_TIMEOUT_MS (20m) or isVisible/evaluate hang.
   context.setDefaultTimeout(config.pageTimeoutMs);
 
+  // Needed for bulk Phase-1 prompt paste (keyboard.insertText hangs on long text).
+  await context
+    .grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: "https://chatgpt.com",
+    })
+    .catch(() => undefined);
+
   const page = context.pages()[0] ?? (await context.newPage());
   page.setDefaultTimeout(config.pageTimeoutMs);
 

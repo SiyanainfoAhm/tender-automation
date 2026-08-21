@@ -1,6 +1,6 @@
 /**
  * Persist Phase-1 GPT screened workbook → Supabase.
- * Source of truth: run-screened-siyana.xlsx (NOT run-normalized.xlsx).
+ * Source of truth: run-screened-siyana.xlsx (NOT a local pre-filter workbook).
  *
  * Rules:
  * - Create/update tender rows from every GPT Excel row

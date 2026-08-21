@@ -130,6 +130,43 @@ const REGRESSION: Array<{
     emdAmount: "100000",
     expected: "VERIFY",
   },
+  {
+    id: "103549141",
+    title:
+      "supply and installation of smart-class rooms with LED interactive panels and classroom hardware",
+    expected: "NO_BID",
+  },
+  {
+    id: "103548560",
+    title: "comprehensive AMC for hardware, software and LAN networking equipment",
+    expected: "NO_BID",
+  },
+  {
+    id: "102890647",
+    title: "CORS network infrastructure AMC and maintenance of reference stations",
+    expected: "NO_BID",
+  },
+  {
+    id: "102890648",
+    title: "AMC of CORS network infrastructure",
+    expected: "NO_BID",
+  },
+  {
+    id: "103484951",
+    title:
+      "VR/AI based fighter-aircraft training system and simulator procurement",
+    expected: "NO_BID",
+  },
+  {
+    id: "103507004",
+    title: "SMS gateway operation and messaging service",
+    expected: "NO_BID",
+  },
+  {
+    id: "103523481",
+    title: "turnkey AI coding labs setup with workstations and lab infrastructure",
+    expected: "NO_BID",
+  },
 ];
 
 test("93674650 is NO_BID because EMD exceeds the company maximum", () => {
@@ -164,18 +201,104 @@ test("103403905 is NO_BID because ICT/ICCC infrastructure dominates ERP keywords
 
 test("known Phase-1 inconsistency regressions keep expected statuses", () => {
   for (const row of REGRESSION) {
+    const llmStatuses =
+      row.expected === "NO_BID"
+        ? (["VERIFY", "MAY_BID", "CONDITIONAL_GO"] as const)
+        : (["VERIFY"] as const);
+    for (const llmStatus of llmStatuses) {
+      const decision = decide({
+        tenderId: row.id,
+        title: row.title,
+        emdAmount: row.emdAmount ?? "0",
+        llmStatus,
+      });
+      assert.equal(
+        decision.status,
+        row.expected,
+        `${row.id} llm=${llmStatus} expected ${row.expected} got ${decision.status} (${decision.dominantScope}) hits=${decision.excludedScopeHits.join("|")}`,
+      );
+    }
+  }
+});
+
+test("hardware false-positive MAY_BID/CONDITIONAL_GO cases are forced to NO_BID", () => {
+  const cases = [
+    {
+      id: "103549141",
+      title:
+        "supply and installation of smart-class rooms with LED interactive panels and classroom hardware",
+    },
+    {
+      id: "103548560",
+      title: "comprehensive AMC for hardware, software and LAN networking equipment",
+    },
+    {
+      id: "102890647",
+      title: "CORS network infrastructure AMC and maintenance of reference stations",
+    },
+    {
+      id: "103484951",
+      title: "VR/AI based fighter-aircraft training system and simulator procurement",
+    },
+    {
+      id: "103507004",
+      title: "SMS gateway operation and messaging service",
+    },
+    {
+      id: "103523481",
+      title: "turnkey AI coding labs setup with workstations and lab infrastructure",
+    },
+  ];
+  for (const row of cases) {
     const decision = decide({
       tenderId: row.id,
       title: row.title,
-      emdAmount: row.emdAmount ?? "0",
-      llmStatus: "VERIFY",
+      llmStatus: "MAY_BID",
     });
-    assert.equal(
-      decision.status,
-      row.expected,
-      `${row.id} expected ${row.expected} got ${decision.status} (${decision.dominantScope})`,
+    assert.equal(decision.status, "NO_BID", row.id);
+    assert.ok(
+      decision.dominantScope.startsWith("EXCLUDED_") ||
+        decision.excludedScopeHits.length > 0,
+      `${row.id} should have excluded signals`,
     );
   }
+
+  const enforced = enforcePhase1ScreeningDecisions({
+    inputRows: cases.map((row) => ({
+      canonicalId: `T247-${row.id}`,
+      source: "TENDER247" as const,
+      tender247Id: row.id,
+      bidAssistId: "",
+      tenderName: row.title,
+      organization: "",
+      location: "",
+      deadline: "",
+      estimatedCost: "1000000",
+      emdAmount: "10000",
+      sourceRefs: "",
+      screeningStatus: "" as const,
+      screeningReason: "",
+    })),
+    outputRows: cases.map((row) => ({
+      canonicalId: `T247-${row.id}`,
+      source: "TENDER247" as const,
+      tender247Id: row.id,
+      bidAssistId: "",
+      tenderName: row.title,
+      organization: "",
+      location: "",
+      deadline: "",
+      estimatedCost: "1000000",
+      emdAmount: "10000",
+      sourceRefs: "",
+      screeningStatus: "CONDITIONAL_GO" as const,
+      screeningReason: "Incorrect GPT MAY_BID",
+    })),
+    snapshot: companySnapshot(),
+    runDate: "2026-08-20",
+  });
+  assert.equal(enforced.corrected, cases.length);
+  assert.ok(enforced.rows.every((row) => row.screeningStatus === "NO_GO"));
 });
 
 test("VERIFY is invalid after a hard-gate failure even with a generic IT title", () => {

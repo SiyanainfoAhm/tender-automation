@@ -24,6 +24,7 @@ import {
   typeComposerPrompt,
   uploadFilesToComposer,
   waitForAssistantResponse,
+  waitForRunExcelScreeningAttachmentReady,
 } from "../chatgptQualification/chatInteraction.js";
 import {
   findGeneratedScreeningWorkbook,
@@ -33,7 +34,9 @@ import {
   type GeneratedScreeningWorkbook,
 } from "../chatgptQualification/assistantSpreadsheetAttachment.js";
 import { ensureDir } from "../fileUtils.js";
-import { RUN_NORMALIZED_FILE } from "./runWorkbook.js";
+import {
+  expectedScreenedOutputFilename,
+} from "./runWorkbook.js";
 import {
   downloadFromSpreadsheetPreview,
   downloadGeneratedChatGptXlsx,
@@ -402,10 +405,21 @@ export function createLiveChatGptExcelScreeningClient(options: {
   return {
     async screenWorkbook({ inputWorkbookPath, prompt, outputPath, runDate }) {
       const correlationId = runCorrelationId(runDate);
-      const inputFileName =
-        path.basename(inputWorkbookPath) || RUN_NORMALIZED_FILE;
+      const inputFileName = path.basename(inputWorkbookPath);
+      if (!inputFileName || !/\.xlsx$/i.test(inputFileName)) {
+        throw new AutomationError(
+          "CHATGPT_INPUT_FILENAME_INVALID",
+          `ChatGPT screening input must be an .xlsx file (got ${inputFileName || "empty"})`,
+        );
+      }
+      const expectedOutputName = expectedScreenedOutputFilename(
+        inputFileName,
+        correlationId,
+      );
       log(logger, `CHATGPT_SCREENING_INPUT_FILE=${inputWorkbookPath}`);
+      log(logger, `CHATGPT_INPUT_FILENAME=${inputFileName}`);
       log(logger, `CHATGPT_SCREENING_OUTPUT_FILE=${outputPath}`);
+      log(logger, `CHATGPT_EXPECTED_OUTPUT_FILENAME=${expectedOutputName}`);
       const session = await launchChatGptPersistentSession({
         config,
         logger,
@@ -491,6 +505,13 @@ export function createLiveChatGptExcelScreeningClient(options: {
         await typeComposerPrompt(page, prompt, logger);
         log(logger, "[AI SCREENING] Prompt prepared");
         log(logger, "CHATGPT_RUN_SCREENING_STAGE=PROMPT_ENTERED");
+        // Prompt insert can race attachment registration — verify before Send.
+        await waitForRunExcelScreeningAttachmentReady(page, {
+          expectedWorkbookName: inputFileName,
+          composerToken: "run-screening",
+          logger,
+        });
+        log(logger, "CHATGPT_SEND_ALLOWED=true");
 
         const already = await detectSubmissionSignals(page, {
           expectedT247Id: correlationId,
@@ -542,7 +563,7 @@ export function createLiveChatGptExcelScreeningClient(options: {
         saveScreeningChatCheckpoint(outputPath, {
           conversationUrl: sendResult.chatUrl || page.url(),
           correlationId,
-          expectedFilename: `run-normalized-screened-${correlationId}.xlsx`,
+          expectedFilename: expectedOutputName,
           submittedAt: new Date().toISOString(),
           stage: "MESSAGE_SUBMITTED",
         });

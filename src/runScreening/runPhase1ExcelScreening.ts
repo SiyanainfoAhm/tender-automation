@@ -1,6 +1,7 @@
 /**
  * Phase-1 run-level Excel screening orchestrator.
- * Deterministic dedupe locally; company suitability only via ChatGPT.
+ * Source of truth: Tender247 downloaded Excel → ChatGPT screening.
+ * No local company/NO_BID pre-filter; only exact dedupe + column normalize.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -23,12 +24,15 @@ import { persistGptScreenedWorkbookToDatabase } from "./persistPhase1Results.js"
 import { enforcePhase1ScreeningDecisions } from "./phase1DecisionGuard.js";
 import { runCorrelationIdForDate } from "./phase1DetailQueue.js";
 import {
+  repairMissingScreeningStatuses,
+  saveScreeningRepairLog,
+} from "./screeningStatusRepair.js";
+import {
   deriveDetailScrapeIds,
   hashFile,
   hashText,
   normalizeAndDedupeRunRows,
   parseSourceWorkbook,
-  RUN_NORMALIZED_FILE,
   ScreeningOutputInvalidError,
   validateScreenedWorkbook,
   writeRunWorkbook,
@@ -54,7 +58,12 @@ export { assertAiScreeningCompleteForDetailCrawl };
 export type Phase1ExcelScreeningResult = {
   status: "complete" | "failed" | "pending";
   aiScreeningComplete: boolean;
+  /** GPT input workbook path (Tender247-derived under screening/). */
+  inputWorkbookPath: string;
+  /** @deprecated Alias of inputWorkbookPath (legacy callers). */
   normalizedPath: string;
+  originalTender247Path: string;
+  inputFilename: string;
   screenedPath: string | null;
   inputRows: number;
   outputRows: number;
@@ -68,6 +77,74 @@ export type Phase1ExcelScreeningResult = {
 function log(logger: Logger | undefined, message: string): void {
   console.log(message);
   logger?.info(message);
+}
+
+function validateAndRepairScreenedWorkbook(options: {
+  inputRows: RunWorkbookRow[];
+  outputPath: string;
+  snapshot: CompanyPreferenceSnapshot;
+  runDate: string;
+  dateFolder: string;
+  logger?: Logger;
+}): {
+  outputRows: RunWorkbookRow[];
+  counts: Phase1ScreeningManifest["counts"];
+  repairedCount: number;
+} {
+  log(options.logger, "SCREENING_VALIDATION_START");
+  const validated = validateScreenedWorkbook({
+    inputRows: options.inputRows,
+    outputPath: options.outputPath,
+    allowMissingStatus: true,
+  });
+  log(options.logger, `GPT_ROWS=${validated.outputRows.length}`);
+
+  let outputRows = validated.outputRows;
+  let repairedCount = 0;
+  if (validated.missingStatusIds.length > 0) {
+    const repaired = repairMissingScreeningStatuses({
+      inputRows: options.inputRows,
+      outputRows,
+      snapshot: options.snapshot,
+      runDate: options.runDate,
+      log: (message) => log(options.logger, message),
+    });
+    outputRows = repaired.rows;
+    repairedCount = repaired.repaired.length;
+    writeRunWorkbook(outputRows, options.outputPath);
+    saveScreeningRepairLog(options.dateFolder, {
+      runId: `RUN-${options.runDate}`,
+      repairedRows: repaired.repaired,
+      gptRows: outputRows.length,
+      screenedRows: outputRows.length,
+      validStatusRows: outputRows.filter((row) => Boolean(row.screeningStatus))
+        .length,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  const stillMissing = outputRows.filter((row) => !row.screeningStatus);
+  if (stillMissing.length > 0) {
+    throw new ScreeningOutputInvalidError(
+      `SCREENING_OUTPUT_INVALID missing status for ${stillMissing[0]!.canonicalId} after repair`,
+    );
+  }
+
+  log(options.logger, `SCREENED_ROWS=${outputRows.length}`);
+  log(
+    options.logger,
+    `VALID_STATUS_ROWS=${outputRows.filter((row) => Boolean(row.screeningStatus)).length}`,
+  );
+  log(options.logger, "SCREENING_VALIDATION_COMPLETE=true");
+  if (repairedCount > 0) {
+    log(options.logger, `SCREENING_STATUS_REPAIRED_COUNT=${repairedCount}`);
+  }
+
+  return {
+    outputRows,
+    counts: countPhase1Statuses(outputRows),
+    repairedCount,
+  };
 }
 
 function applyDeterministicPhase1Guard(options: {
@@ -154,12 +231,92 @@ function newestMatching(dateFolder: string, pattern: RegExp): string | undefined
   return candidates[0]?.fullPath;
 }
 
+function emptyResult(base: {
+  inputWorkbookPath: string;
+  originalTender247Path: string;
+  inputFilename: string;
+  status: Phase1ExcelScreeningResult["status"];
+  error?: string | null;
+  inputRows?: number;
+}): Phase1ExcelScreeningResult {
+  return {
+    status: base.status,
+    aiScreeningComplete: base.status === "complete",
+    inputWorkbookPath: base.inputWorkbookPath,
+    normalizedPath: base.inputWorkbookPath,
+    originalTender247Path: base.originalTender247Path,
+    inputFilename: base.inputFilename,
+    screenedPath: null,
+    inputRows: base.inputRows ?? 0,
+    outputRows: 0,
+    counts: emptyStatusCounts(),
+    tender247DetailIds: [],
+    bidAssistDetailIds: [],
+    noBidRows: [],
+    error: base.error ?? null,
+  };
+}
+
+/**
+ * Prepare Tender247 Excel for GPT: archive original, exact-dedupe + column
+ * normalize only. Never applies local NO_BID / company pre-filter.
+ */
+function prepareTender247GptInput(options: {
+  tender247Path: string;
+  dateFolder: string;
+  logger?: Logger;
+}): {
+  originalArchivePath: string;
+  gptInputPath: string;
+  inputFilename: string;
+  rows: RunWorkbookRow[];
+  tender247Raw: number;
+  tender247Unique: number;
+  duplicatesRemoved: number;
+} {
+  const dir = screeningDir(options.dateFolder);
+  fs.mkdirSync(dir, { recursive: true });
+
+  const inputFilename = path.basename(options.tender247Path);
+  // Keep a byte-for-byte export archive; GPT input uses the same export filename.
+  const originalArchivePath = path.join(dir, `export-original-${inputFilename}`);
+  fs.copyFileSync(options.tender247Path, originalArchivePath);
+  log(options.logger, `SCREENING_ORIGINAL_TENDER247=${originalArchivePath}`);
+
+  const tender247Rows = parseSourceWorkbook(options.tender247Path, "TENDER247");
+  // Tender247 only — BidAssist is not merged into GPT input.
+  const prepared = normalizeAndDedupeRunRows({
+    tender247Rows,
+    bidAssistRows: [],
+  });
+  log(options.logger, `[RUN] Tender247 raw = ${prepared.tender247Raw}`);
+  log(options.logger, `[DEDUPE] Tender247 unique = ${prepared.tender247Unique}`);
+  log(options.logger, `[DEDUPE] duplicates removed = ${prepared.duplicatesRemoved}`);
+  log(options.logger, "TENDER247_LOCAL_NO_BID_PREFILTER=false");
+  log(options.logger, "TENDER247_ROWS_PRESERVED_BEFORE_GPT=true");
+
+  // GPT attachment basename = Tender247 export name (never run-normalized.xlsx).
+  const gptInputPath = path.join(dir, inputFilename);
+  writeRunWorkbook(prepared.rows, gptInputPath);
+
+  return {
+    originalArchivePath,
+    gptInputPath,
+    inputFilename,
+    rows: prepared.rows,
+    tender247Raw: prepared.tender247Raw,
+    tender247Unique: prepared.tender247Unique,
+    duplicatesRemoved: prepared.duplicatesRemoved,
+  };
+}
+
 export async function runPhase1ExcelScreening(options: {
   dateFolder: string;
   dateIso: string;
   config?: AppConfig;
   logger?: Logger;
   tender247ExcelPath?: string;
+  /** Ignored for GPT input — Tender247 is the sole source of truth. */
   bidAssistExcelPath?: string;
   chatgptClient?: ChatGptExcelScreeningClient;
   companySnapshot?: CompanyPreferenceSnapshot;
@@ -170,14 +327,13 @@ export async function runPhase1ExcelScreening(options: {
   const tender247Path =
     options.tender247ExcelPath ??
     newestMatching(dateFolder, /^Tender247_.*\.xlsx$/i);
-  const bidAssistPath =
-    options.bidAssistExcelPath ??
-    newestMatching(dateFolder, /^BidAssist_.*\.xlsx$/i);
 
-  const tender247Rows = parseSourceWorkbook(tender247Path, "TENDER247");
-  const bidAssistRows = parseSourceWorkbook(bidAssistPath, "BIDASSIST");
-  log(logger, `[RUN] Tender247 raw = ${tender247Rows.length}`);
-  log(logger, `[RUN] BidAssist raw = ${bidAssistRows.length}`);
+  if (!tender247Path || !fs.existsSync(tender247Path)) {
+    throw new AutomationError(
+      "TENDER247_EXCEL_MISSING",
+      "Tender247 downloaded Excel not found for Phase-1 screening",
+    );
+  }
 
   saveRunState(dateFolder, {
     stage: "INGESTION_COMPLETE",
@@ -186,25 +342,26 @@ export async function runPhase1ExcelScreening(options: {
     updatedAt: new Date().toISOString(),
   });
 
-  const normalized = normalizeAndDedupeRunRows({
-    tender247Rows,
-    bidAssistRows,
+  const prepared = prepareTender247GptInput({
+    tender247Path,
+    dateFolder,
+    logger,
   });
-  log(logger, `[DEDUPE] Tender247 unique = ${normalized.tender247Unique}`);
-  log(logger, `[DEDUPE] BidAssist unique = ${normalized.bidAssistUnique}`);
-  log(logger, `[DEDUPE] Combined unique = ${normalized.combinedUnique}`);
+  const {
+    gptInputPath,
+    inputFilename,
+    rows: inputRows,
+    originalArchivePath,
+  } = prepared;
+  const inputWorkbookHash = hashFile(gptInputPath);
 
   saveIngestionCounts(dateFolder, {
-    dailyRowsRaw: normalized.tender247Raw,
-    dailyRowsDeduped: normalized.combinedUnique,
-    tender247Raw: normalized.tender247Raw,
-    bidAssistRaw: normalized.bidAssistRaw,
+    dailyRowsRaw: prepared.tender247Raw,
+    dailyRowsDeduped: prepared.tender247Unique,
+    tender247Raw: prepared.tender247Raw,
+    bidAssistRaw: 0,
     updatedAt: new Date().toISOString(),
   });
-
-  const normalizedPath = path.join(dateFolder, RUN_NORMALIZED_FILE);
-  writeRunWorkbook(normalized.rows, normalizedPath);
-  const inputWorkbookHash = hashFile(normalizedPath);
 
   saveRunState(dateFolder, {
     stage: "DEDUPE_COMPLETE",
@@ -213,19 +370,14 @@ export async function runPhase1ExcelScreening(options: {
     updatedAt: new Date().toISOString(),
   });
 
-  if (normalized.rows.length === 0) {
-    const empty: Phase1ExcelScreeningResult = {
+  if (inputRows.length === 0) {
+    const empty = emptyResult({
+      inputWorkbookPath: gptInputPath,
+      originalTender247Path: originalArchivePath,
+      inputFilename,
       status: "complete",
-      aiScreeningComplete: true,
-      normalizedPath,
-      screenedPath: null,
       inputRows: 0,
-      outputRows: 0,
-      counts: emptyStatusCounts(),
-      tender247DetailIds: [],
-      bidAssistDetailIds: [],
-      noBidRows: [],
-    };
+    });
     saveRunState(dateFolder, {
       stage: "AI_SCREENING_COMPLETE",
       aiScreeningComplete: true,
@@ -243,19 +395,14 @@ export async function runPhase1ExcelScreening(options: {
       error: "SCREENING_PENDING",
       updatedAt: new Date().toISOString(),
     });
-    return {
+    return emptyResult({
+      inputWorkbookPath: gptInputPath,
+      originalTender247Path: originalArchivePath,
+      inputFilename,
       status: "pending",
-      aiScreeningComplete: false,
-      normalizedPath,
-      screenedPath: null,
-      inputRows: normalized.combinedUnique,
-      outputRows: 0,
-      counts: emptyStatusCounts(),
-      tender247DetailIds: [],
-      bidAssistDetailIds: [],
-      noBidRows: [],
       error: "SCREENING_PENDING",
-    };
+      inputRows: inputRows.length,
+    });
   }
 
   log(logger, "[AI SCREENING] Loading Siyana preferences...");
@@ -268,8 +415,8 @@ export async function runPhase1ExcelScreening(options: {
   const prompt = buildTenderScreeningPrompt({
     companySnapshot: snapshot,
     runDate: dateIso,
-    sourceExcelName: RUN_NORMALIZED_FILE,
-    inputRowCount: normalized.combinedUnique,
+    sourceExcelName: inputFilename,
+    inputRowCount: inputRows.length,
   });
   const screeningPromptHash = hashText(prompt);
   logActiveScreeningRules(screeningSnapshot, (message) => log(logger, message));
@@ -294,41 +441,53 @@ export async function runPhase1ExcelScreening(options: {
   const existingManifest = loadScreeningManifest(dateFolder);
   const existingScreened = resolveExistingScreenedWorkbook(dateFolder);
   const screenedExists = Boolean(existingScreened);
-  if (
-    screenedExists &&
-    existingManifest?.status === "complete" &&
-    existingManifest.inputWorkbookHash === inputWorkbookHash &&
-    existingManifest.preferencesHash === preferencesHash &&
-    (existingManifest.companyPreferenceSnapshotHash ?? existingManifest.preferencesHash) ===
+  const hashesMatchExisting =
+    Boolean(existingManifest) &&
+    existingManifest!.inputWorkbookHash === inputWorkbookHash &&
+    existingManifest!.preferencesHash === preferencesHash &&
+    (existingManifest!.companyPreferenceSnapshotHash ?? existingManifest!.preferencesHash) ===
       companyPreferenceSnapshotHash &&
-    existingManifest.screeningPromptHash === screeningPromptHash &&
-    existingManifest.screeningPolicyVersion === PHASE1_SCREENING_POLICY_VERSION
-  ) {
+    existingManifest!.screeningPromptHash === screeningPromptHash &&
+    existingManifest!.screeningPolicyVersion === PHASE1_SCREENING_POLICY_VERSION;
+  // Resume when a prior run left a valid XLSX even if status was "failed"
+  // (e.g. old multi-sheet double-count bug that is now fixed in the reader).
+  if (screenedExists && hashesMatchExisting) {
     try {
-      const validated = validateScreenedWorkbook({
-        inputRows: normalized.rows,
+      const validated = validateAndRepairScreenedWorkbook({
+        inputRows,
         outputPath: existingScreened!,
+        snapshot,
+        runDate: dateIso,
+        dateFolder,
+        logger,
       });
       const guarded = applyDeterministicPhase1Guard({
-        inputRows: normalized.rows,
+        inputRows,
         outputRows: validated.outputRows,
         snapshot,
         runDate: dateIso,
         screenedPath: existingScreened!,
         logger,
       });
-      log(logger, "[AI SCREENING] Resuming valid screened workbook");
+      log(
+        logger,
+        existingManifest?.status === "complete"
+          ? "[AI SCREENING] Resuming valid screened workbook"
+          : "[AI SCREENING] Revalidating existing screened workbook after prior failure",
+      );
       return await finalizeScreening({
         dateFolder,
         dateIso,
         snapshot,
-        normalizedPath,
+        inputWorkbookPath: gptInputPath,
+        originalTender247Path: originalArchivePath,
+        inputFilename,
         screenedPath: existingScreened!,
         inputWorkbookHash,
         preferencesHash,
         companyPreferenceSnapshotHash,
         screeningPromptHash,
-        inputRows: normalized.rows,
+        inputRows,
         outputRows: guarded.outputRows,
         counts: guarded.counts,
         logger,
@@ -345,7 +504,11 @@ export async function runPhase1ExcelScreening(options: {
     shortlistReady: false,
     updatedAt: new Date().toISOString(),
   });
-  log(logger, `[AI SCREENING] Uploading ${RUN_NORMALIZED_FILE}`);
+
+  log(logger, `CHATGPT_INPUT_FILE_READY=true`);
+  log(logger, `CHATGPT_INPUT_FILENAME=${inputFilename}`);
+  log(logger, `CHATGPT_INPUT_ROW_COUNT=${inputRows.length}`);
+  log(logger, `[AI SCREENING] Uploading ${inputFilename}`);
 
   const client =
     options.chatgptClient ??
@@ -363,41 +526,40 @@ export async function runPhase1ExcelScreening(options: {
       error: "SCREENING_PENDING",
       updatedAt: new Date().toISOString(),
     });
-    return {
+    return emptyResult({
+      inputWorkbookPath: gptInputPath,
+      originalTender247Path: originalArchivePath,
+      inputFilename,
       status: "pending",
-      aiScreeningComplete: false,
-      normalizedPath,
-      screenedPath: null,
-      inputRows: normalized.combinedUnique,
-      outputRows: 0,
-      counts: emptyStatusCounts(),
-      tender247DetailIds: [],
-      bidAssistDetailIds: [],
-      noBidRows: [],
       error: "SCREENING_PENDING: no ChatGPT screening client",
-    };
+      inputRows: inputRows.length,
+    });
   }
 
   try {
     await client.screenWorkbook({
-      inputWorkbookPath: normalizedPath,
+      inputWorkbookPath: gptInputPath,
       prompt,
       outputPath: screenedPath,
       runDate: dateIso,
     });
-    const validated = validateScreenedWorkbook({
-      inputRows: normalized.rows,
+    const validated = validateAndRepairScreenedWorkbook({
+      inputRows,
       outputPath: screenedPath,
+      snapshot,
+      runDate: dateIso,
+      dateFolder,
+      logger,
     });
     const guarded = applyDeterministicPhase1Guard({
-      inputRows: normalized.rows,
+      inputRows,
       outputRows: validated.outputRows,
       snapshot,
       runDate: dateIso,
       screenedPath,
       logger,
     });
-    log(logger, `SCREENING_INPUT_ROWS=${normalized.combinedUnique}`);
+    log(logger, `SCREENING_INPUT_ROWS=${inputRows.length}`);
     log(logger, `SCREENING_OUTPUT_ROWS=${guarded.outputRows.length}`);
     log(logger, "SCREENING_ROW_RECONCILIATION=PASS");
     log(logger, "[AI SCREENING] Reconciliation = PASS");
@@ -412,13 +574,15 @@ export async function runPhase1ExcelScreening(options: {
       dateFolder,
       dateIso,
       snapshot,
-      normalizedPath,
+      inputWorkbookPath: gptInputPath,
+      originalTender247Path: originalArchivePath,
+      inputFilename,
       screenedPath,
       inputWorkbookHash,
       preferencesHash,
       companyPreferenceSnapshotHash,
       screeningPromptHash,
-      inputRows: normalized.rows,
+      inputRows,
       outputRows: guarded.outputRows,
       counts: guarded.counts,
       logger,
@@ -446,7 +610,7 @@ export async function runPhase1ExcelScreening(options: {
       runDate: dateIso,
       stage: "AI_SCREENING_FAILED",
       status: "failed",
-      inputWorkbook: normalizedPath,
+      inputWorkbook: gptInputPath,
       inputWorkbookHash,
       preferencesHash,
       companyPreferenceSnapshotHash,
@@ -454,7 +618,7 @@ export async function runPhase1ExcelScreening(options: {
       screeningPromptHash,
       screenedWorkbook: fs.existsSync(screenedPath) ? screenedPath : null,
       screenedWorkbookHash: fs.existsSync(screenedPath) ? hashFile(screenedPath) : null,
-      inputRows: normalized.combinedUnique,
+      inputRows: inputRows.length,
       outputRows: 0,
       counts: emptyStatusCounts(),
       error: `${code}: ${message}`,
@@ -471,7 +635,9 @@ async function finalizeScreening(options: {
   dateFolder: string;
   dateIso: string;
   snapshot: CompanyPreferenceSnapshot;
-  normalizedPath: string;
+  inputWorkbookPath: string;
+  originalTender247Path: string;
+  inputFilename: string;
   screenedPath: string;
   inputWorkbookHash: string;
   preferencesHash: string;
@@ -487,7 +653,7 @@ async function finalizeScreening(options: {
   const noBidRows = options.outputRows.filter((row) => row.screeningStatus === "NO_GO");
   const screeningRunId = runCorrelationIdForDate(options.dateIso);
   if (options.persistResults !== false) {
-    // GPT screened workbook is the DB source of truth (not run-normalized.xlsx).
+    // GPT screened workbook is the DB source of truth.
     await persistGptScreenedWorkbookToDatabase({
       rows: options.outputRows,
       runDate: options.dateIso,
@@ -505,7 +671,7 @@ async function finalizeScreening(options: {
     screeningRunId,
     stage: "SHORTLIST_READY",
     status: "complete",
-    inputWorkbook: options.normalizedPath,
+    inputWorkbook: options.inputWorkbookPath,
     inputWorkbookHash: options.inputWorkbookHash,
     preferencesHash: options.preferencesHash,
     companyPreferenceSnapshotHash: options.companyPreferenceSnapshotHash,
@@ -542,7 +708,10 @@ async function finalizeScreening(options: {
   return {
     status: "complete",
     aiScreeningComplete: true,
-    normalizedPath: options.normalizedPath,
+    inputWorkbookPath: options.inputWorkbookPath,
+    normalizedPath: options.inputWorkbookPath,
+    originalTender247Path: options.originalTender247Path,
+    inputFilename: options.inputFilename,
     screenedPath: options.screenedPath,
     inputRows: options.inputRows.length,
     outputRows: options.outputRows.length,

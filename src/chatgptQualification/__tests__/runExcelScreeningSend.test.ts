@@ -166,6 +166,18 @@ describe("RUN_EXCEL_SCREENING sendComposerMessage", () => {
       true,
     );
     assert.equal(
+      logs.some((line) => line.includes("CHATGPT_ATTACHMENT_WAIT_START")),
+      true,
+    );
+    assert.equal(
+      logs.some((line) => line.includes("CHATGPT_ATTACHMENT_READY=true")),
+      true,
+    );
+    assert.equal(
+      logs.some((line) => line.includes("CHATGPT_SEND_ALLOWED=true")),
+      true,
+    );
+    assert.equal(
       logs.some((line) => line.includes("CHATGPT_SEND_CLICKED")),
       true,
     );

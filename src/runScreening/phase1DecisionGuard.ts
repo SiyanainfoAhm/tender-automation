@@ -115,9 +115,21 @@ const EXCLUDED_FAMILY_RULES: FamilyRule[] = [
     weight: 3,
   },
   {
+    family: "EXCLUDED_INFRASTRUCTURE",
+    label: "CORS / Network Infrastructure AMC",
+    re: /\bcors\b|\bcontinuously operating reference station\b|\bnetwork infrastructure\b|\binfrastructure amc\b/i,
+    weight: 4,
+  },
+  {
+    family: "EXCLUDED_INFRASTRUCTURE",
+    label: "Turnkey Lab / Coding Lab Hardware",
+    re: /\bturnkey\b.{0,60}\b(ai\s+)?coding labs?\b|\b(ai\s+)?coding labs?\b|\bcomputer labs?\b|\bit labs?\b|\blab setup\b|\blab establishment\b|\blab infrastructure\b|\bworkstations?\b.{0,40}\blab\b|\blab\b.{0,40}\bworkstations?\b/i,
+    weight: 4,
+  },
+  {
     family: "EXCLUDED_HARDWARE",
     label: "Smart Classroom Hardware / AV Equipment",
-    re: /\bsmart classroom\b|\binteractive panel\b|\bav equipment\b|\baudio[- ]visual\b/i,
+    re: /\bsmart[- ]?class(room)?s?\b|\binteractive (flat )?panel\b|\bav equipment\b|\baudio[- ]visual\b|\bled (panel|display|tv|screen|monitor|board)\b|\bdigital board\b|\bsmart board\b/i,
     weight: 4,
   },
   {
@@ -129,13 +141,31 @@ const EXCLUDED_FAMILY_RULES: FamilyRule[] = [
   {
     family: "EXCLUDED_HARDWARE",
     label: "Hardware Supply / Procurement",
-    re: /\bhardware (only|supply|procurement)\b/i,
+    re: /\bhardware (only|supply|procurement|amc|maintenance)\b|\b(supply|procurement)\b.{0,40}\bhardware\b/i,
     weight: 3,
+  },
+  {
+    family: "EXCLUDED_HARDWARE",
+    label: "Hardware / LAN / Network Equipment AMC",
+    re: /\bhardware\b.{0,60}\bamc\b|\bamc\b.{0,60}\bhardware\b|\blan\b.{0,40}\bamc\b|\bamc\b.{0,40}\blan\b|\bnetwork(ing)?\b.{0,40}\bamc\b|\bamc\b.{0,40}\bnetwork(ing)?\b|\bswitch(es)?\b.{0,30}\bamc\b|\brouter(s)?\b.{0,30}\bamc\b/i,
+    weight: 4,
+  },
+  {
+    family: "EXCLUDED_HARDWARE",
+    label: "VR / Simulator / Aircraft Training Hardware",
+    re: /\bfighter[- ]aircraft\b|\bflight simulat|\bvr\b.{0,40}\btraining\b|\btraining (system|simulator)\b.{0,40}\b(vr|aircraft|fighter)\b|\bsimulator\b.{0,40}\b(aircraft|fighter|vr)\b/i,
+    weight: 4,
   },
   {
     family: "EXCLUDED_CONNECTIVITY",
     label: "Internet / Leased Line / MPLS",
     re: /\bleased line\b|\bmpls\b|\bbandwidth\b|\bdark fibre\b|\bdark fiber\b|\binternet service\b/i,
+    weight: 4,
+  },
+  {
+    family: "EXCLUDED_CONNECTIVITY",
+    label: "SMS / Messaging Gateway Service",
+    re: /\bsms gateway\b|\bsms (service|portal|platform|operation)\b|\bmessaging gateway\b|\bsms[- ]based\b/i,
     weight: 4,
   },
   {
@@ -238,7 +268,10 @@ function familyEnabled(
         policyNoBid(policies.hardwareDominant, true)
       );
     case "EXCLUDED_CONNECTIVITY":
-      return hasSelectedScope(excluded, /internet|connectivity|bandwidth/i);
+      return hasSelectedScope(
+        excluded,
+        /internet|connectivity|bandwidth|network|telecom|sms|lan|cors/i,
+      );
     case "EXCLUDED_COTS":
       return policyNoBid(policies.cotsLicence, true) || policyNoBid(policies.softwareRenewal, true);
     case "EXCLUDED_SURVEY":
@@ -382,7 +415,8 @@ function classifyScope(
   }
 
   const generic = GENERIC_TITLE.test(text) && preferredScore < 3 && topScore < 3;
-  if (topScore >= 3 && topScore >= preferredScore) {
+  // Clear excluded / non-target delivery always beats preferred IT/AI keywords.
+  if (topScore >= 3) {
     return {
       preferredScopeHits,
       excludedScopeHits,
@@ -456,8 +490,11 @@ export function decidePhase1Row(options: {
     scope.dominantScope.startsWith("EXCLUDED_") && !scope.ambiguityRemaining;
 
   if (excludedDominant) {
+    const icccHeavy = scope.excludedScopeHits.some((hit) =>
+      /ICCC|ICT Infrastructure/i.test(hit),
+    );
     const reason =
-      scope.dominantScope === "EXCLUDED_INFRASTRUCTURE"
+      scope.dominantScope === "EXCLUDED_INFRASTRUCTURE" && icccHeavy
         ? "ICT infrastructure / ICCC infrastructure-heavy and specialist long-term O&M delivery dominates despite ERP/software terminology."
         : `Excluded dominant scope (${scope.excludedScopeHits.join(", ") || scope.dominantScope}) overrides preferred-scope keywords.`;
     return {
@@ -498,6 +535,26 @@ export function decidePhase1Row(options: {
       ambiguityRemaining: scope.ambiguityRemaining,
       status: "NO_BID",
       reason: options.llmStatus ? "LLM NO_BID retained." : "NO_BID",
+      emdAmount: hard.emdAmount,
+      maxEmd,
+    };
+  }
+
+  // Never retain MAY_BID/WILL_BID when any excluded-family signal already fired.
+  if (
+    (llm === "MAY_BID" || llm === "WILL_BID") &&
+    scope.excludedScopeHits.length > 0
+  ) {
+    return {
+      hardGateFailed: false,
+      preferredScopeHits: scope.preferredScopeHits,
+      excludedScopeHits: scope.excludedScopeHits,
+      dominantScope: scope.dominantScope.startsWith("EXCLUDED_")
+        ? scope.dominantScope
+        : "AMBIGUOUS",
+      ambiguityRemaining: false,
+      status: "NO_BID",
+      reason: `Excluded scope signals (${scope.excludedScopeHits.join(", ")}) override LLM ${llm}.`,
       emdAmount: hard.emdAmount,
       maxEmd,
     };
@@ -603,13 +660,18 @@ export function enforcePhase1ScreeningDecisions(options: {
 
     const stored = (normalizePhase1ScreeningStatus(decision.status) ??
       "VERIFY") as Phase1ScreeningStatus;
-    if (stored === "NO_GO" && output.screeningStatus && output.screeningStatus !== "NO_GO") {
+    if (
+      stored === "NO_GO" &&
+      output.screeningStatus &&
+      output.screeningStatus !== "NO_GO"
+    ) {
       corrected += 1;
     }
     const overwriteReason =
       decision.hardGateFailed || decision.dominantScope.startsWith("EXCLUDED_");
     return {
       ...output,
+      // Always apply deterministic decision (crawl labels coerced to canonical).
       screeningStatus: stored,
       screeningReason: overwriteReason
         ? decision.reason

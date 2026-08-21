@@ -19,7 +19,6 @@ import {
 } from "../runPhase1ExcelScreening.js";
 import {
   readRunWorkbook,
-  RUN_NORMALIZED_FILE,
   RUN_SCREENED_FILE,
   writeRunWorkbook,
 } from "../runWorkbook.js";
@@ -73,14 +72,14 @@ function promptFor(
   return buildTenderScreeningPrompt({
     companySnapshot: snapshot(prefs),
     runDate: "2026-08-17",
-    sourceExcelName: RUN_NORMALIZED_FILE,
+    sourceExcelName: "Tender247_2026-08-17.xlsx",
     inputRowCount,
   });
 }
 
 function preferredSection(prompt: string): string {
-  const start = prompt.indexOf("PREFERRED SERVICE SCOPE");
-  const end = prompt.indexOf("EXCLUDED SCOPE");
+  const start = prompt.indexOf("Preferred Scope:");
+  const end = prompt.indexOf("Excluded Scope:");
   return prompt.slice(start, end);
 }
 
@@ -98,9 +97,9 @@ test("numeric EMD and tender-value lines come from the live snapshot, not hardco
 test("EOI and other extras policies render dynamically from the database extras JSON", () => {
   const a = promptFor({ extras: { eoiPolicy: "NO_BID" } });
   const b = promptFor({ extras: { screeningPolicies: { eoi: "VERIFY" } } });
-  assert.match(a, /EOI: NO_BID/);
-  assert.match(b, /EOI: VERIFY/);
-  assert.doesNotMatch(b, /EOI: NO_BID/);
+  assert.match(a, /EOI policy:\nNO_BID/);
+  assert.match(b, /EOI policy:\nVERIFY/);
+  assert.doesNotMatch(b, /EOI policy:\nNO_BID/);
   const screening = toTenderScreeningPreferenceSnapshot(
     snapshot({ extras: { eoiPolicy: "ALLOW" } }),
   );
@@ -124,35 +123,23 @@ test("VERIFY vs MAY_BID contract is encoded in the generated prompt", () => {
   assert.match(text, /SIYANA DAILY TENDER SCREENING/);
   assert.match(text, /OPERATING BRIEF/);
   assert.match(text, /PHASE-1 STATUS PRIORITY/);
-  assert.match(text, /Same-day \/ expired deadline → NO_BID/);
+  assert.match(text, /STRICT PHASE-1 STATUS CONTRACT/);
+  assert.match(text, /Same-day deadline → NO_BID/);
+  assert.match(text, /Do NOT use VERIFY merely because the RFP\/ATC has not been reviewed/);
   assert.match(
     text,
-    /DO NOT return VERIFY simply because the RFP\/ATC has not been reviewed/,
+    /Even if preferred IT\/software terminology appears, return NO_BID when the/,
   );
-  assert.match(
-    text,
-    /Even if an IT\/software word appears, classify NO_BID when the dominant/,
-  );
-  assert.match(text, /HARD_GATE_FAILED => NO_BID/);
-  assert.match(
-    text,
-    /Do not use VERIFY merely because detailed PQ\/TQ eligibility information is\nabsent from a Phase-1 Excel/,
-  );
-  assert.match(
-    text,
-    /If the tender clearly matches preferred scope and all available Phase-1\nfinancial\/exclusion gates pass, use MAY_BID/,
-  );
-  assert.match(
-    text,
-    /Hiring of Agency for IT Projects - Milestone Basis/,
-  );
-  assert.match(
-    text,
-    /If the title is generic and actual scope is unavailable from the Excel/,
-  );
+  assert.match(text, /FINAL STATUS CONSISTENCY RULE/);
+  assert.match(text, /VERIFY VS MAY_BID RULE/);
+  assert.match(text, /Hiring of Agency for IT Projects - Milestone Basis/);
+  assert.match(text, /If actual scope remains unavailable\/generic:/);
   assert.match(text, /Tender Type/);
   assert.match(text, /Dominant Scope/);
-  assert.match(text, /Summary \(counts \/ gate tallies\)/);
+  assert.match(text, /MANDATORY CLASSIFICATION FLAGS/);
+  assert.match(text, /Screening Audit/);
+  assert.match(text, /Never output CONDITIONAL_GO/);
+  assert.match(text, /Never output:\n\nPARTNER_BID/);
   assert.doesNotMatch(
     text,
     /Use VERIFY when the scope appears relevant but the Excel does not/,
@@ -171,36 +158,39 @@ test("hardware, COTS, and GIS interpretation follow current DB policies", () => 
       },
     },
   });
-  assert.match(text, /Configured hardware-dominant policy: NO_BID/);
+  assert.match(text, /Hardware-dominant Work policy:\nonly=NO_BID; dominant=NO_BID/);
   assert.match(text, /Do not reject merely because incidental hardware is mentioned/);
-  assert.match(text, /Configured COTS\/licence policy: NO_BID/);
-  assert.match(text, /Do NOT automatically treat "software" as custom development/);
-  assert.match(text, /Configured GIS software\/application policy: ALLOW/);
-  assert.match(text, /Configured GIS field-survey policy: NO_BID/);
-  assert.match(text, /GIS must NOT automatically be accepted or rejected/);
+  assert.match(text, /COTS \/ Licence \/ Subscription policy:\nNO_BID/);
+  assert.match(text, /Do NOT automatically treat the word "software" as custom development/);
+  assert.match(text, /GIS Field \/ DGPS \/ Drone Survey policy:\nNO_BID; GIS software\/application=ALLOW/);
+  assert.match(text, /GIS must not automatically be accepted or rejected/);
   assert.match(text, /ETABS/);
   assert.match(text, /DGPS survey/);
 });
 
 test("deadline status-priority defaults to NO_BID unless a contrary DB policy is stored", () => {
   const unset = promptFor();
-  assert.match(unset, /If the tender has already expired, use NO_BID/);
-  assert.match(unset, /If closing date is the screening date, use NO_BID/);
+  assert.match(unset, /If the tender has already expired:\n→ NO_BID/);
+  assert.match(
+    unset,
+    /Same-day deadline policy:\n\(not supplied in database — Phase-1 default: NO_BID for same-day closing\)/,
+  );
   const override = promptFor({
     extras: { screeningPolicies: { sameDayDeadline: "VERIFY", expiredTender: "ALLOW" } },
   });
-  assert.match(override, /configured same-day rule: VERIFY/);
-  assert.match(override, /configured expired-tender rule: ALLOW/);
-  assert.doesNotMatch(override, /If closing date is the screening date, use NO_BID/);
+  assert.match(override, /Same-day deadline policy:\nVERIFY/);
+  assert.match(override, /Expired-tender policy from database: ALLOW/);
 });
 
-test("workbook already normalized: prompt forbids a second dedupe pass and requires exact row count", () => {
+test("Tender247 GPT input: prompt forbids a second dedupe pass and requires exact row count", () => {
   const text = promptFor(undefined, 67);
-  assert.match(text, /already been normalized and deduplicated/);
+  assert.match(text, /Tender247 daily export/);
+  assert.match(text, /No local company \/ NO_BID pre-filter/);
   assert.match(text, /Do not perform another deduplication pass/);
-  assert.match(text, /exactly 67 tender rows/);
+  assert.match(text, /Expected unique tender rows:\n67/);
+  assert.match(text, /Verify total main-sheet rows = 67/);
   assert.match(text, /Do not delete NO_BID rows/);
-  assert.match(text, /Evaluate exactly all 67 rows/);
+  assert.match(text, /Evaluate exactly all supplied rows/);
 });
 
 test("policy version and preference snapshot hash change when extras policies change", () => {
@@ -208,7 +198,7 @@ test("policy version and preference snapshot hash change when extras policies ch
   const b = snapshot({ extras: { eoiPolicy: "VERIFY" } });
   assert.notEqual(hashPreferenceSnapshot(a), hashPreferenceSnapshot(b));
   const prompt = promptFor({ extras: { eoiPolicy: "NO_BID" } });
-  assert.match(prompt, new RegExp(`Phase-1 screening policy version: ${PHASE1_SCREENING_POLICY_VERSION}`));
+  assert.match(prompt, new RegExp(`Phase-1 screening policy version:\\n${PHASE1_SCREENING_POLICY_VERSION}`));
 });
 
 test("active-rule logging prints only configured policy fields", () => {
@@ -298,9 +288,10 @@ test("67 normalized rows remain 67 unique rows including NO_BID", async () => {
   const promptPath = path.join(dateFolder, "screening", "chatgpt-screening-prompt.txt");
   const prefsPath = path.join(dateFolder, "screening", "company-preferences-snapshot.json");
   const savedPrompt = fs.readFileSync(promptPath, "utf8");
-  assert.match(savedPrompt, /exactly 67 tender rows/);
-  assert.match(savedPrompt, /SIYANA_PHASE1_V5/);
+  assert.match(savedPrompt, /Expected unique tender rows:\n67/);
+  assert.match(savedPrompt, /SIYANA_PHASE1_V7/);
   assert.match(savedPrompt, /SIYANA DAILY TENDER SCREENING/);
+  assert.match(savedPrompt, /STRICT PHASE-1 STATUS CONTRACT/);
   const saved = JSON.parse(fs.readFileSync(prefsPath, "utf8")) as {
     screening: { preferredScopes: string[]; financial: { maxEmdInr: number } };
     screeningPolicyVersion: string;
@@ -312,12 +303,12 @@ test("67 normalized rows remain 67 unique rows including NO_BID", async () => {
     "Mobile",
   ]);
   assert.equal(saved.screening.financial.maxEmdInr, 1_500_000);
-  assert.equal(saved.screeningPolicyVersion, "SIYANA_PHASE1_V5");
+  assert.equal(saved.screeningPolicyVersion, "SIYANA_PHASE1_V7");
 
   const manifest = loadScreeningManifest(dateFolder);
   assert.equal(manifest?.inputRows, 67);
   assert.equal(manifest?.outputRows, 67);
-  assert.equal(manifest?.screeningPolicyVersion, "SIYANA_PHASE1_V5");
+  assert.equal(manifest?.screeningPolicyVersion, "SIYANA_PHASE1_V7");
   assert.ok(manifest?.inputWorkbookHash);
   assert.ok(manifest?.companyPreferenceSnapshotHash);
   assert.ok(manifest?.screeningPromptHash);

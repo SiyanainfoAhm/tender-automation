@@ -2,6 +2,11 @@ import type { BrowserContext, Locator, Page } from "playwright";
 import { AutomationError } from "../browserUtils.js";
 import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
+import { ensureTender247FreshListForDate } from "../tender247Batch/ensureTender247FreshListForDate.js";
+import {
+  getActiveTender247RunContext,
+  requestedDateFromDateFolderSafe,
+} from "../tender247Batch/tender247RunContext.js";
 import { dismissTender247BlockingOverlays } from "./dismissPromotionalPopups.js";
 import { dismissTender247SupportChat } from "./dismissSupportChat.js";
 import {
@@ -19,17 +24,60 @@ import {
   expandTender247Row,
   readTender247CardTitle,
 } from "./tender247Expansion.js";
+import { readCurrentSelectMailDate } from "./selectTender247MailDate.js";
 
 export interface OpenSingleTenderResult {
   page: Page;
   item: TenderListItem;
 }
 
+async function ensureListMailDateForDetailOpen(
+  page: Page,
+  config: AppConfig,
+  logger: Logger,
+  dateFolder?: string,
+): Promise<string | null> {
+  const requestedDate =
+    getActiveTender247RunContext()?.requestedDate ??
+    (dateFolder ? requestedDateFromDateFolderSafe(dateFolder) : null);
+  if (!requestedDate || !/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) {
+    return null;
+  }
+
+  const current = await readCurrentSelectMailDate(page);
+  if (current.iso === requestedDate) {
+    logger.info(`TENDER247_DETAIL_MAIL_DATE_OK=${requestedDate}`);
+    return requestedDate;
+  }
+
+  logger.warn(
+    `TENDER247_MAIL_DATE_DRIFT detected=${current.iso || current.inputValue || "unknown"} requested=${requestedDate}`,
+  );
+  console.log(
+    `TENDER247_MAIL_DATE_DRIFT detected=${current.iso || current.inputValue || "unknown"} requested=${requestedDate}`,
+  );
+  await ensureTender247FreshListForDate(
+    page,
+    requestedDate,
+    logger,
+    config.pageTimeoutMs,
+  );
+  const after = await readCurrentSelectMailDate(page);
+  if (after.iso !== requestedDate) {
+    throw new AutomationError(
+      "TENDER247_DATE_FILTER_MISMATCH",
+      `Cannot open tender: Select Mail Date is ${after.iso || after.inputValue || "unknown"} but run date is ${requestedDate}`,
+    );
+  }
+  logger.info(`TENDER247_DETAIL_MAIL_DATE_RESTORED=${requestedDate}`);
+  return requestedDate;
+}
+
 /**
  * Direct single-tender open — never touches Today/Closed dashboard selection.
  *
- * Flow: dismiss promo → minimize chat → find ID → complete bordered row →
- * explicit View/Eye if present, otherwise title span.cursor-pointer.
+ * Flow: restore requested mail date → dismiss promo → minimize chat → find ID →
+ * complete bordered row → explicit View/Eye if present, otherwise title span.
  */
 export async function openSingleTenderDirectly(
   page: Page,
@@ -67,6 +115,12 @@ export async function openSingleTenderDirectly(
 
   await dismissTender247BlockingOverlays(page, logger, config);
   await dismissTender247SupportChat(page, logger);
+  await ensureListMailDateForDetailOpen(
+    page,
+    config,
+    logger,
+    screening?.dateFolder,
+  );
 
   const idRegex = new RegExp(`T247\\s*ID\\s*[-:]?\\s*${id}\\b`, "i");
   const idLocator = page.getByText(idRegex).first();
@@ -74,6 +128,13 @@ export async function openSingleTenderDirectly(
   try {
     await idLocator.waitFor({ state: "visible", timeout: 15_000 });
   } catch {
+    // List may have drifted to "today" while scrolling prior tenders — restore once.
+    await ensureListMailDateForDetailOpen(
+      page,
+      config,
+      logger,
+      screening?.dateFolder,
+    );
     logger.info(`T247-${id} not initially visible; scrolling to find`);
     await scrollUntilIdVisible(page, idLocator, logger);
   }
