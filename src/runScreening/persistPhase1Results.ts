@@ -69,10 +69,21 @@ function excelEmdAmount(row: RunWorkbookRow): number | null {
   return parsePhase1Amount(row.emdAmount);
 }
 
+function excelTenderValue(row: RunWorkbookRow): number | null {
+  return parsePhase1Amount(row.estimatedCost);
+}
+
 function mapScreeningToQualificationStatus(
   status: Phase1ScreeningStatus,
   existingStatus?: string | null,
+  options?: { preserveWillBid?: boolean },
 ): Phase1ScreeningStatus {
+  if (options?.preserveWillBid) {
+    if (String(existingStatus || "").trim().toUpperCase() === "GO") {
+      return "GO";
+    }
+    return status;
+  }
   return agentQualificationStatusForDatabase(
     status,
     existingStatus,
@@ -225,6 +236,8 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
   screenedWorkbookPath?: string;
   companyId?: string;
   logger?: { info: (msg: string) => void; warn?: (msg: string) => void };
+  /** Override raw_metadata.screeningSource (default CHATGPT_RUN_EXCEL). */
+  screeningSource?: string;
 }): Promise<Phase1PersistResult> {
   const workbookLabel =
     options.screenedWorkbookPath ||
@@ -326,7 +339,16 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
       const qualificationStatus = mapScreeningToQualificationStatus(
         status,
         existing?.qualification_status,
+        {
+          // Uploaded Excel Status is human/offline — keep Will Bid as written.
+          preserveWillBid:
+            options.screeningSource === "UPLOADED_PRESCREENED_EXCEL",
+        },
       );
+      const closingDate = excelDeadlineIso(row);
+      const emdAmount = excelEmdAmount(row);
+      const tenderValue = excelTenderValue(row);
+
       const rawMetadata = {
         ...(existing?.raw_metadata &&
         typeof existing.raw_metadata === "object" &&
@@ -334,7 +356,8 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
           ? existing.raw_metadata
           : {}),
         phase1Screening: true,
-        screeningSource: "CHATGPT_RUN_EXCEL",
+        screeningSource:
+          options.screeningSource || "CHATGPT_RUN_EXCEL",
         screeningWorkbook: RUN_SCREENED_FILE,
         companyId,
         runDate: options.runDate,
@@ -342,10 +365,12 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         screeningReason: row.screeningReason,
         source: row.source,
         sourceRefs: row.sourceRefs || null,
+        tenderCategory: row.tenderCategory || null,
+        msmeExemption:
+          row.msmeExemption != null ? row.msmeExemption : null,
+        startupExemption:
+          row.startupExemption != null ? row.startupExemption : null,
       };
-
-      const closingDate = excelDeadlineIso(row);
-      const emdAmount = excelEmdAmount(row);
 
       const incoming = {
         source_portal: sourcePortal,
@@ -356,11 +381,13 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         location_text: row.location || null,
         closing_date: closingDate,
         bid_submission_date: closingDate,
+        tender_value: tenderValue,
         tender_value_text: row.estimatedCost || null,
         emd_text: row.emdAmount || null,
         emd_amount: emdAmount,
         currency: "INR",
         qualification_status: qualificationStatus,
+        category: row.tenderCategory || null,
         project_category: "Other",
         raw_metadata: rawMetadata,
         metadata_version: 1,
@@ -442,6 +469,7 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
               location_text: row.location || null,
               closing_date: excelDeadlineIso(row),
               bid_submission_date: excelDeadlineIso(row),
+              tender_value: excelTenderValue(row),
               tender_value_text: row.estimatedCost || null,
               emd_text: row.emdAmount || null,
               emd_amount: excelEmdAmount(row),
@@ -451,6 +479,7 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
               document_archive_available: false,
               download_status: "DISCOVERED",
               qualification_status: qualificationStatus,
+              category: row.tenderCategory || null,
               project_category: "Other",
               raw_metadata: rawMetadata,
               metadata_version: 1,

@@ -63,6 +63,12 @@ export type RunWorkbookRow = {
   sourceRefs: string;
   screeningStatus: Phase1ScreeningStatus | "";
   screeningReason: string;
+  /** Free-text tender category from uploaded / portal Excel. */
+  tenderCategory?: string;
+  /** MSME exemption flag when present on the source sheet. */
+  msmeExemption?: boolean | null;
+  /** Startup India exemption flag when present on the source sheet. */
+  startupExemption?: boolean | null;
   /** Optional GPT classification columns used only for local status repair. */
   classification?: Phase1RowClassification;
 };
@@ -79,28 +85,54 @@ export type NormalizedRunWorkbook = {
 
 const T247_ID_HEADERS = [
   "T247 ID",
+  "T247 ID2",
   "Tender247 ID",
   "Tender 247 ID",
   "Tender Id",
   "Tender ID",
   "Canonical ID",
 ];
-const BA_ID_HEADERS = ["BidAssist ID", "GEM/Eprocure ID", "REFERENCE NO", "Reference No"];
-const TITLE_HEADERS = ["TENDER BRIEF", "Tender Name", "Summary", "Title", "Description"];
+const BA_ID_HEADERS = [
+  "BidAssist ID",
+  "GEM/Eprocure ID",
+  "REFERENCE NO",
+  "Reference No",
+  "Reference No.",
+];
+const TITLE_HEADERS = [
+  "TENDER BRIEF",
+  "Tender Brief",
+  "Tender Name",
+  "Summary",
+  "Title",
+  "Description",
+];
 const ORG_HEADERS = ["Organization", "Organisation", "Department", "Authority"];
 const LOCATION_HEADERS = ["Location", "State", "City"];
 const VALUE_HEADERS = [
   "ESTIMATED COST",
   "Estimated Cost",
+  "Estimated Value",
   "Tender Est. Cost",
   "Tender Amount",
   "Value",
 ];
 const EMD_HEADERS = ["EMD", "EMD Amount"];
 const DEADLINE_HEADERS = ["Deadline", "Last Date", "Closing Date"];
-const SOURCE_HEADERS = ["Source"];
+const SOURCE_HEADERS = ["Source", "Portal"];
 const STATUS_HEADERS = ["Screening Status", "Status"];
-const REASON_HEADERS = ["Screening Reason", "Reason"];
+const REASON_HEADERS = [
+  "Screening Reason",
+  "Decision Reason",
+  "Reason",
+];
+const CATEGORY_HEADERS = [
+  "Tender Category",
+  "Category",
+  "Project Category",
+];
+const MSME_HEADERS = ["MSME Exemption", "MSME"];
+const STARTUP_HEADERS = ["Startup Exemption", "Startup India Exemption", "Startup"];
 
 const CLASSIFICATION_FLAG_HEADERS = [
   "EOI",
@@ -125,6 +157,15 @@ const CLASSIFICATION_FLAG_HEADERS = [
 
 function isYesCell(raw: unknown): boolean {
   return /^(yes|y|true|1)$/i.test(String(raw ?? "").trim());
+}
+
+/** Parse Yes/No exemption cells; blank → null. */
+export function parseExemptionFlag(raw: unknown): boolean | null {
+  const text = String(raw ?? "").trim();
+  if (!text) return null;
+  if (/^(yes|y|true|1|applicable|available)$/i.test(text)) return true;
+  if (/^(no|n|false|0|na|n\/a|not\s*applicable|-)$/i.test(text)) return false;
+  return null;
 }
 
 function readPhase1Classification(
@@ -211,8 +252,10 @@ function sheetLooksLikeTenders(headerMap: Map<string, string>): boolean {
   return (
     hasAnyHeaders(headerMap, [...T247_ID_HEADERS, ...TITLE_HEADERS, "EMD", "Deadline"], 2) ||
     headerMap.has(normalizeHeaderKey("T247 ID")) ||
+    headerMap.has(normalizeHeaderKey("T247 ID2")) ||
     headerMap.has(normalizeHeaderKey("Canonical ID")) ||
-    headerMap.has(normalizeHeaderKey("Tender Name"))
+    headerMap.has(normalizeHeaderKey("Tender Name")) ||
+    headerMap.has(normalizeHeaderKey("Tender Brief"))
   );
 }
 
@@ -233,11 +276,15 @@ function scoreTenderSheet(sheetName: string, headerMap: Map<string, string>): nu
   if (/gem|non-?\s*gem/i.test(sheetName)) score += 10;
   if (isHelperScreeningSheetName(sheetName)) score -= 100;
   if (headerMap.has(normalizeHeaderKey("Tender Name"))) score += 20;
+  if (headerMap.has(normalizeHeaderKey("Tender Brief"))) score += 20;
   if (headerMap.has(normalizeHeaderKey("Tender247 ID"))) score += 15;
+  if (headerMap.has(normalizeHeaderKey("T247 ID2"))) score += 15;
   if (headerMap.has(normalizeHeaderKey("Screening Status"))) score += 15;
   if (headerMap.has(normalizeHeaderKey("Organization"))) score += 10;
   if (headerMap.has(normalizeHeaderKey("Estimated Cost"))) score += 5;
+  if (headerMap.has(normalizeHeaderKey("Estimated Value"))) score += 5;
   if (headerMap.has(normalizeHeaderKey("EMD Amount"))) score += 5;
+  if (headerMap.has(normalizeHeaderKey("EMD"))) score += 5;
   // Classification-only helper: Status/Reason without tender body columns.
   if (
     headerMap.has(normalizeHeaderKey("Status")) &&
@@ -255,10 +302,89 @@ function digitsT247(raw: string): string {
   return digits || id.trim();
 }
 
+/**
+ * Uploaded Final_Aug-style sheets often have NO header row —
+ * first cell is a numeric T247 id, not a column title.
+ */
+function matrixLooksHeaderlessPrescreened(matrix: unknown[][]): boolean {
+  if (matrix.length < 1) return false;
+  const row0 = (matrix[0] ?? []).map((c) => String(c ?? "").trim());
+  const firstRaw = row0[0] || "";
+  if (/t247\s*id|tender\s*brief|estimated\s*value|deadline|status/i.test(firstRaw)) {
+    return false;
+  }
+  return /^\d{6,}$/.test(digitsT247(firstRaw));
+}
+
+function excelSerialToIso(value: unknown): string {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  const serial = Number(text);
+  if (!Number.isFinite(serial) || serial < 20000 || serial > 80000) {
+    return text;
+  }
+  // Excel serial date (1900 date system).
+  const utc = Date.UTC(1899, 11, 30) + Math.round(serial) * 86_400_000;
+  return new Date(utc).toISOString().slice(0, 10);
+}
+
+function parseHeaderlessPrescreenedRows(
+  matrix: unknown[][],
+  defaultSource: RunSourcePortal,
+): RunWorkbookRow[] {
+  const rows: RunWorkbookRow[] = [];
+  for (const raw of matrix) {
+    if (!Array.isArray(raw)) continue;
+    const cells = raw.map((c) => c);
+    const t247 = digitsT247(formatIdAsText(cells[0]));
+    const portal = cleanCell(cells[1]);
+    const referenceNo = formatIdAsText(cells[2]);
+    const brief = cleanCell(cells[3]);
+    if (!t247 && !brief) continue;
+    const statusRaw = cleanCell(cells[10]);
+    const status = coercePhase1WorkbookStatus(statusRaw) ?? "";
+    if (!t247 && !status) continue;
+    const source: RunSourcePortal =
+      /bidassist/i.test(portal)
+        ? "BIDASSIST"
+        : /tender247/i.test(portal)
+          ? "TENDER247"
+          : defaultSource;
+    rows.push({
+      canonicalId: t247 ? `T247-${t247}` : `NAME-${brief.slice(0, 40)}`,
+      source,
+      tender247Id: t247,
+      bidAssistId: referenceNo,
+      tenderName: brief,
+      organization: "",
+      location: cleanCell(cells[6]),
+      deadline: excelSerialToIso(cells[5]),
+      estimatedCost: cleanCell(cells[4]),
+      emdAmount: cleanCell(cells[7]),
+      sourceRefs: portal || source,
+      screeningStatus: status,
+      screeningReason: cleanCell(cells[11]),
+      msmeExemption: parseExemptionFlag(cells[8]),
+      startupExemption: parseExemptionFlag(cells[9]),
+    });
+  }
+  return rows;
+}
+
 function parseSheetRows(
   matrix: unknown[][],
   defaultSource: RunSourcePortal,
 ): RunWorkbookRow[] {
+  if (matrix.length < 1) return [];
+
+  if (matrixLooksHeaderlessPrescreened(matrix)) {
+    return parseHeaderlessPrescreenedRows(matrix, defaultSource);
+  }
+
   if (matrix.length < 2) return [];
   const headers = (matrix[0] ?? []).map((h) => String(h ?? "").trim());
   const headerMap = buildHeaderMap(headers);
@@ -289,6 +415,10 @@ function parseSheetRows(
           : `BA-${ba}`
         : `NAME-${name.slice(0, 40)}`;
     const statusRaw = cleanCell(getField(record, headerMap, ...STATUS_HEADERS));
+    const deadlineRaw = getField(record, headerMap, ...DEADLINE_HEADERS);
+    const tenderCategory = cleanCell(
+      getField(record, headerMap, ...CATEGORY_HEADERS),
+    );
     rows.push({
       canonicalId,
       source,
@@ -297,12 +427,19 @@ function parseSheetRows(
       tenderName: name,
       organization: cleanCell(getField(record, headerMap, ...ORG_HEADERS)),
       location: cleanCell(getField(record, headerMap, ...LOCATION_HEADERS)),
-      deadline: cleanCell(getField(record, headerMap, ...DEADLINE_HEADERS)),
+      deadline: excelSerialToIso(deadlineRaw) || cleanCell(deadlineRaw),
       estimatedCost: cleanCell(getField(record, headerMap, ...VALUE_HEADERS)),
       emdAmount: cleanCell(getField(record, headerMap, ...EMD_HEADERS)),
       sourceRefs: sourceCell || source,
       screeningStatus: coercePhase1WorkbookStatus(statusRaw) ?? "",
       screeningReason: cleanCell(getField(record, headerMap, ...REASON_HEADERS)),
+      tenderCategory: tenderCategory || undefined,
+      msmeExemption: parseExemptionFlag(
+        getField(record, headerMap, ...MSME_HEADERS),
+      ),
+      startupExemption: parseExemptionFlag(
+        getField(record, headerMap, ...STARTUP_HEADERS),
+      ),
       classification: readPhase1Classification(record, headerMap),
     });
   }
@@ -330,6 +467,20 @@ function parseWorkbookRows(
       defval: "",
       raw: true,
     });
+    if (matrix.length < 1) continue;
+
+    // Headerless Final_Aug-style: first row is data (T247 id), not titles.
+    if (matrixLooksHeaderlessPrescreened(matrix)) {
+      const rows = parseHeaderlessPrescreenedRows(matrix, defaultSource);
+      if (!rows.length) continue;
+      candidates.push({
+        sheetName,
+        score: 80 + Math.min(rows.length, 50),
+        rows,
+      });
+      continue;
+    }
+
     if (matrix.length < 2) continue;
     const headers = (matrix[0] ?? []).map((h) => String(h ?? "").trim());
     const headerMap = buildHeaderMap(headers);
@@ -381,7 +532,21 @@ function mergeRows(left: RunWorkbookRow, right: RunWorkbookRow): RunWorkbookRow 
     sourceRefs: [left.sourceRefs, right.sourceRefs].filter(Boolean).join("; "),
     screeningStatus: left.screeningStatus || right.screeningStatus,
     screeningReason: left.screeningReason || right.screeningReason,
+    tenderCategory: left.tenderCategory || right.tenderCategory,
+    msmeExemption:
+      left.msmeExemption != null ? left.msmeExemption : right.msmeExemption,
+    startupExemption:
+      left.startupExemption != null
+        ? left.startupExemption
+        : right.startupExemption,
   };
+}
+
+/** True when enough rows already carry a screening Status (uploaded shortlist). */
+export function workbookLooksPreScreened(rows: RunWorkbookRow[]): boolean {
+  if (rows.length === 0) return false;
+  const withStatus = rows.filter((row) => Boolean(row.screeningStatus)).length;
+  return withStatus >= Math.max(1, Math.ceil(rows.length * 0.5));
 }
 
 function dedupeKey(row: RunWorkbookRow): string {

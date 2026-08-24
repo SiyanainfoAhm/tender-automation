@@ -442,6 +442,15 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
     if (accountArgs.companyId) {
       batchExtraArgs.push(`--company-id=${accountArgs.companyId}`);
     }
+    const uploadedExcel =
+      getArgValue(process.argv.slice(2), "file") ||
+      getArgValue(process.argv.slice(2), "excel") ||
+      process.env.TENDER247_UPLOADED_EXCEL?.trim() ||
+      null;
+    if (uploadedExcel) {
+      batchExtraArgs.push(`--file=${uploadedExcel}`);
+      batchExtraArgs.push("--pre-screened");
+    }
     const exitCode = await runScriptProcess({
       scriptPath: tender247Script,
       cwd: config.projectRoot,

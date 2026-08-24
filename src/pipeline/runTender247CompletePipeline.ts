@@ -12,9 +12,15 @@
  *
  * Usage:
  *   npm run pipeline:tender247 -- --date=2026-08-11
- *     → if both ACCOUNT_1 and ACCOUNT_2 are in .env, runs 1 then 2 sequentially
+ *     → select that Fresh-list mail date, download Excel, screen, then detail crawl
+ *       (AI Summary + documents ZIP + metadata) + ChatGPT + Supabase
+ *   npm run pipeline:tender247 -- --file="C:\path\to\screened.xlsx"
+ *     → skip Excel download; No Bid → Supabase; other statuses → detail + ChatGPT
+ *       (run folder defaults to India today; no mail-date filter)
+ *   npm run pipeline:tender247 -- --file="C:\path\to\screened.xlsx" --date=2026-08-11
+ *     → use your Excel for screening, but select that Tender247 date filter before
+ *       detail crawl (AI Summary / docs / metadata like the classic path)
  *   npm run pipeline:tender247 -- --date=2026-08-11 --account-id=1
- *     → single account only
  *   npm run pipeline:tender247 -- --date=2026-08-11 --dry-run-date
  *   npm run test:pipeline:tender247 -- --date=2026-08-11
  */
@@ -96,6 +102,13 @@ export type Tender247CompletePipelineOptions = {
   companyId: string | null;
   /** Tender247 account id for credentials/session/seed excel. */
   accountId: string | null;
+  /**
+   * Local pre-screened Excel path. Skips Tender247 daily Excel download;
+   * No Bid rows persist to Supabase; non–No Bid continue detail + ChatGPT.
+   */
+  excelFile: string | null;
+  /** Force / disable treating --file as already screened (default auto). */
+  preScreened: boolean | "auto";
   rawArgv: string[];
   dateSource: "cli" | "npm_config" | "env" | "india_today";
 };
@@ -187,6 +200,16 @@ export function parseTender247CompletePipelineArgs(
     "--chatgpt-limit",
   );
 
+  const excelFile =
+    getArgOrNpmConfig(argv, "file", env) ||
+    getArgOrNpmConfig(argv, "excel", env) ||
+    env.TENDER247_UPLOADED_EXCEL?.trim() ||
+    null;
+  // Uploaded Excel path is the simple pre-screened flow by default.
+  let preScreened: boolean | "auto" = excelFile ? true : "auto";
+  if (hasBooleanFlag(argv, "pre-screened", env)) preScreened = true;
+  if (hasBooleanFlag(argv, "run-excel-screening", env)) preScreened = false;
+
   return {
     requestedDate: resolved.requestedDate,
     mode,
@@ -207,6 +230,8 @@ export function parseTender247CompletePipelineArgs(
       getArgOrNpmConfig(argv, "tender247-account-id", env) ||
       env.TENDER247_ACCOUNT_ID?.trim() ||
       null,
+    excelFile,
+    preScreened,
     rawArgv: [...argv],
     dateSource: resolved.source,
   };
@@ -523,6 +548,18 @@ export async function runTender247CompletePipeline(
   console.log(`E2E_DATE=${requestedDate}`);
   console.log(`COMPLETE_E2E_DATE=${requestedDate}`);
   console.log(`TENDER247_RUN_REQUESTED_DATE=${requestedDate}`);
+  if (options.excelFile) {
+    console.log(`TENDER247_UPLOADED_EXCEL=${options.excelFile}`);
+    if (options.dateSource === "india_today") {
+      console.log(
+        `UPLOADED_EXCEL_RUN_DATE_AUTO=${requestedDate} (no --date — downloads folder only; detail opens by T247 ID)`,
+      );
+    } else {
+      console.log(
+        `UPLOADED_EXCEL_WITH_DATE=${requestedDate} — Tender247 mail date filter applied before AI Summary/docs/metadata crawl`,
+      );
+    }
+  }
   console.log(`SOURCE=TENDER247`);
   console.log(`SOURCES=${JSON.stringify(options.sources)}`);
   console.log(`PIPELINE_MODE=${options.mode}`);
@@ -649,6 +686,19 @@ export async function runTender247CompletePipeline(
       }
       if (options.companyId) {
         batchArgs.push(`--company-id=${options.companyId}`);
+      }
+      if (options.excelFile) {
+        batchArgs.push(`--file=${options.excelFile}`);
+        if (options.preScreened === true) {
+          batchArgs.push("--pre-screened");
+        } else if (options.preScreened === false) {
+          batchArgs.push("--run-excel-screening");
+        }
+        // Parent always forwards --date= for the downloads folder. Only apply
+        // Tender247 mail-date filter when the user actually passed --date.
+        if (options.dateSource === "india_today") {
+          batchArgs.push("--no-mail-date");
+        }
       }
 
       const env: NodeJS.ProcessEnv = {
@@ -988,18 +1038,32 @@ async function main(): Promise<void> {
   );
 
   // Explicit --account-id / TENDER247_ACCOUNT_ID → single run.
+  // Uploaded --file Excel → always one account (default slot 1 when configured).
   // Otherwise, if both env accounts are configured, run 1 then 2 sequentially.
+  const bareAccountSlot = argv.find((a) => /^[12]$/.test(a.trim()));
   const explicitAccount =
-    getArgValue(argv, "account-id") ||
-    getArgValue(argv, "tender247-account-id") ||
+    getArgOrNpmConfig(argv, "account-id") ||
+    getArgOrNpmConfig(argv, "tender247-account-id") ||
     process.env.TENDER247_ACCOUNT_ID?.trim() ||
+    bareAccountSlot ||
     "";
   const configuredSlots = listConfiguredEnvTender247AccountSlots();
   const runSequentially =
-    !explicitAccount && configuredSlots.length > 1;
+    !explicitAccount && !options.excelFile && configuredSlots.length > 1;
 
   if (!runSequentially) {
-    const { exitCode } = await runTender247CompletePipeline(options);
+    const singleOptions =
+      options.excelFile && !options.accountId
+        ? {
+            ...options,
+            accountId:
+              explicitAccount ||
+              (configuredSlots.includes("1") ? "1" : configuredSlots[0] || "1"),
+          }
+        : explicitAccount && !options.accountId
+          ? { ...options, accountId: explicitAccount }
+          : options;
+    const { exitCode } = await runTender247CompletePipeline(singleOptions);
     process.exit(exitCode);
     return;
   }

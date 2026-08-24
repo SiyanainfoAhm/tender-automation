@@ -26,6 +26,7 @@
     "qualify:chatgpt:text-mode": "tsx src/chatgptQualification/documentTextMode/runDocumentTextModeTest.ts",
     "daily:tender-pipeline": "tsx src/runDailyTenderPipeline.ts",
     "pipeline:tender247": "tsx src/pipeline/runTender247CompletePipeline.ts",
+    "pipeline:tender247:from-excel": "tsx src/pipeline/runTender247CompletePipeline.ts --pre-screened",
     "test:pipeline:tender247": "tsx src/pipeline/runTender247CompletePipeline.ts --mode=smoke --limit=5 --chatgpt-limit=1",
     "auth:bidassist": "tsx src/bidassist/bidassistAuth.ts",
     "crawl:bidassist": "tsx src/bidassist/runBidassistCrawler.ts",

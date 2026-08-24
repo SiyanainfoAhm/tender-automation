@@ -73,6 +73,11 @@ import {
   assertAiScreeningCompleteForDetailCrawl,
   runPhase1ExcelScreening,
 } from "../runScreening/runPhase1ExcelScreening.js";
+import { ingestUploadedScreenedWorkbook } from "../runScreening/ingestUploadedScreenedWorkbook.js";
+import {
+  parseSourceWorkbook,
+  workbookLooksPreScreened,
+} from "../runScreening/runWorkbook.js";
 import { buildPhase1DetailQueue, allowTender247DetailScrape } from "../runScreening/phase1DetailQueue.js";
 import { saveRunState } from "../runScreening/screeningManifest.js";
 import { ensureDir } from "../fileUtils.js";
@@ -128,10 +133,18 @@ function releaseLock(lockFilePath: string): void {
 
 function parseDailyBatchArgs(argv: string[]): {
   date: string;
+  dateExplicit: boolean;
   dryRunDate: boolean;
   resume: boolean;
   accountId: string | null;
   companyId: string | null;
+  /** Local Excel path — skips Tender247 daily Excel download. */
+  excelFile: string | null;
+  /**
+   * Treat uploaded Excel as already screened (Status column present).
+   * Default: auto when --file= is set and Status covers most rows.
+   */
+  preScreened: boolean | "auto";
 } {
   const resolved = resolveRequestedDate(argv);
   const dryRunDate = hasBooleanFlag(argv, "dry-run-date");
@@ -148,12 +161,26 @@ function parseDailyBatchArgs(argv: string[]): {
     process.env.COMPANY_ID?.trim() ||
     process.env.SIYANA_COMPANY_ID?.trim() ||
     null;
+  const excelFile =
+    getArgValue(argv, "file") ||
+    getArgValue(argv, "excel") ||
+    process.env.TENDER247_UPLOADED_EXCEL?.trim() ||
+    null;
+  // --file uploads are always treated as pre-screened (Status already set).
+  // Use --run-excel-screening only when you intentionally want ChatGPT Excel screening.
+  let preScreened: boolean | "auto" = excelFile ? true : "auto";
+  if (hasBooleanFlag(argv, "pre-screened")) preScreened = true;
+  if (hasBooleanFlag(argv, "run-excel-screening")) preScreened = false;
+  const noMailDate = hasBooleanFlag(argv, "no-mail-date");
   return {
     date: resolved.requestedDate,
+    dateExplicit: resolved.source !== "india_today" && !noMailDate,
     dryRunDate,
     resume,
     accountId,
     companyId,
+    excelFile,
+    preScreened,
   };
 }
 
@@ -190,6 +217,12 @@ async function runDailyBatch(): Promise<void> {
   if (batchArgs.dryRunDate) {
     console.log("TENDER247_DRY_RUN_DATE=true");
   }
+  if (batchArgs.excelFile) {
+    console.log(`TENDER247_UPLOADED_EXCEL=${batchArgs.excelFile}`);
+    console.log(
+      "TENDER247_UPLOADED_EXCEL_NOTE=--date optional; defaults to India today for downloads folder only",
+    );
+  }
   if (batchArgs.resume) {
     console.log("TENDER247_RESUME=true");
     logger.info(
@@ -217,6 +250,10 @@ async function runDailyBatch(): Promise<void> {
           dateIso,
           runContext,
           dryRunDate: batchArgs.dryRunDate,
+          excelFile: batchArgs.excelFile,
+          preScreened: batchArgs.preScreened,
+          applyMailDateFilter:
+            !batchArgs.excelFile || batchArgs.dateExplicit,
         });
       });
     });
@@ -252,9 +289,20 @@ async function runDailyBatchBody(options: {
   dateIso: string;
   runContext: ReturnType<typeof createTender247RunContext>;
   dryRunDate?: boolean;
+  excelFile?: string | null;
+  preScreened?: boolean | "auto";
+  /**
+   * When true (default for --date runs, or --file + explicit --date):
+   * select Tender247 Fresh-list mail date before detail crawl so AI Summary,
+   * documents ZIP, and metadata extract like the classic pipeline.
+   * When false (--file only): open tenders by T247 ID without mail-date filter.
+   */
+  applyMailDateFilter?: boolean;
 }): Promise<void> {
   const { config, logger, dateIso, runContext } = options;
   const dryRunDate = options.dryRunDate === true;
+  const uploadedExcel = options.excelFile?.trim() || null;
+  const applyMailDateFilter = options.applyMailDateFilter !== false;
   const dateFolder = runContext.downloadRoot;
   ensureTender247DateScopedDir(dateFolder, dateIso);
 
@@ -308,63 +356,110 @@ async function runDailyBatchBody(options: {
     // Dashboard already loads Today's Fresh list after TENDER247_DASHBOARD_AUTHENTICATED.
     await loginToTender247(listPage, context, logger, config);
     await dismissTender247Interruptions(listPage, logger, config);
-    const mailDate = await ensureTender247FreshListForDate(
-      listPage,
-      dateIso,
-      logger,
-      config.pageTimeoutMs,
-    );
-    assertMailDateReadyForExcel(mailDate, dateIso);
 
-    // -------- Excel-first deterministic pre-screen --------
-    logger.info("TENDER247_DAILY_EXCEL_DOWNLOAD_START");
-    logger.info(`TENDER247_EXCEL_REQUESTED_DATE=${dateIso}`);
-    logger.info(`TENDER247_EXCEL_SOURCE_DATE=${mailDate.selectedMailDateIso}`);
-    assertDatePropagationAgreement(dateIso, {
-      TENDER247_RUN_REQUESTED_DATE: runContext.requestedDate,
-      TENDER247_SELECTED_MAIL_DATE: mailDate.selectedMailDateIso,
-      TENDER247_EXCEL_REQUESTED_DATE: dateIso,
-      TENDER247_EXCEL_SOURCE_DATE: mailDate.selectedMailDateIso,
-    });
-    if (mailDate.selectedMailDateIso !== dateIso) {
-      throw new AutomationError(
-        "TENDER247_DATE_FILTER_MISMATCH",
-        `TENDER247_DATE_FILTER_MISMATCH requested=${dateIso} selected=${mailDate.selectedMailDateIso}`,
-      );
-    }
     const seedDir = resolveSeedExcelDir(runContext);
     ensureDir(seedDir);
-    const excelPath = await downloadTender247DailyExcel(
-      listPage,
-      config,
-      seedDir,
-      logger,
-      dateIso,
-    );
-    logger.info(`TENDER247_DAILY_EXCEL_DOWNLOADED=${excelPath}`);
-    logger.info("TENDER247_LOCAL_COMPANY_FILTER_BYPASSED=true");
-    logger.info("TENDER247_GPT_INPUT_SOURCE=Tender247_export");
 
-    const parsedExcel = parseTender247DailyExcelRows(excelPath, logger);
-    const phase1 = await runPhase1ExcelScreening({
-      dateFolder,
-      dateIso,
-      config,
-      logger,
-      tender247ExcelPath: excelPath,
-      skipChatGpt: dryRunDate,
-    });
+    let excelPath: string;
+    let phase1: Awaited<ReturnType<typeof runPhase1ExcelScreening>>;
+
+    if (uploadedExcel) {
+      const absoluteUpload = path.resolve(uploadedExcel);
+      if (!fs.existsSync(absoluteUpload)) {
+        throw new AutomationError(
+          "UPLOADED_EXCEL_NOT_FOUND",
+          `Uploaded Excel not found: ${absoluteUpload}`,
+        );
+      }
+      excelPath = path.join(
+        seedDir,
+        `uploaded-${dateIso}${path.extname(absoluteUpload) || ".xlsx"}`,
+      );
+      fs.copyFileSync(absoluteUpload, excelPath);
+      logger.info("TENDER247_DAILY_EXCEL_DOWNLOAD_SKIPPED=true");
+      logger.info(`TENDER247_UPLOADED_EXCEL=${absoluteUpload}`);
+      logger.info(`TENDER247_UPLOADED_EXCEL_SEEDED=${excelPath}`);
+
+      const previewRows = parseSourceWorkbook(excelPath, "TENDER247");
+      const usePreScreened =
+        options.preScreened === true ||
+        (options.preScreened !== false &&
+          workbookLooksPreScreened(previewRows));
+
+      if (usePreScreened) {
+        logger.info("TENDER247_GPT_EXCEL_SCREENING_SKIPPED=true");
+        logger.info("TENDER247_GPT_INPUT_SOURCE=uploaded_prescreened_excel");
+        // Still open the portal session for detail crawl; mail-date Excel pull is skipped.
+        phase1 = await ingestUploadedScreenedWorkbook({
+          uploadedExcelPath: excelPath,
+          dateFolder,
+          dateIso,
+          logger,
+        });
+      } else {
+        logger.info("TENDER247_GPT_INPUT_SOURCE=uploaded_excel_unscreened");
+        phase1 = await runPhase1ExcelScreening({
+          dateFolder,
+          dateIso,
+          config,
+          logger,
+          tender247ExcelPath: excelPath,
+          skipChatGpt: dryRunDate,
+        });
+      }
+    } else {
+      const mailDate = await ensureTender247FreshListForDate(
+        listPage,
+        dateIso,
+        logger,
+        config.pageTimeoutMs,
+      );
+      assertMailDateReadyForExcel(mailDate, dateIso);
+
+      // -------- Excel-first deterministic pre-screen --------
+      logger.info("TENDER247_DAILY_EXCEL_DOWNLOAD_START");
+      logger.info(`TENDER247_EXCEL_REQUESTED_DATE=${dateIso}`);
+      logger.info(`TENDER247_EXCEL_SOURCE_DATE=${mailDate.selectedMailDateIso}`);
+      assertDatePropagationAgreement(dateIso, {
+        TENDER247_RUN_REQUESTED_DATE: runContext.requestedDate,
+        TENDER247_SELECTED_MAIL_DATE: mailDate.selectedMailDateIso,
+        TENDER247_EXCEL_REQUESTED_DATE: dateIso,
+        TENDER247_EXCEL_SOURCE_DATE: mailDate.selectedMailDateIso,
+      });
+      if (mailDate.selectedMailDateIso !== dateIso) {
+        throw new AutomationError(
+          "TENDER247_DATE_FILTER_MISMATCH",
+          `TENDER247_DATE_FILTER_MISMATCH requested=${dateIso} selected=${mailDate.selectedMailDateIso}`,
+        );
+      }
+      excelPath = await downloadTender247DailyExcel(
+        listPage,
+        config,
+        seedDir,
+        logger,
+        dateIso,
+      );
+      logger.info(`TENDER247_DAILY_EXCEL_DOWNLOADED=${excelPath}`);
+      logger.info("TENDER247_LOCAL_COMPANY_FILTER_BYPASSED=true");
+      logger.info("TENDER247_GPT_INPUT_SOURCE=Tender247_export");
+
+      phase1 = await runPhase1ExcelScreening({
+        dateFolder,
+        dateIso,
+        config,
+        logger,
+        tender247ExcelPath: excelPath,
+        skipChatGpt: dryRunDate,
+      });
+    }
 
     if (dryRunDate) {
       console.log("TENDER247_DRY_RUN_DATE_COMPLETE=true");
       console.log(`REQUESTED_DATE=${dateIso}`);
       console.log(`DOWNLOAD_ROOT=${dateFolder}`);
-      console.log(
-        `TENDER247_MAIL_DATE_INPUT_VALUE=${mailDate.mailDateInputValue}`,
-      );
-      console.log(
-        `TENDER247_SELECTED_MAIL_DATE=${mailDate.selectedMailDateIso}`,
-      );
+      if (uploadedExcel) {
+        console.log(`TENDER247_UPLOADED_EXCEL=${uploadedExcel}`);
+      }
       await persistAuthState(context, config, logger);
       return;
     }
@@ -416,40 +511,61 @@ async function runDailyBatchBody(options: {
       console.log(`Excel rows: ${phase1.inputRows}`);
       console.log(`Phase-1 NO_BID: ${phase1.counts.NO_GO}`);
       console.log("Detail crawled: 0 (no Phase-1 shortlist)");
+      if (uploadedExcel) {
+        console.log(
+          "UPLOADED_EXCEL_DONE=true — No Bid rows synced to Supabase; nothing left to crawl",
+        );
+      }
       console.log("==================================");
       await persistAuthState(context, config, logger);
       return;
     }
 
-    // ChatGPT screening / idle can leave Select Mail Date on "today". Detail
-    // crawl must search the requested historical Fresh list (e.g. 20, not 21).
-    logger.info("DETAIL_CRAWL_MAIL_DATE_REAPPLY=true");
-    console.log("DETAIL_CRAWL_MAIL_DATE_REAPPLY=true");
-    await listPage.bringToFront().catch(() => undefined);
-    const detailMailDate = await ensureTender247FreshListForDate(
-      listPage,
-      dateIso,
-      logger,
-      config.pageTimeoutMs,
-    );
-    logger.info(
-      `DETAIL_CRAWL_SELECTED_MAIL_DATE=${detailMailDate.selectedMailDateIso}`,
-    );
-    console.log(
-      `DETAIL_CRAWL_SELECTED_MAIL_DATE=${detailMailDate.selectedMailDateIso}`,
-    );
-    if (detailMailDate.selectedMailDateIso !== dateIso) {
-      throw new AutomationError(
-        "TENDER247_DATE_FILTER_MISMATCH",
-        `Detail crawl mail date mismatch requested=${dateIso} selected=${detailMailDate.selectedMailDateIso}`,
+    // ChatGPT screening / idle can leave Select Mail Date on "today".
+    // Classic --date runs (and --file + --date) re-apply the Fresh-list filter
+    // so detail crawl can extract AI Summary, documents ZIP, and metadata.
+    // --file alone opens tenders by T247 ID without requiring that day's list.
+    let expectedCount = survivingIds.size;
+    if (applyMailDateFilter) {
+      logger.info("DETAIL_CRAWL_MAIL_DATE_REAPPLY=true");
+      console.log("DETAIL_CRAWL_MAIL_DATE_REAPPLY=true");
+      if (uploadedExcel) {
+        console.log(
+          `UPLOADED_EXCEL_WITH_DATE=${dateIso} — applying Tender247 mail date filter before detail crawl`,
+        );
+      }
+      await listPage.bringToFront().catch(() => undefined);
+      const detailMailDate = await ensureTender247FreshListForDate(
+        listPage,
+        dateIso,
+        logger,
+        config.pageTimeoutMs,
+      );
+      logger.info(
+        `DETAIL_CRAWL_SELECTED_MAIL_DATE=${detailMailDate.selectedMailDateIso}`,
+      );
+      console.log(
+        `DETAIL_CRAWL_SELECTED_MAIL_DATE=${detailMailDate.selectedMailDateIso}`,
+      );
+      if (detailMailDate.selectedMailDateIso !== dateIso) {
+        throw new AutomationError(
+          "TENDER247_DATE_FILTER_MISMATCH",
+          `Detail crawl mail date mismatch requested=${dateIso} selected=${detailMailDate.selectedMailDateIso}`,
+        );
+      }
+
+      expectedCount = await readFreshExpectedCount(
+        listPage,
+        logger,
+        dateIso,
+      );
+    } else {
+      logger.info("DETAIL_CRAWL_MAIL_DATE_REAPPLY=skipped (uploaded Excel, no --date)");
+      console.log("DETAIL_CRAWL_MAIL_DATE_REAPPLY=skipped");
+      console.log(
+        `UPLOADED_EXCEL_DETAIL_CANDIDATES=${survivingIds.size} (open by T247 ID; pass --date=YYYY-MM-DD to filter Fresh list)`,
       );
     }
-
-    const expectedCount = await readFreshExpectedCount(
-      listPage,
-      logger,
-      dateIso,
-    );
     logger.info(`EXPECTED_TODAY_COUNT=${expectedCount}`);
     logger.info(
       `TENDER247_EXCEL_SURVIVORS=${survivingIds.size} detail crawls required (Phase-1 shortlist)`,
@@ -466,21 +582,41 @@ async function runDailyBatchBody(options: {
     const failedIds = new Set<string>();
     const createdZips: string[] = [];
     const itRelevanceAuditRecords: ItRelevanceAuditRecord[] = [];
-    const excelDecisionById = new Map(
-      parsedExcel.rows.map((row) => {
+    const excelDecisionById = new Map<
+      string,
+      {
+        parsedTenderValueInr: number | null;
+        parsedEmdInr: number | null;
+        title: string;
+        deadline: string | null;
+      }
+    >();
+
+    if (uploadedExcel) {
+      for (const row of parseSourceWorkbook(excelPath, "TENDER247")) {
+        if (!row.tender247Id) continue;
+        const value = resolveExcelTenderValue(row.estimatedCost);
+        const emd = resolveExcelEmd(row.emdAmount);
+        excelDecisionById.set(row.tender247Id, {
+          parsedTenderValueInr: value.amountInr,
+          parsedEmdInr: emd.amountInr,
+          title: row.tenderName,
+          deadline: row.deadline || null,
+        });
+      }
+    } else {
+      const parsedExcel = parseTender247DailyExcelRows(excelPath, logger);
+      for (const row of parsedExcel.rows) {
         const value = resolveExcelTenderValue(row.rawTenderValue);
         const emd = resolveExcelEmd(row.rawEmd);
-        return [
-          row.sourceTenderId,
-          {
-            parsedTenderValueInr: value.amountInr,
-            parsedEmdInr: emd.amountInr,
-            title: row.title,
-            deadline: row.deadline ?? null,
-          },
-        ] as const;
-      }),
-    );
+        excelDecisionById.set(row.sourceTenderId, {
+          parsedTenderValueInr: value.amountInr,
+          parsedEmdInr: emd.amountInr,
+          title: row.title,
+          deadline: row.deadline ?? null,
+        });
+      }
+    }
     let itRelevantCount = 0;
     let nonItDroppedCount = 0;
     let ambiguousCount = 0;
