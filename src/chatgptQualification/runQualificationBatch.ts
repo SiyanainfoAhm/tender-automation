@@ -62,6 +62,10 @@ import {
   closeTender247EvidenceSession,
   ensureTender247EvidenceSession,
 } from "./tender247EvidenceSession.js";
+import {
+  getDetailRateLimitConfig,
+  readDetailRateSnapshot,
+} from "./chatgptDetailSubmissionLedger.js";
 
 export interface QualificationBatchSummary {
   expected: number;
@@ -123,6 +127,52 @@ export async function runQualificationBatch(
     );
   }
 
+  // Experimental path: do not run the document-upload qualification batch.
+  if (config.documentTextMode) {
+    const { runDocumentTextModeTest } = await import(
+      "./documentTextMode/qualifyDocumentTextMode.js"
+    );
+    const dateIso =
+      options.dateIso?.trim() ||
+      resolveRequestedDate(process.argv.slice(2)).requestedDate ||
+      getIndiaTodayIsoDate();
+    const dateFolder = path.join(
+      resolveProjectPath(config.downloadRoot),
+      dateIso,
+    );
+    logger.info("DOCUMENT_TEXT_MODE=true");
+    logger.info("Skipping existing document-upload qualification flow");
+    const { results, complete } = await runDocumentTextModeTest({
+      dateFolder,
+      dateIso,
+      tenderIds: config.documentTextTestTenderIds,
+      config,
+      logger,
+    });
+    const statusCounts: Record<string, number> = {};
+    for (const row of results) {
+      const key = row.status || "FAILED";
+      statusCounts[key] = (statusCounts[key] ?? 0) + 1;
+    }
+    return {
+      expected: results.length,
+      ready: results.length,
+      selected: results.length,
+      completed: results.filter((r) => r.status && !r.error).length,
+      skipped: 0,
+      pending: 0,
+      rateLimited: 0,
+      failed: results.filter((r) => r.error || !r.status).length,
+      notReady: 0,
+      remainingQueued: 0,
+      pendingChatUrl: null,
+      browserOpened: true,
+      dateIso,
+      statusCounts,
+      ...(complete ? {} : {}),
+    };
+  }
+
   const dateIso =
     options.dateIso?.trim() ||
     resolveRequestedDate(process.argv.slice(2)).requestedDate ||
@@ -149,11 +199,25 @@ export async function runQualificationBatch(
   logger.info(`REQUESTED_DATE=${dateIso}`);
   console.log(`CHATGPT_RESUME_MODE=${resumeMode}`);
   logger.info(`CHATGPT_RESUME_MODE=${resumeMode}`);
-  // Fresh runs never blanket-reuse. Resume may reuse only after per-tender checks.
-  if (!resumeMode) {
-    console.log("CHATGPT_EXISTING_QUALIFICATION_REUSE=false");
-    logger.info("CHATGPT_EXISTING_QUALIFICATION_REUSE=false");
-  }
+  console.log(
+    "CHATGPT_EXISTING_QUALIFICATION_POLICY=VALID_RESPONSE_ALWAYS_REUSED",
+  );
+  logger.info(
+    "CHATGPT_EXISTING_QUALIFICATION_POLICY=VALID_RESPONSE_ALWAYS_REUSED",
+  );
+  const rateCfg = getDetailRateLimitConfig();
+  console.log(
+    `CHATGPT_RATE_LIMIT_SAFETY_MAX=${rateCfg.maxSubmissions}`,
+  );
+  console.log(
+    `CHATGPT_RATE_WINDOW_HOURS=${Math.round(rateCfg.windowMs / 3_600_000)}`,
+  );
+  logger.info(
+    `CHATGPT_DETAIL_MAX_SUBMISSIONS_PER_WINDOW=${rateCfg.maxSubmissions}`,
+  );
+  logger.info(
+    `CHATGPT_DETAIL_SUBMISSION_WINDOW_MINUTES=${Math.round(rateCfg.windowMs / 60_000)}`,
+  );
   logger.info(
     `CHATGPT_QUALIFICATION_LIMIT=${formatProductionLimit(effectiveMaxGpt)}`,
   );
@@ -548,7 +612,8 @@ export async function runQualificationBatch(
         tender247ListPage: tender247Evidence?.listPage,
         stopOnGo: false,
         resumeMode,
-        forceReprocess: !resumeMode,
+        // Never force re-send of COMPLETE; pending recovery always preferred.
+        forceReprocess: false,
         manifestTotals,
         recoverSharedContext: async () => {
           // Close broken session handles carefully, then relaunch.
@@ -726,6 +791,20 @@ export async function runQualificationBatch(
     console.log(`GPT_FAILED=${failed}`);
     console.log(`GPT_NOT_READY=${notReady}`);
     console.log(`GPT ready: ${readiness.ready}`);
+    const rateSnap = await readDetailRateSnapshot();
+    const rateCfgEnd = getDetailRateLimitConfig();
+    console.log(
+      `CHATGPT_RATE_LIMIT_SAFETY_MAX=${rateCfgEnd.maxSubmissions}`,
+    );
+    console.log(
+      `CHATGPT_RATE_WINDOW_HOURS=${Math.round(rateCfgEnd.windowMs / 3_600_000)}`,
+    );
+    console.log(`CHATGPT_ROLLING_WINDOW_USED=${rateSnap.used}`);
+    console.log(`CHATGPT_ROLLING_WINDOW_AVAILABLE=${rateSnap.available}`);
+    if (rateSnap.nextSlotAt) {
+      console.log(`CHATGPT_NEXT_RATE_SLOT_AT=${rateSnap.nextSlotAt}`);
+    }
+    console.log(`GPT_WAITING_RATE_SLOT=${rateSnap.allowed ? "false" : "true"}`);
     console.log(`CHATGPT_SELECTED=${selectedIds.length}`);
     console.log(`CHATGPT_NEW_QUEUE_LENGTH=${plan.queuedNewIds.length}`);
     console.log(`CHATGPT_EXPLICIT_LIMIT=${plan.explicitLimit}`);

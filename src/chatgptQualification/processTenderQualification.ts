@@ -18,6 +18,7 @@ import {
   evaluateExistingQualificationReuse,
   logSkipExistingDetails,
 } from "./existingQualificationReuse.js";
+import { inspectQualificationState } from "./inspectQualificationState.js";
 import {
   computeQualificationInputFingerprint,
   saveQualificationInputFingerprint,
@@ -132,8 +133,6 @@ export async function qualifySingleTender(options: {
 }): Promise<QualifyTenderOutcome> {
   const { page, dateFolder, t247Id, config, logger } = options;
   const resumeMode = options.resumeMode === true;
-  // Fresh runs always reprocess; resume may reuse matching valid results.
-  const effectiveForceReprocess = !resumeMode || options.forceReprocess === true;
   // Source/run date comes from the caller's date folder — never system today.
   const dateIso = requestedDateFromDateFolder(dateFolder);
   const tenderFolder = path.join(dateFolder, `T247-${t247Id}`);
@@ -153,12 +152,34 @@ export async function qualifySingleTender(options: {
     logger,
   });
 
-  if (resumeMode && reuseDecision.reuse) {
+  // RULE: valid persisted detailed qualification → never send again (fresh or resume).
+  if (reuseDecision.reuse) {
     logSkipExistingDetails({ sourceTenderId: t247Id, decision: reuseDecision });
     logger.info(`CHATGPT_QUALIFICATION_ALREADY_COMPLETE_SKIP=T247-${t247Id}`);
+    const inspection = inspectQualificationState({
+      dateFolder,
+      tenderId: t247Id,
+    });
+    const reuseResultPath =
+      (inspection.resultPath && fs.existsSync(inspection.resultPath)
+        ? inspection.resultPath
+        : null) ||
+      (fs.existsSync(resultPath) ? resultPath : null);
+    if (!reuseResultPath) {
+      throw new AutomationError(
+        "CHATGPT_REUSE_MISSING_RESULT",
+        `Reuse decided for T247-${t247Id} but no result file found`,
+      );
+    }
     const qualification = JSON.parse(
-      fs.readFileSync(resultPath, "utf8"),
+      fs.readFileSync(reuseResultPath, "utf8"),
     ) as QualificationResult;
+    const reuseResponsePath =
+      inspection.responsePath && fs.existsSync(inspection.responsePath)
+        ? inspection.responsePath
+        : fs.existsSync(responsePath)
+          ? responsePath
+          : null;
     upsertQualificationManifestEntry(
       dateFolder,
       dateIso,
@@ -167,8 +188,8 @@ export async function qualifySingleTender(options: {
         status: "skipped",
         qualificationStatus: qualification.status,
         chatUrl: loadChatGptTenderState(tenderFolder)?.chatUrl ?? null,
-        resultPath,
-        responsePath: fs.existsSync(responsePath) ? responsePath : null,
+        resultPath: reuseResultPath,
+        responsePath: reuseResponsePath,
         updatedAt: new Date().toISOString(),
         error: null,
       },
@@ -177,8 +198,8 @@ export async function qualifySingleTender(options: {
     return {
       t247Id,
       status: "skipped",
-      resultPath,
-      responsePath: fs.existsSync(responsePath) ? responsePath : null,
+      resultPath: reuseResultPath,
+      responsePath: reuseResponsePath,
       qualification,
       chatUrl: loadChatGptTenderState(tenderFolder)?.chatUrl ?? null,
       error: null,
@@ -186,15 +207,9 @@ export async function qualifySingleTender(options: {
     };
   }
 
-  if (reuseDecision.found && !resumeMode) {
-    logger.info(
-      `CHATGPT_EXISTING_QUALIFICATION_FOUND=true CHATGPT_EXISTING_QUALIFICATION_REUSE=false T247-${t247Id}`,
-    );
-  }
-
   // ---- Local raw-response recovery (no ChatGPT / no re-upload) ----
-  // Resume only — fresh runs must submit a new GPT request.
-  if (resumeMode && !options.forceReprocess) {
+  // Always attempt — crash-after-Send must not blindly re-submit.
+  if (!options.forceReprocess) {
     const localRecovery = await tryRecoverFromExistingRawResponse({
       t247Id,
       tenderFolder,
@@ -208,7 +223,7 @@ export async function qualifySingleTender(options: {
     if (localRecovery) {
       return localRecovery;
     }
-  } else if (effectiveForceReprocess) {
+  } else {
     logger.info(`QUALIFICATION_REPROCESSED=true T247-${t247Id}`);
     console.log(`QUALIFICATION_REPROCESSED=true T247-${t247Id}`);
   }
@@ -248,12 +263,10 @@ export async function qualifySingleTender(options: {
       // Treat as unsubmitted; keep invalid state until a verified /c/ URL is saved.
     }
 
-    // ---- Resume pending / rate-limited / failed-with-/c/ chat ----
-    // Fresh runs (--resume absent) must submit a NEW GPT request even if a
-    // prior /c/ URL exists. Pending URL recovery is resume-only.
+    // ---- Pending / rate-limited / failed-with-/c/ recovery ----
+    // Crash-after-Send must recover the existing conversation — never blind re-send.
     if (
       existingState &&
-      resumeMode &&
       !isResumablePendingState(existingState) &&
       isConversationUrl(existingState.chatUrl || "") &&
       existingState.requiredAttachmentsConfirmed !== true
@@ -267,7 +280,7 @@ export async function qualifySingleTender(options: {
       );
     }
 
-    if (resumeMode && isResumablePendingState(existingState)) {
+    if (isResumablePendingState(existingState)) {
       logger.info(`CHATGPT_PENDING_CHAT_RESUME=T247-${t247Id}`);
       // Resume owns a single goto to THIS tender's /c/ URL — never reuse
       // another tender's conversation. Reset lifecycle so the recovery goto

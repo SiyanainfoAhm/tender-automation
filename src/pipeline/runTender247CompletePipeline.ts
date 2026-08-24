@@ -1007,6 +1007,8 @@ async function main(): Promise<void> {
   console.log(
     `TENDER247_SEQUENTIAL_ACCOUNTS=${configuredSlots.join(",")} date=${options.requestedDate}`,
   );
+  // Continue remaining accounts after a non-zero exit so one empty secondary
+  // account does not stop the sequential run after a successful primary crawl.
   let lastExit = 0;
   for (const slot of configuredSlots) {
     console.log("");
@@ -1021,9 +1023,9 @@ async function main(): Promise<void> {
     if (exitCode !== 0) {
       lastExit = exitCode;
       console.error(
-        `TENDER247_SEQUENTIAL_STOP account=${slot} failed; skipping remaining accounts`,
+        `TENDER247_SEQUENTIAL_ACCOUNT_FAILED account=${slot} exit=${exitCode} — continuing remaining accounts`,
       );
-      break;
+      continue;
     }
   }
   process.exit(lastExit);

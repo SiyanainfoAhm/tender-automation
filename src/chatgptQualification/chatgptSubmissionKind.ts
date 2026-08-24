@@ -6,7 +6,8 @@ import { AutomationError } from "../browserUtils.js";
 
 export type ChatGptSubmissionKind =
   | "RUN_EXCEL_SCREENING"
-  | "TENDER_QUALIFICATION";
+  | "TENDER_QUALIFICATION"
+  | "DOCUMENT_TEXT_QUALIFICATION";
 
 export type PreSendAttachmentPresence = {
   metadataAttached: boolean;

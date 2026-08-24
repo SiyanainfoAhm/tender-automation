@@ -18,7 +18,10 @@ import {
   hasPendingExistingConversation,
   loadChatGptTenderState,
 } from "./chatgptState.js";
-import { evaluateExistingQualificationReuse } from "./existingQualificationReuse.js";
+import {
+  inspectQualificationState,
+  logQualificationStateInspection,
+} from "./inspectQualificationState.js";
 import {
   assertGptQueueIntegrity,
   planGptQualificationQueue,
@@ -89,20 +92,22 @@ export function inspectQualificationResumeUniverse(options: {
   const reusedIds: string[] = [];
   const pendingIds: string[] = [];
   for (const t247Id of gptReadyIds) {
-    const reuse = evaluateExistingQualificationReuse({
+    const inspection = inspectQualificationState({
       dateFolder: options.dateFolder,
-      sourceTenderId: t247Id,
-      resumeMode: options.resumeMode,
+      tenderId: t247Id,
     });
-    if (options.resumeMode && reuse.reuse) {
+    logQualificationStateInspection(t247Id, inspection);
+    if (inspection.validResponse) {
       reusedIds.push(t247Id);
       continue;
     }
+    if (inspection.status === "PENDING") {
+      pendingIds.push(t247Id);
+      continue;
+    }
+    // Also keep legacy pending helper for conversations without text-mode artifacts.
     const tenderFolder = path.join(options.dateFolder, `T247-${t247Id}`);
-    if (
-      options.resumeMode &&
-      hasPendingExistingConversation(loadChatGptTenderState(tenderFolder))
-    ) {
+    if (hasPendingExistingConversation(loadChatGptTenderState(tenderFolder))) {
       pendingIds.push(t247Id);
     }
   }

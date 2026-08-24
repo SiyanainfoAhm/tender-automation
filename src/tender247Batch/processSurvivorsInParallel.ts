@@ -29,7 +29,12 @@ export async function processSurvivorsInParallel(options: {
   logger: Logger;
   excelValueById: Map<
     string,
-    { parsedTenderValueInr: number | null; parsedEmdInr: number | null; title?: string }
+    {
+      parsedTenderValueInr: number | null;
+      parsedEmdInr: number | null;
+      title?: string;
+      deadline?: string | null;
+    }
   >;
   alreadyCompleted: Set<string>;
   shouldStop?: () => boolean;
@@ -99,6 +104,7 @@ export async function processSurvivorsInParallel(options: {
         titleHint: excel?.title ?? null,
         excelTenderValue: excel?.parsedTenderValueInr ?? null,
         excelEmd: excel?.parsedEmdInr ?? null,
+        excelDeadline: excel?.deadline ?? null,
         openViaSingleTenderDirect: true,
         phase1ScreeningAuthoritative: options.phase1ScreeningAuthoritative,
       });

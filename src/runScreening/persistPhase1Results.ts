@@ -24,6 +24,8 @@ import { screeningDir, writeJson } from "./screeningManifest.js";
 import { runCorrelationIdForDate } from "./phase1DetailQueue.js";
 import { PHASE1_SCREENING_POLICY_VERSION } from "./screeningPolicy.js";
 import { RUN_SCREENED_FILE } from "./runWorkbook.js";
+import { parsePhase1Amount } from "./phase1DecisionGuard.js";
+import { parsePortalDate } from "../supabase/tenderMetadataMap.js";
 
 export type Phase1PersistResult = {
   attempted: number;
@@ -56,6 +58,14 @@ function referenceCandidates(row: RunWorkbookRow): string[] {
     push(part);
   }
   return out;
+}
+
+function excelDeadlineIso(row: RunWorkbookRow): string | null {
+  return parsePortalDate(row.deadline);
+}
+
+function excelEmdAmount(row: RunWorkbookRow): number | null {
+  return parsePhase1Amount(row.emdAmount);
 }
 
 function mapScreeningToQualificationStatus(
@@ -326,6 +336,9 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         sourceRefs: row.sourceRefs || null,
       };
 
+      const closingDate = excelDeadlineIso(row);
+      const emdAmount = excelEmdAmount(row);
+
       const incoming = {
         source_portal: sourcePortal,
         source_tender_id: existing?.source_tender_id || id,
@@ -333,9 +346,11 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         title: row.tenderName || id,
         organization: row.organization || null,
         location_text: row.location || null,
-        closing_date: null as string | null,
+        closing_date: closingDate,
+        bid_submission_date: closingDate,
         tender_value_text: row.estimatedCost || null,
         emd_text: row.emdAmount || null,
+        emd_amount: emdAmount,
         currency: "INR",
         qualification_status: qualificationStatus,
         project_category: "Other",
@@ -417,9 +432,11 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
               title: row.tenderName || id,
               organization: row.organization || null,
               location_text: row.location || null,
-              closing_date: null,
+              closing_date: excelDeadlineIso(row),
+              bid_submission_date: excelDeadlineIso(row),
               tender_value_text: row.estimatedCost || null,
               emd_text: row.emdAmount || null,
+              emd_amount: excelEmdAmount(row),
               currency: "INR",
               local_folder_path: null,
               ai_summary_available: false,

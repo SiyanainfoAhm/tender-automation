@@ -273,6 +273,7 @@ async function processKeptCandidateDownstream(options: {
       titleHint: candidate.title,
       excelTenderValue: candidate.parsedTenderValueInr,
       excelEmd: candidate.parsedEmdInr,
+      excelDeadline: candidate.deadline ?? null,
       openViaSingleTenderDirect: true,
     }),
     config.perTenderTimeoutMs,

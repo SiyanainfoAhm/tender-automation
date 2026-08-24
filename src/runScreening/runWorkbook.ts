@@ -225,7 +225,12 @@ function isHelperScreeningSheetName(sheetName: string): boolean {
 
 function scoreTenderSheet(sheetName: string, headerMap: Map<string, string>): number {
   let score = 0;
-  if (/current\s*analysis|today'?s?\s*analysis|main|tenders?/i.test(sheetName)) score += 50;
+  // Prefer a single GPT analysis sheet — do NOT treat "GeM Tenders" / "Non-GeM Tenders"
+  // as sole winners (those must be flatMapped together).
+  if (/current\s*analysis|today'?s?\s*analysis|\bmain\b|^tenders?$/i.test(sheetName.trim())) {
+    score += 50;
+  }
+  if (/gem|non-?\s*gem/i.test(sheetName)) score += 10;
   if (isHelperScreeningSheetName(sheetName)) score -= 100;
   if (headerMap.has(normalizeHeaderKey("Tender Name"))) score += 20;
   if (headerMap.has(normalizeHeaderKey("Tender247 ID"))) score += 15;
@@ -341,12 +346,15 @@ function parseWorkbookRows(
   // Prefer a single main analysis sheet so Classification-style helpers never double-count.
   candidates.sort((a, b) => b.score - a.score || b.rows.length - a.rows.length);
   const best = candidates[0]!;
+  const portalMultiSheet =
+    candidates.length > 1 &&
+    candidates.every((c) => /gem|non-?\s*gem|tender/i.test(c.sheetName)) &&
+    !candidates.some((c) => /current\s*analysis/i.test(c.sheetName));
+  if (portalMultiSheet || candidates.every((c) => c.score < 30)) {
+    return candidates.flatMap((c) => c.rows);
+  }
   if (candidates.length > 1 && best.score >= 30) {
     return best.rows;
-  }
-  // Legacy multi-sheet inputs (e.g. Non-GeM + GeM) without a clear analysis winner.
-  if (candidates.every((c) => c.score < 30)) {
-    return candidates.flatMap((c) => c.rows);
   }
   return best.rows;
 }
@@ -564,11 +572,7 @@ export function validateScreenedWorkbook(options: {
   const seen = new Set<string>();
   const missingStatusIds: string[] = [];
   for (const row of outputRows) {
-    if (seen.has(row.canonicalId)) {
-      throw new ScreeningOutputInvalidError(
-        `SCREENING_OUTPUT_INVALID duplicate canonical id ${row.canonicalId}`,
-      );
-    }
+    // Exact duplicate IDs can exist in the original Tender247 export; keep them.
     seen.add(row.canonicalId);
     if (!row.screeningStatus) {
       missingStatusIds.push(row.canonicalId);

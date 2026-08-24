@@ -2,6 +2,11 @@ import "server-only";
 
 import type { TenderSource } from "@/components/tenders/tender-status-styles";
 import { isTenderStatus } from "@/lib/tender-classification";
+import {
+  isIndianStateName,
+  normalizeTenderCity,
+  stripLocationDecorators,
+} from "@/lib/normalize-tender-city";
 import { toAccessibleStorageUrl } from "@/lib/storage/accessible-storage-url";
 import type {
   ExtractedRequirement,
@@ -226,10 +231,17 @@ export function mapTenderDetail(options: {
     (asString(qualification?.status) as TenderStatus | null) ??
     (asString(tender.qualification_status) as TenderStatus | null);
   const qualificationStatus = isTenderStatus(qualStatus) ? qualStatus : null;
-  const location =
-    asString(tender.location_text) ||
-    [asString(tender.city), asString(tender.state)].filter(Boolean).join(", ") ||
-    null;
+  const city = normalizeTenderCity({
+    city: asString(tender.city),
+    state: asString(tender.state),
+    location_text: asString(tender.location_text),
+  });
+  const stateRaw = asString(tender.state);
+  const state =
+    stateRaw && isIndianStateName(stripLocationDecorators(stateRaw))
+      ? stripLocationDecorators(stateRaw)
+      : null;
+  const location = [city, state].filter(Boolean).join(", ") || null;
 
   const rawMeta =
     tender.raw_metadata && typeof tender.raw_metadata === "object"

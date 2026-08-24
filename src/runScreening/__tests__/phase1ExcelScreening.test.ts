@@ -25,12 +25,9 @@ import {
   readRunWorkbook,
   RUN_NORMALIZED_FILE,
   RUN_SCREENED_FILE,
-  ScreeningOutputInvalidError,
-  writeRunWorkbook,
 } from "../runWorkbook.js";
 import {
   assertAiScreeningCompleteForDetailCrawl,
-  loadRunState,
   loadScreeningManifest,
   loadIngestionCounts,
 } from "../screeningManifest.js";
@@ -109,20 +106,42 @@ function statusForId(id: string): {
   };
 }
 
-function assignStatusesFromInput(inputPath: string, outputPath: string, dropLast = 0): void {
+function decisionsFromInput(
+  inputPath: string,
+  options?: { dropLast?: number },
+): {
+  decisionsText: string;
+  conversationUrl: string;
+  decisionsPath: string;
+} {
   const rows = readRunWorkbook(inputPath);
-  const kept = dropLast > 0 ? rows.slice(0, Math.max(0, rows.length - dropLast)) : rows;
-  writeRunWorkbook(
-    kept.map((row) => {
-      const assigned = statusForId(row.tender247Id || row.canonicalId.replace(/\D/g, ""));
-      return {
-        ...row,
-        screeningStatus: normalizePhase1ScreeningStatus(assigned.status) ?? "VERIFY",
-        screeningReason: assigned.reason,
-      };
-    }),
-    outputPath,
-  );
+  const dropLast = options?.dropLast ?? 0;
+  const kept =
+    dropLast > 0 ? rows.slice(0, Math.max(0, rows.length - dropLast)) : rows;
+  const decisions = kept.map((row) => {
+    const id = row.tender247Id || row.canonicalId.replace(/\D/g, "");
+    const assigned = statusForId(id);
+    const status =
+      normalizePhase1ScreeningStatus(assigned.status) ?? "VERIFY";
+    const label =
+      status === "NO_GO"
+        ? "NO_BID"
+        : status === "GO"
+          ? "WILL_BID"
+          : status === "CONDITIONAL_GO"
+            ? "MAY_BID"
+            : "VERIFY";
+    return {
+      t247_id: id,
+      screening_status: label,
+      screening_reason: assigned.reason,
+    };
+  });
+  return {
+    decisionsText: JSON.stringify(decisions),
+    conversationUrl: "https://chatgpt.com/c/test-screening",
+    decisionsPath: path.join(path.dirname(inputPath), "chatgpt-screening-decisions.json"),
+  };
 }
 
 function fixtureDateFolder(): { dateFolder: string; t247Path: string; baPath: string } {
@@ -310,10 +329,9 @@ test("Tender247 export (no local pre-filter) goes to ChatGPT; NO_GO never enters
     companySnapshot: snapshot(),
     persistResults: false,
     chatgptClient: {
-      async screenWorkbook({ inputWorkbookPath, outputPath }) {
+      async screenWorkbook({ inputWorkbookPath }) {
         chatgptCalls += 1;
-        assignStatusesFromInput(inputWorkbookPath, outputPath);
-        return outputPath;
+        return decisionsFromInput(inputWorkbookPath);
       },
     },
   });
@@ -321,14 +339,15 @@ test("Tender247 export (no local pre-filter) goes to ChatGPT; NO_GO never enters
   assert.equal(chatgptCalls, 1);
   assert.equal(result.status, "complete");
   assert.equal(result.aiScreeningComplete, true);
-  assert.equal(result.inputRows, 18);
-  assert.equal(result.outputRows, 18);
-  assert.equal(result.counts.NO_GO, 8);
+  // Original Excel keeps the exact duplicate row (no shortlist / no drop).
+  assert.equal(result.inputRows, 19);
+  assert.equal(result.outputRows, 19);
+  assert.equal(result.counts.NO_GO, 9);
   assert.equal(result.counts.VERIFY, 5);
   assert.equal(result.counts.CONDITIONAL_GO, 4);
   assert.equal(result.counts.GO, 1);
   assert.equal(result.tender247DetailIds.length, 10);
-  assert.equal(result.noBidRows.length, 8);
+  assert.equal(result.noBidRows.length, 9);
 
   const noBidIds = result.noBidRows.map((row) => row.tender247Id);
   for (const id of ["1001", "1002", "1003", "1004", "1005", "1006", "1007", "1008"]) {
@@ -365,16 +384,16 @@ test("Tender247 export (no local pre-filter) goes to ChatGPT; NO_GO never enters
   assert.match(fs.readFileSync(promptPath, "utf8"), /Siyana Info Solutions/);
 
   const screened = readRunWorkbook(path.join(dateFolder, "screening", RUN_SCREENED_FILE));
-  assert.equal(screened.length, 18);
+  assert.equal(screened.length, 19);
   const noBidScreened = screened.filter((row) => row.screeningStatus === "NO_GO");
-  assert.equal(noBidScreened.length, 8);
+  assert.equal(noBidScreened.length, 9);
   assert.ok(noBidScreened.every((row) => row.screeningReason.length > 12));
 
   const manifest = loadScreeningManifest(dateFolder);
   assert.equal(manifest?.status, "complete");
-  assert.equal(manifest?.inputRows, 18);
-  assert.equal(manifest?.outputRows, 18);
-  assert.equal(manifest?.counts.NO_GO, 8);
+  assert.equal(manifest?.inputRows, 19);
+  assert.equal(manifest?.outputRows, 19);
+  assert.equal(manifest?.counts.NO_GO, 9);
 
   assertAiScreeningCompleteForDetailCrawl(dateFolder);
 
@@ -396,42 +415,38 @@ test("Tender247 export (no local pre-filter) goes to ChatGPT; NO_GO never enters
   assert.equal(again.tender247DetailIds.length, 10);
 });
 
-test("invalid ChatGPT workbook missing tenders blocks the detail crawler", async () => {
+test("missing ChatGPT tender mappings keep rows as VERIFY (never drop)", async () => {
   const { dateFolder, t247Path, baPath } = fixtureDateFolder();
-  await assert.rejects(
-    () =>
-      runPhase1ExcelScreening({
-        dateFolder,
-        dateIso: "2026-08-18",
-        tender247ExcelPath: t247Path,
-        bidAssistExcelPath: baPath,
-        companySnapshot: snapshot(),
-        persistResults: false,
-        chatgptClient: {
-          async screenWorkbook({ inputWorkbookPath, outputPath }) {
-            assignStatusesFromInput(inputWorkbookPath, outputPath, 3);
-            return outputPath;
-          },
-        },
-      }),
-    (error: unknown) => {
-      assert.ok(error instanceof ScreeningOutputInvalidError);
-      assert.equal(error.code, "SCREENING_OUTPUT_RECONCILIATION_FAILED");
-      assert.match(error.message, /missing 3 tenders/);
-      return true;
+  const result = await runPhase1ExcelScreening({
+    dateFolder,
+    dateIso: "2026-08-18",
+    tender247ExcelPath: t247Path,
+    bidAssistExcelPath: baPath,
+    companySnapshot: snapshot(),
+    persistResults: false,
+    chatgptClient: {
+      async screenWorkbook({ inputWorkbookPath }) {
+        return decisionsFromInput(inputWorkbookPath, { dropLast: 3 });
+      },
     },
-  );
+  });
 
-  const state = loadRunState(dateFolder);
-  assert.equal(state?.aiScreeningComplete, false);
-  assert.equal(state?.stage, "AI_SCREENING_FAILED");
-  assert.throws(
-    () => assertAiScreeningCompleteForDetailCrawl(dateFolder),
-    /T247_DETAIL_CRAWL_BLOCKED/,
+  assert.equal(result.status, "complete");
+  assert.equal(result.inputRows, 19);
+  assert.equal(result.outputRows, 19);
+  const screened = readRunWorkbook(path.join(dateFolder, "screening", RUN_SCREENED_FILE));
+  assert.equal(screened.length, 19);
+  const missingMapped = screened.filter((row) =>
+    row.screeningReason.includes("AI response missing tender mapping"),
   );
+  // Fixture order ends with 1017, 1018, duplicate 1001 — dropLast:3 omits 1017+1018 only
+  // (duplicate 1001 still classified via the earlier 1001 decision).
+  assert.equal(missingMapped.length, 2);
+  assert.ok(missingMapped.every((row) => row.screeningStatus === "VERIFY"));
+  assertAiScreeningCompleteForDetailCrawl(dateFolder);
 });
 
-test("assistant text with no XLSX is SCREENING_OUTPUT_MISSING and blocks crawl", async () => {
+test("assistant text with no screening JSON is SCREENING_OUTPUT_MISSING and blocks crawl", async () => {
   const { dateFolder, t247Path, baPath } = fixtureDateFolder();
   await assert.rejects(
     () =>
@@ -446,7 +461,7 @@ test("assistant text with no XLSX is SCREENING_OUTPUT_MISSING and blocks crawl",
           async screenWorkbook() {
             throw new AutomationError(
               "SCREENING_OUTPUT_MISSING",
-              "SCREENING_OUTPUT_MISSING: assistant returned text but no workbook",
+              "SCREENING_OUTPUT_MISSING: screening JSON response did not complete",
             );
           },
         },
@@ -491,14 +506,12 @@ test("preference change invalidates resume and reruns screening", async () => {
   const client = {
     async screenWorkbook({
       inputWorkbookPath,
-      outputPath,
     }: {
       inputWorkbookPath: string;
       outputPath: string;
     }) {
       chatgptCalls += 1;
-      assignStatusesFromInput(inputWorkbookPath, outputPath);
-      return outputPath;
+      return decisionsFromInput(inputWorkbookPath);
     },
   };
 

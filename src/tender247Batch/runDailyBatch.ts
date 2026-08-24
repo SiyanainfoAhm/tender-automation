@@ -11,7 +11,6 @@ import {
   createTender247RunContext,
   ensureTender247DateScopedDir,
   logTender247RunContext,
-  resolveExcelPath,
   resolveSeedExcelDir,
   withTender247RunContextAsync,
 } from "./tender247RunContext.js";
@@ -477,6 +476,7 @@ async function runDailyBatchBody(options: {
             parsedTenderValueInr: value.amountInr,
             parsedEmdInr: emd.amountInr,
             title: row.title,
+            deadline: row.deadline ?? null,
           },
         ] as const;
       }),
@@ -602,6 +602,7 @@ async function runDailyBatchBody(options: {
             parsedTenderValueInr: d.parsedTenderValueInr,
             parsedEmdInr: d.parsedEmdInr,
             title: d.title,
+            deadline: d.deadline,
           },
         ]),
       ),

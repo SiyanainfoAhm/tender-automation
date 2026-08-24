@@ -108,6 +108,21 @@ export interface AppConfig {
   chatgptRateLimitMaxBackoffMs: number;
   /** Max rate-limit recovery retries per tender/batch pause */
   chatgptRateLimitMaxRetries: number;
+  /** Experimental: qualify via extracted document text (prompt only, no ZIP upload). */
+  documentTextMode: boolean;
+  /**
+   * Optional subset filter for DOCUMENT_TEXT_MODE.
+   * Empty = process every ZIP-ready tender under downloads/{date}.
+   */
+  documentTextTestTenderIds: string[];
+  /** Max compressed document context chars embedded in DOCUMENT_TEXT_MODE prompt. */
+  maxDocumentContextCharacters: number;
+  /** Internal safety: max NEW detailed ChatGPT submissions per rolling window. */
+  chatgptDetailMaxSubmissionsPerWindow: number;
+  /** Rolling window length in minutes (default 180 = 3 hours). */
+  chatgptDetailSubmissionWindowMinutes: number;
+  /** Extra wait after window expiry before next send (seconds). */
+  chatgptDetailRateSafetyBufferSeconds: number;
   /** Settle delay between Tender247 crawl and ChatGPT qualification */
   dailyPipelinePhaseDelayMs: number;
   /** Master lock for npm run daily:tender-pipeline */
@@ -254,6 +269,26 @@ export function loadConfig(): AppConfig {
       1,
       parseIntEnv(process.env.CHATGPT_RATE_LIMIT_MAX_RETRIES, 3),
     ),
+    documentTextMode: parseBool(process.env.DOCUMENT_TEXT_MODE, false),
+    documentTextTestTenderIds: parseDocumentTextTestTenderIds(
+      process.env.DOCUMENT_TEXT_TEST_TENDER_IDS,
+    ),
+    maxDocumentContextCharacters: Math.max(
+      5_000,
+      parseIntEnv(process.env.MAX_DOCUMENT_CONTEXT_CHARACTERS, 50_000),
+    ),
+    chatgptDetailMaxSubmissionsPerWindow: Math.max(
+      1,
+      parseIntEnv(process.env.CHATGPT_DETAIL_MAX_SUBMISSIONS_PER_WINDOW, 65),
+    ),
+    chatgptDetailSubmissionWindowMinutes: Math.max(
+      1,
+      parseIntEnv(process.env.CHATGPT_DETAIL_SUBMISSION_WINDOW_MINUTES, 180),
+    ),
+    chatgptDetailRateSafetyBufferSeconds: Math.max(
+      0,
+      parseIntEnv(process.env.CHATGPT_DETAIL_RATE_SAFETY_BUFFER_SECONDS, 60),
+    ),
     dailyPipelinePhaseDelayMs: Math.max(
       0,
       parseIntEnv(process.env.DAILY_PIPELINE_PHASE_DELAY_MS, 60_000),
@@ -276,6 +311,35 @@ function parseChatGptTestTenderId(
     return null;
   }
   return value;
+}
+
+/** Parse DOCUMENT_TEXT_TEST_TENDER_IDS JSON array or comma-separated list.
+ * Empty means "all downloaded tenders for the date" (no subset filter).
+ */
+export function parseDocumentTextTestTenderIds(
+  raw: string | undefined,
+): string[] {
+  if (!raw?.trim()) return [];
+  const trimmed = raw.trim();
+  let parts: string[] = [];
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (Array.isArray(parsed)) {
+        parts = parsed.map((item) => String(item));
+      }
+    } catch {
+      parts = [];
+    }
+  } else {
+    parts = trimmed.split(/[,;\n]+/);
+  }
+  const ids: string[] = [];
+  for (const part of parts) {
+    const id = parseChatGptTestTenderId(part);
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
 }
 
 export function resolveChatGptAuthPath(config: AppConfig): string | undefined {

@@ -5,6 +5,10 @@ import {
   resolveCanonicalInrAmount,
 } from "../bidassist/parseIndianCurrencyAmount.js";
 import { classifyProjectCategory } from "../classification/projectCategory.js";
+import {
+  normalizeTenderCity,
+  stripLocationDecorators,
+} from "../location/normalizeTenderCity.js";
 import type { CompleteTenderMetadata } from "../tender247Batch/extractCompleteMetadata.js";
 
 export type AgenttenderSourcePortal = "TENDER247" | "BIDASSIST";
@@ -89,16 +93,43 @@ export function parsePortalDate(value: unknown): string | null {
   if (!text) {
     return null;
   }
-  const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  // Scraped values often include leading ":", newlines, or trailing times.
+  const cleaned = text
+    .replace(/\u00a0/g, " ")
+    .replace(/^[:：\s\r\n]+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return null;
+
+  const iso = cleaned.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (iso) {
     return `${iso[1]}-${iso[2]}-${iso[3]}`;
   }
-  const dmy = text.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+
+  // DD-MM-YYYY / DD/MM/YYYY / DD.MM.YYYY / DD:MM:YYYY (+ optional time suffix)
+  const dmy = cleaned.match(
+    /^(\d{1,2})[.\-/:](\d{1,2})[.\-/:](\d{2,4})(?:\s|$)/,
+  );
   if (dmy) {
+    let year = Number(dmy[3]);
+    if (year < 100) year += 2000;
     const day = dmy[1]!.padStart(2, "0");
     const month = dmy[2]!.padStart(2, "0");
-    return `${dmy[3]}-${month}-${day}`;
+    if (year >= 1990 && year <= 2100) {
+      return `${year}-${month}-${day}`;
+    }
   }
+
+  // Date embedded anywhere in a dirty scraped blob
+  const embedded = cleaned.match(
+    /(\d{1,2})[.\-/:](\d{1,2})[.\-/:](\d{4})/,
+  );
+  if (embedded) {
+    const day = embedded[1]!.padStart(2, "0");
+    const month = embedded[2]!.padStart(2, "0");
+    return `${embedded[3]}-${month}-${day}`;
+  }
+
   return null;
 }
 
@@ -149,14 +180,26 @@ function splitLocation(location: string | null): {
   if (!location) {
     return { city: null, state: null };
   }
-  const parts = location.split(",").map((p) => p.trim()).filter(Boolean);
+  const cleaned = stripLocationDecorators(location);
+  const parts = cleaned
+    .split(",")
+    .map((p) => stripLocationDecorators(p))
+    .filter(Boolean);
   if (parts.length >= 2) {
+    const city = normalizeTenderCity(parts[0] || null);
+    const statePart = parts.slice(1).join(", ") || null;
     return {
-      city: parts[0] || null,
-      state: parts.slice(1).join(", ") || null,
+      city,
+      state: statePart,
     };
   }
-  return { city: null, state: location };
+  // Single token: try as city; do not dump org/product blobs into state as city.
+  const asCity = normalizeTenderCity(cleaned);
+  if (asCity) {
+    return { city: asCity, state: null };
+  }
+  // Preserve original location_text via caller; avoid treating garbage as state.
+  return { city: null, state: null };
 }
 
 export function mapDownloadStatus(options: {
@@ -216,7 +259,10 @@ export function buildTender247SupabaseRow(options: {
     asText(normalized.location) ||
     asText(overview["Site Location -"]) ||
     asText(metadata.raw?.Location);
-  const { city, state } = splitLocation(locationText);
+  const cleanedLocationText = locationText
+    ? stripLocationDecorators(locationText) || locationText
+    : null;
+  const { city, state } = splitLocation(cleanedLocationText);
   const closingDate = parsePortalDate(
     normalized.closingDate || overview["Closing Date -"],
   );
@@ -263,7 +309,7 @@ export function buildTender247SupabaseRow(options: {
       asText(normalized.description) || asText(normalized.brief) || null,
     city,
     state,
-    location_text: locationText,
+    location_text: cleanedLocationText,
     published_date: null,
     opening_date: openingDate,
     closing_date: closingDate,
@@ -328,12 +374,23 @@ export function buildBidassistSupabaseRow(options: {
     authority;
   const department =
     asText(normalized.department) || asText(metadata.department);
-  const city = asText(normalized.city) || asText(metadata.city);
-  const state = asText(normalized.state) || asText(metadata.state);
-  const locationText =
+  const cityRaw = asText(normalized.city) || asText(metadata.city);
+  const stateRaw = asText(normalized.state) || asText(metadata.state);
+  const locationTextRaw =
     asText(normalized.locationText) ||
     asText(metadata.locationText) ||
-    ([city, state].filter(Boolean).join(", ") || null);
+    ([cityRaw, stateRaw].filter(Boolean).join(", ") || null);
+  const cleanedLocationText = locationTextRaw
+    ? stripLocationDecorators(locationTextRaw) || locationTextRaw
+    : null;
+  const city =
+    normalizeTenderCity({
+      city: cityRaw,
+      state: stateRaw,
+      location_text: cleanedLocationText,
+    }) || null;
+  const state = stateRaw;
+  const locationText = cleanedLocationText;
 
   let tenderValue =
     asNumber(normalized.tenderValue) ??

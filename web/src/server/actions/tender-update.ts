@@ -3,6 +3,10 @@
 import { revalidatePath } from "next/cache";
 
 import { isProjectCategory } from "@/lib/project-category";
+import {
+  normalizeTenderCity,
+  stripLocationDecorators,
+} from "@/lib/normalize-tender-city";
 import { TENDER_STATUSES, type TenderStatus } from "@/lib/tender-status";
 import { CompanyAccessError } from "@/server/auth/company-access";
 import { requirePermissionStrict } from "@/server/auth/permissions";
@@ -133,8 +137,10 @@ export async function updateTenderDetailsAction(
       patch.department = payload.department || null;
     }
     if (payload.location !== undefined) {
-      patch.city = payload.location || null;
-      patch.location_text = payload.location || null;
+      const raw = payload.location || null;
+      const cleaned = raw ? stripLocationDecorators(raw) || raw : null;
+      patch.city = cleaned ? normalizeTenderCity(cleaned) : null;
+      patch.location_text = cleaned;
     }
     if (payload.publishedDate !== undefined) {
       patch.published_date = payload.publishedDate || null;

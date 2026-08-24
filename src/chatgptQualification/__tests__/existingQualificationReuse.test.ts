@@ -119,19 +119,25 @@ function seedReadyTender(options: {
 }
 
 describe("existing qualification reuse", () => {
-  it("fresh run never reuses existing VERIFY", () => {
+  it("fresh and resume both reuse a valid existing qualification", () => {
     const dateFolder = makeDateFolder();
     seedReadyTender({ dateFolder, t247Id: "102221347", status: "VERIFY" });
 
-    const decision = evaluateExistingQualificationReuse({
+    const fresh = evaluateExistingQualificationReuse({
       dateFolder,
       sourceTenderId: "102221347",
       resumeMode: false,
     });
+    assert.equal(fresh.found, true);
+    assert.equal(fresh.reuse, true);
+    assert.equal(fresh.reason, "EXISTING_VALID_QUALIFICATION");
 
-    assert.equal(decision.found, true);
-    assert.equal(decision.reuse, false);
-    assert.equal(decision.reason, "FRESH_RUN_NO_REUSE");
+    const resume = evaluateExistingQualificationReuse({
+      dateFolder,
+      sourceTenderId: "102221347",
+      resumeMode: true,
+    });
+    assert.equal(resume.reuse, true);
   });
 
   it("resume reuses when input hash matches", () => {
@@ -154,7 +160,7 @@ describe("existing qualification reuse", () => {
     assert.equal(decision.reason, "EXISTING_VALID_QUALIFICATION");
   });
 
-  it("resume does not skip when ZIP hash changed", () => {
+  it("still reuses when ZIP hash changed but valid qualification exists", () => {
     const dateFolder = makeDateFolder();
     const tenderFolder = seedReadyTender({
       dateFolder,
@@ -164,7 +170,7 @@ describe("existing qualification reuse", () => {
       zipMarker: "zip-v1",
     });
 
-    // Change documents after fingerprint was stored.
+    // Change documents after fingerprint was stored — RULE: valid response still wins.
     fs.writeFileSync(
       path.join(tenderFolder, "documents", "Tender_All_Documents.zip"),
       minimalZip("zip-CHANGED"),
@@ -176,13 +182,11 @@ describe("existing qualification reuse", () => {
       resumeMode: true,
     });
 
-    assert.equal(decision.reuse, false);
-    assert.equal(decision.stale, true);
-    assert.equal(decision.inputHashMatch, false);
-    assert.equal(decision.reason, "EXISTING_STALE_INPUT");
+    assert.equal(decision.reuse, true);
+    assert.equal(decision.reason, "EXISTING_VALID_QUALIFICATION");
   });
 
-  it("resume does not skip when stored input hash is missing", () => {
+  it("still reuses when stored input hash is missing but valid qualification exists", () => {
     const dateFolder = makeDateFolder();
     seedReadyTender({
       dateFolder,
@@ -197,8 +201,8 @@ describe("existing qualification reuse", () => {
       resumeMode: true,
     });
 
-    assert.equal(decision.reuse, false);
-    assert.equal(decision.reason, "EXISTING_MISSING_INPUT_HASH");
+    assert.equal(decision.reuse, true);
+    assert.equal(decision.reason, "EXISTING_VALID_QUALIFICATION");
   });
 
   it("resume does not reuse skipped tenders with no qualification result", () => {

@@ -242,4 +242,39 @@ describe("CHATGPT_CONCURRENCY=2 global Send throttling", () => {
         `tender send should still wait; got ${tenderAt}`,
       );
   });
+
+  it("DOCUMENT_TEXT_QUALIFICATION skips the multi-minute send buffer", async () => {
+    const clock = createFakeClock(0);
+    const scheduler = createChatGptSubmissionScheduler({
+      minIntervalMs: 600_000,
+      documentTextMinIntervalMs: 0,
+      clock,
+      initialLastSubmissionAtMs: 0,
+    });
+
+    const sendAts: number[] = [];
+    await scheduler.withGlobalSendSlot({
+      workerId: 1,
+      sourcePortal: "TENDER247",
+      sourceTenderId: "1",
+      submissionKind: "DOCUMENT_TEXT_QUALIFICATION",
+      send: async () => {
+        sendAts.push(clock.now());
+        return { submitted: true, result: 1 };
+      },
+    });
+    await scheduler.withGlobalSendSlot({
+      workerId: 1,
+      sourcePortal: "TENDER247",
+      sourceTenderId: "2",
+      submissionKind: "DOCUMENT_TEXT_QUALIFICATION",
+      send: async () => {
+        sendAts.push(clock.now());
+        return { submitted: true, result: 2 };
+      },
+    });
+
+    assert.equal(sendAts.length, 2);
+    assert.equal(sendAts[1]! - sendAts[0]!, 0);
+  });
 });

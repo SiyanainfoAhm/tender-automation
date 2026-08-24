@@ -20,10 +20,8 @@ import {
 import {
   readRunWorkbook,
   RUN_SCREENED_FILE,
-  writeRunWorkbook,
 } from "../runWorkbook.js";
 import { loadScreeningManifest } from "../screeningManifest.js";
-import { normalizePhase1ScreeningStatus } from "../phase1Statuses.js";
 import XLSX from "xlsx";
 
 function snapshot(
@@ -137,7 +135,9 @@ test("VERIFY vs MAY_BID contract is encoded in the generated prompt", () => {
   assert.match(text, /Tender Type/);
   assert.match(text, /Dominant Scope/);
   assert.match(text, /MANDATORY CLASSIFICATION FLAGS/);
-  assert.match(text, /Screening Audit/);
+  assert.match(text, /Do NOT generate, rebuild, or return an XLSX workbook/);
+  assert.match(text, /t247_id/);
+  assert.match(text, /screening_status/);
   assert.match(text, /Never output CONDITIONAL_GO/);
   assert.match(text, /Never output:\n\nPARTNER_BID/);
   assert.doesNotMatch(
@@ -188,8 +188,9 @@ test("Tender247 GPT input: prompt forbids a second dedupe pass and requires exac
   assert.match(text, /No local company \/ NO_BID pre-filter/);
   assert.match(text, /Do not perform another deduplication pass/);
   assert.match(text, /Expected unique tender rows:\n67/);
-  assert.match(text, /Verify total main-sheet rows = 67/);
-  assert.match(text, /Do not delete NO_BID rows/);
+  assert.match(text, /The JSON array must cover exactly:/);
+  assert.match(text, /\n67\n/);
+  assert.match(text, /Do NOT return a shortlist workbook/);
   assert.match(text, /Evaluate exactly all supplied rows/);
 });
 
@@ -251,24 +252,37 @@ test("67 normalized rows remain 67 unique rows including NO_BID", async () => {
     companySnapshot: snapshot(),
     persistResults: false,
     chatgptClient: {
-      async screenWorkbook({ inputWorkbookPath, outputPath }) {
+      async screenWorkbook({ inputWorkbookPath }) {
         const input = readRunWorkbook(inputWorkbookPath);
-        writeRunWorkbook(
-          input.map((row, index) => ({
-            ...row,
-            screeningStatus: normalizePhase1ScreeningStatus(
-              index === 0 ? "MAY_BID" : index === 1 ? "VERIFY" : index % 5 === 0 ? "NO_BID" : "MAY_BID",
-            ) ?? "VERIFY",
-            screeningReason:
+        const decisions = input.map((row, index) => {
+          const id = row.tender247Id || row.canonicalId.replace(/\D/g, "");
+          const label =
+            index === 0
+              ? "MAY_BID"
+              : index === 1
+                ? "VERIFY"
+                : index % 5 === 0
+                  ? "NO_BID"
+                  : "MAY_BID";
+          return {
+            t247_id: id,
+            screening_status: label,
+            screening_reason:
               index === 0
                 ? "CMS website matches preferred software scope; Phase-1 gates pass."
                 : index === 1
                   ? "Generic IT title with no Excel scope; VERIFY before Phase-1 fit."
                   : `Tender-specific reason ${row.canonicalId}`,
-          })),
-          outputPath,
-        );
-        return outputPath;
+          };
+        });
+        return {
+          decisionsText: JSON.stringify(decisions),
+          conversationUrl: "https://chatgpt.com/c/test",
+          decisionsPath: path.join(
+            path.dirname(inputWorkbookPath),
+            "chatgpt-screening-decisions.json",
+          ),
+        };
       },
     },
   });

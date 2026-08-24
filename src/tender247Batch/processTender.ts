@@ -26,6 +26,7 @@ import {
   extractCompleteTenderMetadata,
   type CompleteTenderMetadata,
 } from "./extractCompleteMetadata.js";
+import { parsePortalDate } from "../supabase/tenderMetadataMap.js";
 import { findVisibleLiveTenderCards } from "./liveListCards.js";
 import { openTenderFromLiveCard } from "./openTenderFromCard.js";
 import { resolveTender247Tender } from "./resolveTender247Tender.js";
@@ -106,6 +107,8 @@ export interface ProcessLiveTenderOptions {
   titleHint?: string | null;
   excelTenderValue?: number | null;
   excelEmd?: number | null;
+  /** Excel Deadline column as ISO YYYY-MM-DD when parseable. */
+  excelDeadline?: string | null;
   /**
    * When the live Fresh card is not visible, open detail via this captured
    * security_code (never invent — must come from Tender247 API/UI).
@@ -664,6 +667,7 @@ export async function processLiveTender(
     applyExcelFinancialsToMetadata(metadata, {
       excelTenderValue: options.excelTenderValue,
       excelEmd: options.excelEmd,
+      excelDeadline: options.excelDeadline,
       logger,
     });
 
@@ -1250,6 +1254,7 @@ function applyExcelFinancialsToMetadata(
   options: {
     excelTenderValue?: number | null;
     excelEmd?: number | null;
+    excelDeadline?: string | null;
     logger: Logger;
   },
 ): void {
@@ -1298,6 +1303,16 @@ function applyExcelFinancialsToMetadata(
         metadata.raw.EMD = String(excelEmd);
       }
       options.logger.info(`EXCEL_EMD_APPLIED=${excelEmd}`);
+    }
+  }
+
+  const excelDeadlineRaw = options.excelDeadline?.trim() || null;
+  if (excelDeadlineRaw) {
+    const excelDeadlineIso = parsePortalDate(excelDeadlineRaw) || excelDeadlineRaw;
+    const currentParsed = parsePortalDate(metadata.normalized.closingDate);
+    if (!currentParsed) {
+      metadata.normalized.closingDate = excelDeadlineIso;
+      options.logger.info(`EXCEL_DEADLINE_APPLIED=${excelDeadlineIso}`);
     }
   }
 }

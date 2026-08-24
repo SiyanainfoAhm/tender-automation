@@ -72,6 +72,8 @@ export interface ChatGptTenderState {
   uploadedEvidenceFiles?: string[];
   /** SHA-256 fingerprint of GPT inputs used when this result was produced. */
   qualificationInputHash?: string | null;
+  /** Cross-restart correlation for a confirmed Send (prevents duplicate submit). */
+  correlationId?: string | null;
 }
 
 export function chatgptStatePath(tenderFolder: string): string {

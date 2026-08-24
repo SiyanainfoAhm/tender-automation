@@ -1,10 +1,7 @@
 /**
  * Run-level ChatGPT Project Excel screening.
- * Reuses the existing Siyana Tender Qualification Automation project session.
- * Submission mode is RUN_EXCEL_SCREENING — never the tender-artifact pre-send gate.
- *
- * The ChatGPT browser stays open until the generated XLSX is downloaded
- * or an explicit terminal failure is recorded.
+ * Attaches the original Tender247 workbook for reading, then waits for JSON
+ * screening decisions only — never downloads a GPT-generated XLSX.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -35,9 +32,6 @@ import {
 } from "../chatgptQualification/assistantSpreadsheetAttachment.js";
 import { ensureDir } from "../fileUtils.js";
 import {
-  expectedScreenedOutputFilename,
-} from "./runWorkbook.js";
-import {
   downloadFromSpreadsheetPreview,
   downloadGeneratedChatGptXlsx,
   downloadFailedError,
@@ -52,9 +46,16 @@ import {
   assertChatGptScreeningSafeToClose,
   isChatGptScreeningSafeToClose,
 } from "./screeningSessionGuard.js";
+import { parseScreeningDecisionsJson } from "./screeningDecisionSchema.js";
 
 export const RUN_SCREENING_PROMPT_PATTERN =
-  /SIYANA DAILY TENDER SCREENING|Evaluate the attached tender Excel for Phase-1 screening|Run correlation ID:\s*RUN-\d{4}-\d{2}-\d{2}/i;
+  /SIYANA DAILY TENDER SCREENING|Evaluate the attached tender Excel for Phase-1 screening|Run correlation ID:\s*RUN-\d{4}-\d{2}-\d{2}|OUTPUT CONTRACT/i;
+
+export type ChatGptScreeningResult = {
+  decisionsText: string;
+  conversationUrl: string;
+  decisionsPath: string;
+};
 
 export type ChatGptExcelScreeningClient = {
   screenWorkbook: (options: {
@@ -62,7 +63,7 @@ export type ChatGptExcelScreeningClient = {
     prompt: string;
     outputPath: string;
     runDate: string;
-  }) => Promise<string>;
+  }) => Promise<ChatGptScreeningResult>;
 };
 
 function runCorrelationId(runDate: string): string {
@@ -388,6 +389,7 @@ function isTerminalScreeningFailure(error: unknown): boolean {
   if (!(error instanceof AutomationError)) return false;
   return (
     error.code === "SCREENING_OUTPUT_MISSING" ||
+    error.code === "SCREENING_OUTPUT_INVALID" ||
     error.code === "CHATGPT_XLSX_PREVIEW_OPEN_FAILED" ||
     error.code === "CHATGPT_XLSX_DOWNLOAD_FAILED" ||
     error.code === "CHATGPT_RATE_LIMITED" ||
@@ -412,14 +414,14 @@ export function createLiveChatGptExcelScreeningClient(options: {
           `ChatGPT screening input must be an .xlsx file (got ${inputFileName || "empty"})`,
         );
       }
-      const expectedOutputName = expectedScreenedOutputFilename(
-        inputFileName,
-        correlationId,
+      const decisionsPath = path.join(
+        path.dirname(outputPath),
+        "chatgpt-screening-decisions.json",
       );
       log(logger, `CHATGPT_SCREENING_INPUT_FILE=${inputWorkbookPath}`);
       log(logger, `CHATGPT_INPUT_FILENAME=${inputFileName}`);
-      log(logger, `CHATGPT_SCREENING_OUTPUT_FILE=${outputPath}`);
-      log(logger, `CHATGPT_EXPECTED_OUTPUT_FILENAME=${expectedOutputName}`);
+      log(logger, `CHATGPT_SCREENING_DECISIONS_FILE=${decisionsPath}`);
+      log(logger, "CHATGPT_SCREENING_MODE=JSON_DECISIONS");
       const session = await launchChatGptPersistentSession({
         config,
         logger,
@@ -445,43 +447,21 @@ export function createLiveChatGptExcelScreeningClient(options: {
           checkpoint &&
           checkpoint.correlationId === correlationId &&
           checkpoint.conversationUrl &&
-          isConversationUrl(checkpoint.conversationUrl)
+          isConversationUrl(checkpoint.conversationUrl) &&
+          fs.existsSync(decisionsPath)
         ) {
-          log(
-            logger,
-            `CHATGPT_SCREENING_RESUME_CONVERSATION=${checkpoint.conversationUrl}`,
-          );
-          try {
-            await session.page.goto(checkpoint.conversationUrl, {
-              waitUntil: "domcontentloaded",
-              timeout: 60_000,
-            });
-            const existing = await findGeneratedScreeningWorkbook(session.page, {
-              correlationId,
-              inputFileName,
-              assistantCountBefore: 0,
-            });
-            if (existing) {
-              closeState.submitted = true;
-              const downloaded = await downloadGeneratedWorkbook({
-                page: session.page,
-                workbook: existing,
-                outputPath,
-                logger,
-                inputFileName,
-                conversationUrl: checkpoint.conversationUrl,
-                correlationId,
-              });
-              closeState.downloaded = true;
-              closeState.validated = true;
-              log(logger, "CHATGPT_RUN_SCREENING_STAGE=GENERATED_XLSX_DOWNLOADED");
-              return downloaded.outputPath;
-            }
-            log(logger, "CHATGPT_SCREENING_RESUME_NO_XLSX_YET=true");
-          } catch (error) {
-            logger.warn(
-              `CHATGPT_SCREENING_RESUME_FAILED=${error instanceof Error ? error.message : String(error)}`,
-            );
+          const existingText = fs.readFileSync(decisionsPath, "utf8");
+          const parsed = parseScreeningDecisionsJson(existingText);
+          if (parsed.ok && parsed.decisions.length > 0) {
+            log(logger, "CHATGPT_SCREENING_RESUME_DECISIONS=true");
+            closeState.submitted = true;
+            closeState.downloaded = true;
+            closeState.validated = true;
+            return {
+              decisionsText: existingText,
+              conversationUrl: checkpoint.conversationUrl,
+              decisionsPath,
+            };
           }
         }
 
@@ -505,7 +485,6 @@ export function createLiveChatGptExcelScreeningClient(options: {
         await typeComposerPrompt(page, prompt, logger);
         log(logger, "[AI SCREENING] Prompt prepared");
         log(logger, "CHATGPT_RUN_SCREENING_STAGE=PROMPT_ENTERED");
-        // Prompt insert can race attachment registration — verify before Send.
         await waitForRunExcelScreeningAttachmentReady(page, {
           expectedWorkbookName: inputFileName,
           composerToken: "run-screening",
@@ -563,11 +542,11 @@ export function createLiveChatGptExcelScreeningClient(options: {
         saveScreeningChatCheckpoint(outputPath, {
           conversationUrl: sendResult.chatUrl || page.url(),
           correlationId,
-          expectedFilename: expectedOutputName,
+          expectedFilename: "chatgpt-screening-decisions.json",
           submittedAt: new Date().toISOString(),
           stage: "MESSAGE_SUBMITTED",
         });
-        log(logger, "[AI SCREENING] Waiting for ChatGPT screening response...");
+        log(logger, "[AI SCREENING] Waiting for ChatGPT screening JSON...");
 
         const timeoutMs = resolveRunScreeningResponseTimeoutMs();
         log(logger, `CHATGPT_RUN_SCREENING_RESPONSE_TIMEOUT_MS=${timeoutMs}`);
@@ -579,51 +558,46 @@ export function createLiveChatGptExcelScreeningClient(options: {
           assistantCountBefore: sendResult.baseline.assistantCountBefore,
           userCountBefore: sendResult.baseline.userCountBefore,
           submissionKind: "RUN_EXCEL_SCREENING",
-          completionMode: "generation_complete",
+          completionMode: "screening_json",
           inputWorkbookFileName: inputFileName,
         });
-        if (waitResult.status !== "complete" || !waitResult.outputFilename) {
+        if (waitResult.status !== "complete" || !waitResult.text?.trim()) {
           throw new AutomationError(
             "SCREENING_OUTPUT_MISSING",
-            `SCREENING_OUTPUT_MISSING: screening response did not complete (${waitResult.status})`,
+            `SCREENING_OUTPUT_MISSING: screening JSON response did not complete (${waitResult.status})`,
           );
         }
+
+        const parsed = parseScreeningDecisionsJson(waitResult.text);
+        if (!parsed.ok || parsed.decisions.length === 0) {
+          throw new AutomationError(
+            "SCREENING_OUTPUT_INVALID",
+            `SCREENING_OUTPUT_INVALID: ${parsed.ok === false ? parsed.error : "empty decisions"}`,
+          );
+        }
+
+        ensureDir(path.dirname(decisionsPath));
+        fs.writeFileSync(decisionsPath, waitResult.text, "utf8");
+        closeState.downloaded = true;
+        closeState.validated = true;
         log(logger, "[AI SCREENING] Response complete");
         log(logger, "CHATGPT_RUN_SCREENING_STAGE=RESPONSE_STABLE");
-
-        const workbook = await findGeneratedScreeningWorkbook(page, {
-          correlationId,
-          inputFileName,
-          assistantCountBefore: sendResult.baseline.assistantCountBefore,
-        });
-        if (!workbook) {
-          throw new AutomationError(
-            "SCREENING_OUTPUT_MISSING",
-            "SCREENING_OUTPUT_MISSING: stable wait completed without a generated workbook card",
-          );
-        }
+        log(logger, `CHATGPT_SCREENING_DECISIONS_COUNT=${parsed.decisions.length}`);
+        log(logger, "CHATGPT_RUN_SCREENING_STAGE=DECISIONS_RECEIVED");
 
         saveScreeningChatCheckpoint(outputPath, {
           conversationUrl: page.url(),
           correlationId,
-          expectedFilename: workbook.filename,
+          expectedFilename: "chatgpt-screening-decisions.json",
           submittedAt: new Date().toISOString(),
-          stage: "GENERATED_XLSX_DETECTED",
+          stage: "DECISIONS_RECEIVED",
         });
 
-        const downloaded = await downloadGeneratedWorkbook({
-          page,
-          workbook,
-          outputPath,
-          logger,
-          inputFileName,
+        return {
+          decisionsText: waitResult.text,
           conversationUrl: page.url(),
-          correlationId,
-        });
-        closeState.downloaded = true;
-        closeState.validated = true;
-        log(logger, "CHATGPT_RUN_SCREENING_STAGE=OUTPUT_FILE_VALIDATING");
-        return downloaded.outputPath;
+          decisionsPath,
+        };
       } catch (error) {
         if (isTerminalScreeningFailure(error) || closeState.downloaded) {
           closeState.explicitTerminalFailure = true;

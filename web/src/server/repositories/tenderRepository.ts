@@ -10,6 +10,11 @@ import {
 import { resolveTenderSortColumn } from "@/lib/tender-sort";
 import { qualificationStatusesForFilter, type TenderStatus } from "@/lib/tender-status";
 import type { TenderFilters } from "@/lib/validations";
+import {
+  normalizeTenderCity,
+  stripLocationDecorators,
+  uniqueNormalizedCities,
+} from "@/lib/normalize-tender-city";
 import { startOfDay, endOfDay, subDays, addDays, formatISO } from "date-fns";
 import { randomUUID } from "crypto";
 
@@ -237,7 +242,41 @@ export async function listTenders(filters: TenderFilters): Promise<{
   }
 
   if (filters.state) query = query.ilike("state", filters.state);
-  if (filters.city) query = query.ilike("city", `%${filters.city}%`);
+  if (filters.city) {
+    const cityFilter = await resolveCityFilterValues(filters.city);
+    if (cityFilter.kind === "empty") {
+      // Selected city has no matching normalized rows — return empty page.
+      query = query.eq("id", "00000000-0000-0000-0000-000000000000");
+    } else if (cityFilter.kind === "in") {
+      const parts: string[] = [];
+      if (cityFilter.cities.length > 0) {
+        parts.push(
+          `city.in.(${cityFilter.cities.map(quoteOrFilterValue).join(",")})`,
+        );
+      }
+      if (cityFilter.locationTexts.length > 0) {
+        parts.push(
+          `location_text.in.(${cityFilter.locationTexts.map(quoteOrFilterValue).join(",")})`,
+        );
+      }
+      if (cityFilter.states.length > 0) {
+        parts.push(
+          `state.in.(${cityFilter.states.map(quoteOrFilterValue).join(",")})`,
+        );
+      }
+      if (parts.length === 1) {
+        if (cityFilter.cities.length > 0) {
+          query = query.in("city", cityFilter.cities);
+        } else if (cityFilter.locationTexts.length > 0) {
+          query = query.in("location_text", cityFilter.locationTexts);
+        } else {
+          query = query.in("state", cityFilter.states);
+        }
+      } else if (parts.length > 1) {
+        query = query.or(parts.join(","));
+      }
+    }
+  }
   if (filters.category && isProjectCategory(filters.category)) {
     query = query.eq("project_category", filters.category);
   }
@@ -508,17 +547,17 @@ export async function getTenderExplorerFacets(): Promise<{
   const data = assertSupabaseOk(
     await supabase
       .from("agenttender_tenders")
-      .select("project_category, source_portal, city")
+      .select("project_category, source_portal, city, state, location_text")
       .limit(5000),
     {
       queryName: "getTenderExplorerFacets",
-      selectedColumns: "project_category, source_portal, city",
+      selectedColumns: "project_category, source_portal, city, state, location_text",
     },
   );
 
   const portals = new Set<"TENDER247" | "BIDASSIST" | "MANUAL">();
   const present = new Set<string>();
-  const cities = new Set<string>();
+  const cityCandidates: Array<string | null> = [];
   for (const row of data || []) {
     if (
       row.source_portal === "TENDER247" ||
@@ -530,21 +569,96 @@ export async function getTenderExplorerFacets(): Promise<{
     if (isProjectCategory(row.project_category)) {
       present.add(row.project_category);
     }
-    const city = String(row.city || "").trim();
-    if (city) cities.add(city);
+    cityCandidates.push(
+      normalizeTenderCity({
+        city: row.city,
+        state: row.state,
+        location_text: row.location_text,
+      }),
+    );
   }
 
   const categories = PROJECT_CATEGORIES.filter((label) => present.has(label)).map(
     (label) => ({ value: label, label }),
   );
 
+  const cities = uniqueNormalizedCities(cityCandidates)
+    .slice(0, 80)
+    .map((value) => ({ value, label: value }));
+
   return {
     categories,
     portals: [...portals].sort(),
-    cities: [...cities]
-      .sort((a, b) => a.localeCompare(b))
-      .slice(0, 80)
-      .map((value) => ({ value, label: value })),
+    cities,
+  };
+}
+
+function quoteOrFilterValue(value: string): string {
+  // PostgREST list value: wrap and escape double quotes.
+  return `"${value.replace(/"/g, '\\"')}"`;
+}
+
+/**
+ * Map a user-selected display city to raw DB city/location_text values that
+ * normalize to the same city (handles legacy dirty rows without a migration).
+ */
+async function resolveCityFilterValues(
+  selectedCity: string,
+): Promise<
+  | { kind: "empty" }
+  | {
+      kind: "in";
+      cities: string[];
+      locationTexts: string[];
+      states: string[];
+    }
+> {
+  const target = normalizeTenderCity(selectedCity);
+  if (!target) return { kind: "empty" };
+
+  const supabase = getServerSupabase();
+  const data = assertSupabaseOk(
+    await supabase
+      .from("agenttender_tenders")
+      .select("city, state, location_text")
+      .limit(5000),
+    {
+      queryName: "resolveCityFilterValues",
+      selectedColumns: "city, state, location_text",
+    },
+  );
+
+  const cities = new Set<string>();
+  const locationTexts = new Set<string>();
+  const states = new Set<string>();
+  for (const row of data || []) {
+    const normalized = normalizeTenderCity({
+      city: row.city,
+      state: row.state,
+      location_text: row.location_text,
+    });
+    if (!normalized || normalized.toLowerCase() !== target.toLowerCase()) {
+      continue;
+    }
+    const cityRaw = String(row.city || "").trim();
+    const locationRaw = String(row.location_text || "").trim();
+    const stateRaw = String(row.state || "").trim();
+    if (cityRaw) cities.add(cityRaw);
+    if (locationRaw) locationTexts.add(locationRaw);
+    if (stateRaw && normalizeTenderCity(stateRaw)?.toLowerCase() === target.toLowerCase()) {
+      states.add(stateRaw);
+    }
+    cities.add(target);
+  }
+
+  if (cities.size === 0 && locationTexts.size === 0 && states.size === 0) {
+    return { kind: "empty" };
+  }
+  return {
+    kind: "in",
+    cities: [...cities],
+    locationTexts: [...locationTexts],
+    states: [...states],
   };
 }
 
@@ -629,8 +743,8 @@ export async function createManualTender(
       : "Other",
     tender_type: input.tenderType || null,
     description: input.description,
-    city: input.location,
-    location_text: input.location,
+    city: normalizeTenderCity(input.location) || null,
+    location_text: stripLocationDecorators(input.location || "") || input.location || null,
     published_date: input.creationDate,
     closing_date: input.deadline,
     scraped_date: input.creationDate,

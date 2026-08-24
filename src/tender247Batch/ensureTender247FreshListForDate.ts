@@ -125,6 +125,22 @@ export async function ensureTender247FreshListForDate(
         logLine(logger, "TENDER247_FRESH_LIST_READY");
         return { ...mailDate, listRefreshComplete: true };
       }
+      // Today + correct mail date + Fresh/filtered chrome, but zero tenders:
+      // valid for secondary accounts — do not block Excel / fatal the pipeline.
+      if (
+        (freshVisible || Boolean(filtered)) &&
+        !hasTender &&
+        Date.now() > deadline - Math.min(8_000, Math.floor(timeoutMs / 3))
+      ) {
+        logLine(logger, "TENDER247_FRESH_LIST_EMPTY=true");
+        logLine(logger, "TENDER247_FRESH_LIST_READY");
+        return {
+          ...mailDate,
+          filteredDateLabel: filtered?.filteredDateLabel ?? null,
+          filteredTenderCount: filtered?.filteredTenderCount ?? 0,
+          listRefreshComplete: true,
+        };
+      }
     }
 
     await page.waitForTimeout(400);

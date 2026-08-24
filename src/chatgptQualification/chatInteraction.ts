@@ -14,6 +14,10 @@ import { assertRequiredAttachmentsReady } from "./sourceDocumentResolver.js";
 import {
   getSharedChatGptSubmissionScheduler,
 } from "../concurrency/chatGptSubmissionScheduler.js";
+import {
+  awaitDetailChatGptSubmissionSlot,
+  recordDetailSubmission,
+} from "./chatgptDetailSubmissionLedger.js";
 import type { Tender247ExpectedManifest } from "./tender247AttachmentManifest.js";
 import {
   STABLE_ATTACHMENT_POLL_MS,
@@ -41,6 +45,7 @@ import {
   tickCanonicalJsonStability,
   tryParseCanonicalQualificationJson,
 } from "./canonicalJsonCompletion.js";
+import { tickScreeningJsonStability } from "../runScreening/screeningJsonCompletion.js";
 import {
   inspectionToActivitySnapshot,
   inspectLatestAssistantBounded,
@@ -2371,7 +2376,6 @@ export async function waitForRunExcelScreeningAttachmentReady(
   let lastPresence = await detectComposerAttachments(page, {
     composerToken: options.composerToken,
   });
-  let lastMatched: string[] = [];
   let lastCount = 0;
   let lastName = "";
 
@@ -2419,7 +2423,6 @@ export async function waitForRunExcelScreeningAttachmentReady(
     const ready = !uploading && attachmentCount === 1 && nameOk;
 
     lastPresence = presence;
-    lastMatched = matchedNames;
     lastCount = attachmentCount;
     lastName = attachmentName;
 
@@ -2787,16 +2790,29 @@ export async function sendComposerMessage(
   await assertNotRateLimited(page, logger);
 
   if (requireNewConversation) {
-    const minAttachments = options?.minAttachmentCount ?? 2;
+    const isTextMode = submissionKind === "DOCUMENT_TEXT_QUALIFICATION";
+    const minAttachments = isTextMode
+      ? 0
+      : (options?.minAttachmentCount ?? 2);
     if (
-      !confirmed ||
-      confirmed.requiredAttachmentsConfirmed !== true ||
-      !Array.isArray(confirmed.fileNames) ||
-      confirmed.fileNames.length < minAttachments
+      !isTextMode &&
+      (!confirmed ||
+        confirmed.requiredAttachmentsConfirmed !== true ||
+        !Array.isArray(confirmed.fileNames) ||
+        confirmed.fileNames.length < minAttachments)
     ) {
       throw new AutomationError(
         "CHATGPT_PRE_SEND_ATTACHMENT_CHECK_FAILED",
         "sendComposerMessage refused: ConfirmedAttachmentState required for new conversation",
+      );
+    }
+    if (
+      isTextMode &&
+      (!confirmed || confirmed.requiredAttachmentsConfirmed !== true)
+    ) {
+      throw new AutomationError(
+        "CHATGPT_PRE_SEND_ATTACHMENT_CHECK_FAILED",
+        "sendComposerMessage refused: DOCUMENT_TEXT_QUALIFICATION requires confirmedAttachments with requiredAttachmentsConfirmed=true (fileNames may be empty)",
       );
     }
   }
@@ -2812,12 +2828,46 @@ export async function sendComposerMessage(
   // multi-minute individual-tender interval.
   let sendSlotHeld = sendSlotAlreadyHeld;
   if (!sendSlotAlreadyHeld) {
+    // Rolling 65/3h safety budget (detail qualification only) — wait, never fail.
+    if (
+      submissionKind === "TENDER_QUALIFICATION" ||
+      submissionKind === "DOCUMENT_TEXT_QUALIFICATION"
+    ) {
+      await awaitDetailChatGptSubmissionSlot({ logger: logger ?? undefined });
+    }
     await scheduler.acquireSendSlot({ logger, workerId, submissionKind });
     sendSlotHeld = true;
   } else if (submissionKind === "RUN_EXCEL_SCREENING") {
     logger?.info("CHATGPT_ARTIFICIAL_SEND_DELAY_MS=0");
     console.log("CHATGPT_ARTIFICIAL_SEND_DELAY_MS=0");
+  } else if (submissionKind === "DOCUMENT_TEXT_QUALIFICATION") {
+    logger?.info("CHATGPT_DOCUMENT_TEXT_MODE_SEND=true");
+    console.log("CHATGPT_DOCUMENT_TEXT_MODE_SEND=true");
+    logger?.info("CHATGPT_ARTIFICIAL_SEND_DELAY_MS=0");
+    console.log("CHATGPT_ARTIFICIAL_SEND_DELAY_MS=0");
+    logger?.info("CHATGPT_DOCUMENT_TEXT_SKIP_ATTACHMENT_BUFFER=true");
+    console.log("CHATGPT_DOCUMENT_TEXT_SKIP_ATTACHMENT_BUFFER=true");
   }
+
+  const recordDetailRateIfNeeded = async (): Promise<void> => {
+    if (
+      submissionKind !== "TENDER_QUALIFICATION" &&
+      submissionKind !== "DOCUMENT_TEXT_QUALIFICATION"
+    ) {
+      return;
+    }
+    const tenderId =
+      confirmed?.sourceTenderId || expectedT247Id || "unknown";
+    await recordDetailSubmission({
+      tenderId: String(tenderId),
+      mode:
+        submissionKind === "DOCUMENT_TEXT_QUALIFICATION"
+          ? "TEXT_MODE"
+          : "UPLOAD",
+      correlationId: `QUALIFICATION-siyana-${tenderId}`,
+      logger: logger ?? undefined,
+    });
+  };
 
   const releaseSendSlotSafe = (success: boolean): void => {
     if (!sendSlotHeld) return;
@@ -2982,6 +3032,7 @@ export async function sendComposerMessage(
     });
     const attachmentsReady =
       !requireNewConversation ||
+      submissionKind === "DOCUMENT_TEXT_QUALIFICATION" ||
       (submissionKind === "RUN_EXCEL_SCREENING"
         ? presence.candidates.some((name) => /\.xlsx$/i.test(name))
         : presence.metadataAttached && presence.documentsAttached);
@@ -3030,6 +3081,7 @@ export async function sendComposerMessage(
         force: true,
       });
     }
+    await recordDetailRateIfNeeded();
     const url = page.url();
     if (!isConversationUrl(url)) {
       throw new AutomationError(
@@ -3068,6 +3120,7 @@ export async function sendComposerMessage(
         force: true,
       });
     }
+    await recordDetailRateIfNeeded();
     console.log(`CHATGPT_CONVERSATION_URL=${page.url()}`);
     logger?.info(`CHATGPT_CONVERSATION_URL=${page.url()}`);
     if (expectedT247Id) {
@@ -3119,6 +3172,7 @@ export async function sendComposerMessage(
           force: true,
         });
       }
+      await recordDetailRateIfNeeded();
       const url = page.url();
       if (!isConversationUrl(url)) {
         throw new AutomationError(
@@ -3738,9 +3792,9 @@ export async function waitForAssistantResponse(options: {
   assistantCountBefore?: number;
   userCountBefore?: number;
   stallTimeoutMs?: number;
-  /** qualification_json (default) or generation_complete for run Excel screening */
-  completionMode?: "qualification_json" | "generation_complete";
-  /** Explicit mode. RUN_EXCEL_SCREENING completes on assistant XLSX, not JSON. */
+  /** qualification_json (default), generation_complete for XLSX, screening_json for Phase-1 decisions */
+  completionMode?: "qualification_json" | "generation_complete" | "screening_json";
+  /** Explicit mode. RUN_EXCEL_SCREENING completes on assistant XLSX, not JSON — unless screening_json. */
   submissionKind?: ChatGptSubmissionKind;
   inputWorkbookFileName?: string;
   onProgress?: (info: {
@@ -3752,15 +3806,21 @@ export async function waitForAssistantResponse(options: {
   }) => void;
 }): Promise<AssistantWaitResult> {
   const { page, timeoutMs, logger, expectedT247Id, onProgress } = options;
-  const submissionKind: ChatGptSubmissionKind =
-    options.submissionKind ??
-    (options.completionMode === "generation_complete"
-      ? "RUN_EXCEL_SCREENING"
-      : "TENDER_QUALIFICATION");
-  const isRunScreening = submissionKind === "RUN_EXCEL_SCREENING";
   const completionMode =
     options.completionMode ??
-    (isRunScreening ? "generation_complete" : "qualification_json");
+    (options.submissionKind === "RUN_EXCEL_SCREENING"
+      ? "generation_complete"
+      : "qualification_json");
+  const submissionKind: ChatGptSubmissionKind =
+    options.submissionKind ??
+    (completionMode === "generation_complete"
+      ? "RUN_EXCEL_SCREENING"
+      : "TENDER_QUALIFICATION");
+  // Phase-1 JSON decisions reuse the text/JSON wait path even when the workbook is attached.
+  const isRunScreening =
+    submissionKind === "RUN_EXCEL_SCREENING" &&
+    completionMode === "generation_complete";
+  const isScreeningJson = completionMode === "screening_json";
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
   const stallTimeoutMs =
@@ -4141,15 +4201,24 @@ export async function waitForAssistantResponse(options: {
       textDetectedLogged = true;
     }
 
-    const jsonTick = tickCanonicalJsonStability({
-      text: answerText,
-      textHash,
-      expectedT247Id,
-      previous: jsonStability,
-      nowMs: Date.now(),
-      stopStillVisible: insp.stopVisible || insp.active,
-      postJsonUiGraceMs: postJsonGraceMs,
-    });
+    const jsonTick = isScreeningJson
+      ? tickScreeningJsonStability({
+          text: answerText,
+          textHash,
+          previous: jsonStability,
+          nowMs: Date.now(),
+          stopStillVisible: insp.stopVisible || insp.active,
+          postJsonUiGraceMs: postJsonGraceMs,
+        })
+      : tickCanonicalJsonStability({
+          text: answerText,
+          textHash,
+          expectedT247Id,
+          previous: jsonStability,
+          nowMs: Date.now(),
+          stopStillVisible: insp.stopVisible || insp.active,
+          postJsonUiGraceMs: postJsonGraceMs,
+        });
     jsonStability = jsonTick.state;
 
     if (jsonTick.validJson) {

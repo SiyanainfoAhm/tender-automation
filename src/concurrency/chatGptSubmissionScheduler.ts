@@ -10,6 +10,7 @@
 import { AutomationError } from "../browserUtils.js";
 import {
   getTenderQualificationMinSendIntervalMs,
+  getDocumentTextQualificationMinSendIntervalMs,
   readLastSubmission,
   remainingSubmissionWaitMs,
   recordSuccessfulSubmission,
@@ -100,6 +101,7 @@ function loadPersistedLastMs(): number | null {
 export function createChatGptSubmissionScheduler(options?: {
   minIntervalMs?: number;
   runScreeningMinIntervalMs?: number;
+  documentTextMinIntervalMs?: number;
   rateLimitBackoffMs?: number;
   maxRateLimitBackoffMs?: number;
   maxWorkers?: number;
@@ -111,6 +113,9 @@ export function createChatGptSubmissionScheduler(options?: {
     options?.minIntervalMs ?? getTenderQualificationMinSendIntervalMs();
   const runScreeningMinIntervalMs =
     options?.runScreeningMinIntervalMs ?? getRunExcelScreeningMinSendIntervalMs();
+  const documentTextMinIntervalMs =
+    options?.documentTextMinIntervalMs ??
+    getDocumentTextQualificationMinSendIntervalMs();
   const clock = options?.clock ?? realClock;
   const baseBackoff =
     options?.rateLimitBackoffMs ??
@@ -168,7 +173,9 @@ export function createChatGptSubmissionScheduler(options?: {
     const artificialMinIntervalMs =
       submissionKind === "RUN_EXCEL_SCREENING"
         ? runScreeningMinIntervalMs
-        : minIntervalMs;
+        : submissionKind === "DOCUMENT_TEXT_QUALIFICATION"
+          ? documentTextMinIntervalMs
+          : minIntervalMs;
 
     // Refresh from disk so process restarts / other processes are respected.
     const persisted = loadPersistedLastMs();
@@ -205,13 +212,23 @@ export function createChatGptSubmissionScheduler(options?: {
       opts?.logger,
       `CHATGPT_RUN_SCREENING_MIN_SEND_INTERVAL_MS=${runScreeningMinIntervalMs}`,
     );
+    log(
+      opts?.logger,
+      `CHATGPT_DOCUMENT_TEXT_MIN_SEND_INTERVAL_MS=${documentTextMinIntervalMs}`,
+    );
     if (workerId != null) {
       log(opts?.logger, `CHATGPT_WORKER_ID=${workerId}`);
     }
     log(opts?.logger, `CHATGPT_GLOBAL_LAST_SEND_AT=${lastIso}`);
 
-    if (submissionKind === "RUN_EXCEL_SCREENING") {
+    if (
+      submissionKind === "RUN_EXCEL_SCREENING" ||
+      submissionKind === "DOCUMENT_TEXT_QUALIFICATION"
+    ) {
       log(opts?.logger, `CHATGPT_ARTIFICIAL_SEND_DELAY_MS=${remainingInterval}`);
+      if (submissionKind === "DOCUMENT_TEXT_QUALIFICATION") {
+        log(opts?.logger, "CHATGPT_DOCUMENT_TEXT_SKIP_ATTACHMENT_BUFFER=true");
+      }
     } else {
       const nextAt =
         previousSendAtMs != null
@@ -336,7 +353,9 @@ export function createChatGptSubmissionScheduler(options?: {
             sourcePortal: opts.sourcePortal,
             sourceTenderId: opts.sourceTenderId,
             previousSendAtMs,
-            skipMinIntervalCheck: opts.submissionKind === "RUN_EXCEL_SCREENING",
+            skipMinIntervalCheck:
+              opts.submissionKind === "RUN_EXCEL_SCREENING" ||
+              opts.submissionKind === "DOCUMENT_TEXT_QUALIFICATION",
           });
           successStreak += 1;
           if (successStreak >= 2 && activeWorkersAllowed < maxWorkers) {

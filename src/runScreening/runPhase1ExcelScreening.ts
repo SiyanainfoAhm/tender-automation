@@ -19,6 +19,15 @@ import {
   createLiveChatGptExcelScreeningClient,
   type ChatGptExcelScreeningClient,
 } from "./chatgptExcelScreening.js";
+import {
+  applyScreeningDecisionsToWorkbook,
+  inventoryTenderWorkbook,
+} from "./applyScreeningDecisionsToWorkbook.js";
+import {
+  digitsTenderId,
+  parseScreeningDecisionsJson,
+  type ScreeningDecision,
+} from "./screeningDecisionSchema.js";
 import { logActiveScreeningRules, PHASE1_SCREENING_POLICY_VERSION } from "./screeningPolicy.js";
 import { persistGptScreenedWorkbookToDatabase } from "./persistPhase1Results.js";
 import { enforcePhase1ScreeningDecisions } from "./phase1DecisionGuard.js";
@@ -35,10 +44,10 @@ import {
   parseSourceWorkbook,
   ScreeningOutputInvalidError,
   validateScreenedWorkbook,
-  writeRunWorkbook,
   countPhase1Statuses,
   type RunWorkbookRow,
 } from "./runWorkbook.js";
+import { toPhase1WorkbookStatusLabel } from "./phase1Statuses.js";
 import {
   assertAiScreeningCompleteForDetailCrawl,
   emptyStatusCounts,
@@ -54,6 +63,27 @@ import {
 import type { AppConfig } from "../config.js";
 
 export { assertAiScreeningCompleteForDetailCrawl };
+
+function rowsToScreeningDecisions(rows: RunWorkbookRow[]): ScreeningDecision[] {
+  const byId = new Map<string, ScreeningDecision>();
+  for (const row of rows) {
+    const t247Id =
+      digitsTenderId(row.tender247Id) || digitsTenderId(row.canonicalId);
+    if (!t247Id || !row.screeningStatus) continue;
+    const screeningStatus = toPhase1WorkbookStatusLabel(
+      row.screeningStatus,
+    ) as ScreeningDecision["screeningStatus"];
+    byId.set(t247Id, {
+      t247Id,
+      screeningStatus,
+      screeningReason:
+        row.screeningReason ||
+        `${screeningStatus} — classified by Phase-1 screening.`,
+      statusEnum: row.screeningStatus,
+    });
+  }
+  return [...byId.values()];
+}
 
 export type Phase1ExcelScreeningResult = {
   status: "complete" | "failed" | "pending";
@@ -79,18 +109,19 @@ function log(logger: Logger | undefined, message: string): void {
   logger?.info(message);
 }
 
-function validateAndRepairScreenedWorkbook(options: {
+async function validateAndRepairScreenedWorkbook(options: {
   inputRows: RunWorkbookRow[];
   outputPath: string;
+  sourceWorkbookPath: string;
   snapshot: CompanyPreferenceSnapshot;
   runDate: string;
   dateFolder: string;
   logger?: Logger;
-}): {
+}): Promise<{
   outputRows: RunWorkbookRow[];
   counts: Phase1ScreeningManifest["counts"];
   repairedCount: number;
-} {
+}> {
   log(options.logger, "SCREENING_VALIDATION_START");
   const validated = validateScreenedWorkbook({
     inputRows: options.inputRows,
@@ -111,7 +142,12 @@ function validateAndRepairScreenedWorkbook(options: {
     });
     outputRows = repaired.rows;
     repairedCount = repaired.repaired.length;
-    writeRunWorkbook(outputRows, options.outputPath);
+    await applyScreeningDecisionsToWorkbook({
+      sourceWorkbookPath: options.sourceWorkbookPath,
+      outputPath: options.outputPath,
+      decisions: rowsToScreeningDecisions(outputRows),
+      logger: options.logger,
+    });
     saveScreeningRepairLog(options.dateFolder, {
       runId: `RUN-${options.runDate}`,
       repairedRows: repaired.repaired,
@@ -147,14 +183,18 @@ function validateAndRepairScreenedWorkbook(options: {
   };
 }
 
-function applyDeterministicPhase1Guard(options: {
+async function applyDeterministicPhase1Guard(options: {
   inputRows: RunWorkbookRow[];
   outputRows: RunWorkbookRow[];
   snapshot: CompanyPreferenceSnapshot;
   runDate: string;
   screenedPath: string;
+  sourceWorkbookPath: string;
   logger?: Logger;
-}): { outputRows: RunWorkbookRow[]; counts: Phase1ScreeningManifest["counts"] } {
+}): Promise<{
+  outputRows: RunWorkbookRow[];
+  counts: Phase1ScreeningManifest["counts"];
+}> {
   const enforced = enforcePhase1ScreeningDecisions({
     inputRows: options.inputRows,
     outputRows: options.outputRows,
@@ -162,7 +202,12 @@ function applyDeterministicPhase1Guard(options: {
     runDate: options.runDate,
     log: (message) => log(options.logger, message),
   });
-  writeRunWorkbook(enforced.rows, options.screenedPath);
+  await applyScreeningDecisionsToWorkbook({
+    sourceWorkbookPath: options.sourceWorkbookPath,
+    outputPath: options.screenedPath,
+    decisions: rowsToScreeningDecisions(enforced.rows),
+    logger: options.logger,
+  });
   if (enforced.corrected > 0) {
     log(options.logger, `PHASE1_DECISIONS_CORRECTED=${enforced.corrected}`);
   }
@@ -258,8 +303,8 @@ function emptyResult(base: {
 }
 
 /**
- * Prepare Tender247 Excel for GPT: archive original, exact-dedupe + column
- * normalize only. Never applies local NO_BID / company pre-filter.
+ * Prepare Tender247 Excel for GPT: archive original multi-sheet export and
+ * attach that same structure (never flatten / rebuild as GPT input).
  */
 function prepareTender247GptInput(options: {
   tender247Path: string;
@@ -278,13 +323,15 @@ function prepareTender247GptInput(options: {
   fs.mkdirSync(dir, { recursive: true });
 
   const inputFilename = path.basename(options.tender247Path);
-  // Keep a byte-for-byte export archive; GPT input uses the same export filename.
   const originalArchivePath = path.join(dir, `export-original-${inputFilename}`);
   fs.copyFileSync(options.tender247Path, originalArchivePath);
   log(options.logger, `SCREENING_ORIGINAL_TENDER247=${originalArchivePath}`);
 
+  // GPT attachment = original multi-sheet Tender247 export (Gem / Non-Gem preserved).
+  const gptInputPath = path.join(dir, inputFilename);
+  fs.copyFileSync(options.tender247Path, gptInputPath);
+
   const tender247Rows = parseSourceWorkbook(options.tender247Path, "TENDER247");
-  // Tender247 only — BidAssist is not merged into GPT input.
   const prepared = normalizeAndDedupeRunRows({
     tender247Rows,
     bidAssistRows: [],
@@ -294,16 +341,14 @@ function prepareTender247GptInput(options: {
   log(options.logger, `[DEDUPE] duplicates removed = ${prepared.duplicatesRemoved}`);
   log(options.logger, "TENDER247_LOCAL_NO_BID_PREFILTER=false");
   log(options.logger, "TENDER247_ROWS_PRESERVED_BEFORE_GPT=true");
-
-  // GPT attachment basename = Tender247 export name (never run-normalized.xlsx).
-  const gptInputPath = path.join(dir, inputFilename);
-  writeRunWorkbook(prepared.rows, gptInputPath);
+  log(options.logger, "CHATGPT_SCREENING_MODE=JSON_DECISIONS");
 
   return {
     originalArchivePath,
     gptInputPath,
     inputFilename,
-    rows: prepared.rows,
+    // Preserve every original tender row for reconciliation (no shortlist / no drop).
+    rows: tender247Rows,
     tender247Raw: prepared.tender247Raw,
     tender247Unique: prepared.tender247Unique,
     duplicatesRemoved: prepared.duplicatesRemoved,
@@ -412,11 +457,14 @@ export async function runPhase1ExcelScreening(options: {
   const screeningSnapshot = toTenderScreeningPreferenceSnapshot(snapshot);
   const preferencesHash = hashPreferenceSnapshot(snapshot);
   const companyPreferenceSnapshotHash = preferencesHash;
+  const workbookInventory = await inventoryTenderWorkbook(gptInputPath);
+  log(logger, `INPUT_TOTAL_ROWS=${workbookInventory.totalRows}`);
+  log(logger, `INPUT_SHEETS=${JSON.stringify(workbookInventory.sheetNames)}`);
   const prompt = buildTenderScreeningPrompt({
     companySnapshot: snapshot,
     runDate: dateIso,
     sourceExcelName: inputFilename,
-    inputRowCount: inputRows.length,
+    inputRowCount: workbookInventory.totalRows || inputRows.length,
   });
   const screeningPromptHash = hashText(prompt);
   logActiveScreeningRules(screeningSnapshot, (message) => log(logger, message));
@@ -453,20 +501,22 @@ export async function runPhase1ExcelScreening(options: {
   // (e.g. old multi-sheet double-count bug that is now fixed in the reader).
   if (screenedExists && hashesMatchExisting) {
     try {
-      const validated = validateAndRepairScreenedWorkbook({
+      const validated = await validateAndRepairScreenedWorkbook({
         inputRows,
         outputPath: existingScreened!,
+        sourceWorkbookPath: gptInputPath,
         snapshot,
         runDate: dateIso,
         dateFolder,
         logger,
       });
-      const guarded = applyDeterministicPhase1Guard({
+      const guarded = await applyDeterministicPhase1Guard({
         inputRows,
         outputRows: validated.outputRows,
         snapshot,
         runDate: dateIso,
         screenedPath: existingScreened!,
+        sourceWorkbookPath: gptInputPath,
         logger,
       });
       log(
@@ -507,8 +557,8 @@ export async function runPhase1ExcelScreening(options: {
 
   log(logger, `CHATGPT_INPUT_FILE_READY=true`);
   log(logger, `CHATGPT_INPUT_FILENAME=${inputFilename}`);
-  log(logger, `CHATGPT_INPUT_ROW_COUNT=${inputRows.length}`);
-  log(logger, `[AI SCREENING] Uploading ${inputFilename}`);
+  log(logger, `CHATGPT_INPUT_ROW_COUNT=${workbookInventory.totalRows || inputRows.length}`);
+  log(logger, `[AI SCREENING] Uploading ${inputFilename} (JSON decisions only)`);
 
   const client =
     options.chatgptClient ??
@@ -537,30 +587,57 @@ export async function runPhase1ExcelScreening(options: {
   }
 
   try {
-    await client.screenWorkbook({
+    const screening = await client.screenWorkbook({
       inputWorkbookPath: gptInputPath,
       prompt,
       outputPath: screenedPath,
       runDate: dateIso,
     });
-    const validated = validateAndRepairScreenedWorkbook({
+    const parsed = parseScreeningDecisionsJson(screening.decisionsText);
+    if (!parsed.ok) {
+      throw new AutomationError(
+        "SCREENING_OUTPUT_INVALID",
+        `SCREENING_OUTPUT_INVALID: ${parsed.error}`,
+      );
+    }
+    const applied = await applyScreeningDecisionsToWorkbook({
+      sourceWorkbookPath: gptInputPath,
+      outputPath: screenedPath,
+      decisions: parsed.decisions,
+      logger,
+    });
+    log(logger, `SCREENING_INPUT_ROWS=${applied.inputTotalRows}`);
+    log(logger, `SCREENING_OUTPUT_ROWS=${applied.outputTotalRows}`);
+    log(
+      logger,
+      `SCREENING_MISSING_TENDER_IDS=${JSON.stringify(applied.missingTenderIds)}`,
+    );
+    log(logger, `SCREENING_UPDATED_ROWS=${applied.updatedRows}`);
+    if (applied.inputTotalRows !== applied.outputTotalRows) {
+      throw new AutomationError(
+        "SCREENING_OUTPUT_INVALID",
+        `SCREENING_OUTPUT_INVALID missing_rows=${JSON.stringify(applied.missingTenderIds)} extra_rows=${JSON.stringify(applied.extraDecisionIds)}`,
+      );
+    }
+
+    const validated = await validateAndRepairScreenedWorkbook({
       inputRows,
       outputPath: screenedPath,
+      sourceWorkbookPath: gptInputPath,
       snapshot,
       runDate: dateIso,
       dateFolder,
       logger,
     });
-    const guarded = applyDeterministicPhase1Guard({
+    const guarded = await applyDeterministicPhase1Guard({
       inputRows,
       outputRows: validated.outputRows,
       snapshot,
       runDate: dateIso,
       screenedPath,
+      sourceWorkbookPath: gptInputPath,
       logger,
     });
-    log(logger, `SCREENING_INPUT_ROWS=${inputRows.length}`);
-    log(logger, `SCREENING_OUTPUT_ROWS=${guarded.outputRows.length}`);
     log(logger, "SCREENING_ROW_RECONCILIATION=PASS");
     log(logger, "[AI SCREENING] Reconciliation = PASS");
     log(logger, "[AI SCREENING] Workbook validation=PASS");

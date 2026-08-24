@@ -28,6 +28,11 @@ import type { QualificationStatus } from "@/components/status/qualification-badg
 import { StatusBadge } from "@/components/status/qualification-badge";
 import { SourceBadge } from "@/components/status/source-badge";
 import type { TenderSource } from "@/components/tenders/tender-status-styles";
+import {
+  isIndianStateName,
+  normalizeTenderCity,
+  stripLocationDecorators,
+} from "@/lib/normalize-tender-city";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -210,12 +215,22 @@ function hasActiveFilters(filters: TenderFilters): boolean {
 }
 
 function locationLine(row: WebTenderListRow): string {
-  const location =
-    [row.city, row.state].filter(Boolean).join(", ") ||
-    row.location_text?.trim() ||
-    "";
-  const org = row.organization || row.authority || "";
-  return [location, org].filter(Boolean).join(" · ");
+  const city = normalizeTenderCity({
+    city: row.city,
+    state: row.state,
+    location_text: row.location_text,
+  });
+  const state =
+    row.state && isIndianStateName(stripLocationDecorators(row.state))
+      ? stripLocationDecorators(row.state)
+      : null;
+  // List subtitle is location only — never ministry / organization / authority.
+  return [city, state].filter(Boolean).join(", ");
+}
+
+/** Compact one-line tender title for the list (ellipsis when too long). */
+function listTitle(row: WebTenderListRow): string {
+  return String(row.title || "").replace(/\s+/g, " ").trim();
 }
 
 function normalizeStatusChip(value: string | undefined): string {
@@ -1150,7 +1165,7 @@ export function TenderExplorer({
           className="overflow-hidden rounded-lg border border-border bg-card shadow-sm"
         >
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1100px]">
+            <table className="w-full min-w-[1100px] table-fixed">
               <thead>
                 <tr className="border-b border-background-200/70 bg-background-50">
                   <th className="w-10 px-4 py-3">
@@ -1163,7 +1178,7 @@ export function TenderExplorer({
                       aria-label="Select page"
                     />
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-foreground-500">
+                  <th className="w-[32%] px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-foreground-500">
                     Tender Name
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-foreground-500">
@@ -1266,29 +1281,32 @@ export function TenderExplorer({
                               aria-label={`Select ${row.title}`}
                             />
                           </td>
-                          <td className="max-w-[360px] px-4 py-3">
-                            <p className="line-clamp-1 text-sm font-medium text-foreground-800 group-hover:text-primary-600">
-                              {row.title}
+                          <td className="max-w-0 px-4 py-3">
+                            <p
+                              className="truncate text-sm font-medium text-foreground-800 group-hover:text-primary-600"
+                              title={listTitle(row)}
+                            >
+                              {listTitle(row)}
                             </p>
-                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
                               <SourceBadge
                                 source={portal}
                                 size="sm"
                                 className="rounded px-1.5 py-0.5 normal-case tracking-normal"
                               />
-                              <span className="truncate text-xs text-foreground-500">
+                              <span className="min-w-0 truncate text-xs text-foreground-500">
                                 ID: {row.source_tender_id}
                               </span>
                               {reference && reference !== row.source_tender_id ? (
-                                <span className="truncate text-xs text-foreground-500">
+                                <span className="min-w-0 truncate text-xs text-foreground-500">
                                   Ref: {reference}
                                 </span>
                               ) : null}
                             </div>
                             {place ? (
-                              <p className="mt-0.5 line-clamp-1 flex items-center gap-1 text-xs text-foreground-400">
+                              <p className="mt-0.5 flex min-w-0 items-center gap-1 truncate text-xs text-foreground-400">
                                 <MapPin className="size-3 shrink-0" aria-hidden />
-                                {place}
+                                <span className="truncate">{place}</span>
                               </p>
                             ) : null}
                           </td>

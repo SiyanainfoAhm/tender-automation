@@ -203,7 +203,7 @@ const TEXT_FIELD_LABELS: Array<{ field: FieldKey; labels: string[] }> = [
   },
   {
     field: "locationText",
-    labels: ["location", "site location", "office name"],
+    labels: ["location", "site location"],
   },
 ];
 

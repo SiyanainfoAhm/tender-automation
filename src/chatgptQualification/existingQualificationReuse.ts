@@ -1,9 +1,11 @@
 /**
- * Strict existing-qualification reuse — only for --resume with matching input hash.
+ * Strict existing-qualification reuse.
+ * RULE: a valid persisted detailed qualification is NEVER re-sent — fresh or resume.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { loadChatGptTenderState } from "./chatgptState.js";
+import { inspectQualificationState } from "./inspectQualificationState.js";
 import { isValidSavedQualificationResult } from "./qualificationSchema.js";
 import {
   computeQualificationInputFingerprint,
@@ -55,6 +57,37 @@ export function evaluateExistingQualificationReuse(options: {
 
   logDocumentZipFingerprint(fingerprint, options.logger);
 
+  const inspection = inspectQualificationState({
+    dateFolder: options.dateFolder,
+    tenderId: t247Id,
+  });
+  const log = (msg: string) => {
+    console.log(msg);
+    options.logger?.info(msg);
+  };
+
+  log(`CHATGPT_EXISTING_QUALIFICATION_FOUND=${inspection.validResponse || inspection.status !== "NOT_STARTED"}`);
+  if (inspection.qualificationStatus) {
+    log(`CHATGPT_EXISTING_QUALIFICATION_STATUS=${inspection.qualificationStatus}`);
+  }
+
+  // Non-negotiable: valid detailed response → never send again.
+  if (inspection.validResponse) {
+    log("CHATGPT_EXISTING_QUALIFICATION_REUSE=true");
+    log("CHATGPT_QUALIFICATION_REUSED_EXISTING=true");
+    return {
+      found: true,
+      reuse: true,
+      stale: false,
+      inputHashMatch: true,
+      status: inspection.qualificationStatus ?? null,
+      resultSource: "local",
+      resultDate: inspection.completedAt ?? null,
+      reason: "EXISTING_VALID_QUALIFICATION",
+      fingerprint,
+    };
+  }
+
   const resultExists =
     fs.existsSync(resultPath) && fs.statSync(resultPath).size > 0;
   let status: string | null = null;
@@ -72,31 +105,6 @@ export function evaluateExistingQualificationReuse(options: {
   }
 
   const found = resultExists;
-  const log = (msg: string) => {
-    console.log(msg);
-    options.logger?.info(msg);
-  };
-
-  log(`CHATGPT_EXISTING_QUALIFICATION_FOUND=${found}`);
-  if (status) {
-    log(`CHATGPT_EXISTING_QUALIFICATION_STATUS=${status}`);
-  }
-
-  if (!options.resumeMode) {
-    log("CHATGPT_EXISTING_QUALIFICATION_REUSE=false");
-    return {
-      found,
-      reuse: false,
-      stale: false,
-      inputHashMatch: null,
-      status,
-      resultSource: found ? "local" : null,
-      resultDate,
-      reason: "FRESH_RUN_NO_REUSE",
-      fingerprint,
-    };
-  }
-
   const state = loadChatGptTenderState(tenderFolder);
 
   if (!found) {
@@ -134,7 +142,8 @@ export function evaluateExistingQualificationReuse(options: {
 
   const storedHash = loadStoredQualificationInputHash(tenderFolder);
   if (!storedHash) {
-    // Without a stored fingerprint we cannot prove the result matches current inputs.
+    // Valid schema result still counts as complete via inspectQualificationState above.
+    // Reach here only when canonical validator passed but inspector disagreed — treat invalid.
     log("CHATGPT_EXISTING_QUALIFICATION_REUSE=false");
     log("CHATGPT_EXISTING_QUALIFICATION_INPUT_HASH_MATCH=false");
     log("CHATGPT_EXISTING_QUALIFICATION_MISSING_INPUT_HASH=true");
@@ -176,7 +185,6 @@ export function evaluateExistingQualificationReuse(options: {
     state?.status === "not_ready" ||
     state?.status === "response_pending"
   ) {
-    // Incomplete/failed states must not be treated as reusable completions.
     if (state.status !== "response_pending" || !isValidSavedQualificationResult(resultPath)) {
       log("CHATGPT_EXISTING_QUALIFICATION_REUSE=false");
       return {
@@ -193,8 +201,8 @@ export function evaluateExistingQualificationReuse(options: {
     }
   }
 
-  log("CHATGPT_EXISTING_QUALIFICATION_REUSED=true");
   log("CHATGPT_EXISTING_QUALIFICATION_REUSE=true");
+  log("CHATGPT_QUALIFICATION_REUSED_EXISTING=true");
   return {
     found: true,
     reuse: true,

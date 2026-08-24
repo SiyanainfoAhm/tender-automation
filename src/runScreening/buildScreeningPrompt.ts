@@ -218,7 +218,7 @@ Do not replace current database values with remembered values.
 9. Manually audit all MAY_BID, WILL_BID and VERIFY candidates before
    finalizing.
 
-10. Produce one completed XLSX workbook.
+10. Return a JSON array of screening decisions only (never generate an XLSX).
 
 11. The main analysis sheet must contain every supplied tender row exactly
     once.
@@ -1248,7 +1248,7 @@ Before returning:
 
 1. Verify every supplied input row remains exactly once.
 
-2. Verify total main-sheet rows = ${options.inputRowCount}.
+2. Confirm the attached workbook has ${options.inputRowCount} tender rows across Gem / Non-Gem sheets.
 
 3. Verify no row was silently removed.
 
@@ -1440,9 +1440,9 @@ Use sparingly for exceptionally strong Phase-1 matches.
 FINAL RESPONSE VALIDATION
 ================================================================
 
-Before generating / returning the XLSX:
+Before returning JSON:
 
-Scan every Screening Status cell.
+Confirm every supplied tender ID has a decision status.
 
 Allowed:
 
@@ -1451,7 +1451,7 @@ VERIFY
 MAY_BID
 WILL_BID
 
-If any cell contains:
+If any decision contains:
 
 GO
 NO_GO
@@ -1461,64 +1461,53 @@ REJECTED
 QUALIFIED
 DISQUALIFIED
 
-replace it before returning the workbook:
+replace it before returning:
 
 - GO → WILL_BID
 - NO_GO / REJECTED / DISQUALIFIED → NO_BID
 - CONDITIONAL_GO / QUALIFIED → MAY_BID
 - PARTNER_BID → VERIFY (or NO_BID if partner/OEM dependency makes the tender unsuitable)
 
-The workbook is invalid if any forbidden status remains.
+The response is invalid if any forbidden status remains.
 
 
 ================================================================
 OUTPUT CONTRACT
 ================================================================
 
-Preserve every existing source column on the main analysis sheet.
+Do NOT generate, rebuild, or return an XLSX workbook.
 
-Add/update:
+Do NOT return a shortlist workbook.
 
-- Screening Status
-- Screening Reason
+The application will update the original Excel locally.
 
-Recommended additional classification columns:
+Return JSON only — a single array of objects:
 
-- Tender Type
-- Primary Scope
-- Procurement Model
-- Dominant Scope
-- Classification Confidence
+[
+  {
+    "t247_id": "123456789",
+    "screening_status": "NO_BID | VERIFY | MAY_BID | WILL_BID",
+    "screening_reason": "concise reason"
+  }
+]
 
-Optional helper sheets:
-
-- Summary
-- RFP Classification
-- Screening Audit
-
-Do not return only shortlisted rows.
-
-Do not delete NO_BID rows.
-
-Do not return prose instead of XLSX.
-
-Return exactly one completed XLSX workbook.
-
-Mandatory classification flags are internal reasoning fields only. Do not add them as columns to the returned Excel unless explicitly requested.
+Rules:
+- Include exactly one object for every tender row in the attached workbook.
+- Do not omit NO_BID rows.
+- Do not invent tender IDs that are not in the attached workbook.
+- No markdown fences. No prose outside JSON.
 
 
 ================================================================
 ROW RECONCILIATION
 ================================================================
 
-The returned main analysis sheet must contain exactly:
+The JSON array must cover exactly:
 
 ${options.inputRowCount}
 
-tender rows.
+tender rows from the attached workbook.
 
-Every input Canonical ID / Tender ID must remain present exactly once.
-
-NO_BID rows remain part of the audit trail.
+Every input Tender247 ID must appear exactly once as t247_id.
 `;
 }

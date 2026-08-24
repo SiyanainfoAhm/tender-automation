@@ -357,7 +357,7 @@ function mergeParsedTextPairs(
 
   const normalized = text.replace(/\r\n/g, "\n");
   const knownLabel =
-    /^(Tender\s*Id|GEM\s*Bid\s*number|GEM\s*Bid|Bid\s*End\s*Date\s*Time|Bid\s*Opening\s*Date\s*Time|Bid\s*Offer\s*Validity[^\n]*|Ministry\s*State\s*Name|Department\s*Name|Organi[sz]ation\s*Name|Office\s*Name|Item\s*Category|Contract\s*Period|Bid\s*to\s*RA?\s*Enabled|Type\s*of\s*Bid|Time\s*Allowed[^\n]*|Evaluation\s*Method|Advisory\s*Bank|Emd\s*Amount|EMD\s*Amount|Emd\s*Instrument\s*Type|Completion\s*Period|Category|Location|EMD\s*Value|Document\s*required\s*from\s*seller|Pre\s*Bid\s*Meeting|Last\s*date\s*for\s*Seeking\s*Clarification|Performance\s*Bank\s*Guarantee|Payment\s*terms|Evaluation\s*Weightage|Mandatory\s*Sample\s*Submission|Checklist|T247\s*ID|Quantity|Website|Brief|Description|Submission\s*Date|Opening\s*Date|Bid\s*Value|Tender\s*Estimated\s*Cost|Tender\s*Document\s*Fees?|Organi[sz]ation|Department)$/i;
+    /^(Tender\s*Id|GEM\s*Bid\s*number|GEM\s*Bid|Bid\s*End\s*Date\s*Time|Bid\s*Opening\s*Date\s*Time|Bid\s*Offer\s*Validity[^\n]*|Ministry\s*State\s*Name|Department\s*Name|Organi[sz]ation\s*Name|Office\s*Name|Item\s*Category|Products?|Product\s*Category|Contract\s*Period|Bid\s*to\s*RA?\s*Enabled|Type\s*of\s*Bid|Time\s*Allowed[^\n]*|Evaluation\s*Method|Advisory\s*Bank|Emd\s*Amount|EMD\s*Amount|Emd\s*Instrument\s*Type|Completion\s*Period|Category|Location|City|Place|EMD\s*Value|Document\s*required\s*from\s*seller|Pre\s*Bid\s*Meeting|Last\s*date\s*for\s*Seeking\s*Clarification|Performance\s*Bank\s*Guarantee|Payment\s*terms|Evaluation\s*Weightage|Mandatory\s*Sample\s*Submission|Checklist|T247\s*ID|Quantity|Website|Brief|Description|Submission\s*Date|Opening\s*Date|Closing\s*Date|Deadline|Last\s*Date|Bid\s*Value|Tender\s*Estimated\s*Cost|Tender\s*Document\s*Fees?|Organi[sz]ation|Department)$/i;
 
   const lines = normalized.split("\n").map((l) => l.trim()).filter(Boolean);
   let currentLabel: string | null = null;
@@ -426,6 +426,8 @@ function cleanValue(s: string): string {
     .replace(/\u00a0/g, " ")
     .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
+    .replace(/^[:：\-\s]+/, "")
+    .replace(/[:：\-\s]+$/, "")
     .trim();
 }
 
@@ -491,6 +493,8 @@ function buildNormalized(input: {
       /^Bid\s*End\s*Date(\s*Time)?$/i,
       /^Submission\s*Date$/i,
       /^Closing\s*Date$/i,
+      /^Deadline$/i,
+      /^Last\s*Date$/i,
     ]),
     typeof api.tender_endsubmission_datetime === "string"
       ? api.tender_endsubmission_datetime

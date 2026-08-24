@@ -683,19 +683,19 @@ export function TenderDetailClient({
   return (
     <div className="space-y-6">
       <div className="flex min-w-0 items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2 text-sm">
-          <Link
-            href="/tenders"
-            className="inline-flex shrink-0 items-center gap-1 text-foreground-500 hover:text-foreground-900"
-          >
-            <ArrowLeft className="size-4" />
-            Tenders
-          </Link>
-          <ChevronRight className="size-3.5 shrink-0 text-foreground-400" />
-          <span className="truncate font-medium text-foreground-900">
+      <div className="flex min-w-0 items-center gap-2 text-sm">
+        <Link
+          href="/tenders"
+          className="inline-flex shrink-0 items-center gap-1 text-foreground-500 hover:text-foreground-900"
+        >
+          <ArrowLeft className="size-4" />
+          Tenders
+        </Link>
+        <ChevronRight className="size-3.5 shrink-0 text-foreground-400" />
+        <span className="truncate font-medium text-foreground-900">
             {breadcrumbId}
-          </span>
-        </div>
+        </span>
+      </div>
 
         {canEdit ? (
           <div className="flex shrink-0 items-center gap-1">
@@ -784,9 +784,9 @@ export function TenderDetailClient({
                 className="text-lg font-semibold md:text-xl h-auto py-2"
               />
             ) : (
-              <h1 className="text-lg font-semibold leading-snug md:text-xl">
-                {tender.title}
-              </h1>
+            <h1 className="text-lg font-semibold leading-snug md:text-xl">
+              {tender.title}
+            </h1>
             )}
 
             {editing ? (
@@ -796,9 +796,9 @@ export function TenderDetailClient({
                 placeholder="Organization"
               />
             ) : (
-              <p className="text-sm text-foreground-500">
-                {tender.authority || tender.organization || "—"}
-              </p>
+            <p className="text-sm text-foreground-500">
+              {tender.authority || tender.organization || "—"}
+            </p>
             )}
 
             <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -1191,8 +1191,8 @@ export function TenderDetailClient({
                     ) : (
                       <p className="whitespace-pre-wrap font-normal">
                         {tender.lostReason || "—"}
-                      </p>
-                    )}
+                </p>
+              )}
                   </FieldRow>
                 ) : null}
                 {showDisqualified ||
@@ -1312,7 +1312,7 @@ export function TenderDetailClient({
                     <Label htmlFor="msme-exemption" className="text-sm font-medium">
                       MSME
                     </Label>
-                  </div>
+          </div>
                   <ApplicablePill
                     applicable={
                       editing ? draft.msmeExemption : tender.msmeExemption
@@ -1415,7 +1415,10 @@ export function TenderDetailClient({
                       rows={5}
                     />
                   ) : (
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground-700">
+                    <p
+                      className="line-clamp-4 whitespace-pre-wrap text-sm leading-relaxed text-foreground-700"
+                      title={tender.description || undefined}
+                    >
                       {tender.description || "No tender description available."}
                     </p>
                   )}
@@ -1501,7 +1504,7 @@ export function TenderDetailClient({
                 >
                   <Plus className="size-3.5" />
                   Add Fees
-                </Button>
+        </Button>
               ) : null
             }
           />
@@ -1530,11 +1533,11 @@ export function TenderDetailClient({
               }}
             />
           ) : null}
-        </div>
+      </div>
       ) : null}
 
       {tab === "timeline" ? <TimelineTab tender={tender} /> : null}
-    </div>
+              </div>
   );
 }
 

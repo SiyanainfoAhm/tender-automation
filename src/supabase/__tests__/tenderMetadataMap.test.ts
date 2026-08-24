@@ -51,6 +51,9 @@ test("parsePortalDate accepts DMY and ISO formats", () => {
   assert.equal(parsePortalDate("17-08-2026"), "2026-08-17");
   assert.equal(parsePortalDate("17/08/2026"), "2026-08-17");
   assert.equal(parsePortalDate("2026-08-17"), "2026-08-17");
+  assert.equal(parsePortalDate("27-08-2024 11:00 AM"), "2024-08-27");
+  assert.equal(parsePortalDate(":\n03:08:2026 05:00 PM"), "2026-08-03");
+  assert.equal(parsePortalDate("03.08.2026"), "2026-08-03");
   assert.equal(parsePortalDate(""), null);
 });
 
