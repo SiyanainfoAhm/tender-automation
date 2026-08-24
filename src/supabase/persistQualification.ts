@@ -15,12 +15,29 @@ import {
 
 /**
  * ChatGPT Phase-2 persist policy:
- * - GO / WILL_BID → keep GO (Will Bid) in Supabase
+ * - GO / WILL_BID → store CONDITIONAL_GO (May Bid). Will Bid is manual-only.
  * - NO_GO / NO_BID → store VERIFY so humans review instead of auto No Bid
  *
  * Local qualification-result.json still keeps the model’s original status.
- * Phase-1 Excel screening NO_GO is unaffected (different persist path).
+ * Phase-1 Excel screening writes through persistPhase1Results (same GO remap).
  */
+export function agentQualificationStatusForDatabase(
+  agentStatus: string | null | undefined,
+  existingStatus?: string | null,
+): string {
+  if (String(existingStatus || "").trim().toUpperCase() === "GO") {
+    return "GO";
+  }
+  const key = String(agentStatus || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+  if (key === "GO" || key === "WILL_BID") {
+    return "CONDITIONAL_GO";
+  }
+  return String(agentStatus || "");
+}
+
 export function qualificationStatusForSupabasePersist(
   qualification: QualificationResult,
 ): {
@@ -31,10 +48,44 @@ export function qualificationStatusForSupabasePersist(
   unclearCriteria: string[];
   manualReviewRequired: boolean;
   remappedFromNoBid: boolean;
+  remappedFromWillBid: boolean;
   rawResult: Record<string, unknown>;
 } {
   const originalStatus = qualification.status;
   const remappedFromNoBid = originalStatus === "NO_GO";
+  const remappedFromWillBid = originalStatus === "GO";
+
+  if (remappedFromWillBid) {
+    const reasonPrefix =
+      "ChatGPT returned Will Bid; stored as May Bid until Will Bid is set manually. ";
+    const reason = qualification.reason.trim().startsWith(reasonPrefix.trim())
+      ? qualification.reason
+      : `${reasonPrefix}${qualification.reason}`.trim();
+    return {
+      status: "CONDITIONAL_GO",
+      decisionLabel: TENDER_DECISION_LABELS.CONDITIONAL_GO,
+      reason,
+      requiredAction:
+        qualification.requiredAction?.trim() ||
+        TENDER_DECISION_REQUIRED_ACTIONS.CONDITIONAL_GO,
+      unclearCriteria: qualification.unclearCriteria,
+      manualReviewRequired: true,
+      remappedFromNoBid: false,
+      remappedFromWillBid: true,
+      rawResult: {
+        ...(qualification as unknown as Record<string, unknown>),
+        status: "CONDITIONAL_GO",
+        decisionLabel: TENDER_DECISION_LABELS.CONDITIONAL_GO,
+        reason,
+        requiredAction:
+          qualification.requiredAction?.trim() ||
+          TENDER_DECISION_REQUIRED_ACTIONS.CONDITIONAL_GO,
+        manualReviewRequired: true,
+        chatgptOriginalStatus: originalStatus,
+        supabaseStatusRemap: "GO_TO_CONDITIONAL_GO",
+      },
+    };
+  }
 
   if (!remappedFromNoBid) {
     return {
@@ -45,6 +96,7 @@ export function qualificationStatusForSupabasePersist(
       unclearCriteria: qualification.unclearCriteria,
       manualReviewRequired: qualification.manualReviewRequired,
       remappedFromNoBid: false,
+      remappedFromWillBid: false,
       rawResult: qualification as unknown as Record<string, unknown>,
     };
   }
@@ -77,6 +129,7 @@ export function qualificationStatusForSupabasePersist(
     unclearCriteria,
     manualReviewRequired: true,
     remappedFromNoBid: true,
+    remappedFromWillBid: false,
     rawResult: {
       ...(qualification as unknown as Record<string, unknown>),
       status: "VERIFY",
@@ -110,9 +163,31 @@ export async function persistValidatedQualificationToSupabase(options: {
     logger,
   } = options;
 
+  const existingStatus = await readTenderQualificationStatus(
+    sourcePortal,
+    sourceTenderId,
+  );
+  if (existingStatus === "GO") {
+    const msg = `PRESERVE_MANUAL_WILL_BID=true portal=${sourcePortal} tender=${sourceTenderId}`;
+    console.log(msg);
+    logger?.info?.(msg);
+    await maybeEnrichTenderFinancialsFromQualification({
+      sourcePortal,
+      sourceTenderId,
+      qualification: qualification as unknown as Record<string, unknown>,
+      logger,
+    });
+    return { ok: true, error: null };
+  }
+
   const forStore = qualificationStatusForSupabasePersist(qualification);
   if (forStore.remappedFromNoBid) {
     const msg = `CHATGPT_NO_BID_STORED_AS_VERIFY=true portal=${sourcePortal} tender=${sourceTenderId}`;
+    console.log(msg);
+    logger?.info?.(msg);
+  }
+  if (forStore.remappedFromWillBid) {
+    const msg = `CHATGPT_WILL_BID_STORED_AS_MAY_BID=true portal=${sourcePortal} tender=${sourceTenderId}`;
     console.log(msg);
     logger?.info?.(msg);
   }
@@ -161,6 +236,27 @@ export async function persistValidatedQualificationToSupabase(options: {
   });
 
   return { ok: true, error: null };
+}
+
+async function readTenderQualificationStatus(
+  sourcePortal: "TENDER247" | "BIDASSIST",
+  sourceTenderId: string,
+): Promise<string | null> {
+  if (!isSupabaseConfigured()) return null;
+  try {
+    const client = getSupabaseAdminClient();
+    const { data, error } = await client
+      .from("agenttender_tenders")
+      .select("qualification_status")
+      .eq("source_portal", sourcePortal)
+      .eq("source_tender_id", sourceTenderId)
+      .maybeSingle();
+    if (error || !data) return null;
+    const status = data.qualification_status;
+    return status == null ? null : String(status);
+  } catch {
+    return null;
+  }
 }
 
 async function maybeEnrichTenderFinancialsFromQualification(options: {

@@ -12,6 +12,7 @@ import path from "node:path";
 import { getSupabaseAdminClient, isSupabaseConfigured } from "../supabase/client.js";
 import { upsertQualificationResult } from "../supabase/qualificationResultStore.js";
 import { mergeNullOnlyRecord } from "../supabase/mergeTenderNullOnly.js";
+import { agentQualificationStatusForDatabase } from "../supabase/persistQualification.js";
 import { resolveRunCompanyId } from "../company/siyanaCompany.js";
 import type { RunWorkbookRow } from "./runWorkbook.js";
 import {
@@ -70,8 +71,12 @@ function excelEmdAmount(row: RunWorkbookRow): number | null {
 
 function mapScreeningToQualificationStatus(
   status: Phase1ScreeningStatus,
+  existingStatus?: string | null,
 ): Phase1ScreeningStatus {
-  return status;
+  return agentQualificationStatusForDatabase(
+    status,
+    existingStatus,
+  ) as Phase1ScreeningStatus;
 }
 
 function qualificationPayloadForStatus(
@@ -318,7 +323,10 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         `[${label}] Existing record found=${Boolean(existing)}`,
       );
 
-      const qualificationStatus = mapScreeningToQualificationStatus(status);
+      const qualificationStatus = mapScreeningToQualificationStatus(
+        status,
+        existing?.qualification_status,
+      );
       const rawMetadata = {
         ...(existing?.raw_metadata &&
         typeof existing.raw_metadata === "object" &&

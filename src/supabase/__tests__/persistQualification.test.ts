@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { QualificationResult } from "../../chatgptQualification/types.js";
-import { qualificationStatusForSupabasePersist } from "../persistQualification.js";
+import { qualificationStatusForSupabasePersist, agentQualificationStatusForDatabase } from "../persistQualification.js";
 
 function baseResult(
   overrides: Partial<QualificationResult>,
@@ -29,12 +29,19 @@ function baseResult(
 }
 
 describe("qualificationStatusForSupabasePersist", () => {
-  it("keeps Will Bid / GO unchanged", () => {
+  it("maps agent Will Bid / GO to May Bid / CONDITIONAL_GO", () => {
     const out = qualificationStatusForSupabasePersist(
       baseResult({ status: "GO", decisionLabel: "GO" }),
     );
-    assert.equal(out.status, "GO");
+    assert.equal(out.status, "CONDITIONAL_GO");
+    assert.equal(out.remappedFromWillBid, true);
     assert.equal(out.remappedFromNoBid, false);
+    assert.equal(out.manualReviewRequired, true);
+    assert.match(out.reason, /stored as May Bid/);
+    assert.equal(
+      (out.rawResult as { supabaseStatusRemap?: string }).supabaseStatusRemap,
+      "GO_TO_CONDITIONAL_GO",
+    );
   });
 
   it("keeps PARTNER_BID and VERIFY unchanged", () => {
@@ -84,5 +91,29 @@ describe("qualificationStatusForSupabasePersist", () => {
       (out.rawResult as { supabaseStatusRemap?: string }).supabaseStatusRemap,
       "NO_GO_TO_VERIFY",
     );
+  });
+});
+
+describe("agentQualificationStatusForDatabase", () => {
+  it("maps agent Will Bid to May Bid", () => {
+    assert.equal(agentQualificationStatusForDatabase("GO"), "CONDITIONAL_GO");
+    assert.equal(agentQualificationStatusForDatabase("WILL_BID"), "CONDITIONAL_GO");
+  });
+
+  it("keeps May Bid and Verify from the agent", () => {
+    assert.equal(
+      agentQualificationStatusForDatabase("CONDITIONAL_GO"),
+      "CONDITIONAL_GO",
+    );
+    assert.equal(agentQualificationStatusForDatabase("VERIFY"), "VERIFY");
+  });
+
+  it("does not overwrite a manually set Will Bid", () => {
+    assert.equal(
+      agentQualificationStatusForDatabase("CONDITIONAL_GO", "GO"),
+      "GO",
+    );
+    assert.equal(agentQualificationStatusForDatabase("VERIFY", "GO"), "GO");
+    assert.equal(agentQualificationStatusForDatabase("GO", "GO"), "GO");
   });
 });

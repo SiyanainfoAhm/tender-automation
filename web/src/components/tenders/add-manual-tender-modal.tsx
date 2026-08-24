@@ -371,6 +371,10 @@ export function AddManualTenderModal({
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-[11px] text-foreground-400">
+                  Will Bid is a human decision. Agents may set May Bid or
+                  Verify, but never Will Bid.
+                </p>
               </div>
             </div>
           </section>

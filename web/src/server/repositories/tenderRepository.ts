@@ -677,6 +677,8 @@ async function listSubmittedTenderIds(): Promise<string[]> {
     .filter(Boolean);
 }
 
+const ALLOWED_MANUAL_PORTALS = new Set(["MANUAL", "TENDER247", "BIDASSIST"]);
+
 export type CreateManualTenderInput = {
   title: string;
   referenceNo: string;
@@ -730,7 +732,9 @@ export async function createManualTender(
   };
 
   const row = {
-    source_portal: input.portal,
+    source_portal: ALLOWED_MANUAL_PORTALS.has(input.portal)
+      ? input.portal
+      : "MANUAL",
     source_tender_id: sourceTenderId,
     folder_id: input.referenceNo,
     title: input.title,

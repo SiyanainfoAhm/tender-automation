@@ -454,7 +454,7 @@ function buildWonPortfolio(
     },
     {
       key: "awarded",
-      label: "Awarded",
+      label: "Past experience",
       count: experiences.length,
       totalValue: experienceValue,
       color: "#059669",
@@ -487,12 +487,13 @@ function buildWonPortfolio(
   const maxValue = Math.max(1, ...statusBuckets.map((b) => b.totalValue));
 
   return {
-    activeProjects: ongoing.length || wonRows.length,
+    // Active = ongoing past-experience projects only (not inflated by won tenders).
+    activeProjects: ongoing.length,
     inExecutionValue,
     inExecutionValueLabel: moneyLabel(inExecutionValue || wonValue),
     completed: completed.length,
     milestonesDone: completed.length,
-    milestonesTotal: Math.max(experiences.length, wonRows.length, 1),
+    milestonesTotal: Math.max(experiences.length, wonRows.length),
     byStatus: statusBuckets.map((b) => ({
       ...b,
       valueLabel: moneyLabel(b.totalValue),
@@ -560,8 +561,9 @@ function buildUpcomingDeadlines(
  * - scraped → scraped_date (fallback first_seen_at / crawled_at / created_at)
  * - created → created_at (fallback first_seen_at / crawled_at / scraped_date)
  *
- * Won: qualification_status WON/AWARDED when present; execution portfolio also
- * uses agenttender_company_experience (no separate award table yet).
+ * Won Projects KPI: tenders with qualification_status WON/AWARDED only.
+ * Execution portfolio separately shows company past experience
+ * (agenttender_company_experience) — that must not inflate the Won KPI.
  * Financial exposure: disclosed EMD on active pipeline + Bank Guarantee docs.
  */
 export async function getDashboardOverview(options: {
@@ -721,10 +723,14 @@ export async function getDashboardOverview(options: {
       {
         key: "wonProjects",
         label: "Won Projects",
-        value: String(
-          Math.max(wonAll.length, wonPortfolio.activeProjects, experiences.length),
-        ),
-        supporting: wonPortfolio.inExecutionValueLabel,
+        // Count only tenders marked Won — do not inflate with past experience rows.
+        value: wonAll.length.toLocaleString("en-IN"),
+        supporting:
+          wonAll.length > 0
+            ? wonPortfolio.inExecutionValueLabel
+            : experiences.length > 0
+              ? `${experiences.length} past experience on file (not tender wins)`
+              : "No won tenders yet",
         tone: "green",
       },
       {
