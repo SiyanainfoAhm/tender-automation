@@ -199,10 +199,50 @@ export async function getTenderListStatusCounts(): Promise<TenderListStatusCount
     representation: "date",
   });
 
-  const [statusRes, closingRes, submittedRes] = await Promise.all([
+  // Parallel exact counts — never fetch row bodies (PostgREST 1000-row cap).
+  const [
+    totalRes,
+    verifyRes,
+    underEvalRes,
+    willBidRes,
+    mayBidRes,
+    noBidRes,
+    partnershipRes,
+    wonRes,
+    closingRes,
+    submittedRes,
+  ] = await Promise.all([
     supabase
       .from("agenttender_web_tender_list")
-      .select("effective_qualification_status"),
+      .select("id", { count: "exact", head: true }),
+    supabase
+      .from("agenttender_web_tender_list")
+      .select("id", { count: "exact", head: true })
+      .eq("effective_qualification_status", "VERIFY"),
+    supabase
+      .from("agenttender_web_tender_list")
+      .select("id", { count: "exact", head: true })
+      .is("effective_qualification_status", null),
+    supabase
+      .from("agenttender_web_tender_list")
+      .select("id", { count: "exact", head: true })
+      .eq("effective_qualification_status", "GO"),
+    supabase
+      .from("agenttender_web_tender_list")
+      .select("id", { count: "exact", head: true })
+      .eq("effective_qualification_status", "CONDITIONAL_GO"),
+    supabase
+      .from("agenttender_web_tender_list")
+      .select("id", { count: "exact", head: true })
+      .eq("effective_qualification_status", "NO_GO"),
+    supabase
+      .from("agenttender_web_tender_list")
+      .select("id", { count: "exact", head: true })
+      .eq("effective_qualification_status", "PARTNER_BID"),
+    supabase
+      .from("agenttender_web_tender_list")
+      .select("id", { count: "exact", head: true })
+      .eq("effective_qualification_status", "WON"),
     supabase
       .from("agenttender_web_tender_list")
       .select("id", { count: "exact", head: true })
@@ -214,34 +254,61 @@ export async function getTenderListStatusCounts(): Promise<TenderListStatusCount
       .eq("submission_status", "submitted"),
   ]);
 
-  if (statusRes.error) {
-    assertSupabaseOk(statusRes, {
-      queryName: "tenderListStatusCounts.status",
-      selectedColumns: "effective_qualification_status",
-    });
+  const results = [
+    ["total", totalRes],
+    ["verify", verifyRes],
+    ["underEvaluation", underEvalRes],
+    ["willBid", willBidRes],
+    ["mayBid", mayBidRes],
+    ["noBid", noBidRes],
+    ["partnership", partnershipRes],
+    ["won", wonRes],
+    ["closingSoon", closingRes],
+    ["submitted", submittedRes],
+  ] as const;
+
+  for (const [name, res] of results) {
+    if (res.error) {
+      assertSupabaseOk(res, {
+        queryName: `tenderListStatusCounts.${name}`,
+        selectedColumns: "id (count exact head)",
+      });
+    }
   }
 
-  const byStatus = aggregateStatusCounts(
-    (statusRes.data || []).map((row) => ({
-      effective_qualification_status: row.effective_qualification_status as
-        | string
-        | null,
-    })),
-  );
+  const totalTenders = totalRes.count ?? 0;
+  const verify = verifyRes.count ?? 0;
+  const underEvaluation = underEvalRes.count ?? 0;
+  const willBid = willBidRes.count ?? 0;
+  const mayBid = mayBidRes.count ?? 0;
+  const noBid = noBidRes.count ?? 0;
+  const partnership = partnershipRes.count ?? 0;
+  const won = wonRes.count ?? 0;
 
-  const totalTenders = (statusRes.data || []).length;
+  const mappedSum =
+    verify + underEvaluation + willBid + mayBid + noBid + partnership + won;
+  if (mappedSum < totalTenders) {
+    console.warn(
+      "[tenderListStatusCounts] unmapped/legacy statuses present",
+      {
+        totalTenders,
+        mappedSum,
+        unmapped: totalTenders - mappedSum,
+      },
+    );
+  }
 
   return {
     totalTenders,
-    verify: byStatus.VERIFY || 0,
-    underEvaluation: byStatus.NOT_EVALUATED || 0,
-    willBid: byStatus.GO || 0,
-    mayBid: byStatus.CONDITIONAL_GO || 0,
-    noBid: byStatus.NO_GO || 0,
-    partnership: byStatus.PARTNER_BID || 0,
+    verify,
+    underEvaluation,
+    willBid,
+    mayBid,
+    noBid,
+    partnership,
     submitted: submittedRes.count ?? 0,
     closingSoon: closingRes.count ?? 0,
-    won: byStatus.WON || 0,
+    won,
   };
 }
 

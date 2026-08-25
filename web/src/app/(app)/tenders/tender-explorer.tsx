@@ -20,6 +20,7 @@ import {
 
 import { CategoryCapsule } from "@/components/tenders/category-capsule";
 import { TenderLoadingOverlay } from "@/components/tenders/tender-loading-overlay";
+import { TenderStatsCards } from "@/components/tenders/tender-stats-cards";
 import {
   exportTenderRowsCsv,
   TenderPageActions,
@@ -64,6 +65,7 @@ import {
 } from "@/lib/tender-status";
 import { tenderFiltersSchema, type TenderFilters } from "@/lib/validations";
 import { cn } from "@/lib/utils";
+import type { TenderListStatusCounts } from "@/server/repositories/analyticsRepository";
 import type {
   TenderExplorerFacet,
   WebTenderListRow,
@@ -76,7 +78,7 @@ type TenderExplorerProps = {
   cities: TenderExplorerFacet[];
   canImport: boolean;
   canCreate: boolean;
-  stats: React.ReactNode;
+  statusCounts: TenderListStatusCounts | null;
 };
 
 type ListResponse = {
@@ -334,7 +336,7 @@ export function TenderExplorer({
   cities,
   canImport,
   canCreate,
-  stats,
+  statusCounts,
 }: TenderExplorerProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -614,7 +616,19 @@ export function TenderExplorer({
           />
         </div>
 
-        {stats}
+        {statusCounts ? (
+          <TenderStatsCards
+            counts={statusCounts}
+            activeStatus={currentStatus}
+            disabled={isUpdating}
+            onSelectStatus={(status) =>
+              navigate({
+                status: status ?? undefined,
+                page: "1",
+              })
+            }
+          />
+        ) : null}
 
         <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">

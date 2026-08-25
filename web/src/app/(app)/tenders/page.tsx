@@ -1,4 +1,3 @@
-import { TenderStatsCards } from "@/components/tenders/tender-stats-cards";
 import { sessionHasPermission } from "@/server/auth/permissions";
 import { requireSession } from "@/server/auth/session";
 import { getTenderListStatusCounts } from "@/server/repositories/analyticsRepository";
@@ -21,7 +20,10 @@ export default async function TendersPage() {
       cities: [],
     })),
     countVisibleTenders().catch(() => 0),
-    getTenderListStatusCounts().catch(() => null),
+    getTenderListStatusCounts().catch((error) => {
+      console.error("[tenders] failed to load status card counts", error);
+      return null;
+    }),
   ]);
 
   return (
@@ -32,7 +34,7 @@ export default async function TendersPage() {
       cities={facets.cities}
       canImport={sessionHasPermission(session, "tenders.import")}
       canCreate={sessionHasPermission(session, "tenders.edit")}
-      stats={counts ? <TenderStatsCards counts={counts} /> : null}
+      statusCounts={counts}
     />
   );
 }
