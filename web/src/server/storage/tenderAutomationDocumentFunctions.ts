@@ -27,6 +27,8 @@ type EdgeJson = {
 
 type EdgeResult = EdgeJson & { status: number };
 
+export { resolveUploadedDocumentId } from "@/lib/uploads/resolveUploadedDocumentId";
+
 function resolveServiceKey(): string {
   return (
     process.env.SUPABASE_SECRET_KEY?.trim() ||

@@ -23,14 +23,17 @@ import { CompanyAccessError } from "@/server/auth/company-access";
 import { requirePermissionStrict } from "@/server/auth/permissions";
 import {
   createBidFee,
+  countTenderDocumentRefsToCompanyDocument,
   deleteBidFee,
   deleteTenderDocument,
   getBidFeeById,
+  getTenderDocumentById,
   insertTenderDocument,
   updateBidFee,
 } from "@/server/repositories/bidFeeRepository";
 import { getTenderById } from "@/server/repositories/tenderRepository";
 import { insertTenderActivity } from "@/server/repositories/tenderActivityRepository";
+import { resolveUploadedDocumentId } from "@/lib/uploads/resolveUploadedDocumentId";
 import {
   invokeDocumentDelete,
   invokeDocumentUpload,
@@ -51,6 +54,29 @@ function extensionAllowed(name: string): boolean {
   return /\.(pdf|doc|docx|xls|xlsx|png|jpe?g|webp)$/i.test(name);
 }
 
+/** Route MANUAL tender uploads under tender-artifacts/manual/{created-date}/{tender-id}/. */
+function applyManualTenderArtifactFields(
+  form: FormData,
+  tender: Record<string, unknown> | null | undefined,
+): void {
+  if (!tender) return;
+  const portal = String(tender.source_portal || "").toUpperCase();
+  if (portal !== "MANUAL") return;
+  const sourceId = String(
+    tender.source_tender_id || tender.id || "",
+  ).trim();
+  if (!sourceId) return;
+  const createdRaw = String(
+    tender.created_at || tender.first_seen_at || "",
+  ).trim();
+  const createdDate = /^\d{4}-\d{2}-\d{2}/.test(createdRaw)
+    ? createdRaw.slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+  form.set("tenderArtifactPortal", "MANUAL");
+  form.set("tenderArtifactId", sourceId);
+  form.set("tenderArtifactDate", createdDate);
+}
+
 async function uploadLinkedAttachment(options: {
   companyId: string;
   tenderId: string;
@@ -59,6 +85,7 @@ async function uploadLinkedAttachment(options: {
   file: File;
   userId: string;
   entityType?: string;
+  tenderRow?: Record<string, unknown> | null;
 }): Promise<void> {
   if (options.file.size > MAX_SINGLE_SHOT_UPLOAD_BYTES) {
     throw new Error("File exceeds the 25 MB limit.");
@@ -79,9 +106,11 @@ async function uploadLinkedAttachment(options: {
     "notes",
     `tender:${options.tenderId}|fee:${options.feeId}|section:${options.section}`,
   );
+  applyManualTenderArtifactFields(formData, options.tenderRow);
 
   const uploaded = await invokeDocumentUpload(formData);
-  if (!uploaded.success || !uploaded.documentId) {
+  const uploadedDocumentId = resolveUploadedDocumentId(uploaded);
+  if (!uploaded.success || !uploadedDocumentId) {
     throw new Error(uploaded.error || "Unable to upload attachment.");
   }
 
@@ -92,7 +121,7 @@ async function uploadLinkedAttachment(options: {
     entityType: options.entityType || "fee",
     entityId: options.feeId,
     feeId: options.feeId,
-    companyDocumentId: String(uploaded.documentId),
+    companyDocumentId: uploadedDocumentId,
     fileName: options.file.name,
     originalName: options.file.name,
     mimeType: options.file.type || null,
@@ -283,6 +312,7 @@ export async function createBidFeeWithAttachmentsAction(
         file,
         userId: session.user.id,
         entityType: feeType === "pbg" ? "pbg" : "fee",
+        tenderRow: tender.tender,
       });
     }
 
@@ -390,6 +420,8 @@ export async function attachFeeDocumentAction(
     const fee = await getBidFeeById({ companyId: session.companyId, feeId });
     if (!fee) return { ok: false, error: "Fee not found." };
 
+    const tenderLookup = await getTenderById(fee.tenderId);
+
     await uploadLinkedAttachment({
       companyId: session.companyId,
       tenderId: fee.tenderId,
@@ -398,6 +430,7 @@ export async function attachFeeDocumentAction(
       file,
       userId: session.user.id,
       entityType: fee.feeType === "pbg" ? "pbg" : "fee",
+      tenderRow: tenderLookup?.tender ?? null,
     });
 
     revalidateFeePaths(fee.tenderId);
@@ -438,6 +471,10 @@ export async function uploadTenderSectionDocumentAction(
       };
     }
 
+    const tenderLookup = await getTenderById(tenderId);
+    if (!tenderLookup) return { ok: false, error: "Tender not found." };
+    const tenderRow = tenderLookup.tender;
+
     if (feeId) {
       await uploadLinkedAttachment({
         companyId: session.companyId,
@@ -446,6 +483,7 @@ export async function uploadTenderSectionDocumentAction(
         section,
         file,
         userId: session.user.id,
+        tenderRow,
       });
     } else {
       const uploadForm = new FormData();
@@ -459,8 +497,10 @@ export async function uploadTenderSectionDocumentAction(
       );
       uploadForm.set("uploadKind", "general");
       uploadForm.set("notes", `tender:${tenderId}|section:${section}`);
+      applyManualTenderArtifactFields(uploadForm, tenderRow);
       const uploaded = await invokeDocumentUpload(uploadForm);
-      if (!uploaded.success || !uploaded.documentId) {
+      const uploadedDocumentId = resolveUploadedDocumentId(uploaded);
+      if (!uploaded.success || !uploadedDocumentId) {
         return {
           ok: false,
           error: uploaded.error || "Unable to upload document.",
@@ -471,7 +511,7 @@ export async function uploadTenderSectionDocumentAction(
         tenderId,
         section,
         entityType: "manual",
-        companyDocumentId: String(uploaded.documentId),
+        companyDocumentId: uploadedDocumentId,
         fileName: file.name,
         originalName: file.name,
         mimeType: file.type || null,
@@ -499,18 +539,44 @@ export async function deleteTenderDocumentAction(
 ): Promise<FeeActionResult> {
   try {
     const session = await requirePermissionStrict("tenders.edit");
+    const doc = await getTenderDocumentById({
+      companyId: session.companyId,
+      documentId,
+    });
+    if (!doc) return { ok: false, error: "Document not found." };
+
+    // Delete Azure blob + company_documents row first when this is the only
+    // tender link. Fail before removing the tender row if storage cleanup fails.
+    if (doc.companyDocumentId) {
+      const otherRefs = await countTenderDocumentRefsToCompanyDocument({
+        companyId: session.companyId,
+        companyDocumentId: doc.companyDocumentId,
+        excludeTenderDocumentId: doc.id,
+      });
+      if (otherRefs === 0) {
+        const storageDelete = await invokeDocumentDelete(doc.companyDocumentId);
+        if (!storageDelete.success) {
+          return {
+            ok: false,
+            error:
+              storageDelete.error ||
+              "Unable to delete the file from storage. Document was not removed.",
+          };
+        }
+      }
+    }
+
     const removed = await deleteTenderDocument({
       companyId: session.companyId,
       documentId,
     });
     if (!removed) return { ok: false, error: "Document not found." };
 
-    if (removed.companyDocumentId) {
-      await invokeDocumentDelete(removed.companyDocumentId).catch(() => null);
-    }
-
     revalidateFeePaths(removed.tenderId);
-    return { ok: true, message: "Document deleted." };
+    return {
+      ok: true,
+      message: "Document deleted from tender, database, and storage.",
+    };
   } catch (error) {
     if (error instanceof CompanyAccessError) {
       return { ok: false, error: error.message };

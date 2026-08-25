@@ -373,6 +373,21 @@ export async function insertTenderDocument(input: {
   return mapDoc(data as DocRow);
 }
 
+export async function getTenderDocumentById(options: {
+  companyId: string;
+  documentId: string;
+}): Promise<TenderDocumentRecord | null> {
+  const supabase = getServerSupabase();
+  const { data, error } = await supabase
+    .from("agenttender_tender_documents")
+    .select("*")
+    .eq("company_id", options.companyId)
+    .eq("id", options.documentId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data ? mapDoc(data as DocRow) : null;
+}
+
 export async function deleteTenderDocument(options: {
   companyId: string;
   documentId: string;
@@ -393,6 +408,26 @@ export async function deleteTenderDocument(options: {
     .eq("id", options.documentId);
   if (error) throw new Error(error.message);
   return mapDoc(existing as DocRow);
+}
+
+/** How many tender-document rows still point at this company library file. */
+export async function countTenderDocumentRefsToCompanyDocument(options: {
+  companyId: string;
+  companyDocumentId: string;
+  excludeTenderDocumentId?: string;
+}): Promise<number> {
+  const supabase = getServerSupabase();
+  let query = supabase
+    .from("agenttender_tender_documents")
+    .select("id", { count: "exact", head: true })
+    .eq("company_id", options.companyId)
+    .eq("company_document_id", options.companyDocumentId);
+  if (options.excludeTenderDocumentId) {
+    query = query.neq("id", options.excludeTenderDocumentId);
+  }
+  const { count, error } = await query;
+  if (error) throw new Error(error.message);
+  return count ?? 0;
 }
 
 export type BidFeeSummary = {

@@ -1175,16 +1175,35 @@ async function handleUpload(req: Request, form: FormData) {
   }
 
   const documentId = crypto.randomUUID();
-  const blobName =
-    `${slugify(user.companyName)}_${user.companyId}/` +
-    `${slugify(documentName)}_${documentId}/` +
-    `${category}/` +
-    sanitizeFileName(file.name);
+  const artifactPortal = String(form.get("tenderArtifactPortal") || "")
+    .trim()
+    .toUpperCase();
+  const artifactId = String(form.get("tenderArtifactId") || "").trim();
+  const artifactDate = String(form.get("tenderArtifactDate") || "").trim();
+  const useManualArtifactPath =
+    artifactPortal === "MANUAL" && Boolean(artifactId);
+
+  // Manual tenders → companies/{key}/tender-artifacts/manual/{created-date}/{tender-id}/…
+  // (same layout as tender247 date folders; portal segment is "manual")
+  const blobName = useManualArtifactPath
+    ? buildTenderArtifactBlobName({
+        sourcePortal: "MANUAL",
+        sourceTenderId: artifactId,
+        runDate: artifactDate,
+        fileName: `${documentId.slice(0, 8)}_${file.name}`,
+        companyKey: resolveCompanyArtifactKey(user.companyName),
+      })
+    : `${slugify(user.companyName)}_${user.companyId}/` +
+      `${slugify(documentName)}_${documentId}/` +
+      `${category}/` +
+      sanitizeFileName(file.name);
 
   console.info("[tender-automation-documents] upload started", {
     companyId: user.companyId,
     documentId,
     category,
+    artifactPortal: useManualArtifactPath ? "MANUAL" : null,
+    blobName,
   });
 
   await uploadAzureBlob(azure, blobName, file);
@@ -1232,7 +1251,7 @@ async function handleUpload(req: Request, form: FormData) {
   }
 
   console.info("[tender-automation-documents] upload complete", { documentId });
-  return json({ success: true, document: inserted });
+  return json({ success: true, documentId, document: inserted });
 }
 
 async function handleDocumentRead(
@@ -1340,13 +1359,14 @@ async function handleDelete(req: Request, body: { documentId?: string }) {
     }
   }
 
-  const { error: softDeleteError } = await supabase
+  // Remove the DB row after storage succeeds so deletes are not soft-orphans.
+  const { error: hardDeleteError } = await supabase
     .from("agenttender_company_documents")
-    .update({ status: "archived", updated_at: new Date().toISOString() })
+    .delete()
     .eq("id", documentId)
     .eq("company_id", user.companyId);
 
-  if (softDeleteError) throw new Error(softDeleteError.message);
+  if (hardDeleteError) throw new Error(hardDeleteError.message);
 
   console.info("[tender-automation-documents] delete complete", { documentId });
   return json({ success: true, documentId });
@@ -2307,7 +2327,24 @@ function buildTenderArtifactBlobName(options: {
       .replace(/[^a-z0-9_-]+/g, "-")
       .replace(/^-+|-+$/g, "") || "siyana";
   // Company-scoped; never include Tender247 account. metadata.json is not uploaded.
+  // MANUAL → companies/{key}/tender-artifacts/manual/{date}/{tenderId}/…
   return `companies/${company}/tender-artifacts/${portal}/${date}/${id}/${sanitizeTenderArtifactFileName(options.fileName)}`;
+}
+
+/** Short company key matching Azure layout: companies/siyana/tender-artifacts/… */
+function resolveCompanyArtifactKey(companyName: string): string {
+  const fromEnv = (Deno.env.get("COMPANY_BLOB_KEY") || "").trim();
+  if (fromEnv) {
+    return (
+      fromEnv
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "siyana"
+    );
+  }
+  const slug = slugify(companyName);
+  const first = slug.split("-").filter(Boolean)[0];
+  return first || "siyana";
 }
 
 /** Pipeline upload for Tender_All_Documents.zip / AI_Summary.pdf (metadata stays in DB). */
@@ -2322,7 +2359,11 @@ async function handleUploadTenderArtifact(req: Request, formData: FormData) {
   const providedBlobName = String(formData.get("blobName") ?? "").trim();
   const file = formData.get("file");
 
-  if (sourcePortal !== "TENDER247" && sourcePortal !== "BIDASSIST") {
+  if (
+    sourcePortal !== "TENDER247" &&
+    sourcePortal !== "BIDASSIST" &&
+    sourcePortal !== "MANUAL"
+  ) {
     throw new HttpError(400, "Invalid sourcePortal.");
   }
   if (!sourceTenderId) throw new HttpError(400, "sourceTenderId is required.");
@@ -2333,7 +2374,7 @@ async function handleUploadTenderArtifact(req: Request, formData: FormData) {
     throw new HttpError(400, "File exceeds the maximum allowed size.");
   }
 
-  const allowedKinds = new Set(["documents_zip", "ai_summary"]);
+  const allowedKinds = new Set(["documents_zip", "ai_summary", "manual_document"]);
   if (!allowedKinds.has(artifactKind)) {
     throw new HttpError(400, "Invalid artifactKind.");
   }

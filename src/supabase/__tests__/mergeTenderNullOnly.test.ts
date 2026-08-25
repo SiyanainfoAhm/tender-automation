@@ -70,6 +70,18 @@ describe("buildTenderArtifactBlobName", () => {
       "companies/siyana/tender-artifacts/tender247/2026-08-18/103389190/tender-all-documents.zip",
     );
   });
+
+  it("builds manual portal path under tender-artifacts/manual", () => {
+    assert.equal(
+      buildTenderArtifactBlobName({
+        sourcePortal: "MANUAL",
+        sourceTenderId: "MAN-55AF81E6E54B",
+        runDate: "2026-08-25",
+        fileName: "scope.pdf",
+      }),
+      "companies/siyana/tender-artifacts/manual/2026-08-25/MAN-55AF81E6E54B/scope.pdf",
+    );
+  });
 });
 
 describe("resolveLocalArtifactPath", () => {

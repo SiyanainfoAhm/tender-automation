@@ -52,7 +52,7 @@ function sanitizeBlobFileName(fileName: string): string {
 }
 
 export function buildTenderArtifactBlobName(options: {
-  sourcePortal: "TENDER247" | "BIDASSIST";
+  sourcePortal: "TENDER247" | "BIDASSIST" | "MANUAL";
   sourceTenderId: string;
   runDate: string;
   fileName: string;
@@ -72,6 +72,7 @@ export function buildTenderArtifactBlobName(options: {
       .replace(/[^a-z0-9_-]+/g, "-")
       .replace(/^-+|-+$/g, "") || "siyana";
   // Company-based path — never include Tender247 account id.
+  // MANUAL → tender-artifacts/manual/{date}/{id}/… (alongside tender247).
   // metadata.json is intentionally not uploaded (raw_metadata in DB).
   return `companies/${company}/tender-artifacts/${portal}/${date}/${id}/${sanitizeBlobFileName(options.fileName)}`;
 }
@@ -121,7 +122,7 @@ function columnForKind(kind: TenderArtifactKind): keyof TenderArtifactUploadResu
 }
 
 async function invokeUploadTenderArtifact(options: {
-  sourcePortal: "TENDER247" | "BIDASSIST";
+  sourcePortal: "TENDER247" | "BIDASSIST" | "MANUAL";
   sourceTenderId: string;
   runDate: string;
   kind: TenderArtifactKind;
@@ -235,7 +236,7 @@ function writeMarker(
  * Called right after Tender247 download/zip — before ChatGPT qualification.
  */
 export async function uploadTenderArtifactsAndPersistUrls(options: {
-  sourcePortal: "TENDER247" | "BIDASSIST";
+  sourcePortal: "TENDER247" | "BIDASSIST" | "MANUAL";
   sourceTenderId: string;
   tenderFolder: string;
   runDate: string;
