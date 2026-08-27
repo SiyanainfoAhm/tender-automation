@@ -55,6 +55,8 @@ export type ScreeningChatCheckpoint = {
   expectedFilename: string | null;
   submittedAt: string;
   stage: string;
+  /** Set true only after Phase-1 reconciliation passes. */
+  validated?: boolean;
 };
 
 export type Phase1RunState = {

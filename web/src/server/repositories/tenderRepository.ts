@@ -5,7 +5,7 @@ import { PROJECT_CATEGORIES, isProjectCategory } from "@/lib/project-category";
 import { assertSupabaseOk } from "@/lib/errors/db-query";
 import {
   resolveClosingDateFilter,
-  resolveCreatedAtFilter,
+  resolveScrapedDateFilter,
 } from "@/lib/tender-date-filter";
 import { resolveTenderSortColumn } from "@/lib/tender-sort";
 import { qualificationStatusesForFilter, type TenderStatus } from "@/lib/tender-status";
@@ -399,17 +399,17 @@ export async function listTenders(filters: TenderFilters): Promise<{
     query = query.lte(dateCol, dateBounds.to);
   }
 
-  const createdAtFilter = resolveCreatedAtFilter({
+  const scrapedFilter = resolveScrapedDateFilter({
     preset: filters.date,
     selectedDate: filters.selectedDate,
     from: filters.createdFrom,
     to: filters.createdTo,
   });
-  if (createdAtFilter?.gte) {
-    query = query.gte("created_at", createdAtFilter.gte);
-  }
-  if (createdAtFilter?.lte) {
-    query = query.lte("created_at", createdAtFilter.lte);
+  if (scrapedFilter?.mode === "eq") {
+    query = query.eq("scraped_date", scrapedFilter.value);
+  } else if (scrapedFilter?.mode === "range") {
+    query = query.gte("scraped_date", scrapedFilter.gte);
+    query = query.lte("scraped_date", scrapedFilter.lte);
   }
 
   const closingFilter = resolveClosingDateFilter({

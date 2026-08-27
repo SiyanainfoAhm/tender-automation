@@ -510,6 +510,22 @@ export function decidePhase1Row(options: {
     };
   }
 
+  // ChatGPT Status=NO_BID wins over title keyword "preferred" hits (e.g. "mobile"
+  // in hardware supply). Never upgrade NO_BID → MAY_BID from local scope alone.
+  if (llm === "NO_BID") {
+    return {
+      hardGateFailed: false,
+      preferredScopeHits: scope.preferredScopeHits,
+      excludedScopeHits: scope.excludedScopeHits,
+      dominantScope: scope.dominantScope,
+      ambiguityRemaining: scope.ambiguityRemaining,
+      status: "NO_BID",
+      reason: options.llmStatus ? "LLM NO_BID retained." : "NO_BID",
+      emdAmount: hard.emdAmount,
+      maxEmd,
+    };
+  }
+
   if (scope.dominantScope === "PREFERRED_SOFTWARE") {
     const status: Phase1CrawlStatusLabel = llm === "WILL_BID" ? "WILL_BID" : "MAY_BID";
     return {
@@ -521,20 +537,6 @@ export function decidePhase1Row(options: {
       status,
       reason:
         "Visible scope positively matches preferred software/application work and no exclusion dominates.",
-      emdAmount: hard.emdAmount,
-      maxEmd,
-    };
-  }
-
-  if (llm === "NO_BID") {
-    return {
-      hardGateFailed: false,
-      preferredScopeHits: scope.preferredScopeHits,
-      excludedScopeHits: scope.excludedScopeHits,
-      dominantScope: scope.dominantScope,
-      ambiguityRemaining: scope.ambiguityRemaining,
-      status: "NO_BID",
-      reason: options.llmStatus ? "LLM NO_BID retained." : "NO_BID",
       emdAmount: hard.emdAmount,
       maxEmd,
     };

@@ -73,6 +73,11 @@ export interface AppConfig {
   chatgptUrl: string;
   chatgptProjectName: string;
   chatgptProjectUrl: string | null;
+  /**
+   * Persistent ChatGPT chat for daily Tender247 Excel screening.
+   * Prefer a /share/ or /c/ URL reused every day (same account).
+   */
+  chatgptScreeningChatUrl: string | null;
   chatgptProjectMatch: string;
   /** @deprecated alias — use chatgptStorageState */
   chatgptAuthPath: string;
@@ -195,6 +200,9 @@ export function loadConfig(): AppConfig {
       process.env.CHATGPT_PROJECT_NAME?.trim() ||
       "Siyana Tender Qualification Automation",
     chatgptProjectUrl: process.env.CHATGPT_PROJECT_URL?.trim() || null,
+    chatgptScreeningChatUrl:
+      process.env.CHATGPT_SCREENING_CHAT_URL?.trim() ||
+      "https://chatgpt.com/g/g-p-6a6af1fde80c8191a7b497acfa2e0755/c/6a8d22d3-d898-83ee-9576-1a1330f31467",
     chatgptProjectMatch:
       process.env.CHATGPT_PROJECT_MATCH?.trim() || "Siyana Tender Quali",
     chatgptStorageState: (() => {

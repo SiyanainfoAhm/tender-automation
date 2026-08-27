@@ -208,7 +208,7 @@ export const tenderFiltersSchema = z
     /** Legacy aliases */
     sortBy: z.string().optional(),
     sortDir: z.enum(["asc", "desc"]).optional(),
-    /** Created/imported date preset — filters `created_at` (not scraped/published). */
+    /** Scraped/source date preset — filters `scraped_date` (Excel run date). */
     date: z.string().optional(),
     selectedDate: z.string().optional(),
     createdFrom: z.string().optional(),

@@ -109,6 +109,8 @@ export type Tender247CompletePipelineOptions = {
   excelFile: string | null;
   /** Force / disable treating --file as already screened (default auto). */
   preScreened: boolean | "auto";
+  /** Stop after Phase-1 screening; skip Tender247 detail crawl. */
+  skipDetailCrawl: boolean;
   rawArgv: string[];
   dateSource: "cli" | "npm_config" | "env" | "india_today";
 };
@@ -209,6 +211,14 @@ export function parseTender247CompletePipelineArgs(
   let preScreened: boolean | "auto" = excelFile ? true : "auto";
   if (hasBooleanFlag(argv, "pre-screened", env)) preScreened = true;
   if (hasBooleanFlag(argv, "run-excel-screening", env)) preScreened = false;
+  const skipDetailCrawl =
+    hasBooleanFlag(argv, "skip-detail-crawl", env) ||
+    hasBooleanFlag(argv, "no-detail-crawl", env) ||
+    ["1", "true", "yes", "on"].includes(
+      String(env.SKIP_DETAIL_CRAWL || "")
+        .trim()
+        .toLowerCase(),
+    );
 
   return {
     requestedDate: resolved.requestedDate,
@@ -232,6 +242,7 @@ export function parseTender247CompletePipelineArgs(
       null,
     excelFile,
     preScreened,
+    skipDetailCrawl,
     rawArgv: [...argv],
     dateSource: resolved.source,
   };
@@ -245,17 +256,35 @@ function runScriptProcess(options: {
   extraArgs: string[];
   env?: NodeJS.ProcessEnv;
 }): Promise<number> {
+  // Prefer direct node+tsx spawn (no shell) so paths with spaces in --file=
+  // are not re-split by cmd.exe. Falls back to npx only if tsx CLI is missing.
+  const tsxCli = path.join(
+    options.cwd,
+    "node_modules",
+    "tsx",
+    "dist",
+    "cli.mjs",
+  );
+  const useDirectTsx = fs.existsSync(tsxCli);
+  const command = useDirectTsx ? process.execPath : "npx";
+  const args = useDirectTsx
+    ? [tsxCli, options.scriptPath, ...options.extraArgs]
+    : ["tsx", options.scriptPath, ...options.extraArgs];
+
+  options.logger.info(
+    `${options.label}_SPAWN command=${command} script=${options.scriptPath} args=${JSON.stringify(options.extraArgs)}`,
+  );
+
   return new Promise((resolve, reject) => {
-    const proc = spawn(
-      "npx",
-      ["tsx", options.scriptPath, ...options.extraArgs],
-      {
-        cwd: options.cwd,
-        env: { ...process.env, ...options.env },
-        stdio: "inherit",
-        shell: true,
-      },
-    );
+    const proc = spawn(command, args, {
+      cwd: options.cwd,
+      env: { ...process.env, ...options.env },
+      stdio: "inherit",
+      // shell:true re-tokenizes argv on Windows and truncates --file=… paths
+      // that contain spaces (e.g. "25-08-26_daily Tenders.xlsx").
+      shell: !useDirectTsx,
+      windowsHide: true,
+    });
     proc.on("error", reject);
     proc.on("exit", (code) => {
       options.logger.info(`${options.label}_EXIT_CODE=${code ?? 1}`);
@@ -688,7 +717,8 @@ export async function runTender247CompletePipeline(
         batchArgs.push(`--company-id=${options.companyId}`);
       }
       if (options.excelFile) {
-        batchArgs.push(`--file=${options.excelFile}`);
+        // Prefer separate --file <path> tokens so spaces survive argv parsing.
+        batchArgs.push("--file", options.excelFile);
         if (options.preScreened === true) {
           batchArgs.push("--pre-screened");
         } else if (options.preScreened === false) {
@@ -699,6 +729,9 @@ export async function runTender247CompletePipeline(
         if (options.dateSource === "india_today") {
           batchArgs.push("--no-mail-date");
         }
+      }
+      if (options.skipDetailCrawl) {
+        batchArgs.push("--skip-detail-crawl");
       }
 
       const env: NodeJS.ProcessEnv = {
@@ -712,6 +745,13 @@ export async function runTender247CompletePipeline(
       }
       if (options.resume) {
         env.TENDER247_RESUME = "true";
+      }
+      if (options.skipDetailCrawl) {
+        env.SKIP_DETAIL_CRAWL = "true";
+      }
+      // Belt-and-suspenders: env survives shell tokenization better than CLI.
+      if (options.excelFile) {
+        env.TENDER247_UPLOADED_EXCEL = options.excelFile;
       }
       if (crawlLimit != null) {
         env.MAX_TENDERS = String(crawlLimit);
@@ -783,6 +823,45 @@ export async function runTender247CompletePipeline(
         dryRunDate: true,
       };
       console.log("TENDER247_DRY_RUN_DATE_SUCCESS=true");
+      printTender247CompleteRunSummary(summary);
+      writeSummary(downloadRoot, summary);
+      return { summary, exitCode: 0 };
+    }
+
+    // Screening-only: GPT Excel → Supabase upsert already done in the batch.
+    // Do not create per-tender folders, run detail crawl, or Phase-2 ChatGPT.
+    if (options.skipDetailCrawl) {
+      const manifest = loadScreeningManifest(downloadRoot);
+      const counts = manifest?.counts;
+      const summary: Tender247CompleteRunSummary = {
+        success: true,
+        runStatus: "SUCCESS",
+        requestedDate,
+        dailyRowsRaw: preCounts.dailyRowsRaw,
+        dailyRowsDeduped: preCounts.dailyRowsDeduped,
+        filteredOut: preCounts.filteredOut,
+        filterPassed: preCounts.filterPassed,
+        detailCrawlAttempted: 0,
+        detailCrawlSuccess: 0,
+        detailCrawlFailed: 0,
+        chatgptAttempted: 0,
+        chatgptSuccess: 0,
+        chatgptFailed: 0,
+        go: counts?.GO ?? 0,
+        conditionalGo: counts?.CONDITIONAL_GO ?? 0,
+        partnerBid: counts?.PARTNER_BID ?? 0,
+        verify: counts?.VERIFY ?? 0,
+        noGo: counts?.NO_GO ?? 0,
+        supabaseUpsertSuccess: manifest?.outputRows ?? 0,
+        supabaseUpsertFailed: 0,
+        processingErrors: [],
+        downloadRoot,
+        actionable: [],
+        dryRunDate: false,
+      };
+      logger.info("SKIP_DETAIL_CRAWL=true — screening summary only (no tender folders)");
+      console.log("SKIP_DETAIL_CRAWL=true");
+      console.log("TENDER247_SCREENING_ONLY=true");
       printTender247CompleteRunSummary(summary);
       writeSummary(downloadRoot, summary);
       return { summary, exitCode: 0 };

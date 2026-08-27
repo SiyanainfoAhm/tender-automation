@@ -40,6 +40,10 @@ import type {
 import { getServerSupabase } from "@/lib/db/server";
 import { formatIndianCurrency } from "@/lib/format";
 import {
+  calendarDateInAppTz,
+  resolveDashboardPeriodYmdBounds,
+} from "@/lib/tender-date-filter";
+import {
   getTenderUiStatus,
   TENDER_UI_STATUS_LABELS,
 } from "@/lib/tender-status";
@@ -106,21 +110,12 @@ function inRange(date: Date | null, from: Date, to: Date): boolean {
 export function resolveDashboardPeriodBounds(
   period: DashboardPeriod,
   now = new Date(),
-): { from: Date; to: Date } {
-  const to = endOfDay(now);
-  switch (period) {
-    case "today":
-      return { from: startOfDay(now), to };
-    case "week":
-      return {
-        from: startOfWeek(now, { weekStartsOn: 1 }),
-        to: endOfWeek(now, { weekStartsOn: 1 }),
-      };
-    case "month":
-      return { from: startOfMonth(now), to: endOfMonth(now) };
-    case "quarter":
-      return { from: startOfQuarter(now), to: endOfQuarter(now) };
-  }
+): { from: Date; to: Date; fromYmd: string; toYmd: string } {
+  const { fromYmd, toYmd } = resolveDashboardPeriodYmdBounds(period, now);
+  // Noon IST avoids UTC day-boundary skew when comparing scraped_date YMD.
+  const from = new Date(`${fromYmd}T00:00:00+05:30`);
+  const to = new Date(`${toYmd}T23:59:59.999+05:30`);
+  return { from, to, fromYmd, toYmd };
 }
 
 function moneyLabel(value: number): string {
@@ -577,20 +572,53 @@ export async function getDashboardOverview(options: {
   const dateBasis = options.dateBasis || "scraped";
   const supabase = getServerSupabase();
   const now = new Date();
-  const { from, to } = resolveDashboardPeriodBounds(period, now);
+  const { from, to, fromYmd, toYmd } = resolveDashboardPeriodBounds(period, now);
+
+  const periodListQuery = () => {
+    let q = supabase
+      .from("agenttender_web_tender_list")
+      .select(
+        "id, title, source_tender_id, source_portal, closing_date, tender_value, emd_amount, project_category, category, effective_qualification_status, manual_review_required, first_seen_at, crawled_at, created_at, scraped_date, qualified_at, updated_at",
+      )
+      .order("scraped_date", { ascending: false, nullsFirst: false })
+      .limit(8000);
+    if (dateBasis === "scraped") {
+      q = q.gte("scraped_date", fromYmd).lte("scraped_date", toYmd);
+    }
+    return q;
+  };
+
+  const periodCountBase = () => {
+    let q = supabase
+      .from("agenttender_web_tender_list")
+      .select("id", { count: "exact", head: true });
+    if (dateBasis === "scraped") {
+      q = q.gte("scraped_date", fromYmd).lte("scraped_date", toYmd);
+    }
+    return q;
+  };
 
   const [
     listRes,
+    allTimeRes,
+    importedRes,
+    declinedRes,
+    awardedRes,
     submittedIds,
     expiringDocuments,
     experiences,
   ] = await Promise.all([
+    periodListQuery(),
     supabase
       .from("agenttender_web_tender_list")
       .select(
         "id, title, source_tender_id, source_portal, closing_date, tender_value, emd_amount, project_category, category, effective_qualification_status, manual_review_required, first_seen_at, crawled_at, created_at, scraped_date, qualified_at, updated_at",
       )
+      .order("scraped_date", { ascending: false, nullsFirst: false })
       .limit(8000),
+    periodCountBase(),
+    periodCountBase().eq("effective_qualification_status", "NO_GO"),
+    periodCountBase().eq("effective_qualification_status", "WON"),
     loadSubmittedWorkspaces(options.companyId),
     loadExpiringDocuments(options.companyId),
     options.companyId
@@ -601,20 +629,48 @@ export async function getDashboardOverview(options: {
   if (listRes.error) {
     throw new Error(listRes.error.message);
   }
+  if (allTimeRes.error) {
+    throw new Error(allTimeRes.error.message);
+  }
 
-  const allRows = (listRes.data || []) as TenderRow[];
-  const periodRows = allRows.filter((row) =>
-    inRange(tenderBasisDate(row, dateBasis), from, to),
-  );
+  const periodScopedRows = (listRes.data || []) as TenderRow[];
+  const allRows = (allTimeRes.data || []) as TenderRow[];
+  const periodRows =
+    dateBasis === "scraped"
+      ? periodScopedRows
+      : allRows.filter((row) =>
+          inRange(tenderBasisDate(row, dateBasis), from, to),
+        );
 
-  const imported = periodRows.length;
-  const declined = periodRows.filter(
-    (row) => row.effective_qualification_status === "NO_GO",
-  ).length;
-  const wonInPeriod = periodRows.filter((row) =>
-    isWonQualificationStatus(row.effective_qualification_status),
-  );
-  const contractsAwarded = wonInPeriod.length;
+  const imported =
+    dateBasis === "scraped"
+      ? (importedRes.count ?? periodRows.length)
+      : periodRows.length;
+  const declined =
+    dateBasis === "scraped"
+      ? (declinedRes.count ??
+        periodRows.filter(
+          (row) =>
+            row.effective_qualification_status === "NO_GO" ||
+            row.effective_qualification_status === "NO_BID",
+        ).length)
+      : periodRows.filter(
+          (row) =>
+            row.effective_qualification_status === "NO_GO" ||
+            row.effective_qualification_status === "NO_BID",
+        ).length;
+  const wonInPeriod =
+    dateBasis === "scraped"
+      ? periodRows.filter((row) =>
+          isWonQualificationStatus(row.effective_qualification_status),
+        )
+      : periodRows.filter((row) =>
+          isWonQualificationStatus(row.effective_qualification_status),
+        );
+  const contractsAwarded =
+    dateBasis === "scraped"
+      ? (awardedRes.count ?? wonInPeriod.length)
+      : wonInPeriod.length;
   const contractsAwardedValue = wonInPeriod.reduce(
     (sum, row) => sum + toNumber(row.tender_value),
     0,

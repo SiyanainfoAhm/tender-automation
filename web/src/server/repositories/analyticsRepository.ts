@@ -19,6 +19,10 @@ import {
 import { isProjectCategory } from "@/lib/project-category";
 import { AppError } from "@/lib/errors/app-error";
 import { assertSupabaseOk, runQuery, type QueryResult } from "@/lib/errors/db-query";
+import {
+  calendarDateInAppTz,
+  resolveScrapedDateFilter,
+} from "@/lib/tender-date-filter";
 import { startOfDay, subDays, formatISO, addDays } from "date-fns";
 
 export type DashboardMetrics = {
@@ -190,14 +194,47 @@ export type TenderListStatusCounts = {
   won: number;
 };
 
-export async function getTenderListStatusCounts(): Promise<TenderListStatusCounts> {
+export type TenderListStatusCountFilters = {
+  /** Scraped-date preset (`today`, `this_month`, …). */
+  date?: string | null;
+  selectedDate?: string | null;
+  createdFrom?: string | null;
+  createdTo?: string | null;
+  source?: string | null;
+};
+
+export async function getTenderListStatusCounts(
+  filters?: TenderListStatusCountFilters | null,
+): Promise<TenderListStatusCounts> {
   const supabase = getServerSupabase();
-  const todayDate = formatISO(startOfDay(new Date()), {
-    representation: "date",
+  const todayDate = calendarDateInAppTz();
+  const in3 = (() => {
+    const d = new Date(`${todayDate}T12:00:00+05:30`);
+    d.setTime(d.getTime() + 3 * 86_400_000);
+    return calendarDateInAppTz(d);
+  })();
+
+  const scraped = resolveScrapedDateFilter({
+    preset: filters?.date,
+    selectedDate: filters?.selectedDate,
+    from: filters?.createdFrom,
+    to: filters?.createdTo,
   });
-  const in3 = formatISO(addDays(startOfDay(new Date()), 3), {
-    representation: "date",
-  });
+
+  const base = () => {
+    let q = supabase
+      .from("agenttender_web_tender_list")
+      .select("id", { count: "exact", head: true });
+    if (filters?.source && filters.source !== "ALL") {
+      q = q.eq("source_portal", filters.source);
+    }
+    if (scraped?.mode === "eq") {
+      q = q.eq("scraped_date", scraped.value);
+    } else if (scraped?.mode === "range") {
+      q = q.gte("scraped_date", scraped.gte).lte("scraped_date", scraped.lte);
+    }
+    return q;
+  };
 
   // Parallel exact counts — never fetch row bodies (PostgREST 1000-row cap).
   const [
@@ -212,42 +249,15 @@ export async function getTenderListStatusCounts(): Promise<TenderListStatusCount
     closingRes,
     submittedRes,
   ] = await Promise.all([
-    supabase
-      .from("agenttender_web_tender_list")
-      .select("id", { count: "exact", head: true }),
-    supabase
-      .from("agenttender_web_tender_list")
-      .select("id", { count: "exact", head: true })
-      .eq("effective_qualification_status", "VERIFY"),
-    supabase
-      .from("agenttender_web_tender_list")
-      .select("id", { count: "exact", head: true })
-      .is("effective_qualification_status", null),
-    supabase
-      .from("agenttender_web_tender_list")
-      .select("id", { count: "exact", head: true })
-      .eq("effective_qualification_status", "GO"),
-    supabase
-      .from("agenttender_web_tender_list")
-      .select("id", { count: "exact", head: true })
-      .eq("effective_qualification_status", "CONDITIONAL_GO"),
-    supabase
-      .from("agenttender_web_tender_list")
-      .select("id", { count: "exact", head: true })
-      .eq("effective_qualification_status", "NO_GO"),
-    supabase
-      .from("agenttender_web_tender_list")
-      .select("id", { count: "exact", head: true })
-      .eq("effective_qualification_status", "PARTNER_BID"),
-    supabase
-      .from("agenttender_web_tender_list")
-      .select("id", { count: "exact", head: true })
-      .eq("effective_qualification_status", "WON"),
-    supabase
-      .from("agenttender_web_tender_list")
-      .select("id", { count: "exact", head: true })
-      .gte("closing_date", todayDate)
-      .lte("closing_date", in3),
+    base(),
+    base().eq("effective_qualification_status", "VERIFY"),
+    base().is("effective_qualification_status", null),
+    base().eq("effective_qualification_status", "GO"),
+    base().eq("effective_qualification_status", "CONDITIONAL_GO"),
+    base().eq("effective_qualification_status", "NO_GO"),
+    base().eq("effective_qualification_status", "PARTNER_BID"),
+    base().eq("effective_qualification_status", "WON"),
+    base().gte("closing_date", todayDate).lte("closing_date", in3),
     supabase
       .from("agenttender_bid_workspaces")
       .select("tender_id", { count: "exact", head: true })

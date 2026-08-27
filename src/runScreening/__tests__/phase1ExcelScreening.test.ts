@@ -381,7 +381,9 @@ test("Tender247 export (no local pre-filter) goes to ChatGPT; NO_GO never enters
   const prefsPath = path.join(dateFolder, "screening", "company-preferences-snapshot.json");
   assert.ok(fs.existsSync(promptPath));
   assert.ok(fs.existsSync(prefsPath));
-  assert.match(fs.readFileSync(promptPath, "utf8"), /Siyana Info Solutions/);
+  assert.match(fs.readFileSync(promptPath, "utf8"), /18-08-26_daily Tenders\.xlsx/);
+  assert.match(fs.readFileSync(promptPath, "utf8"), /screening\.md/);
+  assert.ok(fs.existsSync(path.join(dateFolder, "screening", "screening.md")));
 
   const screened = readRunWorkbook(path.join(dateFolder, "screening", RUN_SCREENED_FILE));
   assert.equal(screened.length, 19);

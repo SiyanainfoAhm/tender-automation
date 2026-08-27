@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Tender247DailyScreeningEmail",
+  "description": "Payload posted by tender-automation to Power Automate after screening + Supabase upsert (and on failure / count mismatch). Subject and body are always dynamic per run.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["subject", "body"],
+  "properties": {
+    "subject": {
+      "type": "string",
+      "description": "Dynamic email subject, e.g. [Tender247] Screening complete — 2026-08-26 (16 tenders)"
+    },
+    "body": {
+      "type": "string",
+      "description": "Dynamic inline-styled HTML email body (Outlook-safe tables) with counts, project chips, web vs Excel check, errors"
+    }
+  },
+  "examples": [
+    {
+      "subject": "[Tender247] Screening complete — 2026-08-26 (16 tenders)",
+      "body": "<!DOCTYPE html><html>...<body style=\"margin:0;padding:0;background:#f1f5f9;\">... inline-styled HTML with status cards and project chips ...</body></html>"
+    },
+    {
+      "subject": "[Tender247] COUNT MISMATCH — 2026-08-26 (web 20 vs Excel 18)",
+      "body": "<!DOCTYPE html>...<h1>Tender247 web count does not match Excel</h1>..."
+    },
+    {
+      "subject": "[Tender247] FAILED — 2026-08-26",
+      "body": "<!DOCTYPE html>...<strong>Error:</strong> Uploaded Excel not found..."
+    }
+  ]
+}

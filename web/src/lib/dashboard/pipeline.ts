@@ -1,5 +1,3 @@
-import type { TenderStatus } from "@/lib/tender-status";
-
 /**
  * Executive Dashboard bid-pipeline stages (UI buckets).
  * CONDITIONAL_GO → May Bid here (list UI may still label it Screening).
@@ -94,10 +92,13 @@ export function mapToDashboardPipelineStage(options: {
   if (raw === "NO_GO" || raw === "NO_BID") return null;
   if (options.submitted) return "submitted";
 
-  const status = options.qualificationStatus as TenderStatus | null | undefined;
-  if (status === "GO") return "will_bid";
-  if (status === "PARTNER_BID") return "partnership";
-  if (status === "CONDITIONAL_GO") return "may_bid";
+  const status = String(options.qualificationStatus || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+  if (status === "GO" || status === "WILL_BID") return "will_bid";
+  if (status === "PARTNER_BID" || status === "PARTNERSHIP") return "partnership";
+  if (status === "CONDITIONAL_GO" || status === "MAY_BID") return "may_bid";
   if (status === "VERIFY") return "verify";
   return "under_evaluation";
 }

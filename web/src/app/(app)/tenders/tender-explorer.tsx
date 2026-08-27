@@ -367,7 +367,47 @@ export function TenderExplorer({
   const isUpdatingRef = React.useRef(false);
   isUpdatingRef.current = isUpdating;
 
+  const [statusCountsState, setStatusCountsState] =
+    React.useState<TenderListStatusCounts | null>(statusCounts);
+
+  React.useEffect(() => {
+    setStatusCountsState(statusCounts);
+  }, [statusCounts]);
+
   const queryKey = searchParams.toString();
+
+  const statusCountQueryKey = React.useMemo(() => {
+    const params = new URLSearchParams();
+    const date = searchParams.get("date");
+    const selectedDate = searchParams.get("selectedDate");
+    const createdFrom = searchParams.get("createdFrom");
+    const createdTo = searchParams.get("createdTo");
+    const source = searchParams.get("source");
+    if (date) params.set("date", date);
+    if (selectedDate) params.set("selectedDate", selectedDate);
+    if (createdFrom) params.set("createdFrom", createdFrom);
+    if (createdTo) params.set("createdTo", createdTo);
+    if (source && source !== "ALL") params.set("source", source);
+    return params.toString();
+  }, [searchParams]);
+
+  React.useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/tenders/status-counts${statusCountQueryKey ? `?${statusCountQueryKey}` : ""}`,
+          { signal: controller.signal, cache: "no-store" },
+        );
+        if (!response.ok) return;
+        const data = (await response.json()) as TenderListStatusCounts;
+        if (!controller.signal.aborted) setStatusCountsState(data);
+      } catch {
+        /* keep prior counts */
+      }
+    })();
+    return () => controller.abort();
+  }, [statusCountQueryKey, refreshToken]);
 
   React.useEffect(() => {
     setLocalQ(filters.q ?? "");
@@ -616,9 +656,9 @@ export function TenderExplorer({
           />
         </div>
 
-        {statusCounts ? (
+        {statusCountsState ? (
           <TenderStatsCards
-            counts={statusCounts}
+            counts={statusCountsState}
             activeStatus={currentStatus}
             disabled={isUpdating}
             onSelectStatus={(status) =>
@@ -707,7 +747,7 @@ export function TenderExplorer({
         <div className="flex flex-wrap items-center gap-2">
           {filters.date ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-background-100 px-2.5 py-1 text-xs text-foreground-700">
-              Created: {dateTriggerLabel}
+              Scraped: {dateTriggerLabel}
               <button
                 type="button"
                 disabled={isUpdating}
@@ -855,7 +895,7 @@ export function TenderExplorer({
 
             <div className="space-y-2">
               <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
-                Created Date
+                Scraped Date
               </p>
               <Select
                 value={dateValue}
@@ -898,7 +938,7 @@ export function TenderExplorer({
                     type="date"
                     value={filters.createdFrom ?? filters.selectedDate ?? ""}
                     disabled={isUpdating}
-                    aria-label="Created from"
+                    aria-label="Scraped from"
                     onChange={(event) =>
                       navigate({
                         date: "custom",
@@ -913,7 +953,7 @@ export function TenderExplorer({
                     type="date"
                     value={filters.createdTo ?? ""}
                     disabled={isUpdating}
-                    aria-label="Created to"
+                    aria-label="Scraped to"
                     onChange={(event) =>
                       navigate({
                         date: "custom",

@@ -9,6 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
+import { isDailyScreeningFilenameBeforeRunDate } from "../runScreening/buildDailyScreeningOperatorPrompt.js";
 
 const SCREENED_WORKBOOK_LINK_RE =
   /download[\s\S]{0,80}screened[\s\S]{0,40}workbook/i;
@@ -179,15 +180,205 @@ function screenedWorkbookLinkLocators(scope: Locator): Locator[] {
   ];
 }
 
+function normalizeXlsxBasename(name: string): string {
+  return path
+    .basename(name.trim())
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/** True when name is exactly `{DD-MM-YY}_daily Tenders.xlsx` (optionally a specific day). */
+export function isDailyScreeningOutputFilename(
+  name: string,
+  expectedDailyFilename?: string,
+): boolean {
+  const base = normalizeXlsxBasename(name);
+  if (!base.endsWith(".xlsx")) return false;
+  if (expectedDailyFilename) {
+    return base === normalizeXlsxBasename(expectedDailyFilename);
+  }
+  return /^\d{2}-\d{2}-\d{2}_daily tenders\.xlsx$/i.test(base);
+}
+
 function isScreenedOutputFilename(
   name: string,
   inputFileName?: string,
+  expectedDailyFilename?: string,
 ): boolean {
   const base = path.basename(name.trim());
   if (!/\.xlsx$/i.test(base)) return false;
-  const input = (inputFileName || DEFAULT_INPUT_XLSX).replace(/\s+/g, " ").trim().toLowerCase();
+  const input = (inputFileName || DEFAULT_INPUT_XLSX)
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
   if (base.toLowerCase() === input) return false;
+  // When the operator daily name is known, accept ONLY that file — never
+  // run-screened-siyana / other dates / generic *-screened-*.xlsx.
+  if (expectedDailyFilename) {
+    return isDailyScreeningOutputFilename(base, expectedDailyFilename);
+  }
+  if (/\d{2}-\d{2}-\d{2}_daily\s+tenders\.xlsx$/i.test(base)) return true;
   return /screened/i.test(base);
+}
+
+/**
+ * Scroll the conversation and locate today's daily screening Excel if GPT
+ * already produced it in this chat (no re-upload needed).
+ *
+ * While scrolling upward: if we see a `{DD-MM-YY}_daily Tenders.xlsx` whose
+ * date is *before* the pipeline run date — and today's file is still missing —
+ * today's Excel does not exist yet → caller should prompt and generate.
+ */
+export type DailyScreeningChatLookupResult =
+  | {
+      status: "found";
+      workbook: GeneratedScreeningWorkbook;
+    }
+  | {
+      status: "missing_generate";
+      reason: "older_daily_found" | "not_found";
+      olderFilename?: string;
+    };
+
+export async function findExistingDailyScreeningWorkbookInChat(
+  page: Page,
+  options: {
+    expectedFilename: string;
+    /** Pipeline run date ISO (YYYY-MM-DD). Used to detect older daily Excels. */
+    runDate: string;
+    logger?: { info: (m: string) => void; warn?: (m: string) => void };
+    maxScrolls?: number;
+  },
+): Promise<DailyScreeningChatLookupResult> {
+  const expected = options.expectedFilename.trim();
+  const runDate = String(options.runDate || "").trim().slice(0, 10);
+  if (!expected) {
+    return { status: "missing_generate", reason: "not_found" };
+  }
+  const maxScrolls = options.maxScrolls ?? 24;
+  options.logger?.info(
+    `CHATGPT_SCREENING_LOOK_FOR_EXISTING=${expected}`,
+  );
+
+  const tryMatchToday = async (): Promise<GeneratedScreeningWorkbook | null> => {
+    const exact = page.getByText(expected, { exact: true });
+    const loose = page.getByText(expected, { exact: false });
+    const candidates = [
+      page
+        .locator("div, article, section, li, a, button")
+        .filter({ hasText: expected })
+        .filter({ hasText: /Spreadsheet/i }),
+      exact,
+      loose,
+    ];
+    for (const loc of candidates) {
+      const count = await loc.count().catch(() => 0);
+      if (count === 0) continue;
+      const hit = loc.last();
+      if (!(await hit.isVisible().catch(() => false))) continue;
+      await hit.scrollIntoViewIfNeeded().catch(() => undefined);
+      const card =
+        (await cardForFilename(page.locator("body"), expected)) || hit;
+      return {
+        filename: expected,
+        cardLocator: card,
+        assistantMessageLocator: card,
+        downloadLinkLocator: null,
+        linkFound: false,
+        filenameFound: true,
+        cardFound: true,
+      };
+    }
+    return null;
+  };
+
+  const findOlderDailyOnPage = async (): Promise<string | null> => {
+    if (!runDate) return null;
+    const text = await page
+      .locator("body")
+      .innerText()
+      .catch(() => "");
+    const matches = text.match(
+      /\d{2}-\d{2}-\d{2}_daily\s+Tenders\.xlsx/gi,
+    );
+    if (!matches?.length) return null;
+    for (const raw of matches) {
+      const name = raw.replace(/\s+/g, " ").trim();
+      if (name.toLowerCase() === expected.toLowerCase()) continue;
+      if (isDailyScreeningFilenameBeforeRunDate(name, runDate)) {
+        return name;
+      }
+    }
+    return null;
+  };
+
+  const scrollChatUp = async () => {
+    await page
+      .evaluate(() => {
+        const main =
+          document.querySelector('[class*="react-scroll"]') ||
+          document.querySelector("main") ||
+          document.scrollingElement;
+        if (main) main.scrollTop = Math.max(0, (main.scrollTop || 0) - 900);
+        window.scrollBy(0, -900);
+      })
+      .catch(() => undefined);
+    await page.waitForTimeout(350);
+  };
+
+  const scrollChatToBottom = async () => {
+    await page
+      .evaluate(() => {
+        const main =
+          document.querySelector('[class*="react-scroll"]') ||
+          document.querySelector("main") ||
+          document.scrollingElement;
+        if (main) main.scrollTop = main.scrollHeight || 0;
+        window.scrollTo(0, document.body.scrollHeight);
+      })
+      .catch(() => undefined);
+    await page.waitForTimeout(300);
+  };
+
+  let found = await tryMatchToday();
+  if (found) {
+    options.logger?.info(`CHATGPT_SCREENING_EXISTING_FOUND=${expected}`);
+    return { status: "found", workbook: found };
+  }
+
+  // Scroll upward through history — stop early if an older daily Excel appears
+  // (today's file would sit below older ones; missing today ⇒ generate).
+  for (let i = 0; i < maxScrolls; i += 1) {
+    await scrollChatUp();
+    found = await tryMatchToday();
+    if (found) {
+      options.logger?.info(
+        `CHATGPT_SCREENING_EXISTING_FOUND_AFTER_SCROLL=${i + 1}`,
+      );
+      options.logger?.info(`CHATGPT_SCREENING_EXISTING_FOUND=${expected}`);
+      return { status: "found", workbook: found };
+    }
+    const older = await findOlderDailyOnPage();
+    if (older) {
+      options.logger?.info(
+        `CHATGPT_SCREENING_OLDER_DAILY_FOUND=${older}`,
+      );
+      options.logger?.info(
+        "CHATGPT_SCREENING_EXISTING_NOT_FOUND=true (older daily proves today missing — will generate)",
+      );
+      await scrollChatToBottom();
+      return {
+        status: "missing_generate",
+        reason: "older_daily_found",
+        olderFilename: older,
+      };
+    }
+  }
+
+  options.logger?.info("CHATGPT_SCREENING_EXISTING_NOT_FOUND=true");
+  await scrollChatToBottom();
+  return { status: "missing_generate", reason: "not_found" };
 }
 
 async function firstExisting(locators: Locator[]): Promise<Locator | null> {
@@ -269,12 +460,14 @@ export async function scanGeneratedScreeningOutput(
     correlationId: string;
     inputFileName?: string;
     assistantCountBefore?: number;
+    expectedDailyFilename?: string;
   },
 ): Promise<{
   workbook: GeneratedScreeningWorkbook | null;
   diagnostics: ScreeningScanDiagnostics;
 }> {
   const assistantCount = await countAssistantMessages(page);
+  const assistantCountBefore = options.assistantCountBefore ?? 0;
   const emptyDiag = (
     overrides?: Partial<ScreeningScanDiagnostics>,
   ): ScreeningScanDiagnostics => ({
@@ -292,6 +485,21 @@ export async function scanGeneratedScreeningOutput(
     ...overrides,
   });
 
+  // Ignore Excel cards from assistant turns that existed before this Send.
+  // When expectedDailyFilename is set and assistantCountBefore is 0, allow
+  // scanning any turn (reuse existing daily output already in the chat).
+  if (
+    assistantCountBefore > 0 &&
+    assistantCount <= assistantCountBefore
+  ) {
+    return {
+      workbook: null,
+      diagnostics: emptyDiag({
+        innerTextPreview: `waiting_for_new_assistant baseline=${assistantCountBefore} current=${assistantCount}`,
+      }),
+    };
+  }
+
   const scope = await latestAssistantResponseScope(page);
   if (!scope) {
     return { workbook: null, diagnostics: emptyDiag() };
@@ -302,27 +510,43 @@ export async function scanGeneratedScreeningOutput(
 
   const text = await collectScopeText(scope);
   const names = extractXlsxNames(text, options.inputFileName).filter((name) =>
-    isScreenedOutputFilename(name, options.inputFileName),
+    isScreenedOutputFilename(
+      name,
+      options.inputFileName,
+      options.expectedDailyFilename,
+    ),
   );
   const inputStem = (options.inputFileName || DEFAULT_INPUT_XLSX).replace(
     /\.xlsx$/i,
     "",
   );
   const preferred = new RegExp(
-    `${inputStem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-screened-${options.correlationId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.xlsx|run-screened-siyana\\.xlsx`,
+    `${inputStem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-screened-${options.correlationId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.xlsx|run-screened-siyana\\.xlsx|\\d{2}-\\d{2}-\\d{2}_daily\\s+tenders\\.xlsx`,
     "i",
   );
-  const correlated = names.find(
+  let correlated = names.find(
     (name) =>
       preferred.test(name) ||
       (/screened/i.test(name) &&
         name.toUpperCase().includes(options.correlationId.toUpperCase())),
   );
+  if (options.expectedDailyFilename) {
+    const want = options.expectedDailyFilename.replace(/\s+/g, " ").trim().toLowerCase();
+    const dailyHit = names.find(
+      (name) => name.replace(/\s+/g, " ").trim().toLowerCase() === want,
+    );
+    if (dailyHit) correlated = dailyHit;
+  }
   const filename =
     correlated ||
     pickOutputName(names, options.inputFileName, options.correlationId);
   let screenedFilename =
-    filename && isScreenedOutputFilename(filename, options.inputFileName)
+    filename &&
+    isScreenedOutputFilename(
+      filename,
+      options.inputFileName,
+      options.expectedDailyFilename,
+    )
       ? filename
       : null;
 
@@ -370,7 +594,12 @@ export async function scanGeneratedScreeningOutput(
     for (let i = descendantCount - 1; i >= 0 && !generatedOutputFound; i -= 1) {
       const nodeText = await descendantFile.nth(i).innerText().catch(() => "");
       const nodeNames = extractXlsxNames(nodeText, options.inputFileName).filter(
-        (name) => isScreenedOutputFilename(name, options.inputFileName),
+        (name) =>
+          isScreenedOutputFilename(
+            name,
+            options.inputFileName,
+            options.expectedDailyFilename,
+          ),
       );
       if (nodeNames.length > 0) {
         generatedOutputFound = true;
@@ -419,6 +648,7 @@ export async function findGeneratedScreeningWorkbook(
     correlationId: string;
     inputFileName?: string;
     assistantCountBefore?: number;
+    expectedDailyFilename?: string;
   },
 ): Promise<GeneratedScreeningWorkbook | null> {
   const { workbook } = await scanGeneratedScreeningOutput(page, options);

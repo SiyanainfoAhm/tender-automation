@@ -882,7 +882,7 @@ export function getProjectComposerContainer(page: Page): Locator {
 }
 
 /**
- * Plus button immediately left of the Project Home composer.
+ * Plus / attach button for Project Home or a normal /c conversation composer.
  * Does not use the global sidebar "New chat" control.
  */
 export async function findProjectComposerPlusButton(
@@ -904,11 +904,30 @@ export async function findProjectComposerPlusButton(
     return preceding;
   }
 
+  const promptRoot = page
+    .locator(
+      '[contenteditable="true"]#prompt-textarea, #prompt-textarea, [contenteditable="true"][data-testid*="composer" i], [contenteditable="true"]',
+    )
+    .first();
+
   const fallbacks = [
     composerContainer.locator('[data-testid="composer-plus-btn"]').first(),
     composerContainer.locator('button[aria-label*="Add files" i]').first(),
     composerContainer.locator('button[aria-label*="Attach" i]').first(),
     composerContainer.locator('button[aria-label*="Upload" i]').first(),
+    page.locator('[data-testid="composer-plus-btn"]').first(),
+    page.locator('button[aria-label*="Add files" i]').first(),
+    page.locator('button[aria-label*="Attach files" i]').first(),
+    page.locator('button[aria-label*="Attach" i]').first(),
+    page.locator('button[aria-label*="Upload" i]').first(),
+    promptRoot
+      .locator("xpath=ancestor::form[1]//button")
+      .filter({ has: page.locator("svg") })
+      .first(),
+    promptRoot
+      .locator("xpath=ancestor::*[.//button][1]//button")
+      .filter({ has: page.locator("svg") })
+      .first(),
     page
       .locator(
         '[contenteditable="true"][aria-label*="New chat in"], textarea[placeholder*="New chat in"], [contenteditable="true"]#prompt-textarea',

@@ -153,13 +153,24 @@ export type ScrapedDateFilter =
 export function resolveScrapedDateFilter(options: {
   preset?: string | null;
   selectedDate?: string | null;
+  from?: string | null;
+  to?: string | null;
   now?: Date;
 }): ScrapedDateFilter | null {
   const preset = normalizeDatePreset(options.preset);
-  if (!preset) return null;
-
   const now = options.now ?? new Date();
   const today = calendarDateInAppTz(now);
+
+  if (!preset) {
+    const from = options.from?.trim();
+    const to = options.to?.trim();
+    if (isIsoCalendarDate(from) && isIsoCalendarDate(to)) {
+      return { mode: "range", gte: from, lte: to };
+    }
+    if (isIsoCalendarDate(from) && !to) return { mode: "eq", value: from };
+    if (isIsoCalendarDate(to) && !from) return { mode: "eq", value: to };
+    return null;
+  }
 
   switch (preset) {
     case "today":
@@ -191,12 +202,45 @@ export function resolveScrapedDateFilter(options: {
       };
     }
     case "custom": {
-      const selected = options.selectedDate?.trim();
-      if (!isIsoCalendarDate(selected)) return null;
-      return { mode: "eq", value: selected };
+      const from = options.from?.trim() || options.selectedDate?.trim();
+      const to = options.to?.trim() || options.selectedDate?.trim();
+      if (isIsoCalendarDate(from) && isIsoCalendarDate(to)) {
+        if (from === to) return { mode: "eq", value: from };
+        return { mode: "range", gte: from, lte: to };
+      }
+      if (isIsoCalendarDate(from)) return { mode: "eq", value: from };
+      if (isIsoCalendarDate(to)) return { mode: "eq", value: to };
+      return null;
     }
     default:
       return null;
+  }
+}
+
+/**
+ * Asia/Kolkata calendar YMD bounds for Executive Dashboard periods.
+ */
+export function resolveDashboardPeriodYmdBounds(
+  period: "today" | "week" | "month" | "quarter",
+  now = new Date(),
+): { fromYmd: string; toYmd: string } {
+  const today = calendarDateInAppTz(now);
+  switch (period) {
+    case "today":
+      return { fromYmd: today, toYmd: today };
+    case "week": {
+      const monday = shiftYmd(today, -daysFromMonday(today));
+      return { fromYmd: monday, toYmd: today };
+    }
+    case "month":
+      return { fromYmd: `${today.slice(0, 7)}-01`, toYmd: today };
+    case "quarter": {
+      const month = Number(today.slice(5, 7));
+      const year = today.slice(0, 4);
+      const qStartMonth = Math.floor((month - 1) / 3) * 3 + 1;
+      const fromYmd = `${year}-${String(qStartMonth).padStart(2, "0")}-01`;
+      return { fromYmd, toYmd: today };
+    }
   }
 }
 
@@ -271,7 +315,19 @@ export function resolveClosingDateFilter(options: {
   now?: Date;
 }): ScrapedDateFilter | null {
   const preset = normalizeDatePreset(options.preset);
-  if (!preset) return null;
+  if (!preset) {
+    // Custom range without a preset name (from/to only).
+    const from = options.from?.trim();
+    const to = options.to?.trim();
+    if (isIsoCalendarDate(from) || isIsoCalendarDate(to)) {
+      if (isIsoCalendarDate(from) && isIsoCalendarDate(to)) {
+        return { mode: "range", gte: from, lte: to };
+      }
+      if (isIsoCalendarDate(from) && !to) return { mode: "eq", value: from };
+      if (isIsoCalendarDate(to) && !from) return { mode: "eq", value: to };
+    }
+    return null;
+  }
 
   const now = options.now ?? new Date();
   const today = calendarDateInAppTz(now);

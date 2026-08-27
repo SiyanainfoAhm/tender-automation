@@ -301,6 +301,17 @@ test("hardware false-positive MAY_BID/CONDITIONAL_GO cases are forced to NO_BID"
   assert.ok(enforced.rows.every((row) => row.screeningStatus === "NO_GO"));
 });
 
+test("ChatGPT NO_BID is retained even when title matches preferred software keywords", () => {
+  const decision = decide({
+    tenderId: "103765885",
+    title: "supply of - ios based laptop , ios based mobile - | quantity - 3",
+    emdAmount: "0",
+    llmStatus: "NO_BID",
+  });
+  assert.equal(decision.status, "NO_BID");
+  assert.match(decision.reason, /LLM NO_BID retained/i);
+});
+
 test("VERIFY is invalid after a hard-gate failure even with a generic IT title", () => {
   const decision = decide({
     tenderId: "93674650",

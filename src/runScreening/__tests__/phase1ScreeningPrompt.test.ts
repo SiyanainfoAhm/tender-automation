@@ -301,11 +301,13 @@ test("67 normalized rows remain 67 unique rows including NO_BID", async () => {
 
   const promptPath = path.join(dateFolder, "screening", "chatgpt-screening-prompt.txt");
   const prefsPath = path.join(dateFolder, "screening", "company-preferences-snapshot.json");
+  const mdPath = path.join(dateFolder, "screening", "screening.md");
   const savedPrompt = fs.readFileSync(promptPath, "utf8");
-  assert.match(savedPrompt, /Expected unique tender rows:\n67/);
-  assert.match(savedPrompt, /SIYANA_PHASE1_V7/);
-  assert.match(savedPrompt, /SIYANA DAILY TENDER SCREENING/);
-  assert.match(savedPrompt, /STRICT PHASE-1 STATUS CONTRACT/);
+  assert.match(savedPrompt, /Run Siyana Tender247 Daily Screening/);
+  assert.match(savedPrompt, /screening\.md/);
+  assert.match(savedPrompt, /_daily Tenders\.xlsx/);
+  assert.equal(fs.existsSync(mdPath), true);
+  assert.match(fs.readFileSync(mdPath, "utf8"), /Maximum EMD/);
   const saved = JSON.parse(fs.readFileSync(prefsPath, "utf8")) as {
     screening: { preferredScopes: string[]; financial: { maxEmdInr: number } };
     screeningPolicyVersion: string;

@@ -340,9 +340,8 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         status,
         existing?.qualification_status,
         {
-          // Uploaded Excel Status is human/offline — keep Will Bid as written.
-          preserveWillBid:
-            options.screeningSource === "UPLOADED_PRESCREENED_EXCEL",
+          // Phase-1 Excel Status is authoritative — keep Will Bid as written.
+          preserveWillBid: true,
         },
       );
       const closingDate = excelDeadlineIso(row);

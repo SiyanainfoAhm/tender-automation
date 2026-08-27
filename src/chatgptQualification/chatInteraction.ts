@@ -891,28 +891,56 @@ async function assignFilesToComposer(
   logger.info(`CHATGPT_FILES_ASSIGNED_COUNT=${files.length}`);
   console.log(`CHATGPT_FILES_ASSIGNED_COUNT=${files.length}`);
 
-  const plusButton = await findProjectComposerPlusButton(page);
+  // Prefer a direct composer file input when present (conversation chat overlay
+  // often intercepts normal + button clicks).
+  const directInput = page
+    .locator('form input[type="file"], [data-testid*="composer" i] input[type="file"], input[type="file"]')
+    .first();
+  if (await directInput.count().catch(() => 0)) {
+    try {
+      await directInput.setInputFiles(files, { timeout: 8_000 });
+      session.uploadAttemptCount += 1;
+      session.filesAssigned = true;
+      logger.info("CHATGPT_FILES_ASSIGNED_VIA_DIRECT_INPUT");
+      logger.info("CHATGPT_FILES_ASSIGNED");
+      console.log("CHATGPT_FILES_ASSIGNED_VIA_DIRECT_INPUT=true");
+      await dismissDuplicateUploadDialog(page, logger);
+      return;
+    } catch (directError) {
+      logger.warn(
+        `CHATGPT_DIRECT_INPUT_UPLOAD_FAILED=${
+          directError instanceof Error ? directError.message : String(directError)
+        }`,
+      );
+    }
+  }
+
+  const plusButton =
+    (await findProjectComposerPlusButton(page)) ||
+    page.locator('[data-testid="composer-plus-btn"]').first();
   if (!plusButton) {
     throw new AutomationError(
       "CHATGPT_PLUS_BUTTON_MISSING",
-      "Could not find the Project Home composer + button",
+      "Could not find the composer + / attach button",
     );
   }
   if (!(await plusButton.isVisible().catch(() => false))) {
     throw new AutomationError(
       "CHATGPT_PLUS_BUTTON_MISSING",
-      "Project Home composer + button is not visible",
+      "Composer + / attach button is not visible",
     );
   }
 
   logger.info("CHATGPT_PROJECT_PLUS_BUTTON_VISIBLE");
-  await plusButton.click({ timeout: 8_000 });
+  await plusButton.scrollIntoViewIfNeeded().catch(() => undefined);
+  await plusButton.click({ timeout: 8_000, force: true });
   await page.waitForTimeout(500);
   logger.info("CHATGPT_PLUS_MENU_OPENED");
 
   const addPhotosAndFiles = page
     .getByText(/Add photos\s*&\s*files/i)
     .or(page.getByText(/Upload from computer/i))
+    .or(page.getByText(/Add files/i))
     .last();
 
   await addPhotosAndFiles
@@ -933,7 +961,7 @@ async function assignFilesToComposer(
     timeout: 15_000,
   });
 
-  await addPhotosAndFiles.click({ timeout: 8_000 });
+  await addPhotosAndFiles.click({ timeout: 8_000, force: true });
 
   try {
     const chooser = await chooserPromise;
@@ -3132,6 +3160,37 @@ export async function sendComposerMessage(
     return { chatUrl: page.url(), baseline, submissionConfirmed: true };
   }
 
+  // Reused daily screening chat: Send cleared the composer and we are on /c/ —
+  // treat as submitted and wait for the response Excel (do not close early).
+  if (
+    submissionKind === "RUN_EXCEL_SCREENING" &&
+    !requireNewConversation &&
+    isConversationUrl(page.url())
+  ) {
+    const userCount = await page
+      .locator('[data-message-author-role="user"]')
+      .count()
+      .catch(() => 0);
+    const promptGone = !(await composerStillHasPromptText(page));
+    if (promptGone && userCount > baseline.userCountBefore) {
+      logger?.info("CHATGPT_PROMPT_SUBMITTED=true");
+      console.log("CHATGPT_PROMPT_SUBMITTED=true");
+      logger?.info("CHATGPT_RUN_SCREENING_SUBMIT_ACCEPTED_REUSED_CHAT=true");
+      console.log("CHATGPT_RUN_SCREENING_SUBMIT_ACCEPTED_REUSED_CHAT=true");
+      logger?.info("CHATGPT_MESSAGE_SUBMITTED=true");
+      console.log("CHATGPT_MESSAGE_SUBMITTED=true");
+      if (confirmed) {
+        scheduler.markSubmissionSuccess({
+          sourcePortal: confirmed.sourcePortal,
+          sourceTenderId: confirmed.sourceTenderId,
+          force: true,
+        });
+      }
+      releaseSendSlotSafe(true);
+      return { chatUrl: page.url(), baseline, submissionConfirmed: true };
+    }
+  }
+
   const stillOnProject = /\/project(?:\/|$|\?|#)/i.test(page.url());
   const promptStillInComposer = await composerStillHasPromptText(page);
   const anyMatchingUser = await page
@@ -3307,6 +3366,17 @@ async function findSubmittedUserMessage(
     }
     if (!expectedT247Id) {
       return true;
+    }
+    // Daily Excel screening uses RUN-YYYY-MM-DD (not T247-...).
+    if (/^RUN-\d{4}-\d{2}-\d{2}$/i.test(expectedT247Id)) {
+      const runDate = expectedT247Id.slice(4);
+      return (
+        new RegExp(`\\b${expectedT247Id}\\b`, "i").test(text) ||
+        new RegExp(`Run correlation ID:\\s*${expectedT247Id}\\b`, "i").test(
+          text,
+        ) ||
+        new RegExp(`Run date:\\s*${runDate}\\b`, "i").test(text)
+      );
     }
     return (
       new RegExp(`T247-${expectedT247Id}\\b`, "i").test(text) ||

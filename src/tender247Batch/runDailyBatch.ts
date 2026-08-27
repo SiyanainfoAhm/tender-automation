@@ -79,7 +79,8 @@ import {
   workbookLooksPreScreened,
 } from "../runScreening/runWorkbook.js";
 import { buildPhase1DetailQueue, allowTender247DetailScrape } from "../runScreening/phase1DetailQueue.js";
-import { saveRunState } from "../runScreening/screeningManifest.js";
+import { emptyStatusCounts, saveRunState } from "../runScreening/screeningManifest.js";
+import { notifyAfterScreeningAndUpsert } from "../notify/sendScreeningRunNotify.js";
 import { ensureDir } from "../fileUtils.js";
 import path from "node:path";
 import fs from "node:fs";
@@ -145,6 +146,8 @@ function parseDailyBatchArgs(argv: string[]): {
    * Default: auto when --file= is set and Status covers most rows.
    */
   preScreened: boolean | "auto";
+  /** Stop after Phase-1 screening + notify; do not open detail crawl. */
+  skipDetailCrawl: boolean;
 } {
   const resolved = resolveRequestedDate(argv);
   const dryRunDate = hasBooleanFlag(argv, "dry-run-date");
@@ -172,6 +175,14 @@ function parseDailyBatchArgs(argv: string[]): {
   if (hasBooleanFlag(argv, "pre-screened")) preScreened = true;
   if (hasBooleanFlag(argv, "run-excel-screening")) preScreened = false;
   const noMailDate = hasBooleanFlag(argv, "no-mail-date");
+  const skipDetailCrawl =
+    hasBooleanFlag(argv, "skip-detail-crawl") ||
+    hasBooleanFlag(argv, "no-detail-crawl") ||
+    ["1", "true", "yes", "on"].includes(
+      String(process.env.SKIP_DETAIL_CRAWL || "")
+        .trim()
+        .toLowerCase(),
+    );
   return {
     date: resolved.requestedDate,
     dateExplicit: resolved.source !== "india_today" && !noMailDate,
@@ -181,6 +192,7 @@ function parseDailyBatchArgs(argv: string[]): {
     companyId,
     excelFile,
     preScreened,
+    skipDetailCrawl,
   };
 }
 
@@ -254,6 +266,7 @@ async function runDailyBatch(): Promise<void> {
           preScreened: batchArgs.preScreened,
           applyMailDateFilter:
             !batchArgs.excelFile || batchArgs.dateExplicit,
+          skipDetailCrawl: batchArgs.skipDetailCrawl,
         });
       });
     });
@@ -298,11 +311,14 @@ async function runDailyBatchBody(options: {
    * When false (--file only): open tenders by T247 ID without mail-date filter.
    */
   applyMailDateFilter?: boolean;
+  /** Stop after Phase-1 screening + notify (no Tender247 detail crawl). */
+  skipDetailCrawl?: boolean;
 }): Promise<void> {
   const { config, logger, dateIso, runContext } = options;
   const dryRunDate = options.dryRunDate === true;
   const uploadedExcel = options.excelFile?.trim() || null;
   const applyMailDateFilter = options.applyMailDateFilter !== false;
+  const skipDetailCrawl = options.skipDetailCrawl === true;
   const dateFolder = runContext.downloadRoot;
   ensureTender247DateScopedDir(dateFolder, dateIso);
 
@@ -323,6 +339,10 @@ async function runDailyBatchBody(options: {
   const manifestPath = path.join(dateFolder, "crawl-manifest.json");
   acquireLock(config.crawlLockFilePath);
   let session: Awaited<ReturnType<typeof launchBrowserSession>> | undefined;
+  /** Fresh(N) / filtered tab count from Tender247 web UI. */
+  let webTenderCount: number | null = null;
+  let excelRowCountForNotify = 0;
+  let screeningNotifySent = false;
 
   try {
     logger.info("=== Tender247 daily batch started (live-list) ===");
@@ -416,6 +436,14 @@ async function runDailyBatchBody(options: {
       );
       assertMailDateReadyForExcel(mailDate, dateIso);
 
+      webTenderCount = await readFreshExpectedCount(
+        listPage,
+        logger,
+        dateIso,
+      );
+      logger.info(`TENDER247_WEB_TENDER_COUNT=${webTenderCount}`);
+      console.log(`TENDER247_WEB_TENDER_COUNT=${webTenderCount}`);
+
       // -------- Excel-first deterministic pre-screen --------
       logger.info("TENDER247_DAILY_EXCEL_DOWNLOAD_START");
       logger.info(`TENDER247_EXCEL_REQUESTED_DATE=${dateIso}`);
@@ -453,6 +481,8 @@ async function runDailyBatchBody(options: {
       });
     }
 
+    excelRowCountForNotify = phase1.inputRows;
+
     if (dryRunDate) {
       console.log("TENDER247_DRY_RUN_DATE_COMPLETE=true");
       console.log(`REQUESTED_DATE=${dateIso}`);
@@ -472,6 +502,74 @@ async function runDailyBatchBody(options: {
       );
     }
     assertAiScreeningCompleteForDetailCrawl(dateFolder);
+
+    // Uploaded Excel + --date: read Tender247 web count after mail-date filter.
+    if (uploadedExcel && applyMailDateFilter && webTenderCount == null) {
+      try {
+        const detailMailDate = await ensureTender247FreshListForDate(
+          listPage,
+          dateIso,
+          logger,
+          config.pageTimeoutMs,
+        );
+        assertMailDateReadyForExcel(detailMailDate, dateIso);
+        webTenderCount = await readFreshExpectedCount(
+          listPage,
+          logger,
+          dateIso,
+        );
+        logger.info(`TENDER247_WEB_TENDER_COUNT=${webTenderCount}`);
+        console.log(`TENDER247_WEB_TENDER_COUNT=${webTenderCount}`);
+      } catch (error) {
+        logger.warn(
+          `TENDER247_WEB_TENDER_COUNT_UNAVAILABLE=${safeErrorMessage(error)}`,
+        );
+      }
+    }
+
+    // After GPT screened Excel + Supabase upsert — notify via Power Automate.
+    await notifyAfterScreeningAndUpsert({
+      dateIso,
+      dateFolder,
+      webTenderCount,
+      excelRowCount: phase1.inputRows,
+      screenedRowCount: phase1.outputRows,
+      counts: phase1.counts,
+      screenedWorkbookPath: phase1.screenedPath || null,
+      logger,
+    });
+    screeningNotifySent = true;
+    console.log(
+      `COUNT_CHECK web=${webTenderCount ?? "N/A"} excel=${phase1.inputRows}`,
+    );
+
+    if (skipDetailCrawl) {
+      logger.info("SKIP_DETAIL_CRAWL=true — stopping after Phase-1 screening");
+      console.log("SKIP_DETAIL_CRAWL=true");
+      printTender247ScreeningSummary({
+        excelRows: phase1.inputRows,
+        droppedFinancialGate: phase1.counts.NO_GO,
+        financialSurvivors: phase1.tender247DetailIds.length,
+        itRelevant: 0,
+        nonItDropped: phase1.counts.NO_GO,
+        ambiguousManualReview: 0,
+        documentDownloads: 0,
+        supabaseStored: 0,
+        detailedPrescreenPassed: 0,
+        detailedPrescreenRejected: 0,
+        chatgptSubmitted: 0,
+      });
+      console.log("");
+      console.log("==================================");
+      console.log("Tender247 Daily Batch Complete (screening only)");
+      console.log(`Excel rows: ${phase1.inputRows}`);
+      console.log(`Phase-1 NO_BID: ${phase1.counts.NO_GO}`);
+      console.log(`Phase-1 shortlist: ${phase1.tender247DetailIds.length}`);
+      console.log("Detail crawled: 0 (SKIP_DETAIL_CRAWL)");
+      console.log("==================================");
+      await persistAuthState(context, config, logger);
+      return;
+    }
 
     logger.info("DETAIL_CRAWL_START");
     const phase1Queue = buildPhase1DetailQueue({
@@ -977,6 +1075,28 @@ async function runDailyBatchBody(options: {
     if (batchIncomplete) {
       process.exitCode = 1;
     }
+  } catch (error) {
+    if (!screeningNotifySent && !dryRunDate) {
+      try {
+        await notifyAfterScreeningAndUpsert({
+          dateIso,
+          dateFolder,
+          webTenderCount,
+          excelRowCount: excelRowCountForNotify,
+          screenedRowCount: excelRowCountForNotify,
+          counts: emptyStatusCounts(),
+          screenedWorkbookPath: null,
+          errorMessage: safeErrorMessage(error),
+          logger,
+        });
+        screeningNotifySent = true;
+      } catch (notifyError) {
+        logger.warn(
+          `NOTIFY_EMAIL_FAILURE_PATH_ERROR=${safeErrorMessage(notifyError)}`,
+        );
+      }
+    }
+    throw error;
   } finally {
     cleanPlaywrightDownloadTemp(dateFolder, logger);
     cleanOrphanUuidFilesInDayFolder(dateFolder, logger);

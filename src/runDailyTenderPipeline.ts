@@ -448,7 +448,7 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
       process.env.TENDER247_UPLOADED_EXCEL?.trim() ||
       null;
     if (uploadedExcel) {
-      batchExtraArgs.push(`--file=${uploadedExcel}`);
+      batchExtraArgs.push("--file", uploadedExcel);
       batchExtraArgs.push("--pre-screened");
     }
     const exitCode = await runScriptProcess({
@@ -463,6 +463,9 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
           : {}),
         ...(accountArgs.companyId
           ? { COMPANY_ID: accountArgs.companyId }
+          : {}),
+        ...(uploadedExcel
+          ? { TENDER247_UPLOADED_EXCEL: uploadedExcel }
           : {}),
       },
     });

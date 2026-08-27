@@ -7,15 +7,24 @@ import {
   parsePrescreenBackfillArgs,
 } from "../prescreenBackfillArgs.js";
 
-test("--date=2026-08-06 equals form", () => {
-  assert.equal(getArgValue(["--date=2026-08-06"], "date"), "2026-08-06");
-  const parsed = parsePrescreenBackfillArgs(["--date=2026-08-06"]);
-  assert.equal(parsed.ok, true);
-  if (parsed.ok) {
-    assert.equal(parsed.dateIso, "2026-08-06");
-    assert.equal(parsed.source, null);
-    assert.equal(parsed.sourceLabel, "ALL");
-  }
+test("--file with spaces via separate argv tokens", () => {
+  const file =
+    "C:\\Users\\goura\\OneDrive\\Desktop\\tender-automation\\downloads\\network-discovery\\25-08-26_daily Tenders.xlsx";
+  assert.equal(
+    getArgValue(["--file", file, "--date=2026-08-26"], "file"),
+    file,
+  );
+});
+
+test("--file=equals form truncates if shell already split (documents current risk)", () => {
+  // When shell merges badly, only the first token survives inside --file=
+  assert.equal(
+    getArgValue(
+      ["--file=C:\\tmp\\25-08-26_daily", "Tenders.xlsx"],
+      "file",
+    ),
+    "C:\\tmp\\25-08-26_daily",
+  );
 });
 
 test("--date 2026-08-06 spaced form", () => {
