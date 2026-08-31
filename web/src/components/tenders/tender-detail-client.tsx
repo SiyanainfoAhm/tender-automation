@@ -49,7 +49,6 @@ import {
   type FeeEligibleTender,
 } from "@/components/bid-fees/add-fee-wizard";
 import { CategoryCapsule } from "@/components/tenders/category-capsule";
-import { ClassificationWorkflow } from "@/components/tenders/classification-workflow";
 import type { QualificationStatus } from "@/components/status/qualification-badge";
 import { SourceBadge } from "@/components/status/source-badge";
 import { StatusBadge } from "@/components/status/qualification-badge";
@@ -153,7 +152,6 @@ type TenderDetailClientProps = {
   documents: TenderDocumentRecord[];
   fees: BidFeeRecord[];
   eligibleTender: FeeEligibleTender | null;
-  canClassify: boolean;
   canEdit: boolean;
   canCreateFee: boolean;
 };
@@ -588,7 +586,6 @@ export function TenderDetailClient({
   documents,
   fees,
   eligibleTender,
-  canClassify,
   canEdit,
   canCreateFee,
 }: TenderDetailClientProps) {
@@ -1396,17 +1393,6 @@ export function TenderDetailClient({
                 ) : null}
               </dl>
             </SectionCard>
-
-            <ClassificationWorkflow
-              tenderId={tender.id}
-              qualificationStatus={tender.qualificationStatus}
-              submitted={tender.submitted}
-              canClassify={canClassify}
-              conditions={tender.qualification?.conditions ?? []}
-              partnershipRequiredFor={
-                tender.qualification?.partnershipRequiredFor ?? []
-              }
-            />
           </div>
 
           <div className="space-y-5">

@@ -55,7 +55,6 @@ export default async function TenderDetailPage({
       documents={documents}
       fees={fees}
       eligibleTender={eligibleTender}
-      canClassify={sessionHasPermission(session, "tenders.classify")}
       canEdit={sessionHasPermission(session, "tenders.edit")}
       canCreateFee={sessionHasPermission(session, "bids.create")}
     />
