@@ -385,7 +385,7 @@ export async function runPhase1ExcelScreening(options: {
 
   const screenedPath = screenedWorkbookPath(dateFolder);
   const existingManifest = loadScreeningManifest(dateFolder);
-  const existingScreened = resolveExistingScreenedWorkbook(dateFolder);
+  const existingScreened = resolveExistingScreenedWorkbook(dateFolder, dateIso);
   const screenedExists = Boolean(existingScreened);
   const hashesMatchExisting =
     Boolean(existingManifest) &&

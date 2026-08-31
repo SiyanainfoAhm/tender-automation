@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ensureDir } from "../fileUtils.js";
+import { isDailyScreeningOutputFilename } from "../chatgptQualification/assistantSpreadsheetAttachment.js";
 import type { Phase1ScreeningStatus } from "./phase1Statuses.js";
+import { dailyScreeningOutputFilename } from "./buildDailyScreeningOperatorPrompt.js";
 import { RUN_SCREENED_FILE } from "./runWorkbook.js";
 
 export type RunScreeningStage =
@@ -76,11 +78,31 @@ export function screenedWorkbookPath(dateFolder: string): string {
   return path.join(screeningDir(dateFolder), RUN_SCREENED_FILE);
 }
 
-export function resolveExistingScreenedWorkbook(dateFolder: string): string | null {
+export function resolveExistingScreenedWorkbook(
+  dateFolder: string,
+  runDateIso?: string,
+): string | null {
   const canonical = screenedWorkbookPath(dateFolder);
   const legacy = path.join(dateFolder, RUN_SCREENED_FILE);
   if (fs.existsSync(canonical) && fs.statSync(canonical).size > 0) return canonical;
   if (fs.existsSync(legacy) && fs.statSync(legacy).size > 0) return legacy;
+  if (runDateIso) {
+    const expectedDaily = dailyScreeningOutputFilename(runDateIso);
+    const dailyCanonical = path.join(screeningDir(dateFolder), expectedDaily);
+    if (fs.existsSync(dailyCanonical) && fs.statSync(dailyCanonical).size > 0) {
+      return dailyCanonical;
+    }
+    const dir = screeningDir(dateFolder);
+    if (fs.existsSync(dir)) {
+      for (const entry of fs.readdirSync(dir)) {
+        if (!isDailyScreeningOutputFilename(entry, expectedDaily)) continue;
+        const candidate = path.join(dir, entry);
+        if (fs.statSync(candidate).isFile() && fs.statSync(candidate).size > 0) {
+          return candidate;
+        }
+      }
+    }
+  }
   return null;
 }
 

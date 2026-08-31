@@ -18,13 +18,15 @@ import {
   sendComposerMessage,
   typeComposerPrompt,
   uploadFilesToComposer,
-  waitForAssistantResponse,
   waitForRunExcelScreeningAttachmentReady,
 } from "../chatgptQualification/chatInteraction.js";
 import {
   findGeneratedScreeningWorkbook,
   findExistingDailyScreeningWorkbookInChat,
+  findDailyWorkbookInAssistantAfterUserMessage,
   isDailyScreeningOutputFilename,
+  isScreeningGenerationActive,
+  countAssistantMessages,
   revealDownloadControl,
   resolveAssistantSpreadsheetHref,
   tryFindGeneratedWorkbookInLibrary,
@@ -37,6 +39,7 @@ import {
   downloadGeneratedChatGptXlsx,
   downloadFailedError,
   previewOpenFailedError,
+  closeSpreadsheetPreviewIfOpen,
   type ScreeningArtifactStatus,
 } from "./chatgptXlsxPreviewDownload.js";
 import {
@@ -136,13 +139,20 @@ async function tryLegacyCardDownload(
   inputFileName: string,
 ): Promise<{ outputPath: string; originalFilename: string } | null> {
   const revealed = await revealDownloadControl(page, workbook);
-  const controls: Locator[] = [
+  const controls: Locator[] = [];
+  if (revealed) controls.push(revealed);
+  if (workbook.downloadLinkLocator) controls.push(workbook.downloadLinkLocator);
+  controls.push(
+    workbook.cardLocator.getByRole("button", { name: /^download$/i }),
+    workbook.cardLocator.getByRole("button", { name: /download file/i }),
+    workbook.cardLocator.locator('[aria-label*="Download" i]'),
+    workbook.assistantMessageLocator.getByRole("button", { name: /^download$/i }),
+    workbook.assistantMessageLocator.getByRole("button", { name: /download file/i }),
+    workbook.assistantMessageLocator.locator('[aria-label*="Download" i]'),
     page.getByRole("button", { name: /download file/i }),
     page.locator('button[aria-label="Download file"]'),
     page.locator('button[aria-label*="download" i]'),
-  ];
-  if (workbook.downloadLinkLocator) controls.push(workbook.downloadLinkLocator);
-  if (revealed) controls.push(revealed);
+  );
 
   const requireDaily = isDailyScreeningOutputFilename(workbook.filename)
     ? workbook.filename
@@ -152,8 +162,7 @@ async function tryLegacyCardDownload(
     const count = await control.count().catch(() => 0);
     if (count === 0) continue;
     const candidate = control.last();
-    if (!(await candidate.isVisible().catch(() => false))) continue;
-    const download = await clickForWorkbookDownload(page, candidate, logger, 8_000);
+    const download = await clickForWorkbookDownload(page, candidate, logger, 15_000);
     if (!download) continue;
     log(logger, "CHATGPT_XLSX_DOWNLOAD_EVENT_RECEIVED=true");
     log(logger, "CHATGPT_SCREENING_OUTPUT_DOWNLOAD_EVENT_RECEIVED=true");
@@ -207,6 +216,19 @@ export async function downloadGeneratedWorkbook(options: {
   log(logger, "AI_SCREENING_DOWNLOAD_STATUS=DOWNLOADING");
   if (requireDaily) {
     log(logger, `CHATGPT_SCREENING_REQUIRE_DAILY_FILENAME=${requireDaily}`);
+    log(logger, "CHATGPT_SCREENING_DAILY_DOWNLOAD_STRATEGY=card_first");
+    const cardFirst = await tryLegacyCardDownload(
+      page,
+      workbook,
+      outputPath,
+      logger,
+      inputFileName,
+    );
+    if (cardFirst) {
+      log(logger, "AI_SCREENING_DOWNLOAD_STATUS=SUCCESS");
+      log(logger, "AI_SCREENING_STATUS=SUCCESS");
+      return cardFirst;
+    }
   }
 
   const previewAttempt = await downloadGeneratedChatGptXlsx({
@@ -247,6 +269,20 @@ export async function downloadGeneratedWorkbook(options: {
   }
   const previewOpened =
     "previewOpened" in previewAttempt ? previewAttempt.previewOpened : true;
+
+  if (previewOpened) {
+    await closeSpreadsheetPreviewIfOpen(page, logger);
+  }
+  if (
+    options.conversationUrl &&
+    /\/library(?:\/|$|\?)/i.test(page.url())
+  ) {
+    log(logger, "CHATGPT_SCREENING_RETURN_FROM_LIBRARY=true");
+    await page
+      .goto(options.conversationUrl, { waitUntil: "domcontentloaded" })
+      .catch(() => undefined);
+    await page.waitForTimeout(800).catch(() => undefined);
+  }
 
   log(logger, "CHATGPT_XLSX_PREVIEW_DOWNLOAD_FALLBACK=legacy_card_or_href");
   const legacy = await tryLegacyCardDownload(
@@ -320,7 +356,7 @@ export async function downloadGeneratedWorkbook(options: {
     }
   }
 
-  if (options.conversationUrl && options.correlationId) {
+  if (options.conversationUrl && options.correlationId && !requireDaily) {
     log(logger, "CHATGPT_SCREENING_LIBRARY_FALLBACK_START");
     const libraryHit = await tryFindGeneratedWorkbookInLibrary(page, {
       filename: workbook.filename,
@@ -334,6 +370,8 @@ export async function downloadGeneratedWorkbook(options: {
         conversationUrl: undefined,
       });
     }
+  } else if (requireDaily) {
+    log(logger, "CHATGPT_SCREENING_LIBRARY_FALLBACK_SKIPPED=daily_screening");
   }
 
   log(logger, "AI_SCREENING_GENERATION_STATUS=SUCCESS");
@@ -346,6 +384,140 @@ export async function downloadGeneratedWorkbook(options: {
   throw downloadFailedError(workbook.filename, "DOWNLOAD_EVENT_TIMEOUT");
 }
 
+function isValidXlsxFile(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) return false;
+  const st = fs.statSync(filePath);
+  if (!st.isFile() || st.size <= 0) return false;
+  const header = fs.readFileSync(filePath).subarray(0, 4);
+  return header.length >= 2 && header[0] === 0x50 && header[1] === 0x4b;
+}
+
+function archiveDailyScreeningCopy(
+  downloadedPath: string,
+  expectedDailyFilename: string,
+  logger: Logger,
+): void {
+  const dailyArchivePath = path.join(
+    path.dirname(downloadedPath),
+    expectedDailyFilename,
+  );
+  if (path.resolve(dailyArchivePath) === path.resolve(downloadedPath)) return;
+  try {
+    fs.copyFileSync(downloadedPath, dailyArchivePath);
+    log(logger, `CHATGPT_SCREENING_DAILY_ARCHIVE=${dailyArchivePath}`);
+  } catch (error) {
+    logger.warn?.(
+      `CHATGPT_SCREENING_DAILY_ARCHIVE_FAILED=${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+async function downloadDailyWorkbookOnce(options: {
+  page: Page;
+  workbook: GeneratedScreeningWorkbook;
+  outputPath: string;
+  expectedDailyFilename: string;
+  logger: Logger;
+  inputFileName: string;
+  conversationUrl?: string;
+  correlationId: string;
+  reason: "reuse_existing_chat" | "post_generate";
+}): Promise<{ outputPath: string; originalFilename: string }> {
+  log(options.logger, `CHATGPT_SCREENING_DAILY_DOWNLOAD_REASON=${options.reason}`);
+  const downloaded = await downloadGeneratedWorkbook({
+    page: options.page,
+    workbook: options.workbook,
+    outputPath: options.outputPath,
+    logger: options.logger,
+    inputFileName: options.inputFileName,
+    conversationUrl: options.conversationUrl,
+    correlationId: options.correlationId,
+  });
+  archiveDailyScreeningCopy(
+    downloaded.outputPath,
+    options.expectedDailyFilename,
+    options.logger,
+  );
+  return downloaded;
+}
+
+/** After Send: poll until today's `{DD-MM-YY}_daily Tenders.xlsx` appears on the latest assistant turn. */
+async function waitForDailyScreeningWorkbookAfterSend(options: {
+  page: Page;
+  outputPath: string;
+  timeoutMs: number;
+  logger: Logger;
+  inputFileName: string;
+  userCountBefore: number;
+  expectedDailyFilename: string;
+  correlationId: string;
+  conversationUrl?: string;
+}): Promise<{ outputPath: string; originalFilename: string }> {
+  const {
+    page,
+    outputPath,
+    timeoutMs,
+    logger,
+    inputFileName,
+    userCountBefore,
+    expectedDailyFilename,
+    correlationId,
+  } = options;
+  ensureDir(path.dirname(outputPath));
+  log(logger, "[AI SCREENING] Waiting for today's daily Excel in chat...");
+  log(logger, "CHATGPT_SCREENING_OUTPUT_WAITING");
+  log(logger, `CHATGPT_SCREENING_EXPECTED_DAILY=${expectedDailyFilename}`);
+  const deadline = Date.now() + timeoutMs;
+  let lastDiagnosticAt = 0;
+
+  while (Date.now() < deadline) {
+    const generationActive = await isScreeningGenerationActive(page);
+    const userCount = await page
+      .locator('[data-message-author-role="user"]')
+      .count()
+      .catch(() => 0);
+
+    if (userCount > userCountBefore && !generationActive) {
+      const workbook = await findDailyWorkbookInAssistantAfterUserMessage(page, {
+        expectedFilename: expectedDailyFilename,
+        minUserIndex: userCountBefore,
+      });
+      if (workbook) {
+        logger.info("CHATGPT_SCREENING_OUTPUT_DETECTED");
+        logger.info("[AI SCREENING] Today's daily workbook ready in chat");
+        return downloadDailyWorkbookOnce({
+          page,
+          workbook,
+          outputPath,
+          expectedDailyFilename,
+          logger,
+          inputFileName,
+          conversationUrl: options.conversationUrl,
+          correlationId,
+          reason: "post_generate",
+        });
+      }
+    }
+
+    const now = Date.now();
+    if (now - lastDiagnosticAt >= 30_000) {
+      lastDiagnosticAt = now;
+      const assistantCount = await countAssistantMessages(page);
+      log(
+        logger,
+        `CHATGPT_SCREENING_OUTPUT_WAIT_POLL users=${userCount} userBaseline=${userCountBefore} assistants=${assistantCount} generating=${generationActive}`,
+      );
+    }
+
+    await page.waitForTimeout(1_000).catch(() => undefined);
+  }
+
+  throw new AutomationError(
+    "SCREENING_OUTPUT_MISSING",
+    `SCREENING_OUTPUT_MISSING: ChatGPT did not attach ${expectedDailyFilename} before timeout`,
+  );
+}
+
 export async function waitForReturnedWorkbook(options: {
   page: Page;
   outputPath: string;
@@ -353,10 +525,28 @@ export async function waitForReturnedWorkbook(options: {
   logger: Logger;
   inputFileName: string;
   assistantCountBefore?: number;
+  userCountBefore?: number;
   expectedFilename?: string;
   correlationId?: string;
   expectedDailyFilename?: string;
+  runDate?: string;
 }): Promise<{ outputPath: string; originalFilename: string }> {
+  if (options.expectedDailyFilename && options.runDate) {
+    return waitForDailyScreeningWorkbookAfterSend({
+      page: options.page,
+      outputPath: options.outputPath,
+      timeoutMs: options.timeoutMs,
+      logger: options.logger,
+      inputFileName: options.inputFileName,
+      userCountBefore: options.userCountBefore ?? 0,
+      expectedDailyFilename: options.expectedDailyFilename,
+      correlationId: options.correlationId || "RUN",
+      conversationUrl: isConversationUrl(options.page.url())
+        ? options.page.url()
+        : undefined,
+    });
+  }
+
   const { page, outputPath, timeoutMs, logger, inputFileName } = options;
   const assistantCountBefore = options.assistantCountBefore ?? 0;
   const correlationId = options.correlationId || "RUN";
@@ -372,21 +562,21 @@ export async function waitForReturnedWorkbook(options: {
       assistantCountBefore,
       expectedDailyFilename: options.expectedDailyFilename,
     });
-    if (!workbook) {
-      await page.waitForTimeout(1_000).catch(() => undefined);
-      continue;
+    if (workbook) {
+      logger.info("CHATGPT_SCREENING_OUTPUT_DETECTED");
+      logger.info("[AI SCREENING] Returned workbook detected");
+      return downloadGeneratedWorkbook({
+        page,
+        workbook,
+        outputPath,
+        logger,
+        inputFileName,
+        conversationUrl: isConversationUrl(page.url()) ? page.url() : undefined,
+        correlationId,
+      });
     }
-    logger.info("CHATGPT_SCREENING_OUTPUT_DETECTED");
-    logger.info("[AI SCREENING] Returned workbook detected");
-    return downloadGeneratedWorkbook({
-      page,
-      workbook,
-      outputPath,
-      logger,
-      inputFileName,
-      conversationUrl: isConversationUrl(page.url()) ? page.url() : undefined,
-      correlationId,
-    });
+
+    await page.waitForTimeout(1_000).catch(() => undefined);
   }
 
   throw new AutomationError(
@@ -602,11 +792,35 @@ export function createLiveChatGptExcelScreeningClient(options: {
         });
         const page = session.page;
         const expectedDailyFilename = dailyScreeningOutputFilename(runDate);
+        const dailyArchivePath = path.join(
+          path.dirname(outputPath),
+          expectedDailyFilename,
+        );
         log(logger, `CHATGPT_SCREENING_EXPECTED_OUTPUT=${expectedDailyFilename}`);
 
-        // If today's daily Excel already exists in this chat, download it and
-        // skip re-upload / re-prompt. If scrolling finds only an *older*
-        // `{DD-MM-YY}_daily Tenders.xlsx`, today is missing → prompt + generate.
+        // Step 1 — local copy from a prior successful run (skip ChatGPT entirely).
+        if (isValidXlsxFile(dailyArchivePath)) {
+          fs.copyFileSync(dailyArchivePath, outputPath);
+          log(logger, `CHATGPT_SCREENING_REUSE_LOCAL_DAILY=${dailyArchivePath}`);
+          closeState.submitted = true;
+          closeState.downloaded = true;
+          closeState.validated = true;
+          saveScreeningChatCheckpoint(outputPath, {
+            conversationUrl: opened.chatUrl,
+            correlationId,
+            expectedFilename: expectedDailyFilename,
+            submittedAt: new Date().toISOString(),
+            stage: "WORKBOOK_DOWNLOADED",
+          });
+          return {
+            screenedWorkbookPath: outputPath,
+            conversationUrl: opened.chatUrl,
+            decisionsPath,
+          };
+        }
+
+        // Step 2 — before upload/prompt: scroll chat for today's `{DD-MM-YY}_daily Tenders.xlsx`.
+        log(logger, "CHATGPT_SCREENING_CHECK_CHAT_BEFORE_UPLOAD=true");
         const lookup = await findExistingDailyScreeningWorkbookInChat(page, {
           expectedFilename: expectedDailyFilename,
           runDate,
@@ -615,30 +829,17 @@ export function createLiveChatGptExcelScreeningClient(options: {
         if (lookup.status === "found") {
           log(logger, "CHATGPT_SCREENING_REUSE_EXISTING_CHAT_EXCEL=true");
           closeState.submitted = true;
-          const downloaded = await downloadGeneratedWorkbook({
+          const downloaded = await downloadDailyWorkbookOnce({
             page,
             workbook: lookup.workbook,
             outputPath,
+            expectedDailyFilename,
             logger,
             inputFileName,
             conversationUrl: page.url() || opened.chatUrl,
             correlationId,
+            reason: "reuse_existing_chat",
           });
-          // Keep a copy under the exact ChatGPT daily name for operators.
-          const dailyArchivePath = path.join(
-            path.dirname(outputPath),
-            expectedDailyFilename,
-          );
-          if (path.resolve(dailyArchivePath) !== path.resolve(downloaded.outputPath)) {
-            try {
-              fs.copyFileSync(downloaded.outputPath, dailyArchivePath);
-              log(logger, `CHATGPT_SCREENING_DAILY_ARCHIVE=${dailyArchivePath}`);
-            } catch (error) {
-              logger.warn?.(
-                `CHATGPT_SCREENING_DAILY_ARCHIVE_FAILED=${error instanceof Error ? error.message : String(error)}`,
-              );
-            }
-          }
           closeState.downloaded = true;
           closeState.validated = true;
           saveScreeningChatCheckpoint(outputPath, {
@@ -664,6 +865,7 @@ export function createLiveChatGptExcelScreeningClient(options: {
           log(logger, "CHATGPT_SCREENING_GENERATE_NEW=true (today daily not in chat)");
         }
 
+        // Step 3 — upload Tender247 Excel + screening.md, then send operator prompt.
         log(logger, "CHATGPT_RUN_SCREENING_STAGE=COMPOSER_READY");
         log(logger, "CHATGPT_RUN_SCREENING_STAGE=INPUT_FILE_UPLOADING");
         await uploadFilesToComposer({
@@ -727,87 +929,30 @@ export function createLiveChatGptExcelScreeningClient(options: {
         const timeoutMs = resolveRunScreeningResponseTimeoutMs();
         log(logger, `CHATGPT_RUN_SCREENING_RESPONSE_TIMEOUT_MS=${timeoutMs}`);
 
-        // Prefer returned XLSX (matches shared-chat operator prompt).
-        // Ignore workbooks that appeared before this Send (stale prior replies).
-        try {
-          const downloaded = await waitForReturnedWorkbook({
-            page,
-            outputPath,
-            timeoutMs,
-            logger,
-            inputFileName,
-            assistantCountBefore: sendResult.baseline.assistantCountBefore,
-            correlationId,
-            expectedDailyFilename,
-          });
-          closeState.downloaded = true;
-          closeState.validated = true;
-          saveScreeningChatCheckpoint(outputPath, {
-            conversationUrl: page.url() || opened.chatUrl,
-            correlationId,
-            expectedFilename: path.basename(downloaded.outputPath),
-            submittedAt: new Date().toISOString(),
-            stage: "WORKBOOK_DOWNLOADED",
-          });
-          return {
-            screenedWorkbookPath: downloaded.outputPath,
-            conversationUrl: page.url() || opened.chatUrl,
-            decisionsPath,
-          };
-        } catch (xlsxError) {
-          log(
-            logger,
-            `CHATGPT_SCREENING_XLSX_WAIT_FALLBACK=${String(
-              xlsxError instanceof Error ? xlsxError.message : xlsxError,
-            )}`,
-          );
-        }
-
-        const waitResult = await waitForAssistantResponse({
+        // Step 4 — wait for today's daily Excel on the latest assistant turn, download once.
+        const downloaded = await waitForReturnedWorkbook({
           page,
-          timeoutMs: Math.min(timeoutMs, 180_000),
+          outputPath,
+          timeoutMs,
           logger,
-          expectedT247Id: correlationId,
+          inputFileName,
           assistantCountBefore: sendResult.baseline.assistantCountBefore,
           userCountBefore: sendResult.baseline.userCountBefore,
-          submissionKind: "RUN_EXCEL_SCREENING",
-          completionMode: "screening_json",
-          inputWorkbookFileName: inputFileName,
+          correlationId,
+          expectedDailyFilename,
+          runDate,
         });
-        if (waitResult.status !== "complete" || !waitResult.text?.trim()) {
-          throw new AutomationError(
-            "SCREENING_OUTPUT_MISSING",
-            `SCREENING_OUTPUT_MISSING: screened Excel/JSON response did not complete (${waitResult.status})`,
-          );
-        }
-
-        const parsed = parseScreeningDecisionsJson(waitResult.text);
-        if (!parsed.ok || parsed.decisions.length === 0) {
-          throw new AutomationError(
-            "SCREENING_OUTPUT_INVALID",
-            `SCREENING_OUTPUT_INVALID: ${parsed.ok === false ? parsed.error : "empty decisions"}`,
-          );
-        }
-
-        ensureDir(path.dirname(decisionsPath));
-        fs.writeFileSync(decisionsPath, waitResult.text, "utf8");
         closeState.downloaded = true;
         closeState.validated = true;
-        log(logger, "[AI SCREENING] Response complete (JSON fallback)");
-        log(logger, "CHATGPT_RUN_SCREENING_STAGE=RESPONSE_STABLE");
-        log(logger, `CHATGPT_SCREENING_DECISIONS_COUNT=${parsed.decisions.length}`);
-        log(logger, "CHATGPT_RUN_SCREENING_STAGE=DECISIONS_RECEIVED");
-
         saveScreeningChatCheckpoint(outputPath, {
           conversationUrl: page.url() || opened.chatUrl,
           correlationId,
-          expectedFilename: "chatgpt-screening-decisions.json",
+          expectedFilename: expectedDailyFilename,
           submittedAt: new Date().toISOString(),
-          stage: "DECISIONS_RECEIVED",
+          stage: "WORKBOOK_DOWNLOADED",
         });
-
         return {
-          decisionsText: waitResult.text,
+          screenedWorkbookPath: downloaded.outputPath,
           conversationUrl: page.url() || opened.chatUrl,
           decisionsPath,
         };

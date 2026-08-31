@@ -678,4 +678,48 @@ describe("RUN_EXCEL_SCREENING response completion", () => {
     }
     await page.close();
   });
+
+  it("detects daily screening workbook with Open file card (Terra UI)", async () => {
+    const dailyName = "30-08-26_daily Tenders.xlsx";
+    const page: Page = await browser.newPage();
+    await page.setContent(`<!DOCTYPE html>
+<html><body>
+  <article data-testid="conversation-turn-1">
+    <div data-message-author-role="user">older prompt</div>
+  </article>
+  <article data-testid="conversation-turn-2">
+    <div data-message-author-role="assistant">older reply</div>
+  </article>
+  <article data-testid="conversation-turn-3">
+    <div data-message-author-role="user">Run Siyana Tender247 Daily Screening RUN-2026-08-30</div>
+  </article>
+  <article data-testid="conversation-turn-4">
+    <div data-message-author-role="assistant">
+      <p>This is an exact match to the already screened 30 August workbook.</p>
+      <div class="file-card">
+        <div>${dailyName}</div>
+        <div>Open file</div>
+        <button type="button" aria-label="Download">Download</button>
+      </div>
+    </div>
+  </article>
+</body></html>`);
+
+    const {
+      findDailyWorkbookInAssistantAfterUserMessage,
+      findLatestAssistantDailyWorkbook,
+    } = await import("../assistantSpreadsheetAttachment.js");
+
+    const latest = await findLatestAssistantDailyWorkbook(page, dailyName);
+    assert.ok(latest, "latest assistant turn should expose daily workbook");
+    assert.equal(latest!.filename, dailyName);
+
+    const afterUser = await findDailyWorkbookInAssistantAfterUserMessage(page, {
+      expectedFilename: dailyName,
+      minUserIndex: 1,
+    });
+    assert.ok(afterUser, "workbook after run user message should be found");
+    assert.equal(afterUser!.filename, dailyName);
+    await page.close();
+  });
 });

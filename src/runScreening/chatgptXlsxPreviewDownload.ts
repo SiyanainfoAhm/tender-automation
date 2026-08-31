@@ -72,6 +72,10 @@ function previewDownloadButtonLocators(scope: Locator): Locator[] {
     scope.getByRole("button", { name: /^download$/i }),
     scope.getByRole("button", { name: /download file/i }),
     scope.getByRole("link", { name: /download/i }),
+    // Icon-only download controls (Terra / Open file cards)
+    scope.locator(
+      'button:has(svg), [role="button"]:has(svg[aria-label*="download" i])',
+    ),
   ];
 }
 
@@ -168,6 +172,27 @@ async function hoverPreviewToolbar(preview: Locator, page: Page): Promise<void> 
   }
   await preview.hover({ timeout: 3_000, force: true }).catch(() => undefined);
   await page.waitForTimeout(400).catch(() => undefined);
+}
+
+export async function closeSpreadsheetPreviewIfOpen(
+  page: Page,
+  logger?: Logger,
+): Promise<void> {
+  const closeSelectors = [
+    'button[aria-label*="Close" i]',
+    'button[aria-label*="close preview" i]',
+    'button[aria-label*="Dismiss" i]',
+    '[aria-label*="Close preview" i]',
+  ];
+  for (const selector of closeSelectors) {
+    const closeBtn = page.locator(selector).last();
+    if ((await closeBtn.count().catch(() => 0)) === 0) continue;
+    if (!(await closeBtn.isVisible().catch(() => false))) continue;
+    await closeBtn.click({ force: true, timeout: 3_000 }).catch(() => undefined);
+    logger?.info("CHATGPT_XLSX_PREVIEW_CLOSED=true");
+    await page.waitForTimeout(400).catch(() => undefined);
+    return;
+  }
 }
 
 async function findPreviewDownloadButton(

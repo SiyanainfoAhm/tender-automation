@@ -181,11 +181,12 @@ function screenedWorkbookLinkLocators(scope: Locator): Locator[] {
 }
 
 function normalizeXlsxBasename(name: string): string {
-  return path
+  const base = path
     .basename(name.trim())
     .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+    .trim();
+  // Chrome/Edge append (1), (2), … when the target filename already exists locally.
+  return base.replace(/\s*\(\d+\)(?=\.xlsx$)/i, "").toLowerCase();
 }
 
 /** True when name is exactly `{DD-MM-YY}_daily Tenders.xlsx` (optionally a specific day). */
@@ -241,6 +242,199 @@ export type DailyScreeningChatLookupResult =
       olderFilename?: string;
     };
 
+function dailyFilenamePattern(filename: string): RegExp {
+  const escaped = filename
+    .trim()
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\s+/g, "\\s+");
+  return new RegExp(escaped, "i");
+}
+
+/** ChatGPT file cards label as "Spreadsheet" or "Open file" depending on UI version. */
+const FILE_CARD_LABEL_RE = /^(Spreadsheet|Open file)$/i;
+
+function downloadLocators(scope: Locator): Locator[] {
+  return [
+    scope.getByRole("button", { name: /download file/i, includeHidden: true }),
+    scope.getByRole("button", { name: /^download$/i, includeHidden: true }),
+    scope.locator('button[aria-label*="Download file" i]'),
+    scope.locator('[aria-label*="Download file" i]'),
+    scope.locator('[role="button"][aria-label*="Download" i]'),
+    scope.locator('button[title*="Download" i]'),
+    scope.getByRole("link", { name: /download file/i }),
+    scope.locator('a[download*=".xlsx" i], a[href*=".xlsx" i]'),
+  ];
+}
+
+async function firstAttached(locators: Locator[]): Promise<Locator | null> {
+  for (const locator of locators) {
+    const n = await locator.count().catch(() => 0);
+    if (n > 0) return locator.last();
+  }
+  return null;
+}
+
+async function turnHasDownloadControl(turn: Locator): Promise<boolean> {
+  return Boolean(await firstAttached(downloadLocators(turn)));
+}
+
+async function turnHasFileCardLabel(turn: Locator): Promise<boolean> {
+  return (
+    (await turn.getByText(FILE_CARD_LABEL_RE).count().catch(() => 0)) > 0
+  );
+}
+
+function conversationTurnLocators(page: Page): Locator {
+  return page.locator(
+    '[data-testid^="conversation-turn"], [data-turn="user"], [data-turn="assistant"], article:has([data-message-author-role="user"]), article:has([data-message-author-role="assistant"])',
+  );
+}
+
+async function findRunUserTurnIndex(
+  page: Page,
+  minUserIndex: number,
+): Promise<number> {
+  const turns = conversationTurnLocators(page);
+  const turnCount = await turns.count().catch(() => 0);
+  let userSeen = 0;
+  for (let t = 0; t < turnCount; t += 1) {
+    const turn = turns.nth(t);
+    const userInTurn = await turn
+      .locator('[data-message-author-role="user"]')
+      .count()
+      .catch(() => 0);
+    if (userInTurn === 0) continue;
+    if (userSeen === minUserIndex) return t;
+    userSeen += 1;
+  }
+  return -1;
+}
+
+function assistantTurnLocators(page: Page): Locator {
+  return page.locator(
+    '[data-testid^="conversation-turn"]:has([data-message-author-role="assistant"]), [data-turn="assistant"], article:has([data-message-author-role="assistant"])',
+  );
+}
+
+/** True when the assistant turn shows a downloadable daily Excel card, not prompt prose. */
+async function assistantTurnHasDailyWorkbookArtifact(
+  turn: Locator,
+  expectedFilename: string,
+): Promise<Locator | null> {
+  const card = await cardForFilename(turn, expectedFilename);
+  if (!card) return null;
+  const hasFileCardLabel = await turnHasFileCardLabel(turn);
+  const hasDownload = await turnHasDownloadControl(turn);
+  const cardInTurn = turn
+    .locator("div, article, section, li, a, button, span")
+    .filter({ hasText: dailyFilenamePattern(expectedFilename) })
+    .filter({ hasText: FILE_CARD_LABEL_RE });
+  if ((await cardInTurn.count().catch(() => 0)) > 0) {
+    return (await cardInTurn.count()) > 0 ? cardInTurn.last() : card;
+  }
+  if ((hasFileCardLabel || hasDownload) && hasDownload) return card;
+  const turnText = await turn.innerText().catch(() => "");
+  const normalizedTurnText = turnText.replace(/\s+/g, " ");
+  if (
+    hasDownload &&
+    dailyFilenamePattern(expectedFilename).test(normalizedTurnText)
+  ) {
+    return card;
+  }
+  if (
+    hasFileCardLabel &&
+    dailyFilenamePattern(expectedFilename).test(normalizedTurnText)
+  ) {
+    return card;
+  }
+  return null;
+}
+
+/** Newest assistant turn only — for post-send wait (never matches user prompt text). */
+export async function findLatestAssistantDailyWorkbook(
+  page: Page,
+  expectedFilename: string,
+): Promise<GeneratedScreeningWorkbook | null> {
+  const expected = expectedFilename.trim();
+  if (!expected) return null;
+  const turns = assistantTurnLocators(page);
+  const turnCount = await turns.count().catch(() => 0);
+  if (turnCount === 0) return null;
+  const latestTurn = turns.nth(turnCount - 1);
+  const card = await assistantTurnHasDailyWorkbookArtifact(latestTurn, expected);
+  if (!card) return null;
+  await card.scrollIntoViewIfNeeded().catch(() => undefined);
+  return {
+    filename: expected,
+    cardLocator: card,
+    assistantMessageLocator: latestTurn,
+    downloadLinkLocator: null,
+    linkFound: false,
+    filenameFound: true,
+    cardFound: true,
+  };
+}
+
+async function scrollChatToBottom(page: Page): Promise<void> {
+  await page
+    .evaluate(() => {
+      const main =
+        document.querySelector('[class*="react-scroll"]') ||
+        document.querySelector("main") ||
+        document.scrollingElement;
+      if (main) main.scrollTop = main.scrollHeight || 0;
+      window.scrollTo(0, document.body.scrollHeight);
+    })
+    .catch(() => undefined);
+  await page.waitForTimeout(300);
+}
+
+/** Daily Excel in an assistant reply at or after the run's user message (post-send wait). */
+export async function findDailyWorkbookInAssistantAfterUserMessage(
+  page: Page,
+  options: {
+    expectedFilename: string;
+    /** 0-based user index from send baseline (userCountBefore). */
+    minUserIndex: number;
+  },
+): Promise<GeneratedScreeningWorkbook | null> {
+  const expected = options.expectedFilename.trim();
+  if (!expected) return null;
+  await scrollChatToBottom(page);
+
+  const runTurnIndex = await findRunUserTurnIndex(page, options.minUserIndex);
+  const turns = conversationTurnLocators(page);
+  const turnCount = await turns.count().catch(() => 0);
+
+  if (runTurnIndex >= 0) {
+    for (let t = turnCount - 1; t > runTurnIndex; t -= 1) {
+      const turn = turns.nth(t);
+      const hasAssistant =
+        (await turn
+          .locator('[data-message-author-role="assistant"]')
+          .count()
+          .catch(() => 0)) > 0;
+      if (!hasAssistant) continue;
+
+      const card = await assistantTurnHasDailyWorkbookArtifact(turn, expected);
+      if (!card) continue;
+      await card.scrollIntoViewIfNeeded().catch(() => undefined);
+      return {
+        filename: expected,
+        cardLocator: card,
+        assistantMessageLocator: turn,
+        downloadLinkLocator: null,
+        linkFound: false,
+        filenameFound: true,
+        cardFound: true,
+      };
+    }
+  }
+
+  // Turn markers missing or file card not marked visible — bottom assistant fallback.
+  return findLatestAssistantDailyWorkbook(page, expected);
+}
+
 export async function findExistingDailyScreeningWorkbookInChat(
   page: Page,
   options: {
@@ -249,6 +443,10 @@ export async function findExistingDailyScreeningWorkbookInChat(
     runDate: string;
     logger?: { info: (m: string) => void; warn?: (m: string) => void };
     maxScrolls?: number;
+    /** Post-send wait: only scan bottom of chat; never scroll up for older files. */
+    bottomOnly?: boolean;
+    /** Post-send wait: only the newest assistant turn (avoid yesterday's file). */
+    latestAssistantOnly?: boolean;
   },
 ): Promise<DailyScreeningChatLookupResult> {
   const expected = options.expectedFilename.trim();
@@ -257,33 +455,28 @@ export async function findExistingDailyScreeningWorkbookInChat(
     return { status: "missing_generate", reason: "not_found" };
   }
   const maxScrolls = options.maxScrolls ?? 24;
+  const bottomOnly = options.bottomOnly === true;
+  const latestAssistantOnly = options.latestAssistantOnly === true;
   options.logger?.info(
-    `CHATGPT_SCREENING_LOOK_FOR_EXISTING=${expected}`,
+    `CHATGPT_SCREENING_LOOK_FOR_EXISTING=${expected}${bottomOnly ? " bottomOnly=true" : ""}${latestAssistantOnly ? " latestAssistantOnly=true" : ""}`,
   );
 
   const tryMatchToday = async (): Promise<GeneratedScreeningWorkbook | null> => {
-    const exact = page.getByText(expected, { exact: true });
-    const loose = page.getByText(expected, { exact: false });
-    const candidates = [
-      page
-        .locator("div, article, section, li, a, button")
-        .filter({ hasText: expected })
-        .filter({ hasText: /Spreadsheet/i }),
-      exact,
-      loose,
-    ];
-    for (const loc of candidates) {
-      const count = await loc.count().catch(() => 0);
-      if (count === 0) continue;
-      const hit = loc.last();
-      if (!(await hit.isVisible().catch(() => false))) continue;
-      await hit.scrollIntoViewIfNeeded().catch(() => undefined);
-      const card =
-        (await cardForFilename(page.locator("body"), expected)) || hit;
+    if (latestAssistantOnly) {
+      return findLatestAssistantDailyWorkbook(page, expected);
+    }
+    const turns = assistantTurnLocators(page);
+    const turnCount = await turns.count().catch(() => 0);
+    for (let i = turnCount - 1; i >= 0; i -= 1) {
+      const turn = turns.nth(i);
+      const card = await assistantTurnHasDailyWorkbookArtifact(turn, expected);
+      if (!card) continue;
+      if (!(await card.isVisible().catch(() => false))) continue;
+      await card.scrollIntoViewIfNeeded().catch(() => undefined);
       return {
         filename: expected,
         cardLocator: card,
-        assistantMessageLocator: card,
+        assistantMessageLocator: turn,
         downloadLinkLocator: null,
         linkFound: false,
         filenameFound: true,
@@ -327,24 +520,25 @@ export async function findExistingDailyScreeningWorkbookInChat(
     await page.waitForTimeout(350);
   };
 
-  const scrollChatToBottom = async () => {
-    await page
-      .evaluate(() => {
-        const main =
-          document.querySelector('[class*="react-scroll"]') ||
-          document.querySelector("main") ||
-          document.scrollingElement;
-        if (main) main.scrollTop = main.scrollHeight || 0;
-        window.scrollTo(0, document.body.scrollHeight);
-      })
-      .catch(() => undefined);
-    await page.waitForTimeout(300);
-  };
-
+  // Start at the bottom — today's file is usually the newest attachment.
+  await scrollChatToBottom(page);
   let found = await tryMatchToday();
   if (found) {
     options.logger?.info(`CHATGPT_SCREENING_EXISTING_FOUND=${expected}`);
     return { status: "found", workbook: found };
+  }
+
+  if (bottomOnly) {
+    await scrollChatToBottom(page);
+    found = await tryMatchToday();
+    if (found) {
+      options.logger?.info(
+        "CHATGPT_SCREENING_EXISTING_FOUND_AFTER_BOTTOM_SCROLL=true",
+      );
+      options.logger?.info(`CHATGPT_SCREENING_EXISTING_FOUND=${expected}`);
+      return { status: "found", workbook: found };
+    }
+    return { status: "missing_generate", reason: "not_found" };
   }
 
   // Scroll upward through history — stop early if an older daily Excel appears
@@ -367,7 +561,7 @@ export async function findExistingDailyScreeningWorkbookInChat(
       options.logger?.info(
         "CHATGPT_SCREENING_EXISTING_NOT_FOUND=true (older daily proves today missing — will generate)",
       );
-      await scrollChatToBottom();
+      await scrollChatToBottom(page);
       return {
         status: "missing_generate",
         reason: "older_daily_found",
@@ -377,7 +571,7 @@ export async function findExistingDailyScreeningWorkbookInChat(
   }
 
   options.logger?.info("CHATGPT_SCREENING_EXISTING_NOT_FOUND=true");
-  await scrollChatToBottom();
+  await scrollChatToBottom(page);
   return { status: "missing_generate", reason: "not_found" };
 }
 
@@ -417,7 +611,7 @@ async function cardForFilename(
   const withBoth = scope
     .locator("div, article, section, li, a, button, span")
     .filter({ hasText: filename })
-    .filter({ hasText: /Spreadsheet/i });
+    .filter({ hasText: FILE_CARD_LABEL_RE });
   if ((await withBoth.count().catch(() => 0)) > 0) {
     return withBoth.last();
   }
@@ -427,11 +621,11 @@ async function cardForFilename(
     if ((await anyScreened.count().catch(() => 0)) > 0) return anyScreened;
     return null;
   }
-  const withSpreadsheet = nameLoc.locator(
-    'xpath=ancestor::*[contains(translate(normalize-space(.),"SPREADSHEET","spreadsheet"),"spreadsheet")][1]',
+  const withFileCard = nameLoc.locator(
+    'xpath=ancestor::*[contains(translate(normalize-space(.),"SPREADSHEET","spreadsheet"),"spreadsheet") or contains(normalize-space(.),"Open file")][1]',
   );
-  if ((await withSpreadsheet.count().catch(() => 0)) > 0) {
-    return withSpreadsheet.first();
+  if ((await withFileCard.count().catch(() => 0)) > 0) {
+    return withFileCard.first();
   }
   const parent = nameLoc.locator("xpath=ancestor::*[1]");
   if ((await parent.count().catch(() => 0)) > 0) return parent.first();
@@ -485,22 +679,108 @@ export async function scanGeneratedScreeningOutput(
     ...overrides,
   });
 
+  const generationActive = await isScreeningGenerationActive(page);
+  const assistantText = await page
+    .locator('[data-message-author-role="assistant"]')
+    .allInnerTexts()
+    .catch(() => [] as string[]);
+  const assistantBody = assistantText.join("\n");
+  const expectedDailyNorm = options.expectedDailyFilename
+    ?.replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+  const previewScope = await latestAssistantResponseScope(page);
+  let latestScopeHasScreenedOutput = false;
+  let latestDailyArtifactCard: Locator | null = null;
+  if (options.expectedDailyFilename && !generationActive) {
+    const turns = assistantTurnLocators(page);
+    const turnCount = await turns.count().catch(() => 0);
+    if (turnCount > 0) {
+      latestDailyArtifactCard = await assistantTurnHasDailyWorkbookArtifact(
+        turns.nth(turnCount - 1),
+        options.expectedDailyFilename,
+      );
+    }
+  }
+  if (previewScope) {
+    const previewText = await collectScopeText(previewScope);
+    latestScopeHasScreenedOutput = extractXlsxNames(
+      previewText,
+      options.inputFileName,
+    ).some((name) =>
+      isScreenedOutputFilename(
+        name,
+        options.inputFileName,
+        options.expectedDailyFilename,
+      ),
+    );
+  }
+
+  const assistantHasExpectedDaily = expectedDailyNorm
+    ? assistantBody.replace(/\s+/g, " ").toLowerCase().includes(expectedDailyNorm)
+    : false;
+  const responseComplete =
+    !generationActive &&
+    latestScopeHasScreenedOutput &&
+    (assistantHasExpectedDaily ||
+      /\bcompleted screening\b/i.test(assistantBody) ||
+      /\bfinal tenders\b/i.test(assistantBody));
+
   // Ignore Excel cards from assistant turns that existed before this Send.
   // When expectedDailyFilename is set and assistantCountBefore is 0, allow
   // scanning any turn (reuse existing daily output already in the chat).
+  // After Send, also scan when GPT finished or the latest assistant already
+  // contains the screened workbook (count may lag behind DOM updates).
   if (
     assistantCountBefore > 0 &&
-    assistantCount <= assistantCountBefore
+    assistantCount <= assistantCountBefore &&
+    !responseComplete &&
+    !latestScopeHasScreenedOutput &&
+    !latestDailyArtifactCard
   ) {
     return {
       workbook: null,
       diagnostics: emptyDiag({
-        innerTextPreview: `waiting_for_new_assistant baseline=${assistantCountBefore} current=${assistantCount}`,
+        innerTextPreview: `waiting_for_new_assistant baseline=${assistantCountBefore} current=${assistantCount} generating=${generationActive}`,
       }),
     };
   }
 
-  const scope = await latestAssistantResponseScope(page);
+  if (latestDailyArtifactCard && options.expectedDailyFilename) {
+    const turns = assistantTurnLocators(page);
+    const turnCount = await turns.count().catch(() => 0);
+    const latestTurn = turnCount > 0 ? turns.nth(turnCount - 1) : latestAssistantLocator(page);
+    return {
+      workbook: {
+        filename: options.expectedDailyFilename,
+        cardLocator: latestDailyArtifactCard,
+        assistantMessageLocator: latestTurn,
+        downloadLinkLocator: null,
+        linkFound: false,
+        filenameFound: true,
+        cardFound: true,
+      },
+      diagnostics: emptyDiag({
+        innerTextPreview: `latest_assistant_daily_artifact=${options.expectedDailyFilename}`,
+        filename: options.expectedDailyFilename,
+        filenameFound: true,
+        fileCardFound: true,
+        artifactLikelyPresent: true,
+      }),
+    };
+  }
+
+  let scope = previewScope;
+  if (
+    scope &&
+    options.expectedDailyFilename &&
+    responseComplete &&
+    !(await collectScopeText(scope)).toLowerCase().includes(expectedDailyNorm || "")
+  ) {
+    // File card may sit outside the markdown bubble — widen to full page.
+    scope = page.locator("body");
+  }
   if (!scope) {
     return { workbook: null, diagnostics: emptyDiag() };
   }
@@ -680,26 +960,6 @@ export function logScreeningScanDiagnostics(
   if (preview) {
     log(`CHATGPT_SCREENING_ASSISTANT_INNER_TEXT=${preview.slice(0, 1000)}`);
   }
-}
-
-function downloadLocators(scope: Locator): Locator[] {
-  return [
-    scope.getByRole("button", { name: /download file/i, includeHidden: true }),
-    scope.locator('button[aria-label*="Download file" i]'),
-    scope.locator('[aria-label*="Download file" i]'),
-    scope.locator('[role="button"][aria-label*="Download" i]'),
-    scope.locator('button[title*="Download" i]'),
-    scope.getByRole("link", { name: /download file/i }),
-    scope.locator('a[download*=".xlsx" i], a[href*=".xlsx" i]'),
-  ];
-}
-
-async function firstAttached(locators: Locator[]): Promise<Locator | null> {
-  for (const locator of locators) {
-    const n = await locator.count().catch(() => 0);
-    if (n > 0) return locator.last();
-  }
-  return null;
 }
 
 /**

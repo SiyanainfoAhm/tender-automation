@@ -729,6 +729,25 @@ export function validateScreenedWorkbook(options: {
     );
   }
 
+  if (inputRows.length > 0) {
+    const overlap = [...outputIds].filter((id) => inputIds.has(id)).length;
+    if (outputRows.length > inputRows.length * 2) {
+      throw new ScreeningOutputInvalidError(
+        `SCREENING_OUTPUT_ROW_COUNT_MISMATCH output=${outputRows.length} input=${inputRows.length}`,
+      );
+    }
+    const minOverlap = Math.min(
+      inputRows.length,
+      outputRows.length,
+      Math.max(1, Math.floor(inputRows.length * 0.4)),
+    );
+    if (overlap < minOverlap) {
+      throw new ScreeningOutputInvalidError(
+        `SCREENING_OUTPUT_ID_MISMATCH overlap=${overlap} input=${inputRows.length} output=${outputRows.length}`,
+      );
+    }
+  }
+
   const seen = new Set<string>();
   const missingStatusIds: string[] = [];
   for (const row of outputRows) {

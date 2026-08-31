@@ -47,6 +47,25 @@ test("dailyScreeningOutputFilename matches operator Excel name", () => {
   );
 });
 
+test("isDailyScreeningOutputFilename accepts browser duplicate suffix (1)", async () => {
+  const { isDailyScreeningOutputFilename } = await import(
+    "../../chatgptQualification/assistantSpreadsheetAttachment.js"
+  );
+  const expected = "30-08-26_daily Tenders.xlsx";
+  assert.equal(
+    isDailyScreeningOutputFilename("30-08-26_daily Tenders(1).xlsx", expected),
+    true,
+  );
+  assert.equal(
+    isDailyScreeningOutputFilename("30-08-26_daily Tenders (2).xlsx", expected),
+    true,
+  );
+  assert.equal(
+    isDailyScreeningOutputFilename("29-08-26_daily Tenders(1).xlsx", expected),
+    false,
+  );
+});
+
 test("parseDailyScreeningFilenameToIso and before-run-date checks", async () => {
   const {
     parseDailyScreeningFilenameToIso,
