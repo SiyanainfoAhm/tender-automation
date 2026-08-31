@@ -9,6 +9,7 @@
  * - Upload artifacts separately after detail crawl (AI Summary optional)
  */
 import path from "node:path";
+import { AutomationError } from "../browserUtils.js";
 import { getSupabaseAdminClient, isSupabaseConfigured } from "../supabase/client.js";
 import { upsertQualificationResult } from "../supabase/qualificationResultStore.js";
 import { mergeNullOnlyRecord } from "../supabase/mergeTenderNullOnly.js";
@@ -36,6 +37,30 @@ export type Phase1PersistResult = {
   updated: number;
   errors: string[];
 };
+
+/** Postgres btree index on lower(title) fails above ~2704 bytes — cap indexed text. */
+const INDEX_SAFE_TEXT_MAX_CHARS = 512;
+
+function truncateForDatabaseIndex(
+  value: string | null | undefined,
+  maxChars = INDEX_SAFE_TEXT_MAX_CHARS,
+): { text: string | null; truncated: boolean } {
+  const raw = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!raw) return { text: null, truncated: false };
+  if (raw.length <= maxChars) return { text: raw, truncated: false };
+  return { text: `${raw.slice(0, maxChars).trimEnd()}…`, truncated: true };
+}
+
+export function assertPhase1PersistComplete(
+  result: Phase1PersistResult,
+  expectedRows: number,
+): void {
+  if (result.stored === expectedRows && result.errors.length === 0) return;
+  throw new AutomationError(
+    "PHASE1_SUPABASE_UPSERT_INCOMPLETE",
+    `PHASE1_SUPABASE_UPSERT_INCOMPLETE: expected ${expectedRows} rows, stored ${result.stored}, skipped ${result.skipped}, errors ${result.errors.length}${result.errors.length ? ` — ${result.errors.slice(0, 3).join("; ")}` : ""}`,
+  );
+}
 
 function portalForRow(row: RunWorkbookRow): "TENDER247" | "BIDASSIST" {
   if (row.tender247Id) return "TENDER247";
@@ -279,16 +304,6 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
       })),
       updatedAt: new Date().toISOString(),
     });
-    writeJson(
-      path.join(screeningDir(options.dateFolder), "gpt-excel-db-sync.json"),
-      {
-        screeningRunId: runCorrelationId,
-        source: RUN_SCREENED_FILE,
-        sourcePath: options.screenedWorkbookPath ?? null,
-        rowCount: options.rows.length,
-        updatedAt: new Date().toISOString(),
-      },
-    );
   }
 
   if (options.rows.length === 0) {
@@ -347,6 +362,8 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
       const closingDate = excelDeadlineIso(row);
       const emdAmount = excelEmdAmount(row);
       const tenderValue = excelTenderValue(row);
+      const titleParts = truncateForDatabaseIndex(row.tenderName || id);
+      const orgParts = truncateForDatabaseIndex(row.organization || null);
 
       const rawMetadata = {
         ...(existing?.raw_metadata &&
@@ -369,14 +386,20 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
           row.msmeExemption != null ? row.msmeExemption : null,
         startupExemption:
           row.startupExemption != null ? row.startupExemption : null,
+        ...(titleParts.truncated
+          ? { fullTitle: String(row.tenderName || "").trim() }
+          : {}),
+        ...(orgParts.truncated
+          ? { fullOrganization: String(row.organization || "").trim() }
+          : {}),
       };
 
       const incoming = {
         source_portal: sourcePortal,
         source_tender_id: existing?.source_tender_id || id,
         folder_id: existing?.folder_id || row.tender247Id || row.bidAssistId || null,
-        title: row.tenderName || id,
-        organization: row.organization || null,
+        title: titleParts.text || id,
+        organization: orgParts.text,
         location_text: row.location || null,
         closing_date: closingDate,
         bid_submission_date: closingDate,
@@ -463,8 +486,8 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
               source_portal: sourcePortal,
               source_tender_id: id,
               folder_id: row.tender247Id || row.bidAssistId || null,
-              title: row.tenderName || id,
-              organization: row.organization || null,
+              title: titleParts.text || id,
+              organization: orgParts.text,
               location_text: row.location || null,
               closing_date: excelDeadlineIso(row),
               bid_submission_date: excelDeadlineIso(row),
@@ -547,6 +570,30 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
   if (result.errors.length > 0) {
     options.logger?.warn?.(
       `GPT_EXCEL_DB_SYNC_ERRORS=${result.errors.length}`,
+    );
+    for (const err of result.errors.slice(0, 10)) {
+      options.logger?.warn?.(`GPT_EXCEL_DB_SYNC_ERROR=${err}`);
+    }
+  }
+  options.logger?.info(
+    `GPT_EXCEL_DB_SYNC_STORED=${result.stored}/${result.attempted} skipped=${result.skipped}`,
+  );
+
+  if (options.dateFolder) {
+    writeJson(
+      path.join(screeningDir(options.dateFolder), "gpt-excel-db-sync.json"),
+      {
+        screeningRunId: runCorrelationIdForDate(options.runDate),
+        source: RUN_SCREENED_FILE,
+        sourcePath: options.screenedWorkbookPath ?? null,
+        rowCount: options.rows.length,
+        stored: result.stored,
+        skipped: result.skipped,
+        created: result.created,
+        updated: result.updated,
+        errors: result.errors,
+        updatedAt: new Date().toISOString(),
+      },
     );
   }
 

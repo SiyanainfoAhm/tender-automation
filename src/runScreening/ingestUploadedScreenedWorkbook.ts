@@ -10,7 +10,7 @@ import { resolveRunCompanyId } from "../company/siyanaCompany.js";
 import { loadCompanyPreferenceSnapshot } from "./companyPreferences.js";
 import { AutomationError } from "../browserUtils.js";
 import type { Logger } from "../logger.js";
-import { persistGptScreenedWorkbookToDatabase } from "./persistPhase1Results.js";
+import { persistGptScreenedWorkbookToDatabase, assertPhase1PersistComplete } from "./persistPhase1Results.js";
 import { PHASE1_SCREENING_POLICY_VERSION } from "./screeningPolicy.js";
 import {
   countPhase1Statuses,
@@ -126,7 +126,7 @@ export async function ingestUploadedScreenedWorkbook(options: {
       options.logger,
       `UPLOADED_EXCEL_SUPABASE_SYNC_START rows=${outputRows.length} noBid=${counts.NO_GO}`,
     );
-    await persistGptScreenedWorkbookToDatabase({
+    const persistResult = await persistGptScreenedWorkbookToDatabase({
       rows: outputRows,
       runDate: options.dateIso,
       dateFolder: options.dateFolder,
@@ -135,6 +135,8 @@ export async function ingestUploadedScreenedWorkbook(options: {
       logger: options.logger,
       screeningSource: "UPLOADED_PRESCREENED_EXCEL",
     });
+    assertPhase1PersistComplete(persistResult, outputRows.length);
+    log(options.logger, `SUPABASE_UPSERT_SUCCESS=${persistResult.stored}`);
     log(options.logger, "UPLOADED_EXCEL_SUPABASE_SYNC_COMPLETE=true");
   }
 

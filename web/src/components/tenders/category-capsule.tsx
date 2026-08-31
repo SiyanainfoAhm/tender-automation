@@ -27,13 +27,13 @@ export function CategoryCapsule({
   return (
     <span
       className={cn(
-        "inline-flex max-w-[220px] items-center gap-1 truncate rounded-md px-2 py-1 text-xs font-medium",
+        "inline-flex min-w-0 max-w-full items-center rounded-md px-2 py-0.5 text-xs font-medium leading-snug",
         categoryCapsuleClass(label),
         className,
       )}
       title={label}
     >
-      {label}
+      <span className="min-w-0 truncate">{label}</span>
     </span>
   );
 }

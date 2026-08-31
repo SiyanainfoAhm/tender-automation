@@ -1219,7 +1219,7 @@ export function TenderExplorer({
           className="overflow-hidden rounded-lg border border-border bg-card shadow-sm"
         >
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[1100px] table-fixed">
+            <table className="w-full min-w-[1120px] table-fixed">
               <thead>
                 <tr className="border-b border-background-200/70 bg-background-50">
                   <th className="w-10 px-4 py-3">
@@ -1232,13 +1232,13 @@ export function TenderExplorer({
                       aria-label="Select page"
                     />
                   </th>
-                  <th className="w-[32%] px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-foreground-500">
+                  <th className="w-[30%] px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-foreground-500">
                     Tender Name
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-foreground-500">
+                  <th className="w-[152px] px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-foreground-500">
                     Category
                   </th>
-                  <th className="px-4 py-3 text-left">
+                  <th className="w-[108px] px-4 py-3 text-left">
                     <SortControl
                       label="Est. Value"
                       sortKey="value"
@@ -1248,7 +1248,7 @@ export function TenderExplorer({
                       onSort={onSort}
                     />
                   </th>
-                  <th className="px-4 py-3 text-left">
+                  <th className="w-[92px] px-4 py-3 text-left">
                     <SortControl
                       label="EMD"
                       sortKey="emd"
@@ -1258,7 +1258,7 @@ export function TenderExplorer({
                       onSort={onSort}
                     />
                   </th>
-                  <th className="px-4 py-3 text-left">
+                  <th className="w-[118px] px-4 py-3 text-left">
                     <SortControl
                       label="Deadline"
                       sortKey="closing"
@@ -1268,7 +1268,7 @@ export function TenderExplorer({
                       onSort={onSort}
                     />
                   </th>
-                  <th className="px-4 py-3 text-left">
+                  <th className="w-[124px] px-4 py-3 text-left">
                     <SortControl
                       label="Status"
                       sortKey="status"
@@ -1364,24 +1364,24 @@ export function TenderExplorer({
                               </p>
                             ) : null}
                           </td>
-                          <td className="px-4 py-3">
+                          <td className="max-w-0 overflow-hidden px-4 py-3 align-middle">
                             <CategoryCapsule
                               category={row.project_category}
                               title={row.title}
                               sourceCategory={row.category}
                             />
                           </td>
-                          <td className="px-4 py-3">
-                            <p className="text-sm font-semibold text-foreground-800">
+                          <td className="max-w-0 overflow-hidden px-4 py-3 align-middle">
+                            <p className="truncate text-sm font-semibold text-foreground-800">
                               {value.label}
                             </p>
                           </td>
-                          <td className="px-4 py-3">
-                            <p className="text-sm text-foreground-700">
+                          <td className="max-w-0 overflow-hidden px-4 py-3 align-middle">
+                            <p className="truncate text-sm text-foreground-700">
                               {emd.label}
                             </p>
                           </td>
-                          <td className="px-4 py-3">
+                          <td className="max-w-0 overflow-hidden px-4 py-3 align-middle">
                             <p className="text-sm text-foreground-700">
                               {deadline.dateLabel}
                             </p>
@@ -1396,7 +1396,7 @@ export function TenderExplorer({
                               </p>
                             ) : null}
                           </td>
-                          <td className="px-4 py-3">
+                          <td className="max-w-0 overflow-hidden px-4 py-3 align-middle">
                             {status &&
                             (
                               [
@@ -1416,11 +1416,12 @@ export function TenderExplorer({
                               <StatusBadge
                                 status={status as QualificationStatus}
                                 size="sm"
+                                className="max-w-full truncate"
                               />
                             ) : (
-                              <span className="inline-flex items-center gap-1.5 rounded-md bg-background-200 px-2 py-0.5 text-[11px] font-medium text-foreground-600">
-                                <span className="size-1.5 rounded-full bg-foreground-400" />
-                                Under Evaluation
+                              <span className="inline-flex max-w-full items-center gap-1.5 truncate rounded-md bg-background-200 px-2 py-0.5 text-[11px] font-medium text-foreground-600">
+                                <span className="size-1.5 shrink-0 rounded-full bg-foreground-400" />
+                                <span className="truncate">Under Evaluation</span>
                               </span>
                             )}
                           </td>

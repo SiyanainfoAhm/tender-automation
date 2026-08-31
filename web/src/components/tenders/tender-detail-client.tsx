@@ -14,17 +14,33 @@ import {
 } from "react";
 import {
   ArrowLeft,
+  Briefcase,
+  Building2,
   Check,
   ChevronRight,
+  ClipboardList,
+  Clock,
   Download,
   FileText,
+  FolderOpen,
+  Gavel,
+  Hash,
+  LayoutGrid,
+  Link2,
   Lock,
+  NotebookPen,
   Pencil,
   Plus,
+  ShieldCheck,
   Sparkles,
+  Tag,
   Trash2,
   Upload,
+  User,
+  Users,
+  Wallet,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -34,7 +50,6 @@ import {
 } from "@/components/bid-fees/add-fee-wizard";
 import { CategoryCapsule } from "@/components/tenders/category-capsule";
 import { ClassificationWorkflow } from "@/components/tenders/classification-workflow";
-import { TenderAnalyzerPanels } from "@/components/tenders/tender-analysis-panels";
 import type { QualificationStatus } from "@/components/status/qualification-badge";
 import { SourceBadge } from "@/components/status/source-badge";
 import { StatusBadge } from "@/components/status/qualification-badge";
@@ -62,7 +77,6 @@ import {
   formatDate,
   formatEmdAmount,
   formatIndianCurrency,
-  formatRelativeTime,
   formatTenderValue,
 } from "@/lib/format";
 import { PROJECT_CATEGORIES } from "@/lib/project-category";
@@ -95,10 +109,8 @@ import {
 } from "@/server/actions/tender-update";
 
 const TABS = [
-  { id: "overview", label: "Overview" },
-  { id: "analyzer", label: "Analyzer" },
-  { id: "documents", label: "Documents" },
-  { id: "timeline", label: "Timeline" },
+  { id: "overview", label: "Overview", icon: LayoutGrid },
+  { id: "documents", label: "Documents", icon: FolderOpen },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -222,13 +234,15 @@ function buildDraft(tender: TenderDetailDTO): EditDraft {
   };
 }
 
-function Card({
+function SectionCard({
   title,
+  icon: Icon,
   children,
   className,
   actions,
 }: {
   title: string;
+  icon: LucideIcon;
   children: ReactNode;
   className?: string;
   actions?: ReactNode;
@@ -236,22 +250,72 @@ function Card({
   return (
     <section
       className={cn(
-        "rounded-lg border border-border bg-card p-5 shadow-sm md:p-6",
+        "rounded-lg border border-border bg-card shadow-sm",
         className,
       )}
     >
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-foreground-400">
-          {title}
-        </h2>
-        {actions}
+      <div className="flex items-center justify-between gap-3 px-5 pb-3 pt-5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-600">
+            <Icon className="size-3.5" aria-hidden />
+          </div>
+          <h2 className="truncate text-sm font-semibold text-foreground-900">
+            {title}
+          </h2>
+        </div>
+        {actions ? (
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {actions}
+          </div>
+        ) : null}
       </div>
-      <div className="mt-4">{children}</div>
+      <div className="mx-5 border-b border-border" />
+      <div className="space-y-4 px-5 py-4">{children}</div>
     </section>
   );
 }
 
-function FieldRow({
+function InfoGrid({ children }: { children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+      {children}
+    </div>
+  );
+}
+
+function InfoRow({
+  label,
+  icon: Icon,
+  children,
+  highlight,
+  warn,
+}: {
+  label: string;
+  icon?: LucideIcon;
+  children: ReactNode;
+  highlight?: boolean;
+  warn?: boolean;
+}) {
+  return (
+    <div className="min-w-0 space-y-1">
+      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        {Icon ? <Icon className="size-3 shrink-0" aria-hidden /> : null}
+        <span>{label}</span>
+      </div>
+      <div
+        className={cn(
+          "text-[13px] font-medium leading-snug text-foreground-900",
+          highlight && "text-primary-600",
+          warn && "text-rose-600",
+        )}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function DecisionRow({
   label,
   children,
 }: {
@@ -259,9 +323,11 @@ function FieldRow({
   children: ReactNode;
 }) {
   return (
-    <div className="grid grid-cols-1 gap-1 sm:grid-cols-[140px_1fr] sm:items-start sm:gap-3">
-      <dt className="text-xs text-muted-foreground pt-0.5">{label}</dt>
-      <dd className="min-w-0 text-sm font-medium text-foreground-900">
+    <div className="flex flex-col gap-1.5 sm:flex-row sm:gap-4">
+      <dt className="w-full shrink-0 text-[11px] text-muted-foreground sm:w-[104px] sm:pt-0.5">
+        {label}
+      </dt>
+      <dd className="min-w-0 flex-1 text-[13px] font-medium text-foreground-900">
         {children}
       </dd>
     </div>
@@ -276,13 +342,13 @@ function ApplicablePill({ applicable }: { applicable: boolean }) {
   return (
     <span
       className={cn(
-        "inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium",
+        "inline-flex shrink-0 rounded-full px-2.5 py-0.5 text-[11px] font-medium",
         applicable
-          ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-          : "bg-slate-50 text-slate-500 border border-slate-200",
+          ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+          : "border border-stone-200 bg-stone-100 text-stone-600",
       )}
     >
-      {applicable ? "Applicable" : "Not applicable"}
+      {applicable ? "Applicable" : "Not Applicable"}
     </span>
   );
 }
@@ -296,8 +362,25 @@ type DocRowItem = {
   meta?: string;
 };
 
+function downloadAllDocuments(items: DocRowItem[]) {
+  const downloadable = items.filter((item) => item.url);
+  if (downloadable.length === 0) {
+    toast.message("No downloadable files in this section.");
+    return;
+  }
+  for (const doc of downloadable) {
+    const anchor = document.createElement("a");
+    anchor.href = doc.url!;
+    anchor.target = "_blank";
+    anchor.rel = "noreferrer";
+    anchor.download = doc.name;
+    anchor.click();
+  }
+}
+
 function DocumentSection({
   title,
+  subtitle,
   locked,
   lockReason,
   items,
@@ -306,8 +389,11 @@ function DocumentSection({
   onUpload,
   onDelete,
   headerActions,
+  showUpload = true,
+  showDownloadAll = false,
 }: {
   title: string;
+  subtitle?: string;
   locked: boolean;
   lockReason?: string;
   items: DocRowItem[];
@@ -316,37 +402,76 @@ function DocumentSection({
   onUpload?: (file: File) => void;
   onDelete?: (documentId: string) => void;
   headerActions?: ReactNode;
+  showUpload?: boolean;
+  showDownloadAll?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   if (locked) {
     return (
-      <section className="rounded-lg border border-dashed border-border bg-card/60 p-5 md:p-6">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-foreground-400">
-          {title}
-        </h2>
-        <div className="mt-6 flex flex-col items-center justify-center gap-2 py-6 text-center">
-          <div className="flex size-10 items-center justify-center rounded-full bg-slate-100 text-slate-500">
-            <Lock className="size-4" />
+      <section className="rounded-lg border border-border bg-card shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3 px-5 pb-3 pt-5">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-600">
+                <FolderOpen className="size-3.5" aria-hidden />
+              </div>
+              <h2 className="text-sm font-semibold text-foreground-900">
+                {title}
+              </h2>
+              <span className="rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
+                Locked
+              </span>
+            </div>
+            {subtitle ? (
+              <p className="mt-1 pl-9 text-[11px] text-muted-foreground">
+                {subtitle}
+              </p>
+            ) : null}
           </div>
-          <p className="text-sm font-medium text-foreground-700">Locked</p>
-          <p className="max-w-sm text-xs text-foreground-500">
-            {lockReason || "This section is locked for the current tender status."}
-          </p>
+        </div>
+        <div className="mx-5 border-b border-border" />
+        <div className="px-5 py-4">
+          <div className="flex items-start gap-3 rounded-lg border border-dashed border-border bg-background-50 px-4 py-5">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-500">
+              <Lock className="size-4" aria-hidden />
+            </div>
+            <div className="min-w-0 space-y-1">
+              <p className="text-sm font-medium text-foreground-800">
+                Section locked
+              </p>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {lockReason ||
+                  "This section is locked for the current tender status."}
+              </p>
+            </div>
+          </div>
         </div>
       </section>
     );
   }
 
   return (
-    <section className="rounded-lg border border-border bg-card p-5 shadow-sm md:p-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-foreground-400">
-          {title}
-        </h2>
+    <section className="rounded-lg border border-border bg-card shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3 px-5 pb-3 pt-5">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2.5">
+            <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-emerald-50 text-emerald-600">
+              <FolderOpen className="size-3.5" aria-hidden />
+            </div>
+            <h2 className="text-sm font-semibold text-foreground-900">
+              {title}
+            </h2>
+          </div>
+          {subtitle ? (
+            <p className="mt-1 pl-9 text-[11px] text-muted-foreground">
+              {subtitle}
+            </p>
+          ) : null}
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           {headerActions}
-          {canEdit && onUpload ? (
+          {showUpload && canEdit && onUpload ? (
             <>
               <input
                 ref={inputRef}
@@ -363,6 +488,7 @@ function DocumentSection({
                 type="button"
                 variant="outline"
                 size="sm"
+                className="h-8 gap-1.5 text-xs"
                 disabled={uploading}
                 onClick={() => inputRef.current?.click()}
               >
@@ -371,62 +497,87 @@ function DocumentSection({
               </Button>
             </>
           ) : null}
+          {showDownloadAll && items.some((item) => item.url) ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 gap-1.5 text-xs"
+              onClick={() => downloadAllDocuments(items)}
+            >
+              <Download className="size-3.5" />
+              Download All
+            </Button>
+          ) : null}
         </div>
       </div>
+      <div className="mx-5 border-b border-border" />
 
       {items.length === 0 ? (
-        <p className="mt-6 text-sm text-foreground-500">
+        <p className="px-5 py-6 text-sm text-muted-foreground">
           No documents in this section yet.
         </p>
       ) : (
-        <ul className="mt-4 divide-y divide-border">
-          {items.map((doc) => (
-            <li key={doc.key} className="flex items-center gap-3 py-3">
-              <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-sky-50 text-sky-700">
-                <FileText className="size-4" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{doc.name}</p>
-                <p className="text-xs text-foreground-500">
-                  {doc.sizeLabel}
-                  {doc.meta ? ` · ${doc.meta}` : ""}
-                </p>
-              </div>
-              {doc.url ? (
-                <a
-                  href={doc.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-sm font-medium text-primary-600 hover:underline"
-                >
-                  <Download className="size-4" />
-                  Download
-                </a>
-              ) : (
-                <span className="text-[11px] text-foreground-400">No link</span>
-              )}
-              {canEdit && doc.deletableId && onDelete ? (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="text-rose-600 hover:text-rose-700"
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        `Delete “${doc.name}”? This cannot be undone.`,
-                      )
-                    ) {
-                      onDelete(doc.deletableId!);
-                    }
-                  }}
-                >
-                  <Trash2 className="size-3.5" />
-                </Button>
-              ) : null}
-            </li>
-          ))}
-        </ul>
+        <div className="px-5 py-4">
+          <ul className="max-h-[360px] space-y-2 overflow-y-auto rounded-lg border border-border/70 bg-background-50/50 p-2">
+            {items.map((doc) => (
+              <li
+                key={doc.key}
+                className="group flex min-w-0 items-center gap-3 rounded-lg border border-border/80 bg-white px-3 py-3"
+              >
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+                  <FileText className="size-4" aria-hidden />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-foreground-900">
+                    {doc.name}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    {doc.sizeLabel}
+                    {doc.meta ? ` · ${doc.meta}` : ""}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  {doc.url ? (
+                    <a
+                      href={doc.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-stone-100 hover:text-foreground-800"
+                      aria-label={`Download ${doc.name}`}
+                    >
+                      <Download className="size-4" />
+                    </a>
+                  ) : (
+                    <span className="px-1 text-[11px] text-foreground-400">
+                      No link
+                    </span>
+                  )}
+                  {canEdit && doc.deletableId && onDelete ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-9 text-rose-600 opacity-0 transition-opacity hover:text-rose-700 group-hover:opacity-100"
+                      aria-label={`Delete ${doc.name}`}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Delete “${doc.name}”? This cannot be undone.`,
+                          )
+                        ) {
+                          onDelete(doc.deletableId!);
+                        }
+                      }}
+                    >
+                      <Trash2 className="size-3.5" />
+                    </Button>
+                  ) : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </section>
   );
@@ -458,7 +609,7 @@ export function TenderDetailClient({
     editing ? draft.closingDate || tender.closingDate : tender.closingDate,
   );
   const closed = days != null && days < 0;
-  const urgent = days != null && days >= 0 && days <= 3;
+  const urgent = days != null && days >= 0 && days <= 7;
 
   const breadcrumbId = tender.folderId || tender.sourceTenderId;
   const displayStatus = editing
@@ -681,30 +832,34 @@ export function TenderDetailClient({
   const showDisqualified = displayStatus === "DISQUALIFIED";
 
   return (
-    <div className="space-y-6">
+    <div className="min-w-0 space-y-5 overflow-x-hidden">
       <div className="flex min-w-0 items-center justify-between gap-3">
-      <div className="flex min-w-0 items-center gap-2 text-sm">
-        <Link
-          href="/tenders"
-          className="inline-flex shrink-0 items-center gap-1 text-foreground-500 hover:text-foreground-900"
-        >
-          <ArrowLeft className="size-4" />
-          Tenders
-        </Link>
-        <ChevronRight className="size-3.5 shrink-0 text-foreground-400" />
-        <span className="truncate font-medium text-foreground-900">
+        <div className="flex min-w-0 items-center gap-1.5 text-sm">
+          <Link
+            href="/tenders"
+            className="inline-flex shrink-0 items-center gap-1 text-muted-foreground transition-colors hover:text-foreground-900"
+          >
+            <ArrowLeft className="size-4" />
+            Tenders
+          </Link>
+          <ChevronRight className="size-3.5 shrink-0 text-foreground-400" />
+          <span
+            className="truncate font-medium text-foreground-900"
+            title={breadcrumbId ?? undefined}
+          >
             {breadcrumbId}
-        </span>
-      </div>
+          </span>
+        </div>
 
         {canEdit ? (
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1.5">
             {editing ? (
               <>
                 <Button
                   type="button"
                   variant="ghost"
-                  size="sm"
+                  size="icon"
+                  className="size-9"
                   disabled={pending}
                   onClick={handleCancelEdit}
                   aria-label="Cancel edit"
@@ -714,6 +869,7 @@ export function TenderDetailClient({
                 <Button
                   type="button"
                   size="sm"
+                  className="h-9"
                   disabled={pending}
                   onClick={handleSave}
                   aria-label="Save"
@@ -726,7 +882,8 @@ export function TenderDetailClient({
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
+                size="icon"
+                className="size-9 shrink-0"
                 onClick={() => {
                   setDraft(buildDraft(tender));
                   setEditing(true);
@@ -734,7 +891,6 @@ export function TenderDetailClient({
                 aria-label="Edit tender"
               >
                 <Pencil className="size-4" />
-                Edit
               </Button>
             )}
           </div>
@@ -742,8 +898,8 @@ export function TenderDetailClient({
       </div>
 
       <div className="rounded-lg border border-border bg-card p-5 shadow-sm md:p-6">
-        <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
-          <div className="min-w-0 space-y-3">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0 flex-1 space-y-2.5">
             <div className="flex flex-wrap items-center gap-1.5">
               <SourceBadge
                 source={tender.sourcePortal}
@@ -762,31 +918,24 @@ export function TenderDetailClient({
                 className="rounded px-2 py-0.5 text-[11px]"
               />
               {tender.tenderType || (editing && draft.tenderType) ? (
-                <span className="rounded border border-border px-2 py-0.5 text-[11px] text-foreground-600">
+                <span className="rounded border border-border px-2 py-0.5 text-[11px] font-medium text-foreground-600">
                   {editing
                     ? draft.tenderType || tender.tenderType
                     : tender.tenderType}
                 </span>
               ) : null}
-              {statusBadge ? (
-                <StatusBadge status={statusBadge} size="sm" />
-              ) : (
-                <span className="rounded border border-border px-2 py-0.5 text-[11px] text-foreground-500">
-                  New
-                </span>
-              )}
             </div>
 
             {editing ? (
               <Input
                 value={draft.title}
                 onChange={(e) => patchDraft({ title: e.target.value })}
-                className="text-lg font-semibold md:text-xl h-auto py-2"
+                className="h-auto py-2 text-lg font-semibold leading-snug md:text-xl"
               />
             ) : (
-            <h1 className="text-lg font-semibold leading-snug md:text-xl">
-              {tender.title}
-            </h1>
+              <h1 className="text-lg font-semibold leading-snug text-foreground-900 md:text-xl">
+                {tender.title}
+              </h1>
             )}
 
             {editing ? (
@@ -796,21 +945,24 @@ export function TenderDetailClient({
                 placeholder="Organization"
               />
             ) : (
-            <p className="text-sm text-foreground-500">
-              {tender.authority || tender.organization || "—"}
-            </p>
+              <p className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
+                <Building2 className="size-3.5 shrink-0" aria-hidden />
+                <span className="truncate">
+                  {tender.authority || tender.organization || "—"}
+                </span>
+              </p>
             )}
+          </div>
 
-            <div className="flex flex-wrap items-center gap-2 pt-1">
+          <div className="flex w-full flex-col items-stretch gap-2.5 lg:w-[248px] lg:shrink-0">
+            <div className="flex justify-center">
               <Label className="sr-only">Status</Label>
               <Select
                 value={statusSelectValue}
                 onValueChange={handleStatusChange}
-                disabled={
-                  (!canEdit && !editing) || statusPending || pending
-                }
+                disabled={(!canEdit && !editing) || statusPending || pending}
               >
-                <SelectTrigger className="w-[200px]">
+                <SelectTrigger className="h-9 w-full rounded-full border-border bg-background px-4 text-sm font-medium shadow-sm">
                   <SelectValue placeholder="Set status" />
                 </SelectTrigger>
                 <SelectContent>
@@ -822,9 +974,7 @@ export function TenderDetailClient({
                 </SelectContent>
               </Select>
             </div>
-          </div>
 
-          <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto">
             <div
               className={cn(
                 "rounded-lg border px-4 py-3 text-center",
@@ -846,48 +996,60 @@ export function TenderDetailClient({
                 </>
               )}
             </div>
-            <Button asChild className="justify-center">
-              <Link href={`/tenders/${tender.id}/analyze`}>
-                <Sparkles className="size-4" />
-                AI Qualification Analysis
-              </Link>
-            </Button>
-            <Button asChild variant="outline" className="justify-center">
-              <Link href={`/tenders/${tender.id}/bid-workspace`}>
-                Open Bid Workspace
-              </Link>
-            </Button>
           </div>
         </div>
       </div>
 
-      <div className="flex w-fit items-center gap-1 overflow-x-auto rounded-lg bg-background-100 p-1">
-        {TABS.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            onClick={() => setTab(item.id)}
-            className={cn(
-              "rounded-md px-3 py-1.5 text-sm font-medium whitespace-nowrap",
-              tab === item.id
-                ? "bg-white text-foreground-900 shadow-sm"
-                : "text-foreground-500 hover:text-foreground-800",
-            )}
-          >
-            {item.label}
-          </button>
-        ))}
+      <div className="flex flex-col gap-2.5">
+        <Button
+          asChild
+          variant="outline"
+          className="h-10 w-full justify-center text-sm"
+        >
+          <Link href={`/tenders/${tender.id}/analyze`}>
+            <Sparkles className="size-4" />
+            AI Qualification Analysis
+          </Link>
+        </Button>
+        <Button asChild className="h-10 w-full justify-center text-sm">
+          <Link href={`/tenders/${tender.id}/bid-workspace`}>
+            <Briefcase className="size-4" />
+            Open Bid Workspace
+          </Link>
+        </Button>
+      </div>
+
+      <div className="inline-flex w-fit max-w-full items-center gap-1 rounded-lg bg-stone-100 p-1">
+        {TABS.map((item) => {
+          const TabIcon = item.icon;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setTab(item.id)}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors",
+                tab === item.id
+                  ? "bg-[#e8e2d6] text-foreground-900 shadow-sm"
+                  : "text-muted-foreground hover:text-foreground-800",
+              )}
+            >
+              <TabIcon className="size-3.5 shrink-0" aria-hidden />
+              {item.label}
+            </button>
+          );
+        })}
       </div>
 
       {tab === "overview" ? (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <div className="space-y-6 lg:col-span-2">
-            <Card title="Tender Information">
-              <dl className="space-y-3">
-                <FieldRow label="Tender ID">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+          <div className="space-y-5">
+            <SectionCard title="Tender Information" icon={FileText}>
+              <InfoGrid>
+                <InfoRow label="Tender ID" icon={Hash} highlight>
                   <ReadonlyText value={tender.sourceTenderId} />
-                </FieldRow>
-                <FieldRow label="Reference No.">
+                </InfoRow>
+                <InfoRow label="Reference No." icon={Hash}>
                   {editing ? (
                     <Input
                       value={draft.referenceNo}
@@ -900,8 +1062,8 @@ export function TenderDetailClient({
                       value={tender.folderId || tender.sourceTenderId}
                     />
                   )}
-                </FieldRow>
-                <FieldRow label="Portal">
+                </InfoRow>
+                <InfoRow label="Portal" icon={Tag}>
                   {editing ? (
                     <Select
                       value={draft.portal}
@@ -923,8 +1085,8 @@ export function TenderDetailClient({
                   ) : (
                     <SourceBadge source={tender.sourcePortal} size="sm" />
                   )}
-                </FieldRow>
-                <FieldRow label="Type">
+                </InfoRow>
+                <InfoRow label="Tender Type" icon={ClipboardList}>
                   {editing ? (
                     <Input
                       value={draft.tenderType}
@@ -936,8 +1098,8 @@ export function TenderDetailClient({
                   ) : (
                     <ReadonlyText value={tender.tenderType} />
                   )}
-                </FieldRow>
-                <FieldRow label="Category">
+                </InfoRow>
+                <InfoRow label="Category" icon={Tag}>
                   {editing ? (
                     <Select
                       value={draft.category || undefined}
@@ -957,8 +1119,8 @@ export function TenderDetailClient({
                   ) : (
                     <ReadonlyText value={tender.projectCategory} />
                   )}
-                </FieldRow>
-                <FieldRow label="Portal Link">
+                </InfoRow>
+                <InfoRow label="Portal Link" icon={Link2}>
                   {editing ? (
                     <Input
                       value={draft.portalLink}
@@ -972,15 +1134,16 @@ export function TenderDetailClient({
                       href={tender.sourceUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="break-all text-primary-600 hover:underline"
+                      className="block truncate font-medium text-primary-600 hover:underline"
+                      title={tender.sourceUrl}
                     >
                       {tender.sourceUrl}
                     </a>
                   ) : (
                     <span>—</span>
                   )}
-                </FieldRow>
-                <FieldRow label="Creation Date">
+                </InfoRow>
+                <InfoRow label="Creation Date" icon={Clock}>
                   {editing ? (
                     <Input
                       type="date"
@@ -992,8 +1155,12 @@ export function TenderDetailClient({
                   ) : (
                     formatDate(tender.publishedDate)
                   )}
-                </FieldRow>
-                <FieldRow label="Deadline">
+                </InfoRow>
+                <InfoRow
+                  label="Deadline"
+                  icon={Clock}
+                  warn={urgent && !closed}
+                >
                   {editing ? (
                     <Input
                       type="date"
@@ -1005,13 +1172,13 @@ export function TenderDetailClient({
                   ) : (
                     formatDate(tender.closingDate)
                   )}
-                </FieldRow>
-              </dl>
-            </Card>
+                </InfoRow>
+              </InfoGrid>
+            </SectionCard>
 
-            <Card title="Organization Details">
-              <dl className="space-y-3">
-                <FieldRow label="Organization">
+            <SectionCard title="Organization Details" icon={Building2}>
+              <InfoGrid>
+                <InfoRow label="Organization" icon={Building2}>
                   {editing ? (
                     <Input
                       value={draft.organization}
@@ -1024,8 +1191,8 @@ export function TenderDetailClient({
                       value={tender.organization || tender.authority}
                     />
                   )}
-                </FieldRow>
-                <FieldRow label="Location">
+                </InfoRow>
+                <InfoRow label="Location" icon={Building2}>
                   {editing ? (
                     <Input
                       value={draft.location}
@@ -1036,18 +1203,20 @@ export function TenderDetailClient({
                   ) : (
                     <ReadonlyText value={tender.location} />
                   )}
-                </FieldRow>
-              </dl>
-            </Card>
+                </InfoRow>
+              </InfoGrid>
+            </SectionCard>
 
-            <Card
+            <SectionCard
               title="Contact Details"
+              icon={Users}
               actions={
                 editing ? (
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
+                    className="h-8 text-xs"
                     onClick={() =>
                       patchDraft({
                         contacts: [
@@ -1068,7 +1237,7 @@ export function TenderDetailClient({
                   {draft.contacts.map((contact, index) => (
                     <div
                       key={index}
-                      className="grid grid-cols-1 gap-2 rounded-md border border-border p-3 sm:grid-cols-[1fr_1fr_1fr_auto]"
+                      className="grid grid-cols-1 gap-2 rounded-lg border border-border bg-background-50 p-3 sm:grid-cols-[1fr_1fr_1fr_auto]"
                     >
                       <Input
                         placeholder="Name"
@@ -1129,39 +1298,48 @@ export function TenderDetailClient({
                   ))}
                 </div>
               ) : tender.contacts.length === 0 ? (
-                <p className="text-sm text-foreground-500">No contacts listed.</p>
+                <p className="text-sm text-muted-foreground">
+                  No contacts listed.
+                </p>
               ) : (
-                <ul className="space-y-3">
+                <ul className="space-y-2">
                   {tender.contacts.map((c, i) => (
                     <li
                       key={`${c.name}-${i}`}
-                      className="rounded-md border border-border px-3 py-2 text-sm"
+                      className="flex min-w-0 items-start gap-3 rounded-lg border border-border/80 bg-background-50 p-3"
                     >
-                      <p className="font-medium">{c.name || "—"}</p>
-                      <p className="text-foreground-500">
-                        {[c.mobile, c.email].filter(Boolean).join(" · ") || "—"}
-                      </p>
+                      <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-background-200 text-foreground-600">
+                        <User className="size-4" aria-hidden />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-foreground-900">
+                          {c.name || "—"}
+                        </p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          {[c.mobile, c.email].filter(Boolean).join(" · ") ||
+                            "—"}
+                        </p>
+                      </div>
                     </li>
                   ))}
                 </ul>
               )}
-            </Card>
+            </SectionCard>
 
-            <Card title="Bid Decision">
-              <dl className="space-y-3">
-                <FieldRow label="Status">
-                  {statusBadge ? (
-                    <StatusBadge status={statusBadge} size="sm" />
-                  ) : (
-                    <span className="text-foreground-500">Not evaluated</span>
-                  )}
-                  <span className="ml-2 text-xs text-foreground-500">
-                    {displayStatus
-                      ? STATUS_DISPLAY_LABELS[displayStatus]
-                      : "—"}
-                  </span>
-                </FieldRow>
-                <FieldRow label="Decision reason">
+            <SectionCard title="Bid Decision" icon={Gavel}>
+              <dl className="space-y-4">
+                <DecisionRow label="Current Status">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {statusBadge ? (
+                      <StatusBadge status={statusBadge} size="sm" />
+                    ) : (
+                      <span className="font-normal text-muted-foreground">
+                        Not evaluated
+                      </span>
+                    )}
+                  </div>
+                </DecisionRow>
+                <DecisionRow label="Decision Reason">
                   {editing ? (
                     <Textarea
                       value={draft.decisionReason}
@@ -1171,15 +1349,16 @@ export function TenderDetailClient({
                       rows={3}
                     />
                   ) : (
-                    <p className="whitespace-pre-wrap font-normal text-foreground-700">
+                    <p className="whitespace-pre-wrap font-normal leading-relaxed text-foreground-700">
                       {tender.decisionReason ||
                         tender.qualification?.reason ||
                         "—"}
                     </p>
                   )}
-                </FieldRow>
-                {showLost || (editing && draft.qualificationStatus === "LOST") ? (
-                  <FieldRow label="Lost reason">
+                </DecisionRow>
+                {showLost ||
+                (editing && draft.qualificationStatus === "LOST") ? (
+                  <DecisionRow label="Lost Reason">
                     {editing ? (
                       <Textarea
                         value={draft.lostReason}
@@ -1189,15 +1368,15 @@ export function TenderDetailClient({
                         rows={2}
                       />
                     ) : (
-                      <p className="whitespace-pre-wrap font-normal">
+                      <p className="whitespace-pre-wrap font-normal leading-relaxed">
                         {tender.lostReason || "—"}
-                </p>
-              )}
-                  </FieldRow>
+                      </p>
+                    )}
+                  </DecisionRow>
                 ) : null}
                 {showDisqualified ||
                 (editing && draft.qualificationStatus === "DISQUALIFIED") ? (
-                  <FieldRow label="Disqualification reason">
+                  <DecisionRow label="Disqualification">
                     {editing ? (
                       <Textarea
                         value={draft.disqualificationReason}
@@ -1209,18 +1388,31 @@ export function TenderDetailClient({
                         rows={2}
                       />
                     ) : (
-                      <p className="whitespace-pre-wrap font-normal">
+                      <p className="whitespace-pre-wrap font-normal leading-relaxed">
                         {tender.disqualificationReason || "—"}
                       </p>
                     )}
-                  </FieldRow>
+                  </DecisionRow>
                 ) : null}
               </dl>
-            </Card>
+            </SectionCard>
 
-            <Card title="Financial Details">
-              <dl className="space-y-3">
-                <FieldRow label="Estimated value">
+            <ClassificationWorkflow
+              tenderId={tender.id}
+              qualificationStatus={tender.qualificationStatus}
+              submitted={tender.submitted}
+              canClassify={canClassify}
+              conditions={tender.qualification?.conditions ?? []}
+              partnershipRequiredFor={
+                tender.qualification?.partnershipRequiredFor ?? []
+              }
+            />
+          </div>
+
+          <div className="space-y-5">
+            <SectionCard title="Financial Details" icon={Wallet}>
+              <InfoGrid>
+                <InfoRow label="Estimated Value" icon={Wallet}>
                   {editing ? (
                     <Input
                       value={draft.tenderValue}
@@ -1230,10 +1422,12 @@ export function TenderDetailClient({
                       placeholder="INR"
                     />
                   ) : (
-                    <span title={valueLabel}>{moneyOrNil(tender.tenderValue)}</span>
+                    <span title={valueLabel}>
+                      {moneyOrNil(tender.tenderValue)}
+                    </span>
                   )}
-                </FieldRow>
-                <FieldRow label="Tender est. cost">
+                </InfoRow>
+                <InfoRow label="Tender Est. Cost" icon={Wallet}>
                   {editing ? (
                     <Input
                       value={draft.tenderEstCost}
@@ -1244,8 +1438,8 @@ export function TenderDetailClient({
                   ) : (
                     moneyOrNil(tender.tenderEstCost)
                   )}
-                </FieldRow>
-                <FieldRow label="EMD">
+                </InfoRow>
+                <InfoRow label="EMD" icon={Wallet}>
                   {editing ? (
                     <Input
                       value={draft.emdAmount}
@@ -1256,8 +1450,8 @@ export function TenderDetailClient({
                   ) : (
                     <span title={emdLabel}>{moneyOrNil(tender.emdAmount)}</span>
                   )}
-                </FieldRow>
-                <FieldRow label="Tender fee">
+                </InfoRow>
+                <InfoRow label="Tender Fee" icon={Wallet}>
                   {editing ? (
                     <Input
                       value={draft.tenderFee}
@@ -1268,8 +1462,8 @@ export function TenderDetailClient({
                   ) : (
                     moneyOrNil(tender.tenderFee)
                   )}
-                </FieldRow>
-                <FieldRow label="Processing fee">
+                </InfoRow>
+                <InfoRow label="Processing Fee" icon={Wallet}>
                   {editing ? (
                     <Input
                       value={draft.processingFee}
@@ -1280,8 +1474,12 @@ export function TenderDetailClient({
                   ) : (
                     moneyOrNil(tender.processingFee)
                   )}
-                </FieldRow>
-                <FieldRow label="Final cost">
+                </InfoRow>
+                <InfoRow
+                  label="Final Cost / Bid Value"
+                  icon={Wallet}
+                  highlight={!editing && tender.finalCost == null}
+                >
                   {editing ? (
                     <Input
                       value={draft.finalCost}
@@ -1292,65 +1490,93 @@ export function TenderDetailClient({
                   ) : (
                     moneyOrNotBid(tender.finalCost)
                   )}
-                </FieldRow>
-              </dl>
-            </Card>
+                </InfoRow>
+              </InfoGrid>
+            </SectionCard>
 
-            <Card title="Exemptions">
-              <div className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    {editing ? (
-                      <Checkbox
-                        checked={draft.msmeExemption}
-                        onCheckedChange={(checked) =>
-                          patchDraft({ msmeExemption: checked === true })
-                        }
-                        id="msme-exemption"
-                      />
-                    ) : null}
-                    <Label htmlFor="msme-exemption" className="text-sm font-medium">
-                      MSME
-                    </Label>
-          </div>
-                  <ApplicablePill
-                    applicable={
-                      editing ? draft.msmeExemption : tender.msmeExemption
-                    }
-                  />
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    {editing ? (
-                      <Checkbox
-                        checked={draft.startupExemption}
-                        onCheckedChange={(checked) =>
-                          patchDraft({ startupExemption: checked === true })
-                        }
-                        id="startup-exemption"
-                      />
-                    ) : null}
-                    <Label
-                      htmlFor="startup-exemption"
-                      className="text-sm font-medium"
-                    >
-                      Startup
-                    </Label>
+            <SectionCard title="Exemptions & Benefits" icon={ShieldCheck}>
+              <div className="space-y-3">
+                <div className="rounded-lg border border-border bg-white p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      {editing ? (
+                        <Checkbox
+                          checked={draft.msmeExemption}
+                          onCheckedChange={(checked) =>
+                            patchDraft({ msmeExemption: checked === true })
+                          }
+                          id="msme-exemption"
+                        />
+                      ) : null}
+                      <Label
+                        htmlFor="msme-exemption"
+                        className="text-sm font-medium"
+                      >
+                        <span className="text-muted-foreground">•</span> MSME
+                        Exemption
+                      </Label>
+                    </div>
+                    <ApplicablePill
+                      applicable={
+                        editing ? draft.msmeExemption : tender.msmeExemption
+                      }
+                    />
                   </div>
-                  <ApplicablePill
-                    applicable={
-                      editing
-                        ? draft.startupExemption
-                        : tender.startupExemption
-                    }
-                  />
+                  <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                    {editing
+                      ? draft.msmeExemption
+                        ? "MSME exemption is marked as applicable for this tender."
+                        : "No MSME exemption available for this tender."
+                      : tender.msmeExemption
+                        ? "MSME exemption is applicable for this tender."
+                        : "No MSME exemption available for this tender."}
+                  </p>
+                </div>
+
+                <div className="rounded-lg border border-border bg-white p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      {editing ? (
+                        <Checkbox
+                          checked={draft.startupExemption}
+                          onCheckedChange={(checked) =>
+                            patchDraft({ startupExemption: checked === true })
+                          }
+                          id="startup-exemption"
+                        />
+                      ) : null}
+                      <Label
+                        htmlFor="startup-exemption"
+                        className="text-sm font-medium"
+                      >
+                        <span className="text-muted-foreground">•</span>{" "}
+                        Startup India Exemption
+                      </Label>
+                    </div>
+                    <ApplicablePill
+                      applicable={
+                        editing
+                          ? draft.startupExemption
+                          : tender.startupExemption
+                      }
+                    />
+                  </div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                    {editing
+                      ? draft.startupExemption
+                        ? "Startup India exemption is marked as applicable."
+                        : "No Startup India exemption available for this tender."
+                      : tender.startupExemption
+                        ? "Startup India exemption is applicable for this tender."
+                        : "No Startup India exemption available for this tender."}
+                  </p>
                 </div>
 
                 {(editing
                   ? draft.msmeExemption || draft.startupExemption
                   : tender.msmeExemption || tender.startupExemption) ? (
                   <div>
-                    <p className="mb-2 text-xs text-muted-foreground">
+                    <p className="mb-2 text-[11px] text-muted-foreground">
                       Exemption types
                     </p>
                     {editing ? (
@@ -1393,20 +1619,20 @@ export function TenderDetailClient({
                         ))}
                       </div>
                     ) : (
-                      <p className="text-sm text-foreground-500">—</p>
+                      <p className="text-sm text-muted-foreground">—</p>
                     )}
                   </div>
                 ) : null}
               </div>
-            </Card>
+            </SectionCard>
 
-            <Card title="Tender Notes">
-              <div className="space-y-4">
-                <div>
-                  <p className="mb-1.5 text-xs text-muted-foreground">
-                    Description
-                  </p>
-                  {editing ? (
+            <SectionCard title="Tender Notes" icon={NotebookPen}>
+              {editing ? (
+                <div className="space-y-4">
+                  <div>
+                    <p className="mb-1.5 text-[11px] text-muted-foreground">
+                      Description
+                    </p>
                     <Textarea
                       value={draft.description}
                       onChange={(e) =>
@@ -1414,66 +1640,50 @@ export function TenderDetailClient({
                       }
                       rows={5}
                     />
-                  ) : (
-                    <p
-                      className="line-clamp-4 whitespace-pre-wrap text-sm leading-relaxed text-foreground-700"
-                      title={tender.description || undefined}
-                    >
-                      {tender.description || "No tender description available."}
+                  </div>
+                  <div>
+                    <p className="mb-1.5 text-[11px] text-muted-foreground">
+                      Notes
                     </p>
-                  )}
-                </div>
-                <div>
-                  <p className="mb-1.5 text-xs text-muted-foreground">Notes</p>
-                  {editing ? (
                     <Textarea
                       value={draft.notes}
                       onChange={(e) => patchDraft({ notes: e.target.value })}
                       rows={3}
                     />
-                  ) : (
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground-700">
-                      {tender.notes || "—"}
-                    </p>
-                  )}
+                  </div>
                 </div>
-              </div>
-            </Card>
-          </div>
-
-          <div className="space-y-6">
-            <ClassificationWorkflow
-              tenderId={tender.id}
-              qualificationStatus={tender.qualificationStatus}
-              submitted={tender.submitted}
-              canClassify={canClassify}
-              conditions={tender.qualification?.conditions ?? []}
-              partnershipRequiredFor={
-                tender.qualification?.partnershipRequiredFor ?? []
-              }
-            />
+              ) : (
+                <p
+                  className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground-700"
+                  title={tender.description || tender.notes || undefined}
+                >
+                  {tender.description ||
+                    tender.notes ||
+                    "No tender notes available."}
+                </p>
+              )}
+            </SectionCard>
           </div>
         </div>
       ) : null}
 
-      {tab === "analyzer" ? (
-        <TenderAnalyzerPanels tender={tender} compact />
-      ) : null}
-
       {tab === "documents" ? (
-        <div className="space-y-6">
+        <div className="space-y-5">
           <DocumentSection
             title="Tender Documents"
+            subtitle="Official documents issued by the buyer"
             locked={false}
             items={tenderSectionDocs}
             canEdit={canEdit}
             uploading={uploadPending}
+            showDownloadAll
             onUpload={(file) => uploadSectionDoc("tender", file)}
             onDelete={handleDeleteDoc}
           />
 
           <DocumentSection
             title="Bidding Documents"
+            subtitle="Your bid submission documents"
             locked={!canAccessBiddingDocuments(tender.qualificationStatus)}
             lockReason={biddingDocumentsLockReason(tender.qualificationStatus)}
             items={sectionDocs("bidding")}
@@ -1485,6 +1695,7 @@ export function TenderDetailClient({
 
           <DocumentSection
             title="Financials"
+            subtitle="EMD, tender fee & performance bank guarantee"
             locked={!canAccessFinancialDocuments(tender.qualificationStatus)}
             lockReason={financialDocumentsLockReason(
               tender.qualificationStatus,
@@ -1492,6 +1703,7 @@ export function TenderDetailClient({
             items={sectionDocs("financial")}
             canEdit={canEdit}
             uploading={uploadPending}
+            showUpload={false}
             onUpload={handleFinancialUpload}
             onDelete={handleDeleteDoc}
             headerActions={
@@ -1500,17 +1712,19 @@ export function TenderDetailClient({
                   type="button"
                   variant="outline"
                   size="sm"
+                  className="h-8 text-xs"
                   onClick={() => setFeeWizardOpen(true)}
                 >
                   <Plus className="size-3.5" />
                   Add Fees
-        </Button>
+                </Button>
               ) : null
             }
           />
 
           <DocumentSection
             title="Project Deliverables"
+            subtitle="Documents delivered after winning the tender"
             locked={!canAccessDeliverables(tender.qualificationStatus)}
             lockReason={deliverablesLockReason(tender.qualificationStatus)}
             items={sectionDocs("deliverable")}
@@ -1535,47 +1749,6 @@ export function TenderDetailClient({
           ) : null}
       </div>
       ) : null}
-
-      {tab === "timeline" ? <TimelineTab tender={tender} /> : null}
               </div>
-  );
-}
-
-function TimelineTab({ tender }: { tender: TenderDetailDTO }) {
-  if (tender.activity.length === 0) {
-    return (
-      <section className="rounded-lg border border-border bg-card p-5 shadow-sm md:p-6">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-foreground-400">
-          Timeline
-        </h2>
-        <p className="mt-6 text-sm text-foreground-500">
-          No activity recorded yet.
-        </p>
-      </section>
-    );
-  }
-
-  return (
-    <section className="rounded-lg border border-border bg-card p-5 shadow-sm md:p-6">
-      <h2 className="text-xs font-semibold uppercase tracking-wide text-foreground-400">
-        Timeline
-      </h2>
-      <ol className="mt-4 space-y-3">
-        {tender.activity.map((event) => (
-          <li key={event.id} className="flex gap-3">
-            <span className="mt-1.5 size-2 shrink-0 rounded-full bg-emerald-500" />
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-foreground-900">
-                {event.summary}
-              </p>
-              <p className="text-xs text-foreground-500">
-                {formatRelativeTime(event.createdAt)}
-                {event.actorName ? ` · ${event.actorName}` : ""}
-              </p>
-            </div>
-          </li>
-        ))}
-      </ol>
-    </section>
   );
 }

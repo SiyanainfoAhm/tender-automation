@@ -28,7 +28,7 @@ import {
   parseScreeningDecisionsJson,
 } from "./screeningDecisionSchema.js";
 import { logActiveScreeningRules, PHASE1_SCREENING_POLICY_VERSION } from "./screeningPolicy.js";
-import { persistGptScreenedWorkbookToDatabase } from "./persistPhase1Results.js";
+import { persistGptScreenedWorkbookToDatabase, assertPhase1PersistComplete } from "./persistPhase1Results.js";
 import { runCorrelationIdForDate } from "./phase1DetailQueue.js";
 import {
   deriveDetailScrapeIds,
@@ -649,7 +649,7 @@ async function finalizeScreening(options: {
   const screeningRunId = runCorrelationIdForDate(options.dateIso);
   if (options.persistResults !== false) {
     // GPT screened workbook is the DB source of truth.
-    await persistGptScreenedWorkbookToDatabase({
+    const persistResult = await persistGptScreenedWorkbookToDatabase({
       rows: options.outputRows,
       runDate: options.dateIso,
       dateFolder: options.dateFolder,
@@ -657,6 +657,8 @@ async function finalizeScreening(options: {
       companyId: options.snapshot.company.id,
       logger: options.logger,
     });
+    assertPhase1PersistComplete(persistResult, options.outputRows.length);
+    log(options.logger, `SUPABASE_UPSERT_SUCCESS=${persistResult.stored}`);
   }
 
   saveScreeningManifest(options.dateFolder, {
