@@ -4,6 +4,7 @@ export const TENDER_STATUSES = [
   "PARTNER_BID",
   "VERIFY",
   "NO_GO",
+  "DUPLICATE",
   "WON",
   "LOST",
   "DISQUALIFIED",
@@ -33,6 +34,7 @@ export const STATUS_DISPLAY_LABELS: Record<TenderStatus, string> = {
   PARTNER_BID: "Partnership",
   VERIFY: "Verify",
   NO_GO: "No Bid",
+  DUPLICATE: "Duplicate",
   WON: "Won",
   LOST: "Lost",
   DISQUALIFIED: "Disqualified",
@@ -51,6 +53,7 @@ export const TENDER_UI_STATUSES = [
   "submitted",
   "won",
   "no_bid",
+  "duplicate",
   "not_evaluated",
 ] as const;
 
@@ -65,6 +68,7 @@ export const TENDER_UI_STATUS_LABELS: Record<TenderUiStatus, string> = {
   submitted: "Submitted",
   won: "Won",
   no_bid: "No Bid",
+  duplicate: "Duplicate",
   not_evaluated: "Not Evaluated",
 };
 
@@ -77,6 +81,7 @@ export const TENDER_UI_STATUS_COLORS: Record<TenderUiStatus, string> = {
   submitted: "#3b82f6",
   won: "#16a34a",
   no_bid: "#dc2626",
+  duplicate: "#6b7280",
   not_evaluated: "#94a3b8",
 };
 
@@ -96,6 +101,7 @@ export const TENDER_LIST_STATUS_FILTERS: Array<{
   { value: "lost", label: "Lost" },
   { value: "disqualified", label: "Disqualified" },
   { value: "no_bid", label: "No Bid" },
+  { value: "duplicate", label: "Duplicate" },
 ];
 
 export function getTenderUiStatus(
@@ -111,6 +117,7 @@ export function getTenderUiStatus(
   if (value === "GO" || value === "WILL_BID") return "will_bid";
   if (value === "PARTNER_BID" || value === "PARTNERSHIP") return "partnership";
   if (value === "NO_GO" || value === "NO_BID") return "no_bid";
+  if (value === "DUPLICATE") return "duplicate";
   if (value === "SUBMITTED") return "submitted";
   if (value === "WON" || value === "AWARDED") return "won";
   if (value === "LOST") return "no_bid";
@@ -162,6 +169,9 @@ export function qualificationStatusesForFilter(
   if (ui === "no_bid" || upper === "NO_BID") {
     return { kind: "in", values: ["NO_GO"] };
   }
+  if (ui === "duplicate" || upper === "DUPLICATE") {
+    return { kind: "in", values: ["DUPLICATE"] };
+  }
   if (ui === "won" || upper === "WON" || upper === "AWARDED") {
     return { kind: "in", values: ["WON"] };
   }
@@ -187,6 +197,7 @@ export const DECISION_CHART_COLORS: Record<TenderStatus | "NOT_EVALUATED", strin
   PARTNER_BID: "#7c3aed",
   VERIFY: "#2563eb",
   NO_GO: "#dc2626",
+  DUPLICATE: "#6b7280",
   WON: "#16a34a",
   LOST: "#b91c1c",
   DISQUALIFIED: "#9f1239",

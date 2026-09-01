@@ -10,6 +10,7 @@ export const PHASE1_STATUSES = [
   "PARTNER_BID",
   "VERIFY",
   "NO_GO",
+  "DUPLICATE",
 ] as const;
 
 export type Phase1ScreeningStatus = (typeof PHASE1_STATUSES)[number];
@@ -20,6 +21,7 @@ export const PHASE1_STATUS_DISPLAY: Record<Phase1ScreeningStatus, string> = {
   PARTNER_BID: "Partnership",
   VERIFY: "Verify",
   NO_GO: "No Bid",
+  DUPLICATE: "Duplicate",
 };
 
 /** Workbook / ChatGPT Phase-1 tokens used for Tender247 detail selection. */
@@ -28,6 +30,7 @@ export const PHASE1_CRAWL_STATUSES = [
   "VERIFY",
   "MAY_BID",
   "WILL_BID",
+  "DUPLICATE",
 ] as const;
 
 export type Phase1CrawlStatus = (typeof PHASE1_CRAWL_STATUSES)[number];
@@ -86,6 +89,8 @@ export function normalizePhase1CrawlStatus(
     case "WILLBID":
     case "GO":
       return "WILL_BID";
+    case "DUPLICATE":
+      return "DUPLICATE";
     default:
       return null;
   }
@@ -129,6 +134,12 @@ export function isPhase1NoBid(
   return normalizePhase1CrawlStatus(status) === "NO_BID";
 }
 
+export function isPhase1Duplicate(
+  status: Phase1ScreeningStatus | Phase1CrawlStatus | null | undefined,
+): boolean {
+  return normalizePhase1CrawlStatus(status) === "DUPLICATE";
+}
+
 /**
  * Normalize ChatGPT / Excel status cells onto the canonical Phase-1 enum.
  * MAY_BID is treated as CONDITIONAL_GO (scrape), not VERIFY — Phase-1
@@ -165,6 +176,8 @@ export function normalizePhase1ScreeningStatus(
     case "NO_BID":
     case "NOBID":
       return "NO_GO";
+    case "DUPLICATE":
+      return "DUPLICATE";
     default:
       return null;
   }

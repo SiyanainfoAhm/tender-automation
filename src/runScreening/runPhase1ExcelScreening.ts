@@ -29,6 +29,13 @@ import {
 } from "./screeningDecisionSchema.js";
 import { logActiveScreeningRules, PHASE1_SCREENING_POLICY_VERSION } from "./screeningPolicy.js";
 import { persistGptScreenedWorkbookToDatabase, assertPhase1PersistComplete } from "./persistPhase1Results.js";
+import {
+  annotateImportDuplicates,
+  duplicateStatusCounts,
+  type AnnotatedImportRow,
+} from "./duplicateScreening.js";
+import { loadScreeningHistoryIndex } from "./loadScreeningHistoryIndex.js";
+import { mergeScreeningResults } from "./mergeScreeningResults.js";
 import { runCorrelationIdForDate } from "./phase1DetailQueue.js";
 import {
   deriveDetailScrapeIds,
@@ -36,8 +43,10 @@ import {
   hashText,
   normalizeAndDedupeRunRows,
   parseSourceWorkbook,
+  readRunWorkbook,
   ScreeningOutputInvalidError,
   validateScreenedWorkbook,
+  writeRunWorkbook,
   type RunWorkbookRow,
 } from "./runWorkbook.js";
 import {
@@ -82,30 +91,34 @@ function log(logger: Logger | undefined, message: string): void {
   logger?.info(message);
 }
 
-async function validateScreenedWorkbookAsIs(options: {
-  inputRows: RunWorkbookRow[];
-  outputPath: string;
+async function reconcileScreenedWorkbook(options: {
+  annotatedRows: AnnotatedImportRow[];
+  gptOutputPath: string;
+  screenedPath: string;
   logger?: Logger;
 }): Promise<{
   outputRows: RunWorkbookRow[];
   counts: Phase1ScreeningManifest["counts"];
 }> {
-  log(options.logger, "SCREENING_VALIDATION_START");
-  // ChatGPT Status / Decision Reason are authoritative — no local repair.
+  const gptRows = readRunWorkbook(options.gptOutputPath);
+  const merged = mergeScreeningResults({
+    importRows: options.annotatedRows,
+    gptRows,
+  });
+  writeRunWorkbook(merged, options.screenedPath);
   const validated = validateScreenedWorkbook({
-    inputRows: options.inputRows,
-    outputPath: options.outputPath,
+    inputRows: options.annotatedRows,
+    outputPath: options.screenedPath,
     allowMissingStatus: false,
   });
-  log(options.logger, `GPT_ROWS=${validated.outputRows.length}`);
-  log(options.logger, `SCREENED_ROWS=${validated.outputRows.length}`);
+  const duplicateCounts = duplicateStatusCounts(validated.outputRows);
+  log(options.logger, `SCREENING_IMPORTED_ROWS=${options.annotatedRows.length}`);
+  log(options.logger, `SCREENING_FINAL_ROWS=${validated.outputRows.length}`);
+  log(options.logger, `SCREENING_DUPLICATE_ROWS=${duplicateCounts.DUPLICATE}`);
   log(
     options.logger,
-    `VALID_STATUS_ROWS=${validated.outputRows.filter((row) => Boolean(row.screeningStatus)).length}`,
+    `SCREENING_ROW_INTEGRITY=${validated.outputRows.length === options.annotatedRows.length ? "PASS" : "FAIL"}`,
   );
-  log(options.logger, "SCREENING_VALIDATION_COMPLETE=true");
-  log(options.logger, "PHASE1_DECISION_GUARD=SKIPPED");
-  log(options.logger, "PHASE1_LOCAL_STATUS_REPAIR=SKIPPED");
   return {
     outputRows: validated.outputRows,
     counts: validated.counts,
@@ -232,7 +245,7 @@ function prepareTender247GptInput(options: {
   });
   log(options.logger, `[RUN] Tender247 raw = ${prepared.tender247Raw}`);
   log(options.logger, `[DEDUPE] Tender247 unique = ${prepared.tender247Unique}`);
-  log(options.logger, `[DEDUPE] duplicates removed = ${prepared.duplicatesRemoved}`);
+  log(options.logger, `[DEDUPE] duplicates marked server-side (none removed)`);
   log(options.logger, "TENDER247_LOCAL_NO_BID_PREFILTER=false");
   log(options.logger, "TENDER247_ROWS_PRESERVED_BEFORE_GPT=true");
   log(options.logger, "CHATGPT_SCREENING_MODE=JSON_DECISIONS");
@@ -241,7 +254,6 @@ function prepareTender247GptInput(options: {
     originalArchivePath,
     gptInputPath,
     inputFilename,
-    // Preserve every original tender row for reconciliation (no shortlist / no drop).
     rows: tender247Rows,
     tender247Raw: prepared.tender247Raw,
     tender247Unique: prepared.tender247Unique,
@@ -292,11 +304,21 @@ export async function runPhase1ExcelScreening(options: {
     rows: inputRows,
     originalArchivePath,
   } = prepared;
+  const history = await loadScreeningHistoryIndex({
+    runDateIso: dateIso,
+    downloadsRoot: path.dirname(dateFolder),
+  });
+  const annotatedRows = annotateImportDuplicates(inputRows, history);
+  const duplicateRows = annotatedRows.filter((row) => row.duplicateMark).length;
+  const screenableRows = annotatedRows.length - duplicateRows;
+  log(logger, `SCREENING_IMPORTED_ROWS=${annotatedRows.length}`);
+  log(logger, `SCREENING_DUPLICATE_PREMARKED=${duplicateRows}`);
+  log(logger, `SCREENING_SCREENABLE_ROWS=${screenableRows}`);
   const inputWorkbookHash = hashFile(gptInputPath);
 
   saveIngestionCounts(dateFolder, {
     dailyRowsRaw: prepared.tender247Raw,
-    dailyRowsDeduped: prepared.tender247Unique,
+    dailyRowsDeduped: annotatedRows.length,
     tender247Raw: prepared.tender247Raw,
     bidAssistRaw: 0,
     updatedAt: new Date().toISOString(),
@@ -364,6 +386,8 @@ export async function runPhase1ExcelScreening(options: {
   const prompt = buildDailyScreeningOperatorPrompt({
     runDate: dateIso,
     sourceExcelName: inputFilename,
+    totalRowCount: annotatedRows.length,
+    screenableRowCount: screenableRows,
   });
   const screeningPromptHash = hashText(prompt);
   logActiveScreeningRules(screeningSnapshot, (message) => log(logger, message));
@@ -399,9 +423,10 @@ export async function runPhase1ExcelScreening(options: {
   // (e.g. old multi-sheet double-count bug that is now fixed in the reader).
   if (screenedExists && hashesMatchExisting) {
     try {
-      const validated = await validateScreenedWorkbookAsIs({
-        inputRows,
-        outputPath: existingScreened!,
+      const validated = await reconcileScreenedWorkbook({
+        annotatedRows,
+        gptOutputPath: existingScreened!,
+        screenedPath: existingScreened!,
         logger,
       });
       log(
@@ -422,7 +447,7 @@ export async function runPhase1ExcelScreening(options: {
         preferencesHash,
         companyPreferenceSnapshotHash,
         screeningPromptHash,
-        inputRows,
+        inputRows: annotatedRows,
         outputRows: validated.outputRows,
         counts: validated.counts,
         logger,
@@ -509,12 +534,6 @@ export async function runPhase1ExcelScreening(options: {
         `SCREENING_MISSING_TENDER_IDS=${JSON.stringify(applied.missingTenderIds)}`,
       );
       log(logger, `SCREENING_UPDATED_ROWS=${applied.updatedRows}`);
-      if (applied.inputTotalRows !== applied.outputTotalRows) {
-        throw new AutomationError(
-          "SCREENING_OUTPUT_INVALID",
-          `SCREENING_OUTPUT_INVALID missing_rows=${JSON.stringify(applied.missingTenderIds)} extra_rows=${JSON.stringify(applied.extraDecisionIds)}`,
-        );
-      }
     } else {
       throw new AutomationError(
         "SCREENING_OUTPUT_MISSING",
@@ -522,19 +541,22 @@ export async function runPhase1ExcelScreening(options: {
       );
     }
 
-    const validated = await validateScreenedWorkbookAsIs({
-      inputRows,
-      outputPath: screenedPath,
+    const rawGptPath = path.join(dir, "chatgpt-screened-raw.xlsx");
+    fs.copyFileSync(screenedPath, rawGptPath);
+    const validated = await reconcileScreenedWorkbook({
+      annotatedRows,
+      gptOutputPath: rawGptPath,
+      screenedPath,
       logger,
     });
     log(logger, "SCREENING_ROW_RECONCILIATION=PASS");
     log(logger, "[AI SCREENING] Reconciliation = PASS");
     log(logger, "[AI SCREENING] Workbook validation=PASS");
     log(logger, "CHATGPT_SCREENING_OUTPUT_VALID=true");
+    log(logger, `[AI SCREENING] DUPLICATE = ${validated.counts.DUPLICATE}`);
     log(logger, `[AI SCREENING] NO_BID = ${validated.counts.NO_GO}`);
     log(logger, `[AI SCREENING] VERIFY = ${validated.counts.VERIFY}`);
     log(logger, `[AI SCREENING] MAY_BID = ${validated.counts.CONDITIONAL_GO}`);
-    log(logger, `[AI SCREENING] WILL_BID = ${validated.counts.GO}`);
     {
       const prior = loadScreeningChatCheckpoint(screenedPath);
       saveScreeningChatCheckpoint(screenedPath, {
@@ -563,7 +585,7 @@ export async function runPhase1ExcelScreening(options: {
       preferencesHash,
       companyPreferenceSnapshotHash,
       screeningPromptHash,
-      inputRows,
+      inputRows: annotatedRows,
       outputRows: validated.outputRows,
       counts: validated.counts,
       logger,
@@ -613,7 +635,7 @@ export async function runPhase1ExcelScreening(options: {
       screeningPromptHash,
       screenedWorkbook: null,
       screenedWorkbookHash: null,
-      inputRows: inputRows.length,
+      inputRows: annotatedRows.length,
       outputRows: 0,
       counts: emptyStatusCounts(),
       error: `${code}: ${message}`,
@@ -693,10 +715,10 @@ async function finalizeScreening(options: {
   log(options.logger, `SCREENING_RUN_ID=${screeningRunId}`);
   log(options.logger, `FILTERED_OUT=${options.counts.NO_GO}`);
   log(options.logger, `FILTER_PASSED=${shortlist.tender247Ids.length + shortlist.bidAssistIds.length}`);
+  log(options.logger, `SHORTLIST_DUPLICATE=${options.counts.DUPLICATE}`);
   log(options.logger, `SHORTLIST_NO_BID=${options.counts.NO_GO}`);
   log(options.logger, `SHORTLIST_VERIFY=${options.counts.VERIFY}`);
   log(options.logger, `SHORTLIST_MAY_BID=${options.counts.CONDITIONAL_GO}`);
-  log(options.logger, `SHORTLIST_WILL_BID=${options.counts.GO}`);
 
   options.logger?.info(
     `[DETAIL CRAWL] candidates = ${shortlist.tender247Ids.length}`,

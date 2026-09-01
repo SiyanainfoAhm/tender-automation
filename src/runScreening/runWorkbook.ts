@@ -494,20 +494,10 @@ function parseWorkbookRows(
     });
   }
   if (!candidates.length) return [];
-  // Prefer a single main analysis sheet so Classification-style helpers never double-count.
-  candidates.sort((a, b) => b.score - a.score || b.rows.length - a.rows.length);
-  const best = candidates[0]!;
-  const portalMultiSheet =
-    candidates.length > 1 &&
-    candidates.every((c) => /gem|non-?\s*gem|tender/i.test(c.sheetName)) &&
-    !candidates.some((c) => /current\s*analysis/i.test(c.sheetName));
-  if (portalMultiSheet || candidates.every((c) => c.score < 30)) {
-    return candidates.flatMap((c) => c.rows);
+  if (candidates.length > 1) {
+    return candidates.flatMap((candidate) => candidate.rows);
   }
-  if (candidates.length > 1 && best.score >= 30) {
-    return best.rows;
-  }
-  return best.rows;
+  return candidates[0]!.rows;
 }
 
 function mergeRows(left: RunWorkbookRow, right: RunWorkbookRow): RunWorkbookRow {
@@ -658,6 +648,7 @@ export function countPhase1Statuses(
     PARTNER_BID: 0,
     VERIFY: 0,
     NO_GO: 0,
+    DUPLICATE: 0,
   };
   for (const row of rows) {
     if (row.screeningStatus) counts[row.screeningStatus] += 1;
@@ -711,39 +702,27 @@ export function validateScreenedWorkbook(options: {
     throw new ScreeningOutputInvalidError("Screened workbook has no data rows");
   }
 
-  const inputIds = new Set(inputRows.map((row) => row.canonicalId));
-  const outputIds = new Set(outputRows.map((row) => row.canonicalId));
-  const missingIds = [...inputIds].filter((id) => !outputIds.has(id));
-  const extra = [...outputIds].filter((id) => !inputIds.has(id));
-  // Daily shared-chat screening may drop internal / ~30-day historical repeats
-  // (operator prompt). That is expected — do not fail reconciliation on missing.
-  if (missingIds.length > 0) {
-    console.log(
-      `SCREENING_OUTPUT_DROPPED_INPUT_IDS=${missingIds.length} (historical/internal removals allowed)`,
-    );
-  }
-  if (extra.length > 0) {
-    // ChatGPT daily Excel is authoritative (may include rows after combine/dedupe).
-    console.log(
-      `SCREENING_OUTPUT_EXTRA_IDS=${extra.length} (ChatGPT daily Excel is authoritative)`,
+  if (inputRows.length > 0 && outputRows.length !== inputRows.length) {
+    throw new ScreeningOutputInvalidError(
+      `SCREENING_OUTPUT_ROW_COUNT_MISMATCH output=${outputRows.length} input=${inputRows.length}`,
     );
   }
 
-  if (inputRows.length > 0) {
-    const overlap = [...outputIds].filter((id) => inputIds.has(id)).length;
-    if (outputRows.length > inputRows.length * 2) {
+  for (let index = 0; index < inputRows.length; index += 1) {
+    const input = inputRows[index]!;
+    const output = outputRows[index];
+    if (!output) {
       throw new ScreeningOutputInvalidError(
-        `SCREENING_OUTPUT_ROW_COUNT_MISMATCH output=${outputRows.length} input=${inputRows.length}`,
+        `SCREENING_OUTPUT_INVALID missing_row_index=${index}`,
       );
     }
-    const minOverlap = Math.min(
-      inputRows.length,
-      outputRows.length,
-      Math.max(1, Math.floor(inputRows.length * 0.4)),
-    );
-    if (overlap < minOverlap) {
+    if (
+      input.tender247Id &&
+      output.tender247Id &&
+      input.tender247Id !== output.tender247Id
+    ) {
       throw new ScreeningOutputInvalidError(
-        `SCREENING_OUTPUT_ID_MISMATCH overlap=${overlap} input=${inputRows.length} output=${outputRows.length}`,
+        `SCREENING_OUTPUT_ROW_ORDER_MISMATCH index=${index} input=${input.tender247Id} output=${output.tender247Id}`,
       );
     }
   }

@@ -107,7 +107,14 @@ export function resolveExistingScreenedWorkbook(
 }
 
 export function emptyStatusCounts(): Record<Phase1ScreeningStatus, number> {
-  return { GO: 0, CONDITIONAL_GO: 0, PARTNER_BID: 0, VERIFY: 0, NO_GO: 0 };
+  return {
+    GO: 0,
+    CONDITIONAL_GO: 0,
+    PARTNER_BID: 0,
+    VERIFY: 0,
+    NO_GO: 0,
+    DUPLICATE: 0,
+  };
 }
 
 export function writeJson(filePath: string, value: unknown): void {

@@ -5,7 +5,8 @@ export type QualificationStatus =
   | "CONDITIONAL_GO"
   | "PARTNER_BID"
   | "VERIFY"
-  | "NO_GO";
+  | "NO_GO"
+  | "DUPLICATE";
 
 export type QualificationResultInput = {
   sourcePortal: "TENDER247" | "BIDASSIST";

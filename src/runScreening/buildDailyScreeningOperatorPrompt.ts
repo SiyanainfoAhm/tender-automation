@@ -1,5 +1,5 @@
 /**
- * Operator prompt + screening.md attachment for the persistent daily screening chat.
+ * Daily screening operator prompt — preserve every imported row; duplicates are marked DUPLICATE server-side.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -65,8 +65,16 @@ export function isDailyScreeningFilenameBeforeRunDate(
 export function buildDailyScreeningOperatorPrompt(options: {
   runDate: string;
   sourceExcelName: string;
+  screenableRowCount?: number;
+  totalRowCount?: number;
 }): string {
   const outName = dailyScreeningOutputFilename(options.runDate);
+  const total = options.totalRowCount;
+  const screenable = options.screenableRowCount;
+  const rowContract =
+    typeof total === "number" && typeof screenable === "number"
+      ? `\nRow contract:\n- Total imported rows: ${total}\n- Rows requiring screening decisions: ${screenable}\n- Return exactly ${screenable} screened rows for non-duplicate tenders.\n- Do not remove duplicate or already-reviewed rows from the source file; the system preserves every imported row.\n`
+      : "";
   return `Run Siyana Tender247 Daily Screening for the attached Tender247 Excel file(s).
 
 Follow the attached \`screening.md\` preferences exactly.
@@ -77,25 +85,22 @@ Scope:
 
 Process:
 1. Read all attached Tender247 files and relevant sheets, including Non-GeM Tenders and GeM Tenders.
-2. Combine the uploaded Tender247 data.
-3. Remove internal duplicates using this priority:
-   - Tender ID
-   - Valid reference number
-   - Exact Authority + Tender Brief + Deadline
-4. Compare with approximately 30 days of available screening history and remove already-reviewed tenders.
-5. Apply Siyana’s hard rules and scope rules from \`screening.md\`.
-6. Assign every remaining tender:
+2. Combine every uploaded row. Never delete, hide, or exclude any imported tender row.
+3. Duplicate and historical matches are handled by the system. Screen only tenders that are not already marked DUPLICATE.
+4. Apply Siyana’s hard rules and scope rules from \`screening.md\` to non-duplicate tenders only.
+5. Assign every screened tender:
    - Tender Category
-   - Status: NO_BID, VERIFY, or MAY_BID
+   - Status: NO_BID, VERIFY, or MAY_BID only
    - Tender-specific Decision Reason
+6. Do not assign WILL_BID automatically.
 7. Create one Excel workbook with one tab only.
-
+${rowContract}
 Filename:
 ${outName}
 
 Keep the original tender fields and add Tender Category, Status, and Decision Reason.
 
-Before returning the final Excel, validate that no internal duplicate Tender ID or valid reference number remains, historical repeats are removed, and every status/reason matches the actual tender scope.
+Before returning the final Excel, validate that every screened row has exactly one of NO_BID, VERIFY, or MAY_BID and a tender-specific Decision Reason.
 
 Input workbook attached: ${options.sourceExcelName}
 Run date: ${options.runDate}
@@ -144,6 +149,7 @@ export function writeScreeningMdPreferences(options: {
     ``,
     `## Status vocabulary`,
     ``,
+    `- DUPLICATE — duplicate or already-reviewed tender (system-assigned; do not screen)`,
     `- NO_BID — out of scope / hard reject`,
     `- VERIFY — needs human verification`,
     `- MAY_BID — potentially bid-worthy`,

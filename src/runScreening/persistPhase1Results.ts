@@ -18,6 +18,7 @@ import { resolveRunCompanyId } from "../company/siyanaCompany.js";
 import type { RunWorkbookRow } from "./runWorkbook.js";
 import {
   isPhase1NoBid,
+  isPhase1Duplicate,
   normalizePhase1ScreeningStatus,
   PHASE1_STATUS_DISPLAY,
   type Phase1ScreeningStatus,
@@ -120,6 +121,21 @@ function qualificationPayloadForStatus(
   reason: string,
 ) {
   const label = PHASE1_STATUS_DISPLAY[status];
+  if (status === "DUPLICATE") {
+    return {
+      status: "DUPLICATE" as const,
+      decisionLabel: label,
+      verdict: "DUPLICATE",
+      reason: reason || "Duplicate or already-reviewed tender",
+      requiredAction: null as string | null,
+      confidence: 1,
+      matchedCriteria: [] as string[],
+      failedCriteria: [] as string[],
+      unclearCriteria: [] as string[],
+      missingDocuments: [] as string[],
+      manualReviewRequired: false,
+    };
+  }
   if (status === "NO_GO") {
     return {
       status: "NO_GO" as const,
@@ -351,14 +367,16 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         `[${label}] Existing record found=${Boolean(existing)}`,
       );
 
-      const qualificationStatus = mapScreeningToQualificationStatus(
-        status,
-        existing?.qualification_status,
-        {
-          // Phase-1 Excel Status is authoritative — keep Will Bid as written.
-          preserveWillBid: true,
-        },
-      );
+      const qualificationStatus = isPhase1Duplicate(status)
+        ? "DUPLICATE"
+        : mapScreeningToQualificationStatus(
+            status,
+            existing?.qualification_status,
+            {
+              // Phase-1 Excel Status is authoritative — keep Will Bid as written.
+              preserveWillBid: true,
+            },
+          );
       const closingDate = excelDeadlineIso(row);
       const emdAmount = excelEmdAmount(row);
       const tenderValue = excelTenderValue(row);
@@ -541,7 +559,8 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         partnershipRequiredFor: [],
         partnershipModeAllowed: [],
         manualReviewRequired: qual.manualReviewRequired,
-        requiresDetailedTenderReview: status !== "GO" && status !== "NO_GO",
+        requiresDetailedTenderReview:
+          !isPhase1Duplicate(status) && status !== "GO" && status !== "NO_GO",
         evidenceFiles: ["CHATGPT_RUN_EXCEL", RUN_SCREENED_FILE],
         rawResponse: row.screeningReason,
         rawResult: rawMetadata,
