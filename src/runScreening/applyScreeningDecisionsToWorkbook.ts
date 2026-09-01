@@ -252,3 +252,77 @@ export async function applyScreeningDecisionsToWorkbook(options: {
     extraDecisionIds,
   };
 }
+
+/**
+ * Write server-side DUPLICATE marks into the GPT upload workbook so ChatGPT
+ * can skip pre-handled rows (Status=DUPLICATE + Decision Reason).
+ * Row order must match parseSourceWorkbook / annotateImportDuplicates.
+ */
+export async function markDuplicateRowsInGptWorkbook(options: {
+  workbookPath: string;
+  annotatedRows: Array<{
+    duplicateMark?: { reason: string };
+  }>;
+  logger?: Logger;
+}): Promise<{ marked: number; enumeratedRows: number }> {
+  const { workbookPath, annotatedRows, logger } = options;
+  if (!fs.existsSync(workbookPath)) {
+    throw new Error(`GPT input workbook missing: ${workbookPath}`);
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile(workbookPath);
+  let importIndex = 0;
+  let marked = 0;
+
+  for (const sheet of workbook.worksheets) {
+    const { headers, headerRowNumber } = readSheetHeaders(sheet);
+    if (!isLikelyTenderSheet(sheet.name, headers)) continue;
+    const idCol = headerIndex(headers, ID_HEADERS);
+    if (idCol < 0) continue;
+
+    const statusCol = ensureColumn(
+      sheet,
+      headers,
+      headerRowNumber,
+      "Screening Status",
+      STATUS_HEADERS,
+    );
+    const reasonCol = ensureColumn(
+      sheet,
+      headers,
+      headerRowNumber,
+      "Screening Reason",
+      REASON_HEADERS,
+    );
+
+    for (let r = headerRowNumber + 1; r <= sheet.rowCount; r += 1) {
+      const row = sheet.getRow(r);
+      const id = digitsTenderId(cellText(row.getCell(idCol + 1)));
+      if (!id) continue;
+      const annotated = annotatedRows[importIndex];
+      if (!annotated) {
+        throw new Error(
+          `DUPLICATE_MARK_ROW_MISMATCH sheet=${sheet.name} row=${r} importIndex=${importIndex} annotated=${annotatedRows.length}`,
+        );
+      }
+      if (annotated.duplicateMark) {
+        row.getCell(statusCol).value = "DUPLICATE";
+        row.getCell(reasonCol).value = annotated.duplicateMark.reason;
+        marked += 1;
+      }
+      importIndex += 1;
+    }
+  }
+
+  if (importIndex !== annotatedRows.length) {
+    throw new Error(
+      `DUPLICATE_MARK_ROW_MISMATCH enumerated=${importIndex} annotated=${annotatedRows.length}`,
+    );
+  }
+
+  await workbook.xlsx.writeFile(workbookPath);
+  log(logger, `SCREENING_DUPLICATE_MARKED_IN_GPT_INPUT=${marked}`);
+  log(logger, `SCREENING_GPT_INPUT_ENUMERATED_ROWS=${importIndex}`);
+  return { marked, enumeratedRows: importIndex };
+}

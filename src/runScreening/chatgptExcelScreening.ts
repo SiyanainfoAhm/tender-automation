@@ -73,6 +73,8 @@ export type ChatGptExcelScreeningClient = {
     prompt: string;
     /** Optional screening.md path uploaded alongside the Excel. */
     screeningMdPath?: string | null;
+    /** Optional extra files (e.g. duplicate-rows-manifest.json). */
+    extraUploadPaths?: string[];
     outputPath: string;
     runDate: string;
   }) => Promise<ChatGptScreeningResult>;
@@ -700,6 +702,7 @@ export function createLiveChatGptExcelScreeningClient(options: {
       inputWorkbookPath,
       prompt,
       screeningMdPath,
+      extraUploadPaths,
       outputPath,
       runDate,
     }) {
@@ -718,6 +721,11 @@ export function createLiveChatGptExcelScreeningClient(options: {
       const uploadPaths = [inputWorkbookPath];
       if (screeningMdPath && fs.existsSync(screeningMdPath)) {
         uploadPaths.push(screeningMdPath);
+      }
+      for (const extraPath of extraUploadPaths || []) {
+        if (extraPath && fs.existsSync(extraPath)) {
+          uploadPaths.push(extraPath);
+        }
       }
       log(logger, `CHATGPT_SCREENING_INPUT_FILE=${inputWorkbookPath}`);
       log(logger, `CHATGPT_INPUT_FILENAME=${inputFileName}`);

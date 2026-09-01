@@ -307,7 +307,7 @@ test("67 normalized rows remain 67 unique rows including NO_BID", async () => {
   assert.match(savedPrompt, /screening\.md/);
   assert.match(savedPrompt, /_daily Tenders\.xlsx/);
   assert.equal(fs.existsSync(mdPath), true);
-  assert.match(fs.readFileSync(mdPath, "utf8"), /Maximum EMD/);
+  assert.match(fs.readFileSync(mdPath, "utf8"), /INR 15 lakh/);
   const saved = JSON.parse(fs.readFileSync(prefsPath, "utf8")) as {
     screening: { preferredScopes: string[]; financial: { maxEmdInr: number } };
     screeningPolicyVersion: string;

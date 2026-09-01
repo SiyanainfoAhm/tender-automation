@@ -27,12 +27,15 @@ test("operator prompt embeds shared-chat instructions and output filename", () =
   const prompt = buildDailyScreeningOperatorPrompt({
     runDate: "2026-08-26",
     sourceExcelName: "Tender247_2026-08-26.xlsx",
+    totalRowCount: 516,
+    duplicateRowCount: 37,
   });
   assert.match(prompt, /Run Siyana Tender247 Daily Screening/);
   assert.match(prompt, /screening\.md/);
   assert.match(prompt, /26-08-26_daily Tenders\.xlsx/);
   assert.match(prompt, /Do not open Tender247, send email/);
-  assert.match(prompt, /NO_BID, VERIFY, or MAY_BID/);
+  assert.match(prompt, /Allowed statuses: DUPLICATE, NO_BID, VERIFY, MAY_BID/);
+  assert.match(prompt, /duplicate-rows-manifest\.json/);
   assert.match(prompt, /Run correlation ID: RUN-2026-08-26/);
 });
 
@@ -170,8 +173,9 @@ test("writeScreeningMdPreferences writes company rules file", () => {
   };
   writeScreeningMdPreferences({ snapshot, outputPath: out });
   const text = fs.readFileSync(out, "utf8");
-  assert.match(text, /Siyana/);
-  assert.match(text, /Maximum EMD/);
-  assert.match(text, /custom software/);
-  assert.match(text, /NO_BID/);
+  assert.match(text, /Siyana Tender247 Daily Screening Preferences/);
+  assert.match(text, /Hard filters/);
+  assert.match(text, /INR 15 lakh/);
+  assert.match(text, /DUPLICATE/);
+  assert.match(text, /Non-GeM Tenders/);
 });

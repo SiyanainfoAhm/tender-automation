@@ -61,7 +61,7 @@ async function loadHistoryFromSupabase(options: {
     )
     .eq("source_portal", "TENDER247")
     .gte("scraped_date", fromDate)
-    .lte("scraped_date", options.runDateIso);
+    .lt("scraped_date", options.runDateIso);
 
   if (error) {
     console.warn(`SCREENING_HISTORY_LOAD_FAILED=${error.message}`);
@@ -109,7 +109,7 @@ function loadHistoryFromLocalScreenedWorkbooks(options: {
     if (!entry.isDirectory()) continue;
     const runDate = entry.name.slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(runDate)) continue;
-    if (runDate < fromDate || runDate > options.runDateIso) continue;
+    if (runDate < fromDate || runDate >= options.runDateIso) continue;
     const screenedPath = path.join(root, runDate, "screening", RUN_SCREENED_FILE);
     if (!fs.existsSync(screenedPath)) continue;
     try {

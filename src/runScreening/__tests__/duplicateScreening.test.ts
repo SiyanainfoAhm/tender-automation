@@ -127,10 +127,10 @@ test("mergeScreeningResults preserves DUPLICATE rows and merges GPT decisions fo
       },
     ],
   });
-  assert.equal(merged.length, 2);
-  assert.equal(merged[0]?.screeningStatus, "NO_GO");
-  assert.equal(merged[1]?.screeningStatus, "DUPLICATE");
-  assert.match(merged[1]?.screeningReason || "", /Duplicate Tender247 ID/);
+  assert.equal(merged.rows.length, 2);
+  assert.equal(merged.rows[0]?.screeningStatus, "NO_GO");
+  assert.equal(merged.rows[1]?.screeningStatus, "DUPLICATE");
+  assert.match(merged.rows[1]?.screeningReason || "", /Duplicate Tender247 ID/);
 });
 
 test("referenceKey and authorityBriefDeadlineKey normalize consistently", () => {

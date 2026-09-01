@@ -49,11 +49,12 @@ function takeMatchedGptRow(
 
 /**
  * Merge GPT-screened rows back onto the full import list (including DUPLICATE rows).
+ * Rows ChatGPT omits are kept as VERIFY (never dropped).
  */
 export function mergeScreeningResults(options: {
   importRows: AnnotatedImportRow[];
   gptRows: RunWorkbookRow[];
-}): RunWorkbookRow[] {
+}): { rows: RunWorkbookRow[]; missingIds: string[] } {
   const queues = rowMatchQueues(options.gptRows);
   const merged: RunWorkbookRow[] = [];
   const missing: string[] = [];
@@ -87,19 +88,13 @@ export function mergeScreeningResults(options: {
     });
   }
 
-  if (missing.length > 0) {
-    throw new ScreeningOutputInvalidError(
-      `SCREENING_OUTPUT_INVALID missing_rows=${JSON.stringify(missing.slice(0, 8))}`,
-    );
-  }
-
   if (merged.length !== options.importRows.length) {
     throw new ScreeningOutputInvalidError(
       `SCREENING_OUTPUT_ROW_COUNT_MISMATCH output=${merged.length} input=${options.importRows.length}`,
     );
   }
 
-  return merged;
+  return { rows: merged, missingIds: missing };
 }
 
 export function assertNoScreeningOnDuplicates(rows: RunWorkbookRow[]): void {

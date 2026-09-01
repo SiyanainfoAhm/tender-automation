@@ -23,6 +23,7 @@ import {
 import {
   applyScreeningDecisionsToWorkbook,
   inventoryTenderWorkbook,
+  markDuplicateRowsInGptWorkbook,
 } from "./applyScreeningDecisionsToWorkbook.js";
 import {
   parseScreeningDecisionsJson,
@@ -61,6 +62,7 @@ import {
   screenedWorkbookPath,
   screeningDir,
   loadScreeningChatCheckpoint,
+  writeJson,
   type Phase1ScreeningManifest,
 } from "./screeningManifest.js";
 import type { AppConfig } from "../config.js";
@@ -101,11 +103,18 @@ async function reconcileScreenedWorkbook(options: {
   counts: Phase1ScreeningManifest["counts"];
 }> {
   const gptRows = readRunWorkbook(options.gptOutputPath);
+  log(options.logger, `SCREENING_GPT_OUTPUT_ROWS=${gptRows.length}`);
   const merged = mergeScreeningResults({
     importRows: options.annotatedRows,
     gptRows,
   });
-  writeRunWorkbook(merged, options.screenedPath);
+  if (merged.missingIds.length > 0) {
+    log(
+      options.logger,
+      `SCREENING_MERGE_MISSING_ROWS=${merged.missingIds.length} ids=${JSON.stringify(merged.missingIds.slice(0, 8))}`,
+    );
+  }
+  writeRunWorkbook(merged.rows, options.screenedPath);
   const validated = validateScreenedWorkbook({
     inputRows: options.annotatedRows,
     outputPath: options.screenedPath,
@@ -314,6 +323,43 @@ export async function runPhase1ExcelScreening(options: {
   log(logger, `SCREENING_IMPORTED_ROWS=${annotatedRows.length}`);
   log(logger, `SCREENING_DUPLICATE_PREMARKED=${duplicateRows}`);
   log(logger, `SCREENING_SCREENABLE_ROWS=${screenableRows}`);
+
+  const dir = screeningDir(dateFolder);
+  fs.mkdirSync(dir, { recursive: true });
+  if (duplicateRows > 0) {
+    const marked = await markDuplicateRowsInGptWorkbook({
+      workbookPath: gptInputPath,
+      annotatedRows,
+      logger,
+    });
+    if (marked.marked !== duplicateRows) {
+      throw new AutomationError(
+        "SCREENING_DUPLICATE_MARK_FAILED",
+        `SCREENING_DUPLICATE_MARK_FAILED expected=${duplicateRows} marked=${marked.marked}`,
+      );
+    }
+    writeJson(path.join(dir, "duplicate-rows-manifest.json"), {
+      runDate: dateIso,
+      totalImportedRows: annotatedRows.length,
+      duplicateRows,
+      screenableRows,
+      duplicates: annotatedRows
+        .filter((row) => row.duplicateMark)
+        .map((row) => ({
+          tender247Id: row.tender247Id || null,
+          referenceNumber: row.bidAssistId || null,
+          organization: row.organization,
+          tenderName: row.tenderName,
+          deadline: row.deadline,
+          kind: row.duplicateMark?.kind,
+          reason: row.duplicateMark?.reason,
+          matchedTenderId: row.duplicateMark?.matchedTenderId,
+          matchedRunDate: row.duplicateMark?.matchedRunDate ?? null,
+        })),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
   const inputWorkbookHash = hashFile(gptInputPath);
 
   saveIngestionCounts(dateFolder, {
@@ -376,7 +422,6 @@ export async function runPhase1ExcelScreening(options: {
   const workbookInventory = await inventoryTenderWorkbook(gptInputPath);
   log(logger, `INPUT_TOTAL_ROWS=${workbookInventory.totalRows}`);
   log(logger, `INPUT_SHEETS=${JSON.stringify(workbookInventory.sheetNames)}`);
-  const dir = screeningDir(dateFolder);
   fs.mkdirSync(dir, { recursive: true });
   const screeningMdPath = path.join(dir, "screening.md");
   writeScreeningMdPreferences({
@@ -388,6 +433,7 @@ export async function runPhase1ExcelScreening(options: {
     sourceExcelName: inputFilename,
     totalRowCount: annotatedRows.length,
     screenableRowCount: screenableRows,
+    duplicateRowCount: duplicateRows,
   });
   const screeningPromptHash = hashText(prompt);
   logActiveScreeningRules(screeningSnapshot, (message) => log(logger, message));
@@ -419,21 +465,31 @@ export async function runPhase1ExcelScreening(options: {
       companyPreferenceSnapshotHash &&
     existingManifest!.screeningPromptHash === screeningPromptHash &&
     existingManifest!.screeningPolicyVersion === PHASE1_SCREENING_POLICY_VERSION;
+  const recoverableMergeFailure =
+    Boolean(existingManifest) &&
+    existingManifest!.status === "failed" &&
+    existingManifest!.inputWorkbookHash === inputWorkbookHash &&
+    existingManifest!.preferencesHash === preferencesHash &&
+    (existingManifest!.companyPreferenceSnapshotHash ?? existingManifest!.preferencesHash) ===
+      companyPreferenceSnapshotHash &&
+    String(existingManifest!.error || "").includes("missing_rows");
   // Resume when a prior run left a valid XLSX even if status was "failed"
-  // (e.g. old multi-sheet double-count bug that is now fixed in the reader).
-  if (screenedExists && hashesMatchExisting) {
+  // (e.g. merge missing-row VERIFY fallback now completes instead of aborting).
+  if (screenedExists && (hashesMatchExisting || recoverableMergeFailure)) {
     try {
       const validated = await reconcileScreenedWorkbook({
         annotatedRows,
         gptOutputPath: existingScreened!,
-        screenedPath: existingScreened!,
+        screenedPath: screenedWorkbookPath(dateFolder),
         logger,
       });
       log(
         logger,
         existingManifest?.status === "complete"
           ? "[AI SCREENING] Resuming valid screened workbook"
-          : "[AI SCREENING] Revalidating existing screened workbook after prior failure",
+          : recoverableMergeFailure
+            ? "[AI SCREENING] Recovering ChatGPT workbook after prior merge failure"
+            : "[AI SCREENING] Revalidating existing screened workbook after prior failure",
       );
       return await finalizeScreening({
         dateFolder,
@@ -442,7 +498,7 @@ export async function runPhase1ExcelScreening(options: {
         inputWorkbookPath: gptInputPath,
         originalTender247Path: originalArchivePath,
         inputFilename,
-        screenedPath: existingScreened!,
+        screenedPath: screenedWorkbookPath(dateFolder),
         inputWorkbookHash,
         preferencesHash,
         companyPreferenceSnapshotHash,
@@ -496,11 +552,17 @@ export async function runPhase1ExcelScreening(options: {
     });
   }
 
+  const duplicateManifestPath = path.join(dir, "duplicate-rows-manifest.json");
+
   try {
     const screening = await client.screenWorkbook({
       inputWorkbookPath: gptInputPath,
       prompt,
       screeningMdPath,
+      extraUploadPaths:
+        duplicateRows > 0 && fs.existsSync(duplicateManifestPath)
+          ? [duplicateManifestPath]
+          : undefined,
       outputPath: screenedPath,
       runDate: dateIso,
     });
