@@ -15,6 +15,7 @@ import type {
   TenderQualificationDTO,
 } from "@/lib/tender-detail";
 import type { TenderStatus } from "@/lib/tender-status";
+import { parseDuplicateReferenceFromReason } from "@/lib/duplicate-reference";
 
 function asString(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -271,6 +272,10 @@ export function mapTenderDetail(options: {
     ? rawMeta.exemptionTypes.filter((v): v is string => typeof v === "string")
     : [];
 
+  const screeningReason =
+    asString(rawMeta.screeningReason) || asString(qualification?.reason);
+  const parsedDuplicate = parseDuplicateReferenceFromReason(screeningReason);
+
   return {
     id: String(tender.id),
     title,
@@ -332,15 +337,19 @@ export function mapTenderDetail(options: {
     exemptionTypes,
     contacts,
     notes: asString(rawMeta.notes),
-    decisionReason: asString(rawMeta.decisionReason) || asString(qualification?.reason),
+    decisionReason:
+      asString(rawMeta.decisionReason) ||
+      screeningReason,
     lostReason: asString(rawMeta.lostReason),
     disqualificationReason: asString(rawMeta.disqualificationReason),
     duplicateOfSourceTenderId:
       asString(tender.duplicate_of_source_tender_id) ||
-      asString(rawMeta.duplicateOfSourceTenderId),
+      asString(rawMeta.duplicateOfSourceTenderId) ||
+      parsedDuplicate.matchedSourceTenderId,
     duplicateOfTenderId: asString(tender.duplicate_of_tender_id),
     duplicateMatchKind:
       asString(tender.duplicate_match_kind) ||
-      asString(rawMeta.duplicateMatchKind),
+      asString(rawMeta.duplicateMatchKind) ||
+      parsedDuplicate.matchKind,
   };
 }

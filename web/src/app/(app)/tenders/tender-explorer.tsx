@@ -1434,7 +1434,8 @@ export function TenderExplorer({
                                         row.duplicate_of_tender_id,
                                       duplicateMatchKind:
                                         row.duplicate_match_kind,
-                                      screeningReason: row.reason,
+                                      screeningReason:
+                                        row.screening_reason || row.reason,
                                       sourcePortal: row.source_portal,
                                     });
                                     if (!ref) return null;

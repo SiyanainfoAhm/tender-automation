@@ -54,6 +54,7 @@ export type WebTenderListRow = {
   decision_label: string | null;
   verdict: string | null;
   reason: string | null;
+  screening_reason: string | null;
   required_action: string | null;
   confidence: number | null;
   manual_review_required: boolean | null;
@@ -99,6 +100,7 @@ export const WEB_TENDER_LIST_SELECT = [
   "updated_at",
   "effective_qualification_status",
   "reason",
+  "screening_reason",
   "duplicate_of_source_tender_id",
   "duplicate_of_tender_id",
   "duplicate_match_kind",
