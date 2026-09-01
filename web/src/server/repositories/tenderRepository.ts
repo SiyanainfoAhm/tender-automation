@@ -64,9 +64,10 @@ export type WebTenderListRow = {
   first_seen_at: string | null;
   updated_at: string;
   effective_qualification_status: string | null;
-  duplicate_of_source_tender_id: string | null;
-  duplicate_of_tender_id: string | null;
-  duplicate_match_kind: string | null;
+  /** Present after duplicate-reference migration is applied. */
+  duplicate_of_source_tender_id?: string | null;
+  duplicate_of_tender_id?: string | null;
+  duplicate_match_kind?: string | null;
   chat_url: string | null;
 };
 
@@ -97,6 +98,7 @@ export const WEB_TENDER_LIST_SELECT = [
   "crawled_at",
   "updated_at",
   "effective_qualification_status",
+  "reason",
   "duplicate_of_source_tender_id",
   "duplicate_of_tender_id",
   "duplicate_match_kind",

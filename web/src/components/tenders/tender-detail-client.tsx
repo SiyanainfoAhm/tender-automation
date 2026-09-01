@@ -620,9 +620,13 @@ export function TenderDetailClient({
   const duplicateReference = formatDuplicateReference({
     duplicateOfSourceTenderId: tender.duplicateOfSourceTenderId,
     duplicateOfTenderId: tender.duplicateOfTenderId,
+    duplicateMatchKind: tender.duplicateMatchKind,
+    screeningReason: tender.decisionReason || tender.qualification?.reason,
     sourcePortal: tender.sourcePortal,
   });
-  const duplicateKindLabel = duplicateMatchKindLabel(tender.duplicateMatchKind);
+  const duplicateKindLabel = duplicateReference?.matchKind
+    ? duplicateMatchKindLabel(duplicateReference.matchKind)
+    : null;
 
   const valueLabel = formatTenderValue({
     amount: tender.tenderValue,

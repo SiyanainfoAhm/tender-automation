@@ -1432,17 +1432,20 @@ export function TenderExplorer({
                                         row.duplicate_of_source_tender_id,
                                       duplicateOfTenderId:
                                         row.duplicate_of_tender_id,
+                                      duplicateMatchKind:
+                                        row.duplicate_match_kind,
+                                      screeningReason: row.reason,
                                       sourcePortal: row.source_portal,
                                     });
                                     if (!ref) return null;
                                     return (
                                       <p className="truncate text-[10px] text-foreground-500">
                                         {duplicateMatchKindLabel(
-                                          row.duplicate_match_kind,
+                                          ref.matchKind,
                                         ) ? (
                                           <span>
                                             {duplicateMatchKindLabel(
-                                              row.duplicate_match_kind,
+                                              ref.matchKind,
                                             )}
                                             {": "}
                                           </span>
