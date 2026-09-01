@@ -3,6 +3,7 @@
  * Attachment requirements are mode-specific and must never be inferred from filenames.
  */
 import { AutomationError } from "../browserUtils.js";
+import { screeningComposerCandidatesInclude } from "../runScreening/runExcelScreeningAttachments.js";
 
 export type ChatGptSubmissionKind =
   | "RUN_EXCEL_SCREENING"
@@ -15,6 +16,7 @@ export type PreSendAttachmentPresence = {
   aiSummaryAttached: boolean;
   visibleCardCount: number;
   candidates: string[];
+  allFilenames?: string[];
   signals?: string[];
 };
 
@@ -109,6 +111,7 @@ export function assertTenderQualificationPreSend(
 export function evaluateRunExcelScreeningPreSend(options: {
   presence: PreSendAttachmentPresence;
   expectedWorkbookName: string;
+  expectedAllFileNames?: string[];
   promptPresent: boolean;
   sendEnabled: boolean;
   requireSendEnabled?: boolean;
@@ -118,10 +121,24 @@ export function evaluateRunExcelScreeningPreSend(options: {
     options.expectedWorkbookName,
   );
   const workbookReady = matchedNames.length > 0;
+  const allNames = options.expectedAllFileNames?.length
+    ? options.expectedAllFileNames
+    : [options.expectedWorkbookName];
+  const candidatePool =
+    options.presence.allFilenames?.length
+      ? options.presence.allFilenames
+      : options.presence.candidates;
+  const allFilesAttached = allNames.every((name) =>
+    screeningComposerCandidatesInclude(candidatePool, name),
+  );
   const requireSend = options.requireSendEnabled !== false;
   const sendOk = !requireSend || options.sendEnabled;
   return {
-    ok: workbookReady && options.promptPresent && sendOk,
+    ok:
+      workbookReady &&
+      allFilesAttached &&
+      options.promptPresent &&
+      sendOk,
     workbookReady,
     promptPresent: options.promptPresent,
     sendEnabled: options.sendEnabled,
@@ -132,12 +149,29 @@ export function evaluateRunExcelScreeningPreSend(options: {
 export function assertRunExcelScreeningPreSend(options: {
   presence: PreSendAttachmentPresence;
   expectedWorkbookName: string;
+  expectedAllFileNames?: string[];
   promptPresent: boolean;
   sendEnabled: boolean;
   requireSendEnabled?: boolean;
 }): RunExcelScreeningPreSendResult {
   const result = evaluateRunExcelScreeningPreSend(options);
   if (result.ok) return result;
+  const allNames = options.expectedAllFileNames?.length
+    ? options.expectedAllFileNames
+    : [options.expectedWorkbookName];
+  const candidatePool =
+    options.presence.allFilenames?.length
+      ? options.presence.allFilenames
+      : options.presence.candidates;
+  const missing = allNames.filter(
+    (name) => !screeningComposerCandidatesInclude(candidatePool, name),
+  );
+  if (missing.length > 0) {
+    throw new AutomationError(
+      "FILE_ATTACHMENT_ERROR",
+      `${allNames.length} files selected, but only ${allNames.length - missing.length} file(s) were attached. Processing stopped. Missing: ${missing.join(", ")}`,
+    );
+  }
   if (!result.workbookReady) {
     throw new AutomationError(
       "CHATGPT_PRE_SEND_ATTACHMENT_CHECK_FAILED",

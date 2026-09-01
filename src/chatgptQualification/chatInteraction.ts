@@ -3348,7 +3348,7 @@ export async function detectSubmissionSignals(
   };
 }
 
-async function findSubmittedUserMessage(
+export async function findSubmittedUserMessage(
   page: Page,
   options: {
     baseline: MessageBaseline;

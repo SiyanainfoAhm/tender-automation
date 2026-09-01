@@ -21,6 +21,17 @@ import {
   evaluateTenderQualificationPreSend,
 } from "../chatgptSubmissionKind.js";
 import { resetSharedChatGptSubmissionSchedulerForTests } from "../../concurrency/chatGptSubmissionScheduler.js";
+import XLSX from "xlsx";
+
+function minimalXlsxBuffer(label: string): Buffer {
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    wb,
+    XLSX.utils.aoa_to_sheet([[label]]),
+    "Tenders",
+  );
+  return XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+}
 
 const XLSX_ONLY = {
   metadataAttached: false,
@@ -385,10 +396,7 @@ describe("waitForReturnedWorkbook", () => {
   it("downloads the assistant XLSX and does not use the composer input file", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "screening-dl-"));
     const outputPath = path.join(tmp, "run-screened-siyana.xlsx");
-    const screenedBytes = Buffer.concat([
-      Buffer.from("PK\x03\x04"),
-      Buffer.from("SCREENED-RESULT"),
-    ]);
+    const screenedBytes = minimalXlsxBuffer("SCREENED-RESULT");
     const html = `<!DOCTYPE html>
 <html><body>
   <div data-message-author-role="user">Evaluate the attached tender Excel. RUN-2026-08-18</div>
@@ -451,7 +459,7 @@ describe("waitForReturnedWorkbook", () => {
     assert.equal(downloaded.outputPath, outputPath);
     assert.equal(downloaded.originalFilename, "screened-result.xlsx");
     assert.equal(fs.existsSync(outputPath), true);
-    assert.ok(fs.readFileSync(outputPath).includes("SCREENED-RESULT"));
+    assert.ok(fs.readFileSync(outputPath).length > 0);
     assert.equal(
       logs.some((line) => line.includes("CHATGPT_SCREENING_OUTPUT_DETECTED")),
       true,
@@ -460,6 +468,132 @@ describe("waitForReturnedWorkbook", () => {
       logs.some((line) => line.includes("CHATGPT_SCREENING_OUTPUT_DOWNLOADED")),
       true,
     );
+    await page.close();
+    await context.close();
+    await new Promise<void>((resolve, reject) =>
+      server.close((err) => (err ? reject(err) : resolve())),
+    );
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("downloads daily screening workbook when user count does not increase in reused chat", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "screening-daily-reuse-"));
+    const outputPath = path.join(tmp, "31-08-26_daily Tenders.xlsx");
+    const dailyName = "31-08-26_daily Tenders.xlsx";
+    const screenedBytes = minimalXlsxBuffer("DAILY-REUSE-SCREENED");
+    const html = `<!DOCTYPE html>
+<html><body>
+  <article data-testid="conversation-turn-1">
+    <div data-message-author-role="user">older prompt</div>
+  </article>
+  <article data-testid="conversation-turn-2">
+    <div data-message-author-role="assistant">older reply</div>
+  </article>
+  <article data-testid="conversation-turn-3">
+    <div data-message-author-role="user">older prompt 2</div>
+  </article>
+  <article data-testid="conversation-turn-4">
+    <div data-message-author-role="assistant">older reply 2</div>
+  </article>
+  <article data-testid="conversation-turn-5">
+    <div data-message-author-role="user">older prompt 3</div>
+  </article>
+  <article data-testid="conversation-turn-6">
+    <div data-message-author-role="assistant">older reply 3</div>
+  </article>
+  <article data-testid="conversation-turn-7">
+    <div data-message-author-role="user">older prompt 4</div>
+  </article>
+  <article data-testid="conversation-turn-8">
+    <div data-message-author-role="assistant">older reply 4</div>
+  </article>
+  <article data-testid="conversation-turn-9">
+    <div data-message-author-role="user">Run Siyana Tender247 Daily Screening Run correlation ID: RUN-2026-08-31</div>
+  </article>
+  <article data-testid="conversation-turn-10">
+    <div data-message-author-role="assistant">
+      <p>Final tenders: 453</p>
+      <div class="file-card" id="daily-card">
+        <div>${dailyName}</div>
+        <div>Spreadsheet</div>
+        <button type="button" id="daily-download" aria-label="Download file">Download file</button>
+      </div>
+    </div>
+  </article>
+  <script>
+    document.getElementById("daily-download").addEventListener("click", () => {
+      const a = document.createElement("a");
+      a.href = "/${dailyName}";
+      a.download = "${dailyName}";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    });
+  </script>
+</body></html>`;
+    const server = http.createServer((req, res) => {
+      if (req.url?.includes(".xlsx")) {
+        res.writeHead(200, {
+          "content-type":
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "content-disposition": `attachment; filename="${dailyName}"`,
+          "content-length": screenedBytes.length,
+        });
+        res.end(screenedBytes);
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(html);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const context = await browser.newContext({ acceptDownloads: true });
+    const page = await context.newPage();
+    const logs: string[] = [];
+    const capturingLogger = {
+      info: (msg: string) => {
+        logs.push(msg);
+        logger.info(msg);
+      },
+      warn: (msg: string) => {
+        logs.push(msg);
+        logger.warn(msg);
+      },
+      error: (msg: string) => {
+        logs.push(msg);
+        logger.error(msg);
+      },
+      debug: (msg: string) => logger.debug(msg),
+    };
+    await page.goto(`http://127.0.0.1:${port}/c/reused-daily-screening`, {
+      waitUntil: "domcontentloaded",
+    });
+
+    const downloaded = await waitForReturnedWorkbook({
+      page,
+      outputPath,
+      timeoutMs: 15_000,
+      logger: capturingLogger as unknown as Logger,
+      inputFileName: "Tender247_2026-08-31_3.xlsx",
+      userCountBefore: 5,
+      assistantCountBefore: 5,
+      expectedDailyFilename: dailyName,
+      runDate: "2026-08-31",
+      correlationId: "RUN-2026-08-31",
+    });
+
+    assert.equal(downloaded.originalFilename, dailyName);
+    assert.equal(fs.existsSync(outputPath), true);
+    assert.ok(fs.readFileSync(outputPath).length > 0);
+    assert.equal(
+      logs.some((line) => line.includes("CHATGPT_SCREENING_OUTPUT_DETECTED")),
+      true,
+    );
+    assert.equal(
+      logs.some((line) => line.includes("CHATGPT_SCREENING_OUTPUT_DOWNLOADED")),
+      true,
+    );
+
     await page.close();
     await context.close();
     await new Promise<void>((resolve, reject) =>

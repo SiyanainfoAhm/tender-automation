@@ -23,7 +23,10 @@ export type LogicalAttachmentTypes = {
 };
 
 export type DiscoveredComposerAttachments = {
+  /** Tender247 logical attachment names (metadata / AI summary / zip). */
   filenames: string[];
+  /** Every filename discovered in the composer shell (includes xlsx, md, etc.). */
+  allFilenames: string[];
   logicalTypes: LogicalAttachmentTypes;
   /** Distinct logical types present (metadata + ai + zip). */
   logicalAttachmentCount: number;
@@ -92,6 +95,9 @@ export function isExpectedLogicalSetComplete(options: {
   if (options.aiSummaryRequired && !options.types.aiSummary) return false;
   return true;
 }
+
+const COMPOSER_ATTACHMENT_FILENAME_RE =
+  /\b(metadata[^\s/\\]*\.json|AI[_\s-]*Summary[^\s/\\]*\.pdf|Tender[_\s-]*All[_\s-]*Documents[^\s/\\]*\.zip|screening[^\s/\\]*\.md|[\w.-]+\.xlsx|[\w.-]+\.xls|[\w.-]+\.csv|[\w.-]+\.md|[\w.-]+\.txt|[\w.-]+\.pdf|[\w.-]+\.docx)\b/i;
 
 export function getComposerEditorLocator(page: Page): Locator {
   return page.locator(EDITOR_SELECTOR).filter({ visible: true }).last();
@@ -221,11 +227,7 @@ export async function resolveComposerShell(
             if (card.querySelector('[contenteditable="true"], textarea')) {
               continue;
             }
-            if (
-              !/\b(metadata[^\s]*\.json|AI[_\s-]*Summary[^\s]*\.pdf|Tender[_\s-]*All[_\s-]*Documents[^\s]*\.zip|[\w.-]+\.xlsx)\b/i.test(
-                t,
-              )
-            ) {
+            if (!/\b(metadata[^\s/\\]*\.json|AI[_\s-]*Summary[^\s/\\]*\.pdf|Tender[_\s-]*All[_\s-]*Documents[^\s/\\]*\.zip|screening[^\s/\\]*\.md|[\w.-]+\.xlsx|[\w.-]+\.xls|[\w.-]+\.csv|[\w.-]+\.md|[\w.-]+\.txt|[\w.-]+\.pdf|[\w.-]+\.docx)\b/i.test(t)) {
               continue;
             }
             const lbs = Array.from(
@@ -393,7 +395,7 @@ export async function discoverComposerShellAttachments(
         if (card.querySelector('[contenteditable="true"], textarea')) continue;
 
         const fileMatch = text.match(
-          /\b(metadata[^\s/\\]*\.json|AI[_\s-]*Summary[^\s/\\]*\.pdf|Tender[_\s-]*All[_\s-]*Documents[^\s/\\]*\.zip|[\w.-]+\.xlsx)\b/i,
+          /\b(metadata[^\s/\\]*\.json|AI[_\s-]*Summary[^\s/\\]*\.pdf|Tender[_\s-]*All[_\s-]*Documents[^\s/\\]*\.zip|screening[^\s/\\]*\.md|[\w.-]+\.xlsx|[\w.-]+\.xls|[\w.-]+\.csv|[\w.-]+\.md|[\w.-]+\.txt|[\w.-]+\.pdf|[\w.-]+\.docx)\b/i,
         );
         if (!fileMatch) continue;
 
@@ -457,15 +459,16 @@ export async function discoverComposerShellAttachments(
       structuralRemoveButtonCount: 0,
     }));
 
-  const filenames = raw.names.filter((n) => {
+  const logicalFilenames = raw.names.filter((n) => {
     const c = classifyLogicalAttachmentFilename(n);
     return c.metadata || c.aiSummary || c.documentsZip;
   });
 
-  const logicalTypes = logicalTypesFromFilenames(filenames);
+  const logicalTypes = logicalTypesFromFilenames(logicalFilenames);
 
   return {
-    filenames,
+    filenames: logicalFilenames,
+    allFilenames: raw.names,
     logicalTypes,
     logicalAttachmentCount:
       Number(logicalTypes.metadata) +
@@ -490,6 +493,7 @@ export async function discoverComposerAttachments(
     ? await discoverComposerShellAttachments(resolution.shell)
     : {
         filenames: [],
+        allFilenames: [],
         logicalTypes: {
           metadata: false,
           aiSummary: false,

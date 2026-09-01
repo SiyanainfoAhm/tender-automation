@@ -19,6 +19,8 @@ import {
   typeComposerPrompt,
   uploadFilesToComposer,
   waitForRunExcelScreeningAttachmentReady,
+  findSubmittedUserMessage,
+  type MessageBaseline,
 } from "../chatgptQualification/chatInteraction.js";
 import {
   findGeneratedScreeningWorkbook,
@@ -449,6 +451,7 @@ async function waitForDailyScreeningWorkbookAfterSend(options: {
   logger: Logger;
   inputFileName: string;
   userCountBefore: number;
+  assistantCountBefore: number;
   expectedDailyFilename: string;
   correlationId: string;
   conversationUrl?: string;
@@ -460,6 +463,7 @@ async function waitForDailyScreeningWorkbookAfterSend(options: {
     logger,
     inputFileName,
     userCountBefore,
+    assistantCountBefore,
     expectedDailyFilename,
     correlationId,
   } = options;
@@ -469,6 +473,11 @@ async function waitForDailyScreeningWorkbookAfterSend(options: {
   log(logger, `CHATGPT_SCREENING_EXPECTED_DAILY=${expectedDailyFilename}`);
   const deadline = Date.now() + timeoutMs;
   let lastDiagnosticAt = 0;
+  const messageBaseline: MessageBaseline = {
+    assistantCountBefore,
+    userCountBefore,
+    capturedAt: new Date().toISOString(),
+  };
 
   while (Date.now() < deadline) {
     const generationActive = await isScreeningGenerationActive(page);
@@ -476,11 +485,22 @@ async function waitForDailyScreeningWorkbookAfterSend(options: {
       .locator('[data-message-author-role="user"]')
       .count()
       .catch(() => 0);
+    const assistantCount = await countAssistantMessages(page);
+    const newTurnObserved =
+      userCount > userCountBefore || assistantCount > assistantCountBefore;
+    const runUserMessage = await findSubmittedUserMessage(page, {
+      baseline: messageBaseline,
+      userMessagePattern: RUN_SCREENING_PROMPT_PATTERN,
+      expectedT247Id: correlationId,
+    });
+    const readyToScan =
+      !generationActive && (newTurnObserved || runUserMessage !== null);
 
-    if (userCount > userCountBefore && !generationActive) {
+    if (readyToScan) {
+      const minUserIndex = runUserMessage?.index ?? userCountBefore;
       const workbook = await findDailyWorkbookInAssistantAfterUserMessage(page, {
         expectedFilename: expectedDailyFilename,
-        minUserIndex: userCountBefore,
+        minUserIndex,
       });
       if (workbook) {
         logger.info("CHATGPT_SCREENING_OUTPUT_DETECTED");
@@ -502,10 +522,9 @@ async function waitForDailyScreeningWorkbookAfterSend(options: {
     const now = Date.now();
     if (now - lastDiagnosticAt >= 30_000) {
       lastDiagnosticAt = now;
-      const assistantCount = await countAssistantMessages(page);
       log(
         logger,
-        `CHATGPT_SCREENING_OUTPUT_WAIT_POLL users=${userCount} userBaseline=${userCountBefore} assistants=${assistantCount} generating=${generationActive}`,
+        `CHATGPT_SCREENING_OUTPUT_WAIT_POLL users=${userCount} userBaseline=${userCountBefore} assistants=${assistantCount} assistantBaseline=${assistantCountBefore} generating=${generationActive} runUserIndex=${runUserMessage?.index ?? "none"} readyToScan=${readyToScan}`,
       );
     }
 
@@ -539,6 +558,7 @@ export async function waitForReturnedWorkbook(options: {
       logger: options.logger,
       inputFileName: options.inputFileName,
       userCountBefore: options.userCountBefore ?? 0,
+      assistantCountBefore: options.assistantCountBefore ?? 0,
       expectedDailyFilename: options.expectedDailyFilename,
       correlationId: options.correlationId || "RUN",
       conversationUrl: isConversationUrl(options.page.url())
