@@ -37,12 +37,13 @@ import type {
   DashboardVolumePoint,
   DashboardWonPortfolio,
 } from "@/lib/dashboard/types";
+import {
+  filterRowsForDashboardPeriod,
+  tenderBasisDate,
+} from "@/lib/dashboard/period-filter";
+import { fetchAllSupabaseRows } from "@/lib/db/fetchAllRows";
 import { getServerSupabase } from "@/lib/db/server";
 import { formatIndianCurrency } from "@/lib/format";
-import {
-  calendarDateInAppTz,
-  resolveDashboardPeriodYmdBounds,
-} from "@/lib/tender-date-filter";
 import {
   getTenderUiStatus,
   TENDER_UI_STATUS_LABELS,
@@ -73,49 +74,6 @@ type TenderRow = {
 function toNumber(value: unknown): number {
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : 0;
-}
-
-function parseDate(raw: string | null | undefined): Date | null {
-  if (!raw) return null;
-  const d = parseISO(raw.length === 10 ? `${raw}T12:00:00+05:30` : raw);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function tenderBasisDate(
-  row: TenderRow,
-  basis: DashboardDateBasis,
-): Date | null {
-  if (basis === "scraped") {
-    return (
-      parseDate(row.scraped_date) ||
-      parseDate(row.first_seen_at) ||
-      parseDate(row.crawled_at) ||
-      parseDate(row.created_at)
-    );
-  }
-  return (
-    parseDate(row.created_at) ||
-    parseDate(row.first_seen_at) ||
-    parseDate(row.crawled_at) ||
-    parseDate(row.scraped_date)
-  );
-}
-
-function inRange(date: Date | null, from: Date, to: Date): boolean {
-  if (!date) return false;
-  const t = date.getTime();
-  return t >= from.getTime() && t <= to.getTime();
-}
-
-export function resolveDashboardPeriodBounds(
-  period: DashboardPeriod,
-  now = new Date(),
-): { from: Date; to: Date; fromYmd: string; toYmd: string } {
-  const { fromYmd, toYmd } = resolveDashboardPeriodYmdBounds(period, now);
-  // Noon IST avoids UTC day-boundary skew when comparing scraped_date YMD.
-  const from = new Date(`${fromYmd}T00:00:00+05:30`);
-  const to = new Date(`${toYmd}T23:59:59.999+05:30`);
-  return { from, to, fromYmd, toYmd };
 }
 
 function moneyLabel(value: number): string {
@@ -572,53 +530,21 @@ export async function getDashboardOverview(options: {
   const dateBasis = options.dateBasis || "scraped";
   const supabase = getServerSupabase();
   const now = new Date();
-  const { from, to, fromYmd, toYmd } = resolveDashboardPeriodBounds(period, now);
 
-  const periodListQuery = () => {
-    let q = supabase
-      .from("agenttender_web_tender_list")
-      .select(
-        "id, title, source_tender_id, source_portal, closing_date, tender_value, emd_amount, project_category, category, effective_qualification_status, manual_review_required, first_seen_at, crawled_at, created_at, scraped_date, qualified_at, updated_at",
-      )
-      .order("scraped_date", { ascending: false, nullsFirst: false })
-      .limit(8000);
-    if (dateBasis === "scraped") {
-      q = q.gte("scraped_date", fromYmd).lte("scraped_date", toYmd);
-    }
-    return q;
-  };
-
-  const periodCountBase = () => {
-    let q = supabase
-      .from("agenttender_web_tender_list")
-      .select("id", { count: "exact", head: true });
-    if (dateBasis === "scraped") {
-      q = q.gte("scraped_date", fromYmd).lte("scraped_date", toYmd);
-    }
-    return q;
-  };
+  const tenderListSelect =
+    "id, title, source_tender_id, source_portal, closing_date, tender_value, emd_amount, project_category, category, effective_qualification_status, manual_review_required, first_seen_at, crawled_at, created_at, scraped_date, qualified_at, updated_at";
 
   const [
-    listRes,
-    allTimeRes,
-    importedRes,
-    declinedRes,
-    awardedRes,
+    allRows,
     submittedIds,
     expiringDocuments,
     experiences,
   ] = await Promise.all([
-    periodListQuery(),
-    supabase
-      .from("agenttender_web_tender_list")
-      .select(
-        "id, title, source_tender_id, source_portal, closing_date, tender_value, emd_amount, project_category, category, effective_qualification_status, manual_review_required, first_seen_at, crawled_at, created_at, scraped_date, qualified_at, updated_at",
-      )
-      .order("scraped_date", { ascending: false, nullsFirst: false })
-      .limit(8000),
-    periodCountBase(),
-    periodCountBase().eq("effective_qualification_status", "NO_GO"),
-    periodCountBase().eq("effective_qualification_status", "WON"),
+    fetchAllSupabaseRows<TenderRow>(supabase, {
+      table: "agenttender_web_tender_list",
+      select: tenderListSelect,
+      order: { column: "scraped_date", ascending: false, nullsFirst: false },
+    }),
     loadSubmittedWorkspaces(options.companyId),
     loadExpiringDocuments(options.companyId),
     options.companyId
@@ -626,60 +552,33 @@ export async function getDashboardOverview(options: {
       : Promise.resolve([]),
   ]);
 
-  if (listRes.error) {
-    throw new Error(listRes.error.message);
-  }
-  if (allTimeRes.error) {
-    throw new Error(allTimeRes.error.message);
-  }
+  const periodRows = filterRowsForDashboardPeriod(allRows, {
+    period,
+    dateBasis,
+    now,
+  });
+  /** Period filter applies to intake, pipeline, and category views. */
+  const scopedRows = periodRows;
 
-  const periodScopedRows = (listRes.data || []) as TenderRow[];
-  const allRows = (allTimeRes.data || []) as TenderRow[];
-  const periodRows =
-    dateBasis === "scraped"
-      ? periodScopedRows
-      : allRows.filter((row) =>
-          inRange(tenderBasisDate(row, dateBasis), from, to),
-        );
-
-  const imported =
-    dateBasis === "scraped"
-      ? (importedRes.count ?? periodRows.length)
-      : periodRows.length;
-  const declined =
-    dateBasis === "scraped"
-      ? (declinedRes.count ??
-        periodRows.filter(
-          (row) =>
-            row.effective_qualification_status === "NO_GO" ||
-            row.effective_qualification_status === "NO_BID",
-        ).length)
-      : periodRows.filter(
-          (row) =>
-            row.effective_qualification_status === "NO_GO" ||
-            row.effective_qualification_status === "NO_BID",
-        ).length;
-  const wonInPeriod =
-    dateBasis === "scraped"
-      ? periodRows.filter((row) =>
-          isWonQualificationStatus(row.effective_qualification_status),
-        )
-      : periodRows.filter((row) =>
-          isWonQualificationStatus(row.effective_qualification_status),
-        );
-  const contractsAwarded =
-    dateBasis === "scraped"
-      ? (awardedRes.count ?? wonInPeriod.length)
-      : wonInPeriod.length;
+  const imported = periodRows.length;
+  const declined = periodRows.filter(
+    (row) =>
+      row.effective_qualification_status === "NO_GO" ||
+      row.effective_qualification_status === "NO_BID",
+  ).length;
+  const wonInPeriod = periodRows.filter((row) =>
+    isWonQualificationStatus(row.effective_qualification_status),
+  );
+  const contractsAwarded = wonInPeriod.length;
   const contractsAwardedValue = wonInPeriod.reduce(
     (sum, row) => sum + toNumber(row.tender_value),
     0,
   );
 
   const { stages: pipeline, total: pipelineTotal, valueTotal: pipelineValueTotal } =
-    buildPipeline(allRows, submittedIds);
+    buildPipeline(scopedRows, submittedIds);
 
-  const activePipelineRows = allRows.filter((row) => {
+  const activePipelineRows = scopedRows.filter((row) => {
     const stage = mapToDashboardPipelineStage({
       qualificationStatus: row.effective_qualification_status,
       submitted: submittedIds.has(row.id),
@@ -688,8 +587,10 @@ export async function getDashboardOverview(options: {
     return stage != null;
   });
 
-  const submittedCount = allRows.filter((row) => submittedIds.has(row.id)).length;
-  const wonAll = allRows.filter((row) =>
+  const submittedCount = scopedRows.filter((row) =>
+    submittedIds.has(row.id),
+  ).length;
+  const wonAll = scopedRows.filter((row) =>
     isWonQualificationStatus(row.effective_qualification_status),
   );
   const decided = submittedCount + wonAll.length;
@@ -706,12 +607,12 @@ export async function getDashboardOverview(options: {
   );
 
   const financialExposure = buildFinancialExposure(
-    allRows,
+    scopedRows,
     bankGuaranteeDocs.length > 0 ? bankGuaranteeDocs : expiringDocuments,
   );
-  const wonPortfolio = buildWonPortfolio(allRows, experiences);
+  const wonPortfolio = buildWonPortfolio(scopedRows, experiences);
   const { categories, total: categoryTotal, sources } =
-    buildCategories(periodRows.length > 0 ? periodRows : allRows);
+    buildCategories(scopedRows);
   const volumeTrend = buildVolumeTrend(allRows, dateBasis, now);
   const upcomingDeadlines = buildUpcomingDeadlines(allRows, submittedIds);
 
@@ -813,7 +714,7 @@ export async function getDashboardOverview(options: {
     pipelineValueTotal,
     pipelineValueLabel: moneyLabel(pipelineValueTotal),
     volumeTrend,
-    volumeSubtitle: "12-month rolling view of tender intake",
+    volumeSubtitle: `12-month intake trend (${periodPhrase} filter applies to totals below)`,
     categories,
     categoryTotal,
     sources,

@@ -21,6 +21,89 @@ import {
   dashboardRangeDays,
 } from "@/lib/dashboard/time-range";
 
+import {
+  filterRowsForDashboardPeriod,
+  resolveDashboardPeriodBounds,
+} from "@/lib/dashboard/period-filter";
+
+describe("dashboard period row filtering", () => {
+  const baseRow = {
+    id: "1",
+    title: "Test",
+    source_tender_id: "1",
+    source_portal: "TENDER247",
+    closing_date: null,
+    tender_value: 0,
+    emd_amount: 0,
+    project_category: null,
+    category: null,
+    effective_qualification_status: null,
+    manual_review_required: false,
+    qualified_at: null,
+    updated_at: null,
+  };
+
+  it("includes tenders missing scraped_date when first_seen_at is in this month", () => {
+    const now = new Date("2026-08-31T12:00:00+05:30");
+    const rows = [
+      {
+        ...baseRow,
+        scraped_date: null,
+        first_seen_at: "2026-08-15T06:30:00.000Z",
+        crawled_at: null,
+        created_at: "2026-08-15T06:30:00.000Z",
+      },
+      {
+        ...baseRow,
+        id: "2",
+        scraped_date: "2026-07-01",
+        first_seen_at: "2026-08-15T06:30:00.000Z",
+        crawled_at: null,
+        created_at: "2026-08-15T06:30:00.000Z",
+      },
+    ];
+
+    const filtered = filterRowsForDashboardPeriod(rows, {
+      period: "month",
+      dateBasis: "scraped",
+      now,
+    });
+
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0]?.id).toBe("1");
+  });
+
+  it("uses created_at basis when requested", () => {
+    const now = new Date("2026-08-31T12:00:00+05:30");
+    const rows = [
+      {
+        ...baseRow,
+        scraped_date: "2026-07-01",
+        first_seen_at: "2026-07-01T06:30:00.000Z",
+        crawled_at: null,
+        created_at: "2026-08-20T06:30:00.000Z",
+      },
+    ];
+
+    const filtered = filterRowsForDashboardPeriod(rows, {
+      period: "month",
+      dateBasis: "created",
+      now,
+    });
+
+    expect(filtered).toHaveLength(1);
+  });
+
+  it("resolves this month bounds in Asia/Kolkata", () => {
+    const bounds = resolveDashboardPeriodBounds(
+      "month",
+      new Date("2026-09-01T12:00:00+05:30"),
+    );
+    expect(bounds.fromYmd).toBe("2026-09-01");
+    expect(bounds.toYmd).toBe("2026-09-01");
+  });
+});
+
 describe("dashboard pipeline mapping", () => {
   it("maps GO to Will Bid and submitted overrides GO", () => {
     expect(

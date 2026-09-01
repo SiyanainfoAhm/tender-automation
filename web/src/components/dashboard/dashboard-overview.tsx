@@ -301,7 +301,8 @@ export function DashboardOverviewClient({ data }: DashboardOverviewProps) {
               Bid Pipeline by Stage
             </h2>
             <p className="mt-0.5 text-sm text-slate-500">
-              {data.pipelineTotal} live opportunities flowing through the funnel
+              {data.pipelineTotal.toLocaleString("en-IN")} opportunities{" "}
+              {DASHBOARD_PERIOD_LABELS[data.period].toLowerCase()}
             </p>
           </div>
           <ul className="space-y-3.5">
@@ -521,7 +522,8 @@ export function DashboardOverviewClient({ data }: DashboardOverviewProps) {
               By Category
             </h2>
             <p className="mt-0.5 text-sm text-slate-500">
-              {data.categoryTotal.toLocaleString("en-IN")} tenders
+              {data.categoryTotal.toLocaleString("en-IN")} tenders{" "}
+              {DASHBOARD_PERIOD_LABELS[data.period].toLowerCase()}
             </p>
           </div>
           <ul className="space-y-2.5">
