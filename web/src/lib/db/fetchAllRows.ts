@@ -9,6 +9,21 @@ type OrderConfig = {
   nullsFirst?: boolean;
 };
 
+/** Minimal select-query surface used for paginated reads. */
+type PagedSelectQuery<TRow> = {
+  order(
+    column: string,
+    options?: { ascending?: boolean; nullsFirst?: boolean },
+  ): PagedSelectQuery<TRow>;
+  range(
+    from: number,
+    to: number,
+  ): PromiseLike<{
+    data: TRow[] | null;
+    error: { message: string } | null;
+  }>;
+};
+
 /**
  * Fetch every row from a Supabase query, paging past the 1,000-row API cap.
  */
@@ -18,9 +33,7 @@ export async function fetchAllSupabaseRows<T extends Record<string, unknown>>(
     table: string;
     select: string;
     order?: OrderConfig;
-    apply?: (
-      query: ReturnType<SupabaseClient["from"]>,
-    ) => ReturnType<SupabaseClient["from"]>;
+    apply?: (query: PagedSelectQuery<T>) => PagedSelectQuery<T>;
     pageSize?: number;
   },
 ): Promise<T[]> {
@@ -29,9 +42,11 @@ export async function fetchAllSupabaseRows<T extends Record<string, unknown>>(
   let from = 0;
 
   while (true) {
-    let query = supabase.from(options.table).select(options.select);
+    let query = supabase
+      .from(options.table)
+      .select(options.select) as unknown as PagedSelectQuery<T>;
     if (options.apply) {
-      query = options.apply(query) as typeof query;
+      query = options.apply(query);
     }
     if (options.order) {
       query = query.order(options.order.column, {
@@ -43,7 +58,7 @@ export async function fetchAllSupabaseRows<T extends Record<string, unknown>>(
     if (error) {
       throw new Error(error.message);
     }
-    const batch = (data || []) as T[];
+    const batch = data ?? [];
     rows.push(...batch);
     if (batch.length < pageSize) {
       break;
