@@ -12,6 +12,7 @@ const CARD_STATUS_FILTERS = {
   willBid: "will_bid",
   mayBid: "may_bid",
   noBid: "no_bid",
+  duplicate: "duplicate",
   partnership: "partnership",
   submitted: "submitted",
   won: "won",

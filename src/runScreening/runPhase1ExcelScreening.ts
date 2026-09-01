@@ -1,7 +1,7 @@
 /**
  * Phase-1 run-level Excel screening orchestrator.
  * Source of truth: Tender247 downloaded Excel → ChatGPT screening.
- * No local company/NO_BID pre-filter; only exact dedupe + column normalize.
+ * No local pre-filter, duplicate detection, or merge — GPT output is authoritative.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -23,20 +23,12 @@ import {
 import {
   applyScreeningDecisionsToWorkbook,
   inventoryTenderWorkbook,
-  markDuplicateRowsInGptWorkbook,
 } from "./applyScreeningDecisionsToWorkbook.js";
 import {
   parseScreeningDecisionsJson,
 } from "./screeningDecisionSchema.js";
 import { logActiveScreeningRules, PHASE1_SCREENING_POLICY_VERSION } from "./screeningPolicy.js";
 import { persistGptScreenedWorkbookToDatabase, assertPhase1PersistComplete } from "./persistPhase1Results.js";
-import {
-  annotateImportDuplicates,
-  duplicateStatusCounts,
-  type AnnotatedImportRow,
-} from "./duplicateScreening.js";
-import { loadScreeningHistoryIndex } from "./loadScreeningHistoryIndex.js";
-import { mergeScreeningResults } from "./mergeScreeningResults.js";
 import { runCorrelationIdForDate } from "./phase1DetailQueue.js";
 import {
   deriveDetailScrapeIds,
@@ -47,7 +39,6 @@ import {
   readRunWorkbook,
   ScreeningOutputInvalidError,
   validateScreenedWorkbook,
-  writeRunWorkbook,
   type RunWorkbookRow,
 } from "./runWorkbook.js";
 import {
@@ -62,7 +53,6 @@ import {
   screenedWorkbookPath,
   screeningDir,
   loadScreeningChatCheckpoint,
-  writeJson,
   type Phase1ScreeningManifest,
 } from "./screeningManifest.js";
 import type { AppConfig } from "../config.js";
@@ -93,8 +83,8 @@ function log(logger: Logger | undefined, message: string): void {
   logger?.info(message);
 }
 
-async function reconcileScreenedWorkbook(options: {
-  annotatedRows: AnnotatedImportRow[];
+async function finalizeGptScreenedWorkbook(options: {
+  inputRows: RunWorkbookRow[];
   gptOutputPath: string;
   screenedPath: string;
   logger?: Logger;
@@ -103,30 +93,25 @@ async function reconcileScreenedWorkbook(options: {
   counts: Phase1ScreeningManifest["counts"];
 }> {
   const gptRows = readRunWorkbook(options.gptOutputPath);
+  log(options.logger, `SCREENING_IMPORTED_ROWS=${options.inputRows.length}`);
   log(options.logger, `SCREENING_GPT_OUTPUT_ROWS=${gptRows.length}`);
-  const merged = mergeScreeningResults({
-    importRows: options.annotatedRows,
-    gptRows,
-  });
-  if (merged.missingIds.length > 0) {
-    log(
-      options.logger,
-      `SCREENING_MERGE_MISSING_ROWS=${merged.missingIds.length} ids=${JSON.stringify(merged.missingIds.slice(0, 8))}`,
-    );
+  log(options.logger, "PHASE1_LOCAL_SCREENING=SKIPPED");
+  log(options.logger, "CHATGPT_SCREENING_AUTHORITATIVE=true");
+
+  if (path.resolve(options.gptOutputPath) !== path.resolve(options.screenedPath)) {
+    fs.copyFileSync(options.gptOutputPath, options.screenedPath);
   }
-  writeRunWorkbook(merged.rows, options.screenedPath);
+
   const validated = validateScreenedWorkbook({
-    inputRows: options.annotatedRows,
+    inputRows: options.inputRows,
     outputPath: options.screenedPath,
     allowMissingStatus: false,
   });
-  const duplicateCounts = duplicateStatusCounts(validated.outputRows);
-  log(options.logger, `SCREENING_IMPORTED_ROWS=${options.annotatedRows.length}`);
   log(options.logger, `SCREENING_FINAL_ROWS=${validated.outputRows.length}`);
-  log(options.logger, `SCREENING_DUPLICATE_ROWS=${duplicateCounts.DUPLICATE}`);
+  log(options.logger, `SCREENING_DUPLICATE_ROWS=${validated.counts.DUPLICATE}`);
   log(
     options.logger,
-    `SCREENING_ROW_INTEGRITY=${validated.outputRows.length === options.annotatedRows.length ? "PASS" : "FAIL"}`,
+    `SCREENING_ROW_INTEGRITY=${validated.outputRows.length === options.inputRows.length ? "PASS" : "FAIL"}`,
   );
   return {
     outputRows: validated.outputRows,
@@ -254,10 +239,9 @@ function prepareTender247GptInput(options: {
   });
   log(options.logger, `[RUN] Tender247 raw = ${prepared.tender247Raw}`);
   log(options.logger, `[DEDUPE] Tender247 unique = ${prepared.tender247Unique}`);
-  log(options.logger, `[DEDUPE] duplicates marked server-side (none removed)`);
   log(options.logger, "TENDER247_LOCAL_NO_BID_PREFILTER=false");
   log(options.logger, "TENDER247_ROWS_PRESERVED_BEFORE_GPT=true");
-  log(options.logger, "CHATGPT_SCREENING_MODE=JSON_DECISIONS");
+  log(options.logger, "CHATGPT_SCREENING_MODE=GPT_AUTHORITATIVE");
 
   return {
     originalArchivePath,
@@ -313,58 +297,15 @@ export async function runPhase1ExcelScreening(options: {
     rows: inputRows,
     originalArchivePath,
   } = prepared;
-  const history = await loadScreeningHistoryIndex({
-    runDateIso: dateIso,
-    downloadsRoot: path.dirname(dateFolder),
-  });
-  const annotatedRows = annotateImportDuplicates(inputRows, history);
-  const duplicateRows = annotatedRows.filter((row) => row.duplicateMark).length;
-  const screenableRows = annotatedRows.length - duplicateRows;
-  log(logger, `SCREENING_IMPORTED_ROWS=${annotatedRows.length}`);
-  log(logger, `SCREENING_DUPLICATE_PREMARKED=${duplicateRows}`);
-  log(logger, `SCREENING_SCREENABLE_ROWS=${screenableRows}`);
-
   const dir = screeningDir(dateFolder);
   fs.mkdirSync(dir, { recursive: true });
-  if (duplicateRows > 0) {
-    const marked = await markDuplicateRowsInGptWorkbook({
-      workbookPath: gptInputPath,
-      annotatedRows,
-      logger,
-    });
-    if (marked.marked !== duplicateRows) {
-      throw new AutomationError(
-        "SCREENING_DUPLICATE_MARK_FAILED",
-        `SCREENING_DUPLICATE_MARK_FAILED expected=${duplicateRows} marked=${marked.marked}`,
-      );
-    }
-    writeJson(path.join(dir, "duplicate-rows-manifest.json"), {
-      runDate: dateIso,
-      totalImportedRows: annotatedRows.length,
-      duplicateRows,
-      screenableRows,
-      duplicates: annotatedRows
-        .filter((row) => row.duplicateMark)
-        .map((row) => ({
-          tender247Id: row.tender247Id || null,
-          referenceNumber: row.bidAssistId || null,
-          organization: row.organization,
-          tenderName: row.tenderName,
-          deadline: row.deadline,
-          kind: row.duplicateMark?.kind,
-          reason: row.duplicateMark?.reason,
-          matchedTenderId: row.duplicateMark?.matchedTenderId,
-          matchedRunDate: row.duplicateMark?.matchedRunDate ?? null,
-        })),
-      updatedAt: new Date().toISOString(),
-    });
-  }
+  log(logger, `SCREENING_IMPORTED_ROWS=${inputRows.length}`);
 
   const inputWorkbookHash = hashFile(gptInputPath);
 
   saveIngestionCounts(dateFolder, {
     dailyRowsRaw: prepared.tender247Raw,
-    dailyRowsDeduped: annotatedRows.length,
+    dailyRowsDeduped: inputRows.length,
     tender247Raw: prepared.tender247Raw,
     bidAssistRaw: 0,
     updatedAt: new Date().toISOString(),
@@ -431,9 +372,7 @@ export async function runPhase1ExcelScreening(options: {
   const prompt = buildDailyScreeningOperatorPrompt({
     runDate: dateIso,
     sourceExcelName: inputFilename,
-    totalRowCount: annotatedRows.length,
-    screenableRowCount: screenableRows,
-    duplicateRowCount: duplicateRows,
+    totalRowCount: inputRows.length,
   });
   const screeningPromptHash = hashText(prompt);
   logActiveScreeningRules(screeningSnapshot, (message) => log(logger, message));
@@ -465,20 +404,20 @@ export async function runPhase1ExcelScreening(options: {
       companyPreferenceSnapshotHash &&
     existingManifest!.screeningPromptHash === screeningPromptHash &&
     existingManifest!.screeningPolicyVersion === PHASE1_SCREENING_POLICY_VERSION;
-  const recoverableMergeFailure =
+  const recoverableGptFailure =
     Boolean(existingManifest) &&
     existingManifest!.status === "failed" &&
     existingManifest!.inputWorkbookHash === inputWorkbookHash &&
     existingManifest!.preferencesHash === preferencesHash &&
     (existingManifest!.companyPreferenceSnapshotHash ?? existingManifest!.preferencesHash) ===
       companyPreferenceSnapshotHash &&
-    String(existingManifest!.error || "").includes("missing_rows");
-  // Resume when a prior run left a valid XLSX even if status was "failed"
-  // (e.g. merge missing-row VERIFY fallback now completes instead of aborting).
-  if (screenedExists && (hashesMatchExisting || recoverableMergeFailure)) {
+    existingManifest!.screeningPromptHash === screeningPromptHash &&
+    existingManifest!.screeningPolicyVersion === PHASE1_SCREENING_POLICY_VERSION;
+  // Resume when a prior run left a valid ChatGPT workbook even if status was "failed".
+  if (screenedExists && (hashesMatchExisting || recoverableGptFailure)) {
     try {
-      const validated = await reconcileScreenedWorkbook({
-        annotatedRows,
+      const validated = await finalizeGptScreenedWorkbook({
+        inputRows,
         gptOutputPath: existingScreened!,
         screenedPath: screenedWorkbookPath(dateFolder),
         logger,
@@ -487,8 +426,8 @@ export async function runPhase1ExcelScreening(options: {
         logger,
         existingManifest?.status === "complete"
           ? "[AI SCREENING] Resuming valid screened workbook"
-          : recoverableMergeFailure
-            ? "[AI SCREENING] Recovering ChatGPT workbook after prior merge failure"
+          : recoverableGptFailure
+            ? "[AI SCREENING] Recovering ChatGPT workbook after prior failure"
             : "[AI SCREENING] Revalidating existing screened workbook after prior failure",
       );
       return await finalizeScreening({
@@ -503,7 +442,7 @@ export async function runPhase1ExcelScreening(options: {
         preferencesHash,
         companyPreferenceSnapshotHash,
         screeningPromptHash,
-        inputRows: annotatedRows,
+        inputRows,
         outputRows: validated.outputRows,
         counts: validated.counts,
         logger,
@@ -552,17 +491,11 @@ export async function runPhase1ExcelScreening(options: {
     });
   }
 
-  const duplicateManifestPath = path.join(dir, "duplicate-rows-manifest.json");
-
   try {
     const screening = await client.screenWorkbook({
       inputWorkbookPath: gptInputPath,
       prompt,
       screeningMdPath,
-      extraUploadPaths:
-        duplicateRows > 0 && fs.existsSync(duplicateManifestPath)
-          ? [duplicateManifestPath]
-          : undefined,
       outputPath: screenedPath,
       runDate: dateIso,
     });
@@ -605,14 +538,13 @@ export async function runPhase1ExcelScreening(options: {
 
     const rawGptPath = path.join(dir, "chatgpt-screened-raw.xlsx");
     fs.copyFileSync(screenedPath, rawGptPath);
-    const validated = await reconcileScreenedWorkbook({
-      annotatedRows,
+    const validated = await finalizeGptScreenedWorkbook({
+      inputRows,
       gptOutputPath: rawGptPath,
       screenedPath,
       logger,
     });
-    log(logger, "SCREENING_ROW_RECONCILIATION=PASS");
-    log(logger, "[AI SCREENING] Reconciliation = PASS");
+    log(logger, "SCREENING_GPT_OUTPUT_VALIDATED=PASS");
     log(logger, "[AI SCREENING] Workbook validation=PASS");
     log(logger, "CHATGPT_SCREENING_OUTPUT_VALID=true");
     log(logger, `[AI SCREENING] DUPLICATE = ${validated.counts.DUPLICATE}`);
@@ -647,7 +579,7 @@ export async function runPhase1ExcelScreening(options: {
       preferencesHash,
       companyPreferenceSnapshotHash,
       screeningPromptHash,
-      inputRows: annotatedRows,
+      inputRows,
       outputRows: validated.outputRows,
       counts: validated.counts,
       logger,
@@ -697,7 +629,7 @@ export async function runPhase1ExcelScreening(options: {
       screeningPromptHash,
       screenedWorkbook: null,
       screenedWorkbookHash: null,
-      inputRows: annotatedRows.length,
+      inputRows: inputRows.length,
       outputRows: 0,
       counts: emptyStatusCounts(),
       error: `${code}: ${message}`,

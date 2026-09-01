@@ -188,6 +188,7 @@ export type TenderListStatusCounts = {
   willBid: number;
   mayBid: number;
   noBid: number;
+  duplicate: number;
   partnership: number;
   submitted: number;
   closingSoon: number;
@@ -244,6 +245,7 @@ export async function getTenderListStatusCounts(
     willBidRes,
     mayBidRes,
     noBidRes,
+    duplicateRes,
     partnershipRes,
     wonRes,
     closingRes,
@@ -255,6 +257,7 @@ export async function getTenderListStatusCounts(
     base().eq("effective_qualification_status", "GO"),
     base().eq("effective_qualification_status", "CONDITIONAL_GO"),
     base().eq("effective_qualification_status", "NO_GO"),
+    base().eq("effective_qualification_status", "DUPLICATE"),
     base().eq("effective_qualification_status", "PARTNER_BID"),
     base().eq("effective_qualification_status", "WON"),
     base().gte("closing_date", todayDate).lte("closing_date", in3),
@@ -271,6 +274,7 @@ export async function getTenderListStatusCounts(
     ["willBid", willBidRes],
     ["mayBid", mayBidRes],
     ["noBid", noBidRes],
+    ["duplicate", duplicateRes],
     ["partnership", partnershipRes],
     ["won", wonRes],
     ["closingSoon", closingRes],
@@ -292,11 +296,12 @@ export async function getTenderListStatusCounts(
   const willBid = willBidRes.count ?? 0;
   const mayBid = mayBidRes.count ?? 0;
   const noBid = noBidRes.count ?? 0;
+  const duplicate = duplicateRes.count ?? 0;
   const partnership = partnershipRes.count ?? 0;
   const won = wonRes.count ?? 0;
 
   const mappedSum =
-    verify + underEvaluation + willBid + mayBid + noBid + partnership + won;
+    verify + underEvaluation + willBid + mayBid + noBid + duplicate + partnership + won;
   if (mappedSum < totalTenders) {
     console.warn(
       "[tenderListStatusCounts] unmapped/legacy statuses present",
@@ -315,6 +320,7 @@ export async function getTenderListStatusCounts(
     willBid,
     mayBid,
     noBid,
+    duplicate,
     partnership,
     submitted: submittedRes.count ?? 0,
     closingSoon: closingRes.count ?? 0,

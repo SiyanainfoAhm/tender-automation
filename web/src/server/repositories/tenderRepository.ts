@@ -64,6 +64,9 @@ export type WebTenderListRow = {
   first_seen_at: string | null;
   updated_at: string;
   effective_qualification_status: string | null;
+  duplicate_of_source_tender_id: string | null;
+  duplicate_of_tender_id: string | null;
+  duplicate_match_kind: string | null;
   chat_url: string | null;
 };
 
@@ -94,6 +97,9 @@ export const WEB_TENDER_LIST_SELECT = [
   "crawled_at",
   "updated_at",
   "effective_qualification_status",
+  "duplicate_of_source_tender_id",
+  "duplicate_of_tender_id",
+  "duplicate_match_kind",
 ].join(",");
 
 const SORTABLE: Record<string, string> = {

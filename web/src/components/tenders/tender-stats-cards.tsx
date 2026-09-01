@@ -5,6 +5,7 @@ import {
   Briefcase,
   CheckCircle2,
   Clock,
+  Copy,
   FileText,
   Handshake,
   Send,
@@ -77,6 +78,13 @@ const PRIMARY: CardDef[] = [
     iconClassName: "bg-rose-100 text-rose-700",
     filterStatus: "no_bid",
   },
+  {
+    key: "duplicate",
+    label: "Duplicate",
+    icon: Copy,
+    iconClassName: "bg-slate-100 text-slate-700",
+    filterStatus: "duplicate",
+  },
 ];
 
 const EXTRA: CardDef[] = [
@@ -133,7 +141,7 @@ export function TenderStatsCards({
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
         {cards.map((card) => {
           const clickable =
             interactive &&

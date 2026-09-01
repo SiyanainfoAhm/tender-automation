@@ -29,6 +29,7 @@ import { PHASE1_SCREENING_POLICY_VERSION } from "./screeningPolicy.js";
 import { RUN_SCREENED_FILE } from "./runWorkbook.js";
 import { parsePhase1Amount } from "./phase1DecisionGuard.js";
 import { parsePortalDate } from "../supabase/tenderMetadataMap.js";
+import { parseDuplicateReferenceFromReason } from "./parseDuplicateReference.js";
 
 export type Phase1PersistResult = {
   attempted: number;
@@ -255,6 +256,27 @@ async function findExistingTender(options: {
   return null;
 }
 
+async function resolveDuplicateOfTenderId(options: {
+  client: ReturnType<typeof getSupabaseAdminClient>;
+  sourcePortal: "TENDER247" | "BIDASSIST";
+  matchedSourceTenderId: string;
+  excludeTenderId?: string | null;
+}): Promise<string | null> {
+  let query = options.client
+    .from("agenttender_tenders")
+    .select("id")
+    .eq("source_portal", options.sourcePortal)
+    .eq("source_tender_id", options.matchedSourceTenderId)
+    .order("first_seen_at", { ascending: true })
+    .limit(1);
+  if (options.excludeTenderId) {
+    query = query.neq("id", options.excludeTenderId);
+  }
+  const { data, error } = await query.maybeSingle();
+  if (error) return null;
+  return data?.id ? String(data.id) : null;
+}
+
 /** @deprecated Prefer persistGptScreenedWorkbookToDatabase */
 export async function persistPhase1NoBidResults(options: {
   rows: RunWorkbookRow[];
@@ -383,6 +405,19 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
       const titleParts = truncateForDatabaseIndex(row.tenderName || id);
       const orgParts = truncateForDatabaseIndex(row.organization || null);
 
+      const duplicateRef = isPhase1Duplicate(status)
+        ? parseDuplicateReferenceFromReason(row.screeningReason || "")
+        : { matchedSourceTenderId: null, matchKind: null };
+      const duplicateOfTenderId =
+        duplicateRef.matchedSourceTenderId && isPhase1Duplicate(status)
+          ? await resolveDuplicateOfTenderId({
+              client,
+              sourcePortal,
+              matchedSourceTenderId: duplicateRef.matchedSourceTenderId,
+              excludeTenderId: existing?.id ?? null,
+            })
+          : null;
+
       const rawMetadata = {
         ...(existing?.raw_metadata &&
         typeof existing.raw_metadata === "object" &&
@@ -410,6 +445,12 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         ...(orgParts.truncated
           ? { fullOrganization: String(row.organization || "").trim() }
           : {}),
+        ...(duplicateRef.matchedSourceTenderId
+          ? {
+              duplicateOfSourceTenderId: duplicateRef.matchedSourceTenderId,
+              duplicateMatchKind: duplicateRef.matchKind,
+            }
+          : {}),
       };
 
       const incoming = {
@@ -429,6 +470,9 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         qualification_status: qualificationStatus,
         category: row.tenderCategory || null,
         project_category: "Other",
+        duplicate_of_source_tender_id: duplicateRef.matchedSourceTenderId,
+        duplicate_of_tender_id: duplicateOfTenderId,
+        duplicate_match_kind: duplicateRef.matchKind,
         raw_metadata: rawMetadata,
         metadata_version: 1,
         content_hash: `phase1-gpt:${sourcePortal}:${id}:${options.runDate}:${status}`,
@@ -449,6 +493,9 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         "last_seen_at",
         "supabase_synced_at",
         "scraped_date",
+        "duplicate_of_source_tender_id",
+        "duplicate_of_tender_id",
+        "duplicate_match_kind",
       ];
 
       const { next, updatedKeys } = mergeNullOnlyRecord(
@@ -521,6 +568,9 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
               qualification_status: qualificationStatus,
               category: row.tenderCategory || null,
               project_category: "Other",
+              duplicate_of_source_tender_id: duplicateRef.matchedSourceTenderId,
+              duplicate_of_tender_id: duplicateOfTenderId,
+              duplicate_match_kind: duplicateRef.matchKind,
               raw_metadata: rawMetadata,
               metadata_version: 1,
               content_hash: incoming.content_hash,

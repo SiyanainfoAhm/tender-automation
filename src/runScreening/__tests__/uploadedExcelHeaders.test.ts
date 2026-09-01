@@ -137,6 +137,59 @@ test("headerless Final_Aug-style upload parses Status column without titles", ()
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test("GPT output with empty Screening Status falls back to Status column", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "upload-dual-status-"));
+  const filePath = path.join(dir, "daily.xlsx");
+  const aoa = [
+    [
+      "T247 ID",
+      "TENDER BRIEF",
+      "Organization",
+      "EMD",
+      "Screening Status",
+      "Screening Reason",
+      "Tender Category",
+      "Status",
+      "Decision Reason",
+    ],
+    [
+      "101466917",
+      "Core banking maintenance",
+      "Uco Bank",
+      "100000000",
+      "",
+      "",
+      "Financial Threshold Exceeded",
+      "NO_BID",
+      "EMD exceeds Siyana limit",
+    ],
+    [
+      "103862135",
+      "Website redesign",
+      "Dept",
+      "50000",
+      "DUPLICATE",
+      "Duplicate Tender247 ID: 103862135",
+      "",
+      "DUPLICATE",
+      "Duplicate Tender247 ID: 103862135",
+    ],
+  ];
+  const sheet = XLSX.utils.aoa_to_sheet(aoa);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, sheet, "Final Analysis");
+  XLSX.writeFile(workbook, filePath);
+
+  const rows = parseSourceWorkbook(filePath, "TENDER247");
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0]!.screeningStatus, "NO_GO");
+  assert.equal(rows[0]!.screeningReason, "EMD exceeds Siyana limit");
+  assert.equal(rows[1]!.screeningStatus, "DUPLICATE");
+  assert.equal(rows[1]!.screeningReason, "Duplicate Tender247 ID: 103862135");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test("parseExemptionFlag handles Yes/No blanks", () => {
   assert.equal(parseExemptionFlag("Yes"), true);
   assert.equal(parseExemptionFlag("NO"), false);

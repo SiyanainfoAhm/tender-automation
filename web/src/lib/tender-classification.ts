@@ -59,6 +59,7 @@ export const CLASSIFICATION_DECISION_LABELS: Record<TenderStatus, string> = {
   PARTNER_BID: "PARTNER BID",
   VERIFY: "VERIFY",
   NO_GO: "NO-GO",
+  DUPLICATE: "DUPLICATE",
   WON: "WON",
   LOST: "LOST",
   DISQUALIFIED: "DISQUALIFIED",
@@ -73,6 +74,8 @@ export const CLASSIFICATION_REQUIRED_ACTIONS: Record<TenderStatus, string> = {
     "Obtain approval, partner evidence and the required agreement before bid lock.",
   VERIFY: "Hold the decision and obtain the missing source or clarification.",
   NO_GO: "Record the exact reason and close the tender.",
+  DUPLICATE:
+    "This tender matches another record — open the linked tender to see why it was marked duplicate.",
   WON: "Record award details and move into project handover.",
   LOST: "Record the lost reason and close the opportunity.",
   DISQUALIFIED: "Record the disqualification reason and archive the tender.",

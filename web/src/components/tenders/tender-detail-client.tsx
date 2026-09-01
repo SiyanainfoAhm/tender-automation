@@ -97,6 +97,10 @@ import {
   TENDER_STATUSES,
   type TenderStatus,
 } from "@/lib/tender-status";
+import {
+  duplicateMatchKindLabel,
+  formatDuplicateReference,
+} from "@/lib/duplicate-reference";
 import { cn } from "@/lib/utils";
 import {
   deleteTenderDocumentAction,
@@ -613,6 +617,12 @@ export function TenderDetailClient({
     ? draft.qualificationStatus || null
     : tender.qualificationStatus;
   const statusBadge = toStatusBadge(displayStatus);
+  const duplicateReference = formatDuplicateReference({
+    duplicateOfSourceTenderId: tender.duplicateOfSourceTenderId,
+    duplicateOfTenderId: tender.duplicateOfTenderId,
+    sourcePortal: tender.sourcePortal,
+  });
+  const duplicateKindLabel = duplicateMatchKindLabel(tender.duplicateMatchKind);
 
   const valueLabel = formatTenderValue({
     amount: tender.tenderValue,
@@ -1353,6 +1363,28 @@ export function TenderDetailClient({
                     </p>
                   )}
                 </DecisionRow>
+                {displayStatus === "DUPLICATE" && duplicateReference ? (
+                  <DecisionRow label="Duplicate of">
+                    <div className="space-y-1 font-normal leading-relaxed text-foreground-700">
+                      {duplicateKindLabel ? (
+                        <p className="text-sm text-foreground-500">
+                          {duplicateKindLabel}
+                        </p>
+                      ) : null}
+                      {duplicateReference.href ? (
+                        <Link
+                          href={duplicateReference.href}
+                          className="inline-flex items-center gap-1 text-sm font-medium text-sky-700 hover:underline"
+                        >
+                          <Link2 className="size-3.5 shrink-0" aria-hidden />
+                          {duplicateReference.label}
+                        </Link>
+                      ) : (
+                        <p className="text-sm">{duplicateReference.label}</p>
+                      )}
+                    </div>
+                  </DecisionRow>
+                ) : null}
                 {showLost ||
                 (editing && draft.qualificationStatus === "LOST") ? (
                   <DecisionRow label="Lost Reason">

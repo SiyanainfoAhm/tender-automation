@@ -197,6 +197,21 @@ export function getField(
   return undefined;
 }
 
+/** Like getField, but skips empty/blank values so a later alias column can win. */
+export function getFirstPopulatedField(
+  row: Record<string, unknown>,
+  headerMap: Map<string, string>,
+  ...candidates: string[]
+): unknown {
+  for (const candidate of candidates) {
+    const value = getField(row, headerMap, candidate);
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return value;
+    }
+  }
+  return getField(row, headerMap, ...candidates);
+}
+
 export function buildHeaderMap(headers: string[]): Map<string, string> {
   const map = new Map<string, string>();
   for (const header of headers) {

@@ -12,6 +12,7 @@ import {
   cleanCell,
   formatIdAsText,
   getField,
+  getFirstPopulatedField,
   hasAnyHeaders,
   normalizeHeaderKey,
 } from "../excel/types.js";
@@ -414,7 +415,9 @@ function parseSheetRows(
           ? ba
           : `BA-${ba}`
         : `NAME-${name.slice(0, 40)}`;
-    const statusRaw = cleanCell(getField(record, headerMap, ...STATUS_HEADERS));
+    const statusRaw = cleanCell(
+      getFirstPopulatedField(record, headerMap, ...STATUS_HEADERS),
+    );
     const deadlineRaw = getField(record, headerMap, ...DEADLINE_HEADERS);
     const tenderCategory = cleanCell(
       getField(record, headerMap, ...CATEGORY_HEADERS),
@@ -432,7 +435,9 @@ function parseSheetRows(
       emdAmount: cleanCell(getField(record, headerMap, ...EMD_HEADERS)),
       sourceRefs: sourceCell || source,
       screeningStatus: coercePhase1WorkbookStatus(statusRaw) ?? "",
-      screeningReason: cleanCell(getField(record, headerMap, ...REASON_HEADERS)),
+      screeningReason: cleanCell(
+        getFirstPopulatedField(record, headerMap, ...REASON_HEADERS),
+      ),
       tenderCategory: tenderCategory || undefined,
       msmeExemption: parseExemptionFlag(
         getField(record, headerMap, ...MSME_HEADERS),

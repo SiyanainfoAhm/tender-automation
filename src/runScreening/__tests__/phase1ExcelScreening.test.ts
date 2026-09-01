@@ -342,13 +342,13 @@ test("Tender247 export (no local pre-filter) goes to ChatGPT; NO_GO never enters
   // Original Excel keeps the exact duplicate row (no shortlist / no drop).
   assert.equal(result.inputRows, 19);
   assert.equal(result.outputRows, 19);
-  assert.equal(result.counts.DUPLICATE, 1);
-  assert.equal(result.counts.NO_GO, 8);
+  assert.equal(result.counts.DUPLICATE, 0);
+  assert.equal(result.counts.NO_GO, 9);
   assert.equal(result.counts.VERIFY, 5);
   assert.equal(result.counts.CONDITIONAL_GO, 4);
   assert.equal(result.counts.GO, 1);
   assert.equal(result.tender247DetailIds.length, 10);
-  assert.equal(result.noBidRows.length, 8);
+  assert.equal(result.noBidRows.length, 9);
 
   const noBidIds = result.noBidRows.map((row) => row.tender247Id);
   for (const id of ["1001", "1002", "1003", "1004", "1005", "1006", "1007", "1008"]) {
@@ -389,21 +389,15 @@ test("Tender247 export (no local pre-filter) goes to ChatGPT; NO_GO never enters
   const screened = readRunWorkbook(path.join(dateFolder, "screening", RUN_SCREENED_FILE));
   assert.equal(screened.length, 19);
   const noBidScreened = screened.filter((row) => row.screeningStatus === "NO_GO");
-  assert.equal(noBidScreened.length, 8);
-  const duplicateScreened = screened.filter((row) => row.screeningStatus === "DUPLICATE");
-  assert.equal(duplicateScreened.length, 1);
-  assert.match(
-    duplicateScreened[0]?.screeningReason || "",
-    /Duplicate Tender247 ID: 1001/,
-  );
+  assert.equal(noBidScreened.length, 9);
   assert.ok(noBidScreened.every((row) => row.screeningReason.length > 12));
 
   const manifest = loadScreeningManifest(dateFolder);
   assert.equal(manifest?.status, "complete");
   assert.equal(manifest?.inputRows, 19);
   assert.equal(manifest?.outputRows, 19);
-  assert.equal(manifest?.counts.NO_GO, 8);
-  assert.equal(manifest?.counts.DUPLICATE, 1);
+  assert.equal(manifest?.counts.NO_GO, 9);
+  assert.equal(manifest?.counts.DUPLICATE, 0);
 
   assertAiScreeningCompleteForDetailCrawl(dateFolder);
 

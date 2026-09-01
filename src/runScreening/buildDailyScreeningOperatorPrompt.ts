@@ -158,27 +158,16 @@ Each final tender must have:
 export function buildDailyScreeningOperatorPrompt(options: {
   runDate: string;
   sourceExcelName: string;
-  screenableRowCount?: number;
   totalRowCount?: number;
-  duplicateRowCount?: number;
 }): string {
   const outName = dailyScreeningOutputFilename(options.runDate);
-  const total = options.totalRowCount;
-  const duplicates = options.duplicateRowCount ?? 0;
-  const serverNote =
-    typeof total === "number" && duplicates > 0
+  const rowNote =
+    typeof options.totalRowCount === "number"
       ? `
-Server attachments:
-- \`duplicate-rows-manifest.json\` lists ${duplicates} duplicate/historical row(s) detected before screening.
-- The attached workbook already marks those rows with \`Status = DUPLICATE\` — keep them unchanged.
-- Final output must contain all ${total} imported rows.
-`
-      : typeof total === "number"
-        ? `
 Row integrity:
-- Final output must contain all ${total} imported rows.
+- Final output must contain all ${options.totalRowCount} imported rows.
 `
-        : "";
+      : "";
 
   return `Run Siyana Tender247 Daily Screening for the attached Tender247 Excel file(s).
 
@@ -218,7 +207,7 @@ Allowed statuses: DUPLICATE, NO_BID, VERIFY, MAY_BID. Never auto-mark WILL_BID.
 Final Validation
 
 The final workbook row count must equal the imported Tender247 row count. Every detected duplicate and historical match must remain visible with Status DUPLICATE and an evidence-based Decision Reason. Every non-duplicate status and reason must match the actual tender scope.
-${serverNote}
+${rowNote}
 Input workbook attached: ${options.sourceExcelName}
 Run date: ${options.runDate}
 Run correlation ID: RUN-${options.runDate}

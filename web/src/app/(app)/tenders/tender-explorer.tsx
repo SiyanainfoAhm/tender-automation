@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -34,6 +35,10 @@ import {
   normalizeTenderCity,
   stripLocationDecorators,
 } from "@/lib/normalize-tender-city";
+import {
+  duplicateMatchKindLabel,
+  formatDuplicateReference,
+} from "@/lib/duplicate-reference";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -1405,6 +1410,7 @@ export function TenderExplorer({
                                 "PARTNER_BID",
                                 "VERIFY",
                                 "NO_GO",
+                                "DUPLICATE",
                                 "WON",
                                 "LOST",
                                 "DISQUALIFIED",
@@ -1413,11 +1419,52 @@ export function TenderExplorer({
                             ).includes(
                               status as (typeof TENDER_STATUSES)[number],
                             ) ? (
-                              <StatusBadge
-                                status={status as QualificationStatus}
-                                size="sm"
-                                className="max-w-full truncate"
-                              />
+                              <div className="space-y-1">
+                                <StatusBadge
+                                  status={status as QualificationStatus}
+                                  size="sm"
+                                  className="max-w-full truncate"
+                                />
+                                {status === "DUPLICATE" ? (
+                                  (() => {
+                                    const ref = formatDuplicateReference({
+                                      duplicateOfSourceTenderId:
+                                        row.duplicate_of_source_tender_id,
+                                      duplicateOfTenderId:
+                                        row.duplicate_of_tender_id,
+                                      sourcePortal: row.source_portal,
+                                    });
+                                    if (!ref) return null;
+                                    return (
+                                      <p className="truncate text-[10px] text-foreground-500">
+                                        {duplicateMatchKindLabel(
+                                          row.duplicate_match_kind,
+                                        ) ? (
+                                          <span>
+                                            {duplicateMatchKindLabel(
+                                              row.duplicate_match_kind,
+                                            )}
+                                            {": "}
+                                          </span>
+                                        ) : null}
+                                        {ref.href ? (
+                                          <Link
+                                            href={ref.href}
+                                            className="font-medium text-sky-700 hover:underline"
+                                            onClick={(event) =>
+                                              event.stopPropagation()
+                                            }
+                                          >
+                                            {ref.label}
+                                          </Link>
+                                        ) : (
+                                          <span>{ref.label}</span>
+                                        )}
+                                      </p>
+                                    );
+                                  })()
+                                ) : null}
+                              </div>
                             ) : (
                               <span className="inline-flex max-w-full items-center gap-1.5 truncate rounded-md bg-background-200 px-2 py-0.5 text-[11px] font-medium text-foreground-600">
                                 <span className="size-1.5 shrink-0 rounded-full bg-foreground-400" />

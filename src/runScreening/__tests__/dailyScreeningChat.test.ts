@@ -28,14 +28,14 @@ test("operator prompt embeds shared-chat instructions and output filename", () =
     runDate: "2026-08-26",
     sourceExcelName: "Tender247_2026-08-26.xlsx",
     totalRowCount: 516,
-    duplicateRowCount: 37,
   });
   assert.match(prompt, /Run Siyana Tender247 Daily Screening/);
   assert.match(prompt, /screening\.md/);
   assert.match(prompt, /26-08-26_daily Tenders\.xlsx/);
   assert.match(prompt, /Do not open Tender247, send email/);
   assert.match(prompt, /Allowed statuses: DUPLICATE, NO_BID, VERIFY, MAY_BID/);
-  assert.match(prompt, /duplicate-rows-manifest\.json/);
+  assert.match(prompt, /Final output must contain all 516 imported rows/);
+  assert.doesNotMatch(prompt, /duplicate-rows-manifest\.json/);
   assert.match(prompt, /Run correlation ID: RUN-2026-08-26/);
 });
 

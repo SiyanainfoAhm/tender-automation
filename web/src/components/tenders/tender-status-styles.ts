@@ -55,6 +55,14 @@ export const qualificationStatusStyles: Record<
     border: "border-rose-200",
     dot: "bg-rose-500",
   },
+  DUPLICATE: {
+    label: STATUS_DISPLAY_LABELS.DUPLICATE,
+    shortLabel: "Duplicate",
+    bg: "bg-slate-100",
+    text: "text-slate-700",
+    border: "border-slate-200",
+    dot: "bg-slate-500",
+  },
   WON: {
     label: STATUS_DISPLAY_LABELS.WON,
     shortLabel: "Won",

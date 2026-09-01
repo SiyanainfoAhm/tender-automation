@@ -335,5 +335,12 @@ export function mapTenderDetail(options: {
     decisionReason: asString(rawMeta.decisionReason) || asString(qualification?.reason),
     lostReason: asString(rawMeta.lostReason),
     disqualificationReason: asString(rawMeta.disqualificationReason),
+    duplicateOfSourceTenderId:
+      asString(tender.duplicate_of_source_tender_id) ||
+      asString(rawMeta.duplicateOfSourceTenderId),
+    duplicateOfTenderId: asString(tender.duplicate_of_tender_id),
+    duplicateMatchKind:
+      asString(tender.duplicate_match_kind) ||
+      asString(rawMeta.duplicateMatchKind),
   };
 }

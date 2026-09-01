@@ -118,6 +118,9 @@ export type TenderDetailDTO = {
   decisionReason: string | null;
   lostReason: string | null;
   disqualificationReason: string | null;
+  duplicateOfSourceTenderId: string | null;
+  duplicateOfTenderId: string | null;
+  duplicateMatchKind: string | null;
 };
 
 export function displayDash(value: string | null | undefined): string {
