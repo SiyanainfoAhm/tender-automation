@@ -75,8 +75,32 @@ export const DASHBOARD_PIPELINE_META: Record<
 };
 
 /**
+ * Qualification statuses excluded from the active bid pipeline funnel.
+ */
+export const DASHBOARD_PIPELINE_EXCLUDED_STATUSES = new Set([
+  "WON",
+  "AWARDED",
+  "NO_GO",
+  "NO_BID",
+  "DUPLICATE",
+  "LOST",
+  "DISQUALIFIED",
+]);
+
+function normalizeQualificationStatus(
+  status: string | null | undefined,
+): string {
+  return String(status || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+}
+
+/**
  * Map qualification + workspace flags into an active bid-pipeline stage.
- * Won / No Bid are excluded from the live funnel.
+ * Won / No Bid / Duplicate / Lost / Disqualified are excluded.
+ * Unknown or unevaluated statuses are excluded — they must not fall into
+ * Under Evaluation by default.
  */
 export function mapToDashboardPipelineStage(options: {
   qualificationStatus: string | null | undefined;
@@ -84,23 +108,25 @@ export function mapToDashboardPipelineStage(options: {
   won?: boolean;
 }): DashboardPipelineStage | null {
   if (options.won) return null;
-  const raw = String(options.qualificationStatus || "")
-    .trim()
-    .toUpperCase()
-    .replace(/[\s-]+/g, "_");
-  if (raw === "WON" || raw === "AWARDED") return null;
-  if (raw === "NO_GO" || raw === "NO_BID") return null;
-  if (options.submitted) return "submitted";
+  const status = normalizeQualificationStatus(options.qualificationStatus);
+  if (!status) return null;
+  if (DASHBOARD_PIPELINE_EXCLUDED_STATUSES.has(status)) return null;
+  if (options.submitted || status === "SUBMITTED") return "submitted";
 
-  const status = String(options.qualificationStatus || "")
-    .trim()
-    .toUpperCase()
-    .replace(/[\s-]+/g, "_");
   if (status === "GO" || status === "WILL_BID") return "will_bid";
   if (status === "PARTNER_BID" || status === "PARTNERSHIP") return "partnership";
   if (status === "CONDITIONAL_GO" || status === "MAY_BID") return "may_bid";
   if (status === "VERIFY") return "verify";
-  return "under_evaluation";
+  if (
+    status === "UNDER_EVALUATION" ||
+    status === "SCREENING" ||
+    status === "IN_EVALUATION"
+  ) {
+    return "under_evaluation";
+  }
+
+  // NOT_EVALUATED, NEW, and any other unknown status → not in pipeline.
+  return null;
 }
 
 export function isPendingReviewStatus(

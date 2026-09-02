@@ -16,6 +16,11 @@ import {
 } from "date-fns";
 
 import {
+  buildFinancialExposureFromBidFees,
+  financialExposureEmptySubtitles,
+  getEmdCommitted,
+} from "@/lib/dashboard/financial-metrics";
+import {
   DASHBOARD_PIPELINE_META,
   DASHBOARD_PIPELINE_STAGES,
   isWonQualificationStatus,
@@ -30,7 +35,6 @@ import type {
   DashboardCategoryRow,
   DashboardDeadlineItem,
   DashboardExpiringDocument,
-  DashboardFinancialExposure,
   DashboardOverview,
   DashboardPipelineStageRow,
   DashboardSourcePill,
@@ -48,8 +52,8 @@ import {
   getTenderUiStatus,
   TENDER_UI_STATUS_LABELS,
 } from "@/lib/tender-status";
-import { listCompanyExperience } from "@/server/repositories/experienceRepository";
 import { listExpiringDocuments } from "@/server/repositories/documentRepository";
+import { listBidFees } from "@/server/repositories/bidFeeRepository";
 
 type TenderRow = {
   id: string;
@@ -74,6 +78,24 @@ type TenderRow = {
 function toNumber(value: unknown): number {
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+/** Only sum disclosed numeric tender values; null/blank → 0 for aggregates. */
+function disclosedTenderValue(value: unknown): number {
+  if (value == null || value === "") return 0;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function resolvePipelineStage(
+  row: TenderRow,
+  submittedIds: Set<string>,
+): DashboardPipelineStage | null {
+  return mapToDashboardPipelineStage({
+    qualificationStatus: row.effective_qualification_status,
+    submitted: submittedIds.has(row.id),
+    won: isWonQualificationStatus(row.effective_qualification_status),
+  });
 }
 
 function moneyLabel(value: number): string {
@@ -168,15 +190,11 @@ function buildPipeline(
   }
 
   for (const row of rows) {
-    const stage = mapToDashboardPipelineStage({
-      qualificationStatus: row.effective_qualification_status,
-      submitted: submittedIds.has(row.id),
-      won: isWonQualificationStatus(row.effective_qualification_status),
-    });
+    const stage = resolvePipelineStage(row, submittedIds);
     if (!stage) continue;
     const bucket = aggregates.get(stage)!;
     bucket.count += 1;
-    bucket.value += toNumber(row.tender_value);
+    bucket.value += disclosedTenderValue(row.tender_value);
   }
 
   const valueTotal = [...aggregates.values()].reduce(
@@ -235,7 +253,7 @@ function buildVolumeTrend(
     const bucket = index.get(key);
     if (!bucket) continue;
     bucket.count += 1;
-    bucket.value += toNumber(row.tender_value);
+    bucket.value += disclosedTenderValue(row.tender_value);
   }
   return points;
 }
@@ -251,7 +269,7 @@ function buildCategories(rows: TenderRow[]): {
     const cat = categoryLabel(row);
     const existing = catMap.get(cat) || { count: 0, value: 0 };
     existing.count += 1;
-    existing.value += toNumber(row.tender_value);
+    existing.value += disclosedTenderValue(row.tender_value);
     catMap.set(cat, existing);
 
     const src = sourceLabel(row.source_portal);
@@ -283,117 +301,12 @@ function buildCategories(rows: TenderRow[]): {
   return { categories, total, sources };
 }
 
-function buildFinancialExposure(
-  rows: TenderRow[],
-  bankGuaranteeDocs: DashboardExpiringDocument[],
-): DashboardFinancialExposure {
-  const activePipeline = rows.filter((row) => {
-    const stage = mapToDashboardPipelineStage({
-      qualificationStatus: row.effective_qualification_status,
-      submitted: false,
-      won: isWonQualificationStatus(row.effective_qualification_status),
-    });
-    return stage != null && stage !== "under_evaluation";
-  });
-
-  let emdTotal = 0;
-  let emdCount = 0;
-  for (const row of activePipeline) {
-    const emd = toNumber(row.emd_amount);
-    if (emd > 0) {
-      emdTotal += emd;
-      emdCount += 1;
-    }
-  }
-
-  const pbgExpiring = bankGuaranteeDocs.filter(
-    (d) => d.daysLeft >= 0 && d.daysLeft <= 90,
-  );
-  const pbgExpired = bankGuaranteeDocs.filter((d) => d.daysLeft < 0);
-
-  const breakdown = [
-    {
-      key: "tender_fees",
-      label: "Tender Fees",
-      count: 0,
-      totalValue: 0,
-      valueLabel: "₹0",
-      progress: 0,
-    },
-    {
-      key: "emd",
-      label: "EMD / Bid Security",
-      count: emdCount,
-      totalValue: emdTotal,
-      valueLabel: moneyLabel(emdTotal),
-      progress: emdTotal > 0 ? 100 : 0,
-    },
-    {
-      key: "processing",
-      label: "Processing Fees",
-      count: 0,
-      totalValue: 0,
-      valueLabel: "₹0",
-      progress: 0,
-    },
-    {
-      key: "pbg",
-      label: "Performance Guarantee",
-      count: bankGuaranteeDocs.length,
-      totalValue: 0,
-      valueLabel: bankGuaranteeDocs.length
-        ? `${bankGuaranteeDocs.length} docs`
-        : "₹0",
-      progress: bankGuaranteeDocs.length > 0 ? 40 : 0,
-    },
-  ];
-
-  return {
-    totalFees: emdTotal,
-    totalFeesLabel: moneyLabel(emdTotal),
-    pendingFees: emdTotal,
-    pendingFeesLabel: moneyLabel(emdTotal),
-    refundable: emdTotal,
-    refundableLabel: moneyLabel(emdTotal),
-    returned: 0,
-    returnedLabel: "₹0",
-    activePbg: 0,
-    activePbgLabel: bankGuaranteeDocs.length
-      ? `${bankGuaranteeDocs.length} guarantees on file`
-      : "₹0",
-    expiredPbg: 0,
-    expiredPbgLabel:
-      pbgExpired.length > 0 ? `${pbgExpired.length} expired` : "₹0",
-    pbgExpiring90d: 0,
-    pbgExpiring90dLabel:
-      pbgExpiring.length > 0
-        ? `${pbgExpiring.length} need renewal`
-        : "None",
-    pbgExpiringCount: pbgExpiring.length,
-    breakdown,
-  };
-}
-
-function buildWonPortfolio(
-  rows: TenderRow[],
-  experiences: Awaited<ReturnType<typeof listCompanyExperience>>,
-): DashboardWonPortfolio {
+function buildWonPortfolio(rows: TenderRow[]): DashboardWonPortfolio {
   const wonRows = rows.filter((row) =>
     isWonQualificationStatus(row.effective_qualification_status),
   );
   const wonValue = wonRows.reduce(
-    (sum, row) => sum + toNumber(row.tender_value),
-    0,
-  );
-
-  const ongoing = experiences.filter((e) => e.projectStatus === "ongoing");
-  const completed = experiences.filter((e) => e.projectStatus === "completed");
-  const experienceValue = experiences.reduce(
-    (sum, e) => sum + (Number(e.projectValueInr) || 0),
-    0,
-  );
-  const inExecutionValue = ongoing.reduce(
-    (sum, e) => sum + (Number(e.projectValueInr) || 0),
+    (sum, row) => sum + disclosedTenderValue(row.tender_value),
     0,
   );
 
@@ -406,27 +319,17 @@ function buildWonPortfolio(
       color: "#16a34a",
     },
     {
-      key: "awarded",
-      label: "Past experience",
-      count: experiences.length,
-      totalValue: experienceValue,
-      color: "#059669",
-    },
-    {
       key: "in_execution",
       label: "In Execution",
-      count: ongoing.length,
-      totalValue: inExecutionValue,
+      count: 0,
+      totalValue: 0,
       color: "#0ea5e9",
     },
     {
       key: "completed",
       label: "Completed",
-      count: completed.length,
-      totalValue: completed.reduce(
-        (sum, e) => sum + (Number(e.projectValueInr) || 0),
-        0,
-      ),
+      count: 0,
+      totalValue: 0,
       color: "#64748b",
     },
     {
@@ -440,13 +343,12 @@ function buildWonPortfolio(
   const maxValue = Math.max(1, ...statusBuckets.map((b) => b.totalValue));
 
   return {
-    // Active = ongoing past-experience projects only (not inflated by won tenders).
-    activeProjects: ongoing.length,
-    inExecutionValue,
-    inExecutionValueLabel: moneyLabel(inExecutionValue || wonValue),
-    completed: completed.length,
-    milestonesDone: completed.length,
-    milestonesTotal: Math.max(experiences.length, wonRows.length),
+    activeProjects: 0,
+    inExecutionValue: 0,
+    inExecutionValueLabel: moneyLabel(0),
+    completed: 0,
+    milestonesDone: 0,
+    milestonesTotal: 0,
     byStatus: statusBuckets.map((b) => ({
       ...b,
       valueLabel: moneyLabel(b.totalValue),
@@ -463,25 +365,17 @@ function buildUpcomingDeadlines(
   return rows
     .filter((row) => {
       if (!row.closing_date) return false;
-      if (isWonQualificationStatus(row.effective_qualification_status)) {
-        return false;
-      }
-      if (row.effective_qualification_status === "NO_GO") return false;
-      return true;
+      if (!resolvePipelineStage(row, submittedIds)) return false;
+      const closing = startOfDay(parseISO(String(row.closing_date)));
+      return differenceInCalendarDays(closing, today) >= 0;
     })
     .map((row) => {
       const closing = startOfDay(parseISO(String(row.closing_date)));
       const daysLeft = differenceInCalendarDays(closing, today);
       let urgency: DashboardDeadlineItem["urgency"] = "ok";
-      if (daysLeft < 0) urgency = "overdue";
-      else if (daysLeft <= 3) urgency = "urgent";
+      if (daysLeft <= 3) urgency = "urgent";
       else if (daysLeft <= 7) urgency = "soon";
-      const status = row.effective_qualification_status;
-      const stage = mapToDashboardPipelineStage({
-        qualificationStatus: status,
-        submitted: submittedIds.has(row.id),
-      });
-      return { row, closing, daysLeft, urgency, stage };
+      return { row, closing, daysLeft, urgency };
     })
     .filter((item) => item.daysLeft <= 45)
     .sort((a, b) => a.daysLeft - b.daysLeft)
@@ -502,7 +396,7 @@ function buildUpcomingDeadlines(
         ],
       daysLeft,
       urgency,
-      valueLabel: moneyLabel(toNumber(row.tender_value)),
+      valueLabel: moneyLabel(disclosedTenderValue(row.tender_value)),
       href: `/tenders/${row.id}`,
     }));
 }
@@ -515,9 +409,9 @@ function buildUpcomingDeadlines(
  * - created → created_at (fallback first_seen_at / crawled_at / scraped_date)
  *
  * Won Projects KPI: tenders with qualification_status WON/AWARDED only.
- * Execution portfolio separately shows company past experience
- * (agenttender_company_experience) — that must not inflate the Won KPI.
- * Financial exposure: disclosed EMD on active pipeline + Bank Guarantee docs.
+ * Execution portfolio uses Tenderflow won tenders only — past experience
+ * (agenttender_company_experience) is excluded from dashboard KPIs.
+ * Financial exposure: persisted Add Bid Fee records only (agenttender_bid_fees).
  */
 export async function getDashboardOverview(options: {
   period: DashboardPeriod;
@@ -538,7 +432,7 @@ export async function getDashboardOverview(options: {
     allRows,
     submittedIds,
     expiringDocuments,
-    experiences,
+    bidFees,
   ] = await Promise.all([
     fetchAllSupabaseRows<TenderRow>(supabase, {
       table: "agenttender_web_tender_list",
@@ -548,7 +442,7 @@ export async function getDashboardOverview(options: {
     loadSubmittedWorkspaces(options.companyId),
     loadExpiringDocuments(options.companyId),
     options.companyId
-      ? listCompanyExperience(options.companyId).catch(() => [])
+      ? listBidFees({ companyId: options.companyId }).catch(() => [])
       : Promise.resolve([]),
   ]);
 
@@ -578,39 +472,23 @@ export async function getDashboardOverview(options: {
   const { stages: pipeline, total: pipelineTotal, valueTotal: pipelineValueTotal } =
     buildPipeline(scopedRows, submittedIds);
 
-  const activePipelineRows = scopedRows.filter((row) => {
-    const stage = mapToDashboardPipelineStage({
-      qualificationStatus: row.effective_qualification_status,
-      submitted: submittedIds.has(row.id),
-      won: isWonQualificationStatus(row.effective_qualification_status),
-    });
-    return stage != null;
-  });
-
-  const submittedCount = scopedRows.filter((row) =>
-    submittedIds.has(row.id),
-  ).length;
   const wonAll = scopedRows.filter((row) =>
     isWonQualificationStatus(row.effective_qualification_status),
   );
-  const decided = submittedCount + wonAll.length;
+  const lostCount = scopedRows.filter(
+    (row) => row.effective_qualification_status === "LOST",
+  ).length;
+  const disqualifiedCount = scopedRows.filter(
+    (row) => row.effective_qualification_status === "DISQUALIFIED",
+  ).length;
+  const decided = wonAll.length + lostCount + disqualifiedCount;
   const winRate =
     decided > 0 ? (wonAll.length / Math.max(decided, 1)) * 100 : null;
 
-  const emdCommitted = activePipelineRows.reduce(
-    (sum, row) => sum + toNumber(row.emd_amount),
-    0,
-  );
+  const emdCommitted = getEmdCommitted(bidFees);
 
-  const bankGuaranteeDocs = expiringDocuments.filter((d) =>
-    /guarantee|pbg|bank/i.test(d.name),
-  );
-
-  const financialExposure = buildFinancialExposure(
-    scopedRows,
-    bankGuaranteeDocs.length > 0 ? bankGuaranteeDocs : expiringDocuments,
-  );
-  const wonPortfolio = buildWonPortfolio(scopedRows, experiences);
+  const financialExposure = buildFinancialExposureFromBidFees(bidFees);
+  const wonPortfolio = buildWonPortfolio(scopedRows);
   const { categories, total: categoryTotal, sources } =
     buildCategories(scopedRows);
   const volumeTrend = buildVolumeTrend(allRows, dateBasis, now);
@@ -680,21 +558,26 @@ export async function getDashboardOverview(options: {
       {
         key: "wonProjects",
         label: "Won Projects",
-        // Count only tenders marked Won — do not inflate with past experience rows.
         value: wonAll.length.toLocaleString("en-IN"),
         supporting:
           wonAll.length > 0
-            ? wonPortfolio.inExecutionValueLabel
-            : experiences.length > 0
-              ? `${experiences.length} past experience on file (not tender wins)`
-              : "No won tenders yet",
+            ? moneyLabel(
+                wonAll.reduce(
+                  (sum, row) => sum + disclosedTenderValue(row.tender_value),
+                  0,
+                ),
+              )
+            : "No won tenders yet",
         tone: "green",
       },
       {
         key: "emdCommitted",
         label: "EMD Committed",
         value: moneyLabel(emdCommitted),
-        supporting: "Active pipeline bid security",
+        supporting:
+          emdCommitted > 0
+            ? "From recorded bid fees"
+            : "No EMD committed",
         tone: "orange",
       },
       {
@@ -704,7 +587,9 @@ export async function getDashboardOverview(options: {
         supporting:
           financialExposure.pbgExpiringCount > 0
             ? `${financialExposure.pbgExpiringCount} expiring ≤ 90d`
-            : "Bank guarantees on file",
+            : financialExposure.activePbg > 0
+              ? "Active performance guarantees"
+              : "No active guarantees",
         tone: "orange",
       },
     ],

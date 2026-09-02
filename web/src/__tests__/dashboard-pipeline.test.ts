@@ -154,6 +154,45 @@ describe("dashboard pipeline mapping", () => {
     expect(isWonQualificationStatus("WON")).toBe(true);
   });
 
+  it("excludes duplicate, lost, disqualified, and unevaluated statuses", () => {
+    expect(
+      mapToDashboardPipelineStage({
+        qualificationStatus: "DUPLICATE",
+        submitted: false,
+      }),
+    ).toBeNull();
+    expect(
+      mapToDashboardPipelineStage({
+        qualificationStatus: "LOST",
+        submitted: false,
+      }),
+    ).toBeNull();
+    expect(
+      mapToDashboardPipelineStage({
+        qualificationStatus: "DISQUALIFIED",
+        submitted: false,
+      }),
+    ).toBeNull();
+    expect(
+      mapToDashboardPipelineStage({
+        qualificationStatus: null,
+        submitted: false,
+      }),
+    ).toBeNull();
+    expect(
+      mapToDashboardPipelineStage({
+        qualificationStatus: "NOT_EVALUATED",
+        submitted: false,
+      }),
+    ).toBeNull();
+    expect(
+      mapToDashboardPipelineStage({
+        qualificationStatus: "UNDER_EVALUATION",
+        submitted: false,
+      }),
+    ).toBe("under_evaluation");
+  });
+
   it("treats VERIFY as pending review", () => {
     expect(isPendingReviewStatus("VERIFY")).toBe(true);
     expect(isPendingReviewStatus("GO", true)).toBe(false);

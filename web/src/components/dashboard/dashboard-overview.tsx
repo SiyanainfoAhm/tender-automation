@@ -40,6 +40,7 @@ import {
   type DashboardPeriod,
 } from "@/lib/dashboard/time-range";
 import type { DashboardOverview } from "@/lib/dashboard/types";
+import { financialExposureEmptySubtitles } from "@/lib/dashboard/financial-metrics";
 import { formatIndianCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
@@ -149,6 +150,37 @@ export function DashboardOverviewClient({ data }: DashboardOverviewProps) {
         display: chartMode === "value" ? point.value / 1_00_00_000 : point.count,
       })),
     [chartMode, data.volumeTrend],
+  );
+
+  const financialSubs = useMemo(
+    () => financialExposureEmptySubtitles(data.financialExposure),
+    [data.financialExposure],
+  );
+
+  const financialCards = useMemo(
+    () => [
+      {
+        label: "Total Fees",
+        value: data.financialExposure.totalFeesLabel,
+        sub: financialSubs.totalFeesSub,
+      },
+      {
+        label: "Refundable",
+        value: data.financialExposure.refundableLabel,
+        sub: financialSubs.refundableSub,
+      },
+      {
+        label: "Active PBG",
+        value: data.financialExposure.activePbgLabel,
+        sub: financialSubs.activePbgSub,
+      },
+      {
+        label: "PBG Expiring ≤ 90d",
+        value: data.financialExposure.pbgExpiring90dLabel,
+        sub: financialSubs.pbgExpiringSub,
+      },
+    ],
+    [data.financialExposure, financialSubs],
   );
 
   return (
@@ -364,28 +396,7 @@ export function DashboardOverviewClient({ data }: DashboardOverviewProps) {
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            {[
-              {
-                label: "Total Fees",
-                value: data.financialExposure.totalFeesLabel,
-                sub: `Pending ${data.financialExposure.pendingFeesLabel}`,
-              },
-              {
-                label: "Refundable",
-                value: data.financialExposure.refundableLabel,
-                sub: `Returned ${data.financialExposure.returnedLabel}`,
-              },
-              {
-                label: "Active PBG",
-                value: data.financialExposure.activePbgLabel,
-                sub: `Expired ${data.financialExposure.expiredPbgLabel}`,
-              },
-              {
-                label: "PBG Expiring ≤ 90d",
-                value: data.financialExposure.pbgExpiring90dLabel,
-                sub: `${data.financialExposure.pbgExpiringCount} guarantees`,
-              },
-            ].map((item) => (
+            {financialCards.map((item) => (
               <div
                 key={item.label}
                 className="rounded-lg border border-slate-100 bg-slate-50/80 p-3"
