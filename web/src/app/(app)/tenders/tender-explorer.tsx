@@ -1304,7 +1304,7 @@ export function TenderExplorer({
                         text: row.emd_text,
                       });
                       const status = row.effective_qualification_status;
-                      const reference = row.folder_id || row.source_tender_id;
+                      const reference = row.reference_no || "—";
                       const place = locationLine(row);
                       const portal =
                         row.source_portal === "TENDER247" ||

@@ -21,7 +21,7 @@ function rowMatchQueues(gptRows: RunWorkbookRow[]): Map<string, RunWorkbookRow[]
   for (const row of gptRows) {
     const t247 = normalizeTender247Id(row.tender247Id);
     if (t247) push(`t247:${t247}`, row);
-    const ref = referenceKey(row.bidAssistId);
+    const ref = referenceKey(row.referenceNo || row.bidAssistId);
     if (ref) push(`ref:${ref}`, row);
     push(`canon:${row.canonicalId}`, row);
   }
@@ -35,7 +35,7 @@ function takeMatchedGptRow(
   const keys: string[] = [];
   const t247 = normalizeTender247Id(input.tender247Id);
   if (t247) keys.push(`t247:${t247}`);
-  const ref = referenceKey(input.bidAssistId);
+  const ref = referenceKey(input.referenceNo || input.bidAssistId);
   if (ref) keys.push(`ref:${ref}`);
   keys.push(`canon:${input.canonicalId}`);
 

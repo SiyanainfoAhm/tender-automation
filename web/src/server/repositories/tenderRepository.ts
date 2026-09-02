@@ -23,6 +23,7 @@ export type WebTenderListRow = {
   source_portal: "TENDER247" | "BIDASSIST" | "MANUAL";
   source_tender_id: string;
   folder_id: string | null;
+  reference_no: string | null;
   title: string;
   organization: string | null;
   department: string | null;
@@ -78,6 +79,7 @@ export const WEB_TENDER_LIST_SELECT = [
   "source_portal",
   "source_tender_id",
   "folder_id",
+  "reference_no",
   "title",
   "organization",
   "authority",
@@ -440,6 +442,7 @@ export async function listTenders(filters: TenderFilters): Promise<{
       [
         `title.ilike.%${q}%`,
         `source_tender_id.ilike.%${q}%`,
+        `reference_no.ilike.%${q}%`,
         `folder_id.ilike.%${q}%`,
         `organization.ilike.%${q}%`,
         `authority.ilike.%${q}%`,
@@ -747,6 +750,7 @@ export async function createManualTender(
       : "MANUAL",
     source_tender_id: sourceTenderId,
     folder_id: input.referenceNo,
+    reference_no: input.referenceNo,
     title: input.title,
     organization: input.organization,
     department: input.department || null,
@@ -796,7 +800,7 @@ function sanitizeSearchTerm(value: string): string {
 /**
  * Bid Preparation lookup against the existing tender table.
  * Tender ID → source_tender_id (and UUID id).
- * Reference No → folder_id / source_tender_id / title (no dedicated reference column).
+ * Reference No → reference_no / folder_id / source_tender_id / title.
  */
 export async function searchTendersForBidPreparation(options: {
   tenderId?: string;
@@ -825,7 +829,7 @@ export async function searchTendersForBidPreparation(options: {
   let query = supabase
     .from("agenttender_tenders")
     .select(
-      "id, source_tender_id, folder_id, title, organization, authority, tender_value, tender_value_text, closing_date, source_portal, qualification_status, source_url",
+      "id, source_tender_id, folder_id, reference_no, title, organization, authority, tender_value, tender_value_text, closing_date, source_portal, qualification_status, source_url",
     )
     .limit(20);
 
@@ -846,6 +850,7 @@ export async function searchTendersForBidPreparation(options: {
   if (referenceNo) {
     query = query.or(
       [
+        `reference_no.ilike.%${referenceNo}%`,
         `folder_id.ilike.%${referenceNo}%`,
         `source_tender_id.ilike.%${referenceNo}%`,
         `title.ilike.%${referenceNo}%`,
@@ -857,7 +862,7 @@ export async function searchTendersForBidPreparation(options: {
   const data = assertSupabaseOk(result, {
     queryName: "searchTendersForBidPreparation",
     selectedColumns:
-      "id, source_tender_id, folder_id, title, organization, authority, tender_value, tender_value_text, closing_date, source_portal, qualification_status, source_url",
+      "id, source_tender_id, folder_id, reference_no, title, organization, authority, tender_value, tender_value_text, closing_date, source_portal, qualification_status, source_url",
     filters: { tenderId, referenceNo },
   });
 

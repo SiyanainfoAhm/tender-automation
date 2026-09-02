@@ -29,7 +29,7 @@ import { PHASE1_SCREENING_POLICY_VERSION } from "./screeningPolicy.js";
 import { RUN_SCREENED_FILE } from "./runWorkbook.js";
 import { parsePhase1Amount } from "./phase1DecisionGuard.js";
 import { parsePortalDate } from "../supabase/tenderMetadataMap.js";
-import { parseDuplicateReferenceFromReason } from "./parseDuplicateReference.js";
+import { referenceNoForWorkbookRow } from "../excel/referenceNumber.js";
 
 export type Phase1PersistResult = {
   attempted: number;
@@ -80,6 +80,7 @@ function referenceCandidates(row: RunWorkbookRow): string[] {
     if (text && !out.includes(text)) out.push(text);
   };
   push(row.tender247Id);
+  push(row.referenceNo);
   push(row.bidAssistId);
   push(row.canonicalId);
   for (const part of String(row.sourceRefs || "").split(/[|,;/]/)) {
@@ -457,6 +458,7 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         source_portal: sourcePortal,
         source_tender_id: existing?.source_tender_id || id,
         folder_id: existing?.folder_id || row.tender247Id || row.bidAssistId || null,
+        reference_no: referenceNoForWorkbookRow(row),
         title: titleParts.text || id,
         organization: orgParts.text,
         location_text: row.location || null,
@@ -488,6 +490,7 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
 
       const alwaysUpdate: Array<keyof typeof incoming> = [
         "qualification_status",
+        "reference_no",
         "raw_metadata",
         "content_hash",
         "last_seen_at",
@@ -551,6 +554,7 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
               source_portal: sourcePortal,
               source_tender_id: id,
               folder_id: row.tender247Id || row.bidAssistId || null,
+              reference_no: referenceNoForWorkbookRow(row),
               title: titleParts.text || id,
               organization: orgParts.text,
               location_text: row.location || null,

@@ -7,6 +7,7 @@ import fs from "node:fs";
 import path from "node:path";
 import XLSX from "xlsx";
 import { ensureDir } from "../fileUtils.js";
+import { referenceNoFromExcel } from "../excel/referenceNumber.js";
 import {
   buildHeaderMap,
   cleanCell,
@@ -54,6 +55,8 @@ export type RunWorkbookRow = {
   canonicalId: string;
   source: RunSourcePortal;
   tender247Id: string;
+  /** Portal reference number (Reference No. column). */
+  referenceNo: string;
   bidAssistId: string;
   tenderName: string;
   organization: string;
@@ -93,13 +96,15 @@ const T247_ID_HEADERS = [
   "Tender ID",
   "Canonical ID",
 ];
-const BA_ID_HEADERS = [
-  "BidAssist ID",
-  "GEM/Eprocure ID",
+const REFERENCE_NO_HEADERS = [
   "REFERENCE NO",
   "Reference No",
   "Reference No.",
+  "Reference Number",
+  "ReferenceNo",
+  "Reference_No",
 ];
+const BA_ID_HEADERS = ["BidAssist ID", "GEM/Eprocure ID"];
 const TITLE_HEADERS = [
   "TENDER BRIEF",
   "Tender Brief",
@@ -218,6 +223,7 @@ function readPhase1Classification(
 const OUTPUT_HEADERS = [
   "Canonical ID",
   "Tender247 ID",
+  "Reference No.",
   "BidAssist ID",
   "Tender Name",
   "Source",
@@ -343,7 +349,7 @@ function parseHeaderlessPrescreenedRows(
     const cells = raw.map((c) => c);
     const t247 = digitsT247(formatIdAsText(cells[0]));
     const portal = cleanCell(cells[1]);
-    const referenceNo = formatIdAsText(cells[2]);
+    const referenceNo = referenceNoFromExcel(cells[2]) ?? "";
     const brief = cleanCell(cells[3]);
     if (!t247 && !brief) continue;
     const statusRaw = cleanCell(cells[10]);
@@ -359,7 +365,8 @@ function parseHeaderlessPrescreenedRows(
       canonicalId: t247 ? `T247-${t247}` : `NAME-${brief.slice(0, 40)}`,
       source,
       tender247Id: t247,
-      bidAssistId: referenceNo,
+      referenceNo,
+      bidAssistId: "",
       tenderName: brief,
       organization: "",
       location: cleanCell(cells[6]),
@@ -396,7 +403,18 @@ function parseSheetRows(
       ? Object.fromEntries(headers.map((h, i) => [h, raw[i]]))
       : raw;
     const t247 = digitsT247(formatIdAsText(getField(record, headerMap, ...T247_ID_HEADERS)));
-    const ba = formatIdAsText(getField(record, headerMap, ...BA_ID_HEADERS));
+    let referenceNo =
+      referenceNoFromExcel(
+        getField(record, headerMap, ...REFERENCE_NO_HEADERS),
+      ) ?? "";
+    let ba = formatIdAsText(getField(record, headerMap, ...BA_ID_HEADERS));
+    if (!referenceNo && ba && t247) {
+      const legacyRef = referenceNoFromExcel(ba);
+      if (legacyRef && legacyRef !== t247) {
+        referenceNo = legacyRef;
+        ba = "";
+      }
+    }
     const name = cleanCell(getField(record, headerMap, ...TITLE_HEADERS));
     if (!t247 && !ba && !name) continue;
     const sourceCell = cleanCell(getField(record, headerMap, ...SOURCE_HEADERS));
@@ -426,6 +444,7 @@ function parseSheetRows(
       canonicalId,
       source,
       tender247Id: t247,
+      referenceNo,
       bidAssistId: ba,
       tenderName: name,
       organization: cleanCell(getField(record, headerMap, ...ORG_HEADERS)),
@@ -507,6 +526,7 @@ function parseWorkbookRows(
 
 function mergeRows(left: RunWorkbookRow, right: RunWorkbookRow): RunWorkbookRow {
   const t247 = left.tender247Id || right.tender247Id;
+  const referenceNo = left.referenceNo || right.referenceNo;
   const ba = left.bidAssistId || right.bidAssistId;
   const bothSources =
     (left.source === "TENDER247" && right.source === "BIDASSIST") ||
@@ -517,6 +537,7 @@ function mergeRows(left: RunWorkbookRow, right: RunWorkbookRow): RunWorkbookRow 
     canonicalId: t247 ? `T247-${t247}` : left.canonicalId,
     source: bothSources ? "BOTH" : left.source,
     tender247Id: t247,
+    referenceNo,
     bidAssistId: ba,
     tenderName: left.tenderName || right.tenderName,
     organization: left.organization || right.organization,
@@ -603,6 +624,7 @@ export function writeRunWorkbook(rows: RunWorkbookRow[], outputPath: string): st
     ...rows.map((row) => [
       row.canonicalId,
       row.tender247Id,
+      row.referenceNo,
       row.bidAssistId,
       row.tenderName,
       row.source,

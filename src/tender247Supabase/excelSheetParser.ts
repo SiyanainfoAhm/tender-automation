@@ -22,6 +22,7 @@ export type HistoricalTenderRow = {
   sourcePortal: "TENDER247" | "BIDASSIST";
   sourceTenderId: string;
   folderId: string | null;
+  referenceNo: string | null;
   title: string;
   organization: string | null;
   locationText: string | null;
@@ -331,6 +332,7 @@ function buildRow(options: {
     sourcePortal,
     sourceTenderId,
     folderId: t247 || ref || null,
+    referenceNo: ref || null,
     title: brief || sourceTenderId,
     organization: org,
     locationText: location || null,

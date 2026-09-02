@@ -66,6 +66,7 @@ export type TenderDetailDTO = {
   sourcePortal: TenderSource;
   sourceTenderId: string;
   folderId: string | null;
+  referenceNo: string | null;
   sourceUrl: string | null;
   projectCategory: string | null;
   sourceCategory: string | null;

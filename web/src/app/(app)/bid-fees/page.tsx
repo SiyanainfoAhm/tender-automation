@@ -17,6 +17,7 @@ type TenderListRow = {
   title: string | null;
   source_tender_id: string | null;
   folder_id: string | null;
+  reference_no: string | null;
   organization: string | null;
   tender_value: number | string | null;
   emd_amount: number | string | null;
@@ -34,7 +35,7 @@ async function loadEligibleTenders(): Promise<FeeEligibleTender[]> {
   const { data, error } = await supabase
     .from("agenttender_web_tender_list")
     .select(
-      "id, title, source_tender_id, folder_id, organization, tender_value, emd_amount, effective_qualification_status",
+      "id, title, source_tender_id, folder_id, reference_no, organization, tender_value, emd_amount, effective_qualification_status",
     )
     .order("updated_at", { ascending: false })
     .limit(500);
@@ -49,7 +50,7 @@ async function loadEligibleTenders(): Promise<FeeEligibleTender[]> {
       id: row.id,
       title: row.title || "Untitled tender",
       sourceTenderId: row.source_tender_id || row.id,
-      referenceNo: row.folder_id || row.source_tender_id || null,
+      referenceNo: row.reference_no || null,
       organization: row.organization,
       emdAmount: toNumber(row.emd_amount),
       tenderValue: toNumber(row.tender_value),

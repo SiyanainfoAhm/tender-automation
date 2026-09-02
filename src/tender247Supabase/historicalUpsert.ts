@@ -93,6 +93,7 @@ function toDbRow(row: HistoricalTenderRow, companyId: string, now: string) {
     source_portal: row.sourcePortal,
     source_tender_id: row.sourceTenderId,
     folder_id: row.folderId,
+    reference_no: row.referenceNo,
     title: row.title,
     organization: row.organization,
     location_text: row.locationText,

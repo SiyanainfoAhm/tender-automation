@@ -17,6 +17,7 @@ function row(overrides: Partial<RunWorkbookRow> & { tender247Id?: string }): Run
     canonicalId: `T247-${t247}`,
     source: "TENDER247",
     tender247Id: t247,
+    referenceNo: overrides.referenceNo || "",
     bidAssistId: overrides.bidAssistId || "",
     tenderName: overrides.tenderName || "CMS website",
     organization: overrides.organization || "Dept A",
@@ -82,8 +83,8 @@ test("annotateImportDuplicates marks historical matches before internal duplicat
 test("annotateImportDuplicates matches valid reference numbers", () => {
   const annotated = annotateImportDuplicates(
     [
-      row({ tender247Id: "3001", bidAssistId: "GEM/2026/ABC" }),
-      row({ tender247Id: "3002", bidAssistId: "GEM/2026/ABC" }),
+      row({ tender247Id: "3001", referenceNo: "GEM/2026/ABC" }),
+      row({ tender247Id: "3002", referenceNo: "GEM/2026/ABC" }),
     ],
     emptyHistory(),
   );

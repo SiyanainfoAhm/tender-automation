@@ -39,6 +39,7 @@ function row(
     canonicalId: `T247-${id}`,
     source: "TENDER247",
     tender247Id: id,
+    referenceNo: "",
     bidAssistId: "",
     tenderName: `Tender ${id}`,
     organization: "Dept",

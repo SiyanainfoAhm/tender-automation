@@ -119,8 +119,8 @@ function loadHistoryFromLocalScreenedWorkbooks(options: {
         if (!tender247Id) continue;
         registerRecord(index, {
           tender247Id,
-          referenceNumber: isValidReferenceNumber(row.bidAssistId)
-            ? String(row.bidAssistId).trim()
+          referenceNumber: isValidReferenceNumber(row.referenceNo || row.bidAssistId)
+            ? String(row.referenceNo || row.bidAssistId).trim()
             : null,
           organization: row.organization,
           tenderName: row.tenderName,

@@ -41,7 +41,7 @@ export default async function TenderDetailPage({
         id: tender.id,
         title: tender.title,
         sourceTenderId: tender.sourceTenderId,
-        referenceNo: tender.folderId,
+        referenceNo: tender.referenceNo,
         organization: tender.organization,
         emdAmount: tender.emdAmount,
         tenderValue: tender.tenderValue,

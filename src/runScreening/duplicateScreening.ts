@@ -147,7 +147,7 @@ function findHistoricalMatch(
     const hit = history.byTender247Id.get(t247);
     if (hit) return hit;
   }
-  const ref = referenceKey(row.bidAssistId);
+  const ref = referenceKey(row.referenceNo || row.bidAssistId);
   if (ref) {
     const hit = history.byReference.get(ref);
     if (hit) return hit;
@@ -176,12 +176,12 @@ function findInternalMatch(
       matchedTenderId: seen.tender247Id.get(t247)!,
     };
   }
-  const ref = referenceKey(row.bidAssistId);
+  const ref = referenceKey(row.referenceNo || row.bidAssistId);
   if (ref && seen.reference.has(ref)) {
     return {
       kind: "reference",
       reason: duplicateReferenceReason(
-        String(row.bidAssistId).trim(),
+        String(row.referenceNo || row.bidAssistId).trim(),
         seen.reference.get(ref)!,
       ),
       matchedTenderId: seen.reference.get(ref)!,
@@ -211,7 +211,7 @@ function registerInternalSeen(
   if (t247 && !seen.tender247Id.has(t247)) {
     seen.tender247Id.set(t247, representativeId);
   }
-  const ref = referenceKey(row.bidAssistId);
+  const ref = referenceKey(row.referenceNo || row.bidAssistId);
   if (ref && !seen.reference.has(ref)) {
     seen.reference.set(ref, representativeId);
   }

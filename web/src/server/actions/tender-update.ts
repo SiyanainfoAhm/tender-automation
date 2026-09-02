@@ -116,7 +116,8 @@ export async function updateTenderDetailsAction(
 
     if (payload.title !== undefined) patch.title = payload.title.trim();
     if (payload.referenceNo !== undefined) {
-      patch.folder_id = payload.referenceNo.trim() || null;
+      patch.reference_no = payload.referenceNo.trim() || null;
+      nextMeta.referenceNo = payload.referenceNo.trim() || null;
     }
     if (payload.portal !== undefined) patch.source_portal = payload.portal;
     if (payload.portalLink !== undefined) {

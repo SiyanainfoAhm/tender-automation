@@ -48,6 +48,7 @@ function baseRow(overrides: Partial<RunWorkbookRow> = {}): RunWorkbookRow {
     canonicalId: "T247-103493316",
     source: "TENDER247",
     tender247Id: "103493316",
+    referenceNo: "",
     bidAssistId: "",
     tenderName:
       "expression of interest (eoi) for selection of partner for servers, san storage, router and sql server licences",

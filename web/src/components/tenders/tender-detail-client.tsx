@@ -48,6 +48,9 @@ import {
   AddFeeWizard,
   type FeeEligibleTender,
 } from "@/components/bid-fees/add-fee-wizard";
+import {
+  qualificationStatusStyles,
+} from "@/components/tenders/tender-status-styles";
 import { CategoryCapsule } from "@/components/tenders/category-capsule";
 import type { QualificationStatus } from "@/components/status/qualification-badge";
 import { SourceBadge } from "@/components/status/source-badge";
@@ -198,7 +201,7 @@ function buildDraft(tender: TenderDetailDTO): EditDraft {
 
   return {
     title: tender.title || "",
-    referenceNo: tender.folderId || tender.sourceTenderId || "",
+    referenceNo: tender.referenceNo || "",
     portal,
     portalLink: tender.sourceUrl || "",
     category: tender.projectCategory || "",
@@ -838,6 +841,11 @@ export function TenderDetailClient({
   const statusSelectValue =
     (editing ? draft.qualificationStatus : tender.qualificationStatus) ||
     undefined;
+  const statusStyle =
+    statusSelectValue &&
+    (TENDER_STATUSES as readonly string[]).includes(statusSelectValue)
+      ? qualificationStatusStyles[statusSelectValue as TenderStatus]
+      : null;
 
   const showLost = displayStatus === "LOST";
   const showDisqualified = displayStatus === "DISQUALIFIED";
@@ -965,15 +973,22 @@ export function TenderDetailClient({
             )}
           </div>
 
-          <div className="flex w-full flex-col items-stretch gap-2.5 lg:w-[248px] lg:shrink-0">
-            <div className="flex justify-center">
+          <div className="flex w-full flex-col gap-2 lg:w-[208px] lg:shrink-0">
+            <div>
               <Label className="sr-only">Status</Label>
               <Select
                 value={statusSelectValue}
                 onValueChange={handleStatusChange}
                 disabled={(!canEdit && !editing) || statusPending || pending}
               >
-                <SelectTrigger className="h-9 w-full rounded-full border-border bg-background px-4 text-sm font-medium shadow-sm">
+                <SelectTrigger
+                  className={cn(
+                    "h-8 w-full rounded-full border-0 px-4 text-xs font-medium shadow-none outline-none",
+                    statusStyle
+                      ? cn(statusStyle.bg, statusStyle.text)
+                      : "bg-slate-100 text-slate-700",
+                  )}
+                >
                   <SelectValue placeholder="Set status" />
                 </SelectTrigger>
                 <SelectContent>
@@ -988,50 +1003,75 @@ export function TenderDetailClient({
 
             <div
               className={cn(
-                "rounded-lg border px-4 py-3 text-center",
+                "w-full rounded-lg border px-3 py-3 text-center",
                 urgent
-                  ? "border-rose-200 bg-rose-50 text-rose-600"
-                  : "border-border bg-background-50 text-foreground-800",
+                  ? "border-rose-200 bg-rose-50"
+                  : "border-background-200 bg-white",
               )}
             >
               {closed ? (
-                <p className="text-sm font-semibold">Closed</p>
+                <p className="text-sm font-semibold text-rose-600">Closed</p>
               ) : days == null ? (
-                <p className="text-sm font-semibold">—</p>
+                <p className="text-sm font-semibold text-foreground-900">—</p>
               ) : (
                 <>
-                  <p className="text-2xl font-semibold leading-none">{days}</p>
-                  <p className="mt-1 text-[11px] font-medium">
+                  <p
+                    className={cn(
+                      "text-xl font-semibold leading-none",
+                      urgent ? "text-rose-600" : "text-foreground-900",
+                    )}
+                  >
+                    {days > 0 ? days : 0}
+                  </p>
+                  <p className="mt-1.5 text-[10px] text-foreground-500">
                     days until deadline
                   </p>
                 </>
               )}
             </div>
+
+            <Link
+              href={`/tenders/${tender.id}/analyze`}
+              className="inline-flex h-9 w-full flex-none items-center justify-center gap-2 rounded-md border border-background-200 bg-white px-3 text-xs font-medium text-foreground-800 shadow-none transition-colors hover:bg-background-50"
+            >
+              <Sparkles className="size-3.5 shrink-0" aria-hidden />
+              <span>AI Qualification Analysis</span>
+            </Link>
+
+            <Link
+              href={`/tenders/${tender.id}/bid-workspace`}
+              className="inline-flex h-9 w-full flex-none items-center justify-center gap-2 rounded-md bg-emerald-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-emerald-700"
+            >
+              <Briefcase className="size-3.5 shrink-0" aria-hidden />
+              <span>Open Bid Workspace</span>
+            </Link>
           </div>
         </div>
       </div>
 
-      <div className="flex flex-col gap-2.5">
-
-      </div>
-
-      <div className="inline-flex w-fit max-w-full items-center gap-1 rounded-lg bg-stone-100 p-1">
+      <div className="inline-flex w-fit max-w-max flex-none items-center gap-0.5 rounded-md bg-[#f7f4ee] p-[3px]">
         {TABS.map((item) => {
           const TabIcon = item.icon;
+          const active = tab === item.id;
+
           return (
             <button
               key={item.id}
               type="button"
               onClick={() => setTab(item.id)}
               className={cn(
-                "inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium whitespace-nowrap transition-colors",
-                tab === item.id
-                  ? "bg-[#e8e2d6] text-foreground-900 shadow-sm"
-                  : "text-muted-foreground hover:text-foreground-800",
+                "inline-flex h-8 w-auto min-h-0 flex-none grow-0 shrink-0 self-auto items-center justify-center gap-1.5 whitespace-nowrap rounded-[5px] px-3 text-[12px] font-medium leading-none transition-all",
+                active
+                  ? "border border-[#eee9df] bg-white text-slate-800 shadow-[0_1px_2px_rgba(15,23,42,0.06)]"
+                  : "border border-transparent bg-transparent text-slate-500 hover:bg-white/60 hover:text-slate-700",
               )}
             >
-              <TabIcon className="size-3.5 shrink-0" aria-hidden />
-              {item.label}
+              <TabIcon
+                className="h-3.5 w-3.5 shrink-0"
+                strokeWidth={1.8}
+                aria-hidden="true"
+              />
+              <span>{item.label}</span>
             </button>
           );
         })}
@@ -1054,9 +1094,7 @@ export function TenderDetailClient({
                       }
                     />
                   ) : (
-                    <ReadonlyText
-                      value={tender.folderId || tender.sourceTenderId}
-                    />
+                    <ReadonlyText value={tender.referenceNo} />
                   )}
                 </InfoRow>
                 <InfoRow label="Portal" icon={Tag}>

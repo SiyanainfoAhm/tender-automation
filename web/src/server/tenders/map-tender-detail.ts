@@ -285,6 +285,7 @@ export function mapTenderDetail(options: {
     sourcePortal,
     sourceTenderId: asString(tender.source_tender_id) || String(tender.id),
     folderId: asString(tender.folder_id),
+    referenceNo: asString(tender.reference_no),
     sourceUrl: asString(tender.source_url),
     projectCategory: asString(tender.project_category),
     sourceCategory: asString(tender.category),

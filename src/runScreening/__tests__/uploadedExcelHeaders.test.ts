@@ -69,6 +69,8 @@ test("uploaded Excel headers map T247 ID2 / Estimated Value / Decision Reason", 
   const rows = parseSourceWorkbook(filePath, "TENDER247");
   assert.equal(rows.length, 2);
   assert.equal(rows[0]!.tender247Id, "103544061");
+  assert.equal(rows[0]!.referenceNo, "REF-1");
+  assert.equal(rows[0]!.bidAssistId, "");
   assert.equal(rows[0]!.tenderName, "Website redesign");
   assert.equal(rows[0]!.estimatedCost, "1000000");
   assert.equal(rows[0]!.location, "Mumbai, Maharashtra");
@@ -129,6 +131,7 @@ test("headerless Final_Aug-style upload parses Status column without titles", ()
   const rows = parseSourceWorkbook(filePath, "TENDER247");
   assert.equal(rows.length, 2);
   assert.equal(rows[0]!.tender247Id, "103069974");
+  assert.equal(rows[0]!.referenceNo, "2026_ED_30869_1");
   assert.equal(rows[0]!.screeningStatus, "NO_GO");
   assert.equal(rows[0]!.screeningReason, "EMD exceeds limit");
   assert.equal(rows[0]!.location, "North Goa, Goa, India");
