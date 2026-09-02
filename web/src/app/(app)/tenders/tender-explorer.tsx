@@ -22,10 +22,13 @@ import {
 import { CategoryCapsule } from "@/components/tenders/category-capsule";
 import { TenderLoadingOverlay } from "@/components/tenders/tender-loading-overlay";
 import { TenderStatsCards } from "@/components/tenders/tender-stats-cards";
+import { TenderExportButtons } from "@/components/tenders/tender-export-buttons";
+import { TenderPageActions } from "@/components/tenders/tender-page-actions";
 import {
-  exportTenderRowsCsv,
-  TenderPageActions,
-} from "@/components/tenders/tender-page-actions";
+  buildTenderSelectedExportFilename,
+  downloadTenderExportXlsx,
+  exportAllFilteredTenders,
+} from "@/lib/tender-export";
 import type { QualificationStatus } from "@/components/status/qualification-badge";
 import { StatusBadge } from "@/components/status/qualification-badge";
 import { SourceBadge } from "@/components/status/source-badge";
@@ -360,6 +363,7 @@ export function TenderExplorer({
     title: "Updating tenders",
     description: "Applying filters, please wait...",
   });
+  const [exportingAll, setExportingAll] = React.useState(false);
   const [refreshToken, setRefreshToken] = React.useState(0);
   const [localQ, setLocalQ] = React.useState(filters.q ?? "");
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(
@@ -575,6 +579,27 @@ export function TenderExplorer({
     router.refresh();
   }
 
+  const handleExportAll = React.useCallback(async () => {
+    if (exportingAll || total === 0) return;
+    setExportingAll(true);
+    try {
+      const { exported } = await exportAllFilteredTenders(queryKey);
+      toast.success(
+        exported === 1
+          ? "Exported 1 tender."
+          : `Exported ${exported.toLocaleString("en-IN")} tenders.`,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to export tenders.";
+      toast.error(message);
+    } finally {
+      setExportingAll(false);
+    }
+  }, [exportingAll, queryKey, total]);
+
+  const tableBusy = isUpdating || exportingAll;
+
   const onSort = React.useCallback(
     (clicked: TableSortKey) => {
       const next = nextSortState({
@@ -644,7 +669,7 @@ export function TenderExplorer({
   const showEmpty = !showSkeleton && !isUpdating && rows.length === 0;
 
   return (
-    <div className="relative" aria-busy={isUpdating}>
+    <div className="relative" aria-busy={tableBusy}>
       <div className="space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
@@ -1133,24 +1158,17 @@ export function TenderExplorer({
           of {allCount.toLocaleString("en-IN")} tenders
         </p>
         <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            variant="secondary"
-            className="h-8 text-sm"
-            disabled={rows.length === 0 || isUpdating}
-            onClick={() =>
-              exportTenderRowsCsv(
-                rows,
-                `tenders-page-${filters.page}.csv`,
-              )
-            }
-          >
-            <Download className="size-3.5" />
-            Export
-          </Button>
+          <TenderExportButtons
+            rows={rows}
+            total={total}
+            page={filters.page}
+            exportingAll={exportingAll}
+            disabled={tableBusy}
+            onExportAll={() => void handleExportAll()}
+          />
           <Select
             value={String(filters.pageSize)}
-            disabled={isUpdating}
+            disabled={tableBusy}
             onValueChange={(v) => navigate({ pageSize: v, page: "1" })}
           >
             <SelectTrigger className="h-8 w-[100px]">
@@ -1180,9 +1198,9 @@ export function TenderExplorer({
               className="h-8 text-sm"
               disabled={isUpdating}
               onClick={() =>
-                exportTenderRowsCsv(
+                void downloadTenderExportXlsx(
                   selectedRows,
-                  `tenders-selected-${selectedRows.length}.csv`,
+                  buildTenderSelectedExportFilename(selectedRows.length),
                 )
               }
             >
@@ -1536,10 +1554,14 @@ export function TenderExplorer({
       ) : null}
         </div>
       </div>
-      {isUpdating ? (
+      {isUpdating || exportingAll ? (
         <TenderLoadingOverlay
-          title={overlay.title}
-          description={overlay.description}
+          title={exportingAll ? "Exporting tenders" : overlay.title}
+          description={
+            exportingAll
+              ? `Preparing ${total.toLocaleString("en-IN")} matching tenders for download…`
+              : overlay.description
+          }
         />
       ) : null}
     </div>

@@ -71,6 +71,8 @@ export type WebTenderListRow = {
   duplicate_of_tender_id?: string | null;
   duplicate_match_kind?: string | null;
   chat_url: string | null;
+  msme_exemption: boolean | null;
+  startup_exemption: boolean | null;
 };
 
 /** Columns needed for the tender table — avoid RFP text, AI JSON, archives. */
@@ -103,6 +105,8 @@ export const WEB_TENDER_LIST_SELECT = [
   "effective_qualification_status",
   "reason",
   "screening_reason",
+  "msme_exemption",
+  "startup_exemption",
   "duplicate_of_source_tender_id",
   "duplicate_of_tender_id",
   "duplicate_match_kind",
@@ -206,15 +210,18 @@ function applyQuickDate(
   }
 }
 
-export async function listTenders(filters: TenderFilters): Promise<{
+export async function listTenders(
+  filters: TenderFilters,
+  overrides?: { page?: number; pageSize?: number },
+): Promise<{
   rows: WebTenderListRow[];
   total: number;
   page: number;
   pageSize: number;
 }> {
   const supabase = getServerSupabase();
-  const page = filters.page;
-  const pageSize = filters.pageSize;
+  const page = overrides?.page ?? filters.page;
+  const pageSize = overrides?.pageSize ?? filters.pageSize;
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
 
@@ -481,6 +488,32 @@ export async function listTenders(filters: TenderFilters): Promise<{
     page,
     pageSize,
   };
+}
+
+const EXPORT_ALL_BATCH_SIZE = 1000;
+
+/** Fetch every row matching the current tender list filters (ignores UI page). */
+export async function listAllTendersForExport(
+  filters: TenderFilters,
+): Promise<{ rows: WebTenderListRow[]; total: number }> {
+  const allRows: WebTenderListRow[] = [];
+  let page = 1;
+  let total = 0;
+
+  while (true) {
+    const result = await listTenders(filters, {
+      page,
+      pageSize: EXPORT_ALL_BATCH_SIZE,
+    });
+    total = result.total;
+    allRows.push(...result.rows);
+    if (allRows.length >= total || result.rows.length === 0) {
+      break;
+    }
+    page += 1;
+  }
+
+  return { rows: allRows, total };
 }
 
 export async function countVisibleTenders(): Promise<number> {

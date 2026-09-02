@@ -6,65 +6,13 @@ import { Download, Plus } from "lucide-react";
 
 import { AddManualTenderModal } from "@/components/tenders/add-manual-tender-modal";
 import { Button } from "@/components/ui/button";
-import { formatEmdAmount, formatTenderValue } from "@/lib/format-inr";
+import {
+  buildTenderPageExportFilename,
+  downloadTenderExportXlsx,
+} from "@/lib/tender-export";
 import type { WebTenderListRow } from "@/server/repositories/tenderRepository";
 
-function downloadCsv(rows: WebTenderListRow[], filename: string) {
-  const headers = [
-    "Title",
-    "Source",
-    "Reference",
-    "Organization",
-    "Category",
-    "Status",
-    "Scraped Date",
-    "Created At",
-    "Closing",
-    "Value",
-    "EMD",
-    "Tender ID",
-  ];
-  const csvRows = rows.map((r) => {
-    const value = formatTenderValue({
-      amount: r.tender_value,
-      text: r.tender_value_text,
-    }).label;
-    const emd = formatEmdAmount({
-      amount: r.emd_amount,
-      text: r.emd_text,
-    }).label;
-    return [
-      `"${(r.title || "").replace(/"/g, '""')}"`,
-      r.source_portal,
-      `"${(r.folder_id || r.source_tender_id || "").replace(/"/g, '""')}"`,
-      `"${(r.organization || "").replace(/"/g, '""')}"`,
-      `"${(r.project_category || "").replace(/"/g, '""')}"`,
-      r.effective_qualification_status ?? "NOT_EVALUATED",
-      r.scraped_date ?? "",
-      r.created_at ?? "",
-      r.closing_date ?? "",
-      `"${value.replace(/"/g, '""')}"`,
-      `"${emd.replace(/"/g, '""')}"`,
-      r.source_tender_id,
-    ].join(",");
-  });
-  const blob = new Blob([[headers.join(","), ...csvRows].join("\n")], {
-    type: "text/csv;charset=utf-8;",
-  });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-export function exportTenderRowsCsv(
-  rows: WebTenderListRow[],
-  filename: string,
-) {
-  downloadCsv(rows, filename);
-}
+export { downloadTenderExportXlsx as exportTenderRowsCsv } from "@/lib/tender-export";
 
 type TenderPageActionsProps = {
   canImport: boolean;
@@ -94,7 +42,10 @@ export function TenderPageActions({
           className="text-sm"
           disabled={disabled}
           onClick={() =>
-            exportTenderRowsCsv(rows, `tenders-page-${page}.csv`)
+            void downloadTenderExportXlsx(
+              rows,
+              buildTenderPageExportFilename(page),
+            )
           }
         >
           <Download className="size-4" />
