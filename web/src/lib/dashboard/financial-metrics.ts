@@ -80,12 +80,22 @@ export function getReturnedFeesTotal(fees: BidFeeRecord[]): number {
     .reduce((sum, fee) => sum + fee.amount, 0);
 }
 
-export function getActivePbgFees(fees: BidFeeRecord[]): BidFeeRecord[] {
+export function getActivePbgFees(
+  fees: BidFeeRecord[],
+  now = new Date(),
+): BidFeeRecord[] {
+  const today = startOfDay(now);
   return fees.filter((fee) => {
     if (fee.feeType !== "pbg") return false;
     if (!isFinanciallyActiveBidFee(fee)) return false;
     if (fee.pbgStatus === "released" || fee.pbgStatus === "expired") {
       return false;
+    }
+    if (fee.expiryDate) {
+      const expiry = startOfDay(parseISO(fee.expiryDate));
+      if (!Number.isNaN(expiry.getTime()) && expiry < today) {
+        return false;
+      }
     }
     return true;
   });
