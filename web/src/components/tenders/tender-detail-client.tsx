@@ -1012,22 +1012,7 @@ export function TenderDetailClient({
       </div>
 
       <div className="flex flex-col gap-2.5">
-        <Button
-          asChild
-          variant="outline"
-          className="h-10 w-full justify-center text-sm"
-        >
-          <Link href={`/tenders/${tender.id}/analyze`}>
-            <Sparkles className="size-4" />
-            AI Qualification Analysis
-          </Link>
-        </Button>
-        <Button asChild className="h-10 w-full justify-center text-sm">
-          <Link href={`/tenders/${tender.id}/bid-workspace`}>
-            <Briefcase className="size-4" />
-            Open Bid Workspace
-          </Link>
-        </Button>
+
       </div>
 
       <div className="inline-flex w-fit max-w-full items-center gap-1 rounded-lg bg-stone-100 p-1">
