@@ -125,7 +125,7 @@ export function getPbgExpiringWithin90Days(
 ): BidFeeRecord[] {
   const today = startOfDay(now);
   const horizon = addDays(today, 90);
-  return getActivePbgFees(fees).filter((fee) => {
+  return getActivePbgFees(fees, now).filter((fee) => {
     if (!fee.expiryDate) return false;
     const expiry = startOfDay(parseISO(fee.expiryDate));
     if (Number.isNaN(expiry.getTime())) return false;

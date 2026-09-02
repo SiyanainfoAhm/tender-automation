@@ -17,7 +17,6 @@ import {
 
 import {
   buildFinancialExposureFromBidFees,
-  financialExposureEmptySubtitles,
   getEmdCommitted,
 } from "@/lib/dashboard/financial-metrics";
 import {
@@ -53,6 +52,7 @@ import {
   TENDER_UI_STATUS_LABELS,
 } from "@/lib/tender-status";
 import { listExpiringDocuments } from "@/server/repositories/documentRepository";
+import { listCompanyExperience } from "@/server/repositories/experienceRepository";
 import { listBidFees } from "@/server/repositories/bidFeeRepository";
 
 type TenderRow = {
@@ -78,24 +78,6 @@ type TenderRow = {
 function toNumber(value: unknown): number {
   const n = typeof value === "number" ? value : Number(value);
   return Number.isFinite(n) ? n : 0;
-}
-
-/** Only sum disclosed numeric tender values; null/blank → 0 for aggregates. */
-function disclosedTenderValue(value: unknown): number {
-  if (value == null || value === "") return 0;
-  const n = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(n) && n > 0 ? n : 0;
-}
-
-function resolvePipelineStage(
-  row: TenderRow,
-  submittedIds: Set<string>,
-): DashboardPipelineStage | null {
-  return mapToDashboardPipelineStage({
-    qualificationStatus: row.effective_qualification_status,
-    submitted: submittedIds.has(row.id),
-    won: isWonQualificationStatus(row.effective_qualification_status),
-  });
 }
 
 function moneyLabel(value: number): string {
@@ -190,11 +172,15 @@ function buildPipeline(
   }
 
   for (const row of rows) {
-    const stage = resolvePipelineStage(row, submittedIds);
+    const stage = mapToDashboardPipelineStage({
+      qualificationStatus: row.effective_qualification_status,
+      submitted: submittedIds.has(row.id),
+      won: isWonQualificationStatus(row.effective_qualification_status),
+    });
     if (!stage) continue;
     const bucket = aggregates.get(stage)!;
     bucket.count += 1;
-    bucket.value += disclosedTenderValue(row.tender_value);
+    bucket.value += toNumber(row.tender_value);
   }
 
   const valueTotal = [...aggregates.values()].reduce(
@@ -253,7 +239,7 @@ function buildVolumeTrend(
     const bucket = index.get(key);
     if (!bucket) continue;
     bucket.count += 1;
-    bucket.value += disclosedTenderValue(row.tender_value);
+    bucket.value += toNumber(row.tender_value);
   }
   return points;
 }
@@ -269,7 +255,7 @@ function buildCategories(rows: TenderRow[]): {
     const cat = categoryLabel(row);
     const existing = catMap.get(cat) || { count: 0, value: 0 };
     existing.count += 1;
-    existing.value += disclosedTenderValue(row.tender_value);
+    existing.value += toNumber(row.tender_value);
     catMap.set(cat, existing);
 
     const src = sourceLabel(row.source_portal);
@@ -301,12 +287,26 @@ function buildCategories(rows: TenderRow[]): {
   return { categories, total, sources };
 }
 
-function buildWonPortfolio(rows: TenderRow[]): DashboardWonPortfolio {
+function buildWonPortfolio(
+  rows: TenderRow[],
+  experiences: Awaited<ReturnType<typeof listCompanyExperience>>,
+): DashboardWonPortfolio {
   const wonRows = rows.filter((row) =>
     isWonQualificationStatus(row.effective_qualification_status),
   );
   const wonValue = wonRows.reduce(
-    (sum, row) => sum + disclosedTenderValue(row.tender_value),
+    (sum, row) => sum + toNumber(row.tender_value),
+    0,
+  );
+
+  const ongoing = experiences.filter((e) => e.projectStatus === "ongoing");
+  const completed = experiences.filter((e) => e.projectStatus === "completed");
+  const experienceValue = experiences.reduce(
+    (sum, e) => sum + (Number(e.projectValueInr) || 0),
+    0,
+  );
+  const inExecutionValue = ongoing.reduce(
+    (sum, e) => sum + (Number(e.projectValueInr) || 0),
     0,
   );
 
@@ -319,17 +319,27 @@ function buildWonPortfolio(rows: TenderRow[]): DashboardWonPortfolio {
       color: "#16a34a",
     },
     {
+      key: "awarded",
+      label: "Past experience",
+      count: experiences.length,
+      totalValue: experienceValue,
+      color: "#059669",
+    },
+    {
       key: "in_execution",
       label: "In Execution",
-      count: 0,
-      totalValue: 0,
+      count: ongoing.length,
+      totalValue: inExecutionValue,
       color: "#0ea5e9",
     },
     {
       key: "completed",
       label: "Completed",
-      count: 0,
-      totalValue: 0,
+      count: completed.length,
+      totalValue: completed.reduce(
+        (sum, e) => sum + (Number(e.projectValueInr) || 0),
+        0,
+      ),
       color: "#64748b",
     },
     {
@@ -343,12 +353,12 @@ function buildWonPortfolio(rows: TenderRow[]): DashboardWonPortfolio {
   const maxValue = Math.max(1, ...statusBuckets.map((b) => b.totalValue));
 
   return {
-    activeProjects: 0,
-    inExecutionValue: 0,
-    inExecutionValueLabel: moneyLabel(0),
-    completed: 0,
-    milestonesDone: 0,
-    milestonesTotal: 0,
+    activeProjects: ongoing.length,
+    inExecutionValue,
+    inExecutionValueLabel: moneyLabel(inExecutionValue || wonValue),
+    completed: completed.length,
+    milestonesDone: completed.length,
+    milestonesTotal: Math.max(experiences.length, wonRows.length),
     byStatus: statusBuckets.map((b) => ({
       ...b,
       valueLabel: moneyLabel(b.totalValue),
@@ -365,15 +375,18 @@ function buildUpcomingDeadlines(
   return rows
     .filter((row) => {
       if (!row.closing_date) return false;
-      if (!resolvePipelineStage(row, submittedIds)) return false;
-      const closing = startOfDay(parseISO(String(row.closing_date)));
-      return differenceInCalendarDays(closing, today) >= 0;
+      if (isWonQualificationStatus(row.effective_qualification_status)) {
+        return false;
+      }
+      if (row.effective_qualification_status === "NO_GO") return false;
+      return true;
     })
     .map((row) => {
       const closing = startOfDay(parseISO(String(row.closing_date)));
       const daysLeft = differenceInCalendarDays(closing, today);
       let urgency: DashboardDeadlineItem["urgency"] = "ok";
-      if (daysLeft <= 3) urgency = "urgent";
+      if (daysLeft < 0) urgency = "overdue";
+      else if (daysLeft <= 3) urgency = "urgent";
       else if (daysLeft <= 7) urgency = "soon";
       return { row, closing, daysLeft, urgency };
     })
@@ -396,7 +409,7 @@ function buildUpcomingDeadlines(
         ],
       daysLeft,
       urgency,
-      valueLabel: moneyLabel(disclosedTenderValue(row.tender_value)),
+      valueLabel: moneyLabel(toNumber(row.tender_value)),
       href: `/tenders/${row.id}`,
     }));
 }
@@ -409,8 +422,8 @@ function buildUpcomingDeadlines(
  * - created → created_at (fallback first_seen_at / crawled_at / scraped_date)
  *
  * Won Projects KPI: tenders with qualification_status WON/AWARDED only.
- * Execution portfolio uses Tenderflow won tenders only — past experience
- * (agenttender_company_experience) is excluded from dashboard KPIs.
+ * Execution portfolio separately shows company past experience
+ * (agenttender_company_experience) — that must not inflate the Won KPI.
  * Financial exposure: persisted Add Bid Fee records only (agenttender_bid_fees).
  */
 export async function getDashboardOverview(options: {
@@ -432,6 +445,7 @@ export async function getDashboardOverview(options: {
     allRows,
     submittedIds,
     expiringDocuments,
+    experiences,
     bidFees,
   ] = await Promise.all([
     fetchAllSupabaseRows<TenderRow>(supabase, {
@@ -441,6 +455,9 @@ export async function getDashboardOverview(options: {
     }),
     loadSubmittedWorkspaces(options.companyId),
     loadExpiringDocuments(options.companyId),
+    options.companyId
+      ? listCompanyExperience(options.companyId).catch(() => [])
+      : Promise.resolve([]),
     options.companyId
       ? listBidFees({ companyId: options.companyId }).catch(() => [])
       : Promise.resolve([]),
@@ -472,23 +489,20 @@ export async function getDashboardOverview(options: {
   const { stages: pipeline, total: pipelineTotal, valueTotal: pipelineValueTotal } =
     buildPipeline(scopedRows, submittedIds);
 
+  const submittedCount = scopedRows.filter((row) =>
+    submittedIds.has(row.id),
+  ).length;
   const wonAll = scopedRows.filter((row) =>
     isWonQualificationStatus(row.effective_qualification_status),
   );
-  const lostCount = scopedRows.filter(
-    (row) => row.effective_qualification_status === "LOST",
-  ).length;
-  const disqualifiedCount = scopedRows.filter(
-    (row) => row.effective_qualification_status === "DISQUALIFIED",
-  ).length;
-  const decided = wonAll.length + lostCount + disqualifiedCount;
+  const decided = submittedCount + wonAll.length;
   const winRate =
     decided > 0 ? (wonAll.length / Math.max(decided, 1)) * 100 : null;
 
   const emdCommitted = getEmdCommitted(bidFees);
 
   const financialExposure = buildFinancialExposureFromBidFees(bidFees);
-  const wonPortfolio = buildWonPortfolio(scopedRows);
+  const wonPortfolio = buildWonPortfolio(scopedRows, experiences);
   const { categories, total: categoryTotal, sources } =
     buildCategories(scopedRows);
   const volumeTrend = buildVolumeTrend(allRows, dateBasis, now);
@@ -561,13 +575,10 @@ export async function getDashboardOverview(options: {
         value: wonAll.length.toLocaleString("en-IN"),
         supporting:
           wonAll.length > 0
-            ? moneyLabel(
-                wonAll.reduce(
-                  (sum, row) => sum + disclosedTenderValue(row.tender_value),
-                  0,
-                ),
-              )
-            : "No won tenders yet",
+            ? wonPortfolio.inExecutionValueLabel
+            : experiences.length > 0
+              ? `${experiences.length} past experience on file (not tender wins)`
+              : "No won tenders yet",
         tone: "green",
       },
       {

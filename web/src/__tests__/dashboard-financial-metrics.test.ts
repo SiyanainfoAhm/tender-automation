@@ -90,4 +90,29 @@ describe("dashboard financial metrics", () => {
     expect(exposure.refundable).toBe(50_000);
     expect(exposure.returned).toBe(25_000);
   });
+
+  it("excludes expired PBG from active PBG totals", () => {
+    const fees = [
+      sampleFee({
+        id: "pbg-active",
+        feeType: "pbg",
+        amount: 5_00_000,
+        pbgStatus: "active",
+        expiryDate: "2027-01-01",
+      }),
+      sampleFee({
+        id: "pbg-expired",
+        feeType: "pbg",
+        amount: 5_00_000,
+        pbgStatus: "active",
+        expiryDate: "2020-01-01",
+      }),
+    ];
+    const exposure = buildFinancialExposureFromBidFees(fees);
+    expect(exposure.activePbg).toBe(5_00_000);
+    expect(exposure.breakdown.find((row) => row.key === "pbg")).toMatchObject({
+      count: 1,
+      totalValue: 5_00_000,
+    });
+  });
 });
