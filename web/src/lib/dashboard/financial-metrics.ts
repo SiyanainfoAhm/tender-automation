@@ -138,9 +138,12 @@ function buildFeeBreakdown(
   maxValue: number,
 ): DashboardFeeBreakdownRow[] {
   return FEE_BREAKDOWN_TYPES.map((feeType) => {
-    const activeFees = fees.filter(
-      (fee) => fee.feeType === feeType && isFinanciallyActiveBidFee(fee),
-    );
+    const activeFees =
+      feeType === "pbg"
+        ? getActivePbgFees(fees)
+        : fees.filter(
+            (fee) => fee.feeType === feeType && isFinanciallyActiveBidFee(fee),
+          );
     const totalValue = activeFees.reduce((sum, fee) => sum + fee.amount, 0);
     return {
       key: feeType,
@@ -171,13 +174,16 @@ export function buildFinancialExposureFromBidFees(
 
   const maxBreakdown = Math.max(
     1,
-    ...FEE_BREAKDOWN_TYPES.map((feeType) =>
-      fees
-        .filter(
-          (fee) => fee.feeType === feeType && isFinanciallyActiveBidFee(fee),
-        )
-        .reduce((sum, fee) => sum + fee.amount, 0),
-    ),
+    ...FEE_BREAKDOWN_TYPES.map((feeType) => {
+      const activeFees =
+        feeType === "pbg"
+          ? getActivePbgFees(fees)
+          : fees.filter(
+              (fee) =>
+                fee.feeType === feeType && isFinanciallyActiveBidFee(fee),
+            );
+      return activeFees.reduce((sum, fee) => sum + fee.amount, 0);
+    }),
   );
 
   return {
