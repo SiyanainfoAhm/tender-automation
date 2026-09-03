@@ -6,14 +6,17 @@ import {
   canEditBidPreferences,
   canManageCompanyDocuments,
 } from "@/lib/company/types";
+import { createCorrelationId } from "@/lib/errors/app-error";
 import { requireSession, type AuthSession } from "@/server/auth/session";
 
 export class CompanyAccessError extends Error {
   readonly code: "NO_COMPANY" | "FORBIDDEN";
+  digest: string;
   constructor(code: "NO_COMPANY" | "FORBIDDEN", message: string) {
     super(message);
     this.code = code;
     this.name = "CompanyAccessError";
+    this.digest = createCorrelationId();
   }
 }
 

@@ -40,9 +40,5 @@ export function getServerSupabase(): SupabaseClient {
   return cached;
 }
 
-export function createCorrelationId(): string {
-  const n = Math.floor(Math.random() * 1_000_000)
-    .toString()
-    .padStart(6, "0");
-  return `STI-${n}`;
-}
+/** @deprecated Prefer `@/lib/errors/app-error` — kept for compatibility. */
+export { createCorrelationId } from "@/lib/errors/app-error";

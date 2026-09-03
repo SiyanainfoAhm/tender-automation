@@ -327,12 +327,29 @@ export async function getSession(): Promise<AuthSession | null> {
     .maybeSingle();
 
   if (!session) return null;
-  if (session.revoked_at) return null;
+  if (session.revoked_at) {
+    cookieStore.set(COOKIE_NAME, "", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 0,
+    });
+    return null;
+  }
   if (new Date(session.expires_at).getTime() <= Date.now()) {
     await recordAuthEvent({
       userId: session.user_id,
       eventType: "SESSION_EXPIRED",
       success: false,
+    });
+    // Clear only the auth cookie — do not wipe unrelated localStorage/client data.
+    cookieStore.set(COOKIE_NAME, "", {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 0,
     });
     return null;
   }

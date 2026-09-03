@@ -9,9 +9,10 @@ import {
 import { CategoryCapsule } from "@/components/tenders/category-capsule";
 import { SourceBadge } from "@/components/status/source-badge";
 import { StatusBadge } from "@/components/status/qualification-badge";
+import { ErrorState } from "@/components/ui/error-state";
 import { formatDate } from "@/lib/format";
 import { requireSession } from "@/server/auth/session";
-import { loadTenderDetail } from "@/server/tenders/load-tender-detail";
+import { loadTenderDetailSafe } from "@/server/tenders/load-tender-detail";
 
 type AnalyzePageProps = {
   params: Promise<{ id: string }>;
@@ -20,11 +21,24 @@ type AnalyzePageProps = {
 export default async function TenderAnalyzePage({ params }: AnalyzePageProps) {
   const session = await requireSession();
   const { id } = await params;
-  const tender = await loadTenderDetail({
+  const loaded = await loadTenderDetailSafe({
     tenderId: id,
     companyId: session.user.companyId,
+    userId: session.user.id,
+    role: session.user.role,
+    sessionExpiresAt: session.expiresAt,
   });
-  if (!tender) notFound();
+  if (!loaded.ok && loaded.kind === "not_found") notFound();
+  if (!loaded.ok) {
+    return (
+      <ErrorState
+        title="Unable to load analysis"
+        message={loaded.publicMessage}
+        correlationId={loaded.correlationId}
+      />
+    );
+  }
+  const tender = loaded.tender;
 
   return (
     <div className="space-y-6">

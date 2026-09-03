@@ -8,7 +8,7 @@ import {
   loadBidWorkspace,
 } from "@/server/repositories/bidWorkspaceRepository";
 import { insertTenderActivity } from "@/server/repositories/tenderActivityRepository";
-import { loadTenderDetail } from "@/server/tenders/load-tender-detail";
+import { loadTenderDetailSafe } from "@/server/tenders/load-tender-detail";
 
 type BidWorkspacePageProps = {
   params: Promise<{ id: string }>;
@@ -19,11 +19,22 @@ export default async function BidWorkspacePage({
 }: BidWorkspacePageProps) {
   const session = await requirePermission("bids.view");
   const { id } = await params;
-  const tender = await loadTenderDetail({
+  const loaded = await loadTenderDetailSafe({
     tenderId: id,
     companyId: session.companyId,
+    userId: session.user.id,
+    role: session.user.role,
+    sessionExpiresAt: session.expiresAt,
   });
-  if (!tender) notFound();
+  if (!loaded.ok && loaded.kind === "not_found") notFound();
+  if (!loaded.ok) {
+    return (
+      <div className="rounded-lg border border-border bg-card p-6 text-sm text-foreground-600">
+        Workspace failed to load. Reference: {loaded.correlationId}
+      </div>
+    );
+  }
+  const tender = loaded.tender;
 
   const created = await getOrCreateWorkspace({
     tenderId: id,
@@ -41,7 +52,7 @@ export default async function BidWorkspacePage({
     });
   }
 
-  const raw = await getTenderById(id);
+  const raw = await getTenderById(id).catch(() => null);
   let workspace;
   try {
     workspace = await loadBidWorkspace({
@@ -66,15 +77,16 @@ export default async function BidWorkspacePage({
   }
 
   const refreshed = created.created
-    ? await loadTenderDetail({
+    ? await loadTenderDetailSafe({
         tenderId: id,
         companyId: session.companyId,
+        userId: session.user.id,
       })
-    : tender;
+    : loaded;
 
   return (
     <BidWorkspaceClient
-      tender={refreshed ?? tender}
+      tender={refreshed.ok ? refreshed.tender : tender}
       workspace={workspace}
       canEdit={sessionHasPermission(session, "bids.edit")}
       canSubmit={sessionHasPermission(session, "bids.submit")}

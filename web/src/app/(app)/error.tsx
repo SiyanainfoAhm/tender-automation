@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import Link from "next/link";
 import { AlertCircle, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  resolveDisplayReference,
+} from "@/lib/errors/app-error";
 
 export default function AppError({
   error,
@@ -13,12 +16,30 @@ export default function AppError({
   error: Error & { digest?: string; correlationId?: string };
   reset: () => void;
 }) {
-  useEffect(() => {
-    console.error(error);
-  }, [error]);
+  const correlationId = useMemo(
+    () => resolveDisplayReference(error),
+    [error],
+  );
 
-  const correlationId =
-    error.correlationId ?? error.digest ?? "unavailable";
+  useEffect(() => {
+    // Always log a matchable reference for Vercel / browser console.
+    const payload = {
+      level: "error",
+      event: "app_error_boundary",
+      correlationId,
+      digest: error.digest ?? null,
+      name: error.name,
+      message: error.message,
+      // Full stack only in development — production keeps digest + reference.
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    };
+    if (process.env.NODE_ENV === "development") {
+      console.error("[TenderFlow] Unexpected page error", error);
+      console.error(JSON.stringify(payload));
+    } else {
+      console.error(JSON.stringify(payload));
+    }
+  }, [error, correlationId]);
 
   return (
     <div className="flex min-h-[50vh] items-center justify-center py-10">

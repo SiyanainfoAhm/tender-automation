@@ -2,13 +2,20 @@ import "server-only";
 
 import type { PostgrestError } from "@supabase/supabase-js";
 
-import { AppError, createCorrelationId } from "@/lib/errors/app-error";
+import {
+  AppError,
+  createCorrelationId,
+  logDiagnostic,
+} from "@/lib/errors/app-error";
 
 export type DbQueryContext = {
   queryName: string;
   selectedColumns?: string | string[];
   filters?: Record<string, unknown>;
   correlationId?: string;
+  tenderId?: string | null;
+  userId?: string | null;
+  companyId?: string | null;
 };
 
 export function logSupabaseError(
@@ -17,19 +24,21 @@ export function logSupabaseError(
 ): AppError {
   const correlationId = context.correlationId ?? createCorrelationId();
 
-  console.error(
-    JSON.stringify({
-      level: "error",
-      correlationId,
-      queryName: context.queryName,
-      code: error.code,
-      message: error.message,
-      details: error.details,
-      hint: error.hint,
-      selectedColumns: context.selectedColumns,
-      filters: context.filters,
-    }),
-  );
+  logDiagnostic({
+    level: "error",
+    event: "supabase_query_failed",
+    correlationId,
+    operation: context.queryName,
+    tenderId: context.tenderId ?? null,
+    userId: context.userId ?? null,
+    companyId: context.companyId ?? null,
+    supabaseCode: error.code ?? null,
+    message: error.message,
+    details: error.details,
+    hint: error.hint,
+    selectedColumns: context.selectedColumns,
+    filters: context.filters,
+  });
 
   return new AppError({
     code: "DATABASE_QUERY_FAILED",
@@ -72,15 +81,17 @@ export async function runQuery<T>(
     }
     return { ok: true, data: (result.data ?? null) as T };
   } catch (error) {
-    const correlationId = createCorrelationId();
-    console.error(
-      JSON.stringify({
-        level: "error",
-        correlationId,
-        queryName,
-        message: error instanceof Error ? error.message : String(error),
-      }),
-    );
+    const correlationId = context?.correlationId ?? createCorrelationId();
+    logDiagnostic({
+      level: "error",
+      event: "query_unexpected_failure",
+      correlationId,
+      operation: queryName,
+      tenderId: context?.tenderId ?? null,
+      userId: context?.userId ?? null,
+      companyId: context?.companyId ?? null,
+      message: error instanceof Error ? error.message : String(error),
+    });
     return {
       ok: false,
       error: new AppError({

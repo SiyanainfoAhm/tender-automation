@@ -548,7 +548,12 @@ export async function getTenderById(id: string): Promise<{
   const supabase = getServerSupabase();
   const tender = assertSupabaseOk(
     await supabase.from("agenttender_tenders").select("*").eq("id", id).maybeSingle(),
-    { queryName: "getTenderById", selectedColumns: "*", filters: { id } },
+    {
+      queryName: "getTenderById",
+      selectedColumns: "*",
+      filters: { id },
+      tenderId: id,
+    },
   );
   if (!tender) return null;
 

@@ -57,6 +57,7 @@ import { SourceBadge } from "@/components/status/source-badge";
 import { StatusBadge } from "@/components/status/qualification-badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ErrorState } from "@/components/ui/error-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -157,6 +158,8 @@ const EXEMPTION_TYPES = ["Turnover", "Experience", "EMD"] as const;
 type TenderDetailClientProps = {
   tender: TenderDetailDTO;
   documents: TenderDocumentRecord[];
+  /** When document list fetch fails, tender page still renders; Documents tab shows this. */
+  documentsError?: { message: string; correlationId: string } | null;
   fees: BidFeeRecord[];
   eligibleTender: FeeEligibleTender | null;
   canEdit: boolean;
@@ -591,6 +594,7 @@ function DocumentSection({
 export function TenderDetailClient({
   tender,
   documents,
+  documentsError = null,
   fees,
   eligibleTender,
   canEdit,
@@ -723,7 +727,7 @@ export function TenderDetailClient({
   };
 
   const tenderSectionDocs = useMemo((): DocRowItem[] => {
-    const archiveItems: DocRowItem[] = tender.archiveDocuments
+    const archiveItems: DocRowItem[] = (tender.archiveDocuments ?? [])
       .filter((d) => d.downloadable && d.url)
       .map((d, index) => ({
         key: `archive-${d.name}-${index}`,
@@ -734,7 +738,7 @@ export function TenderDetailClient({
         meta: d.kind,
       }));
 
-    const dbItems: DocRowItem[] = documents
+    const dbItems: DocRowItem[] = (documents ?? [])
       .filter((d) => d.section === "tender")
       .map((d) => ({
         key: d.id,
@@ -749,7 +753,7 @@ export function TenderDetailClient({
 
   const sectionDocs = useCallback(
     (section: TenderDocumentSection): DocRowItem[] =>
-      documents
+      (documents ?? [])
         .filter((d) => d.section === section)
         .map((d) => {
           const fee = d.feeId
@@ -1714,12 +1718,22 @@ export function TenderDetailClient({
 
       {tab === "documents" ? (
         <div className="space-y-5">
+          {documentsError ? (
+            <ErrorState
+              compact
+              title="Documents couldn't be loaded"
+              message={documentsError.message}
+              correlationId={documentsError.correlationId}
+              onRetry={() => router.refresh()}
+            />
+          ) : null}
+
           <DocumentSection
             title="Tender Documents"
             subtitle="Official documents issued by the buyer"
             locked={false}
             items={tenderSectionDocs}
-            canEdit={canEdit}
+            canEdit={canEdit && !documentsError}
             uploading={uploadPending}
             showDownloadAll
             onUpload={(file) => uploadSectionDoc("tender", file)}
