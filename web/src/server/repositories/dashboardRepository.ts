@@ -22,6 +22,7 @@ import {
 import {
   DASHBOARD_PIPELINE_META,
   DASHBOARD_PIPELINE_STAGES,
+  isLiveDashboardPipelineStage,
   isWonQualificationStatus,
   mapToDashboardPipelineStage,
   type DashboardPipelineStage,
@@ -161,7 +162,9 @@ function buildPipeline(
 ): {
   stages: DashboardPipelineStageRow[];
   total: number;
+  liveTotal: number;
   valueTotal: number;
+  liveValueTotal: number;
 } {
   const aggregates = new Map<
     DashboardPipelineStage,
@@ -177,8 +180,8 @@ function buildPipeline(
       submitted: submittedIds.has(row.id),
       won: isWonQualificationStatus(row.effective_qualification_status),
     });
-    if (!stage) continue;
-    const bucket = aggregates.get(stage)!;
+    const bucket = aggregates.get(stage);
+    if (!bucket) continue;
     bucket.count += 1;
     bucket.value += toNumber(row.tender_value);
   }
@@ -190,13 +193,13 @@ function buildPipeline(
   const valueDenom = Math.max(valueTotal, 1);
 
   const stages: DashboardPipelineStageRow[] = DASHBOARD_PIPELINE_STAGES.map(
-    (key) => {
+    (key, index) => {
       const meta = DASHBOARD_PIPELINE_META[key];
       const bucket = aggregates.get(key)!;
       return {
         key,
         label: meta.label,
-        number: meta.number,
+        number: index + 1,
         count: bucket.count,
         totalValue: bucket.value,
         valueLabel: moneyLabel(bucket.value),
@@ -207,12 +210,15 @@ function buildPipeline(
         iconText: meta.iconText,
       };
     },
-  )
-    .filter((stage) => stage.key !== "partnership" || stage.count > 0)
-    .map((stage, index) => ({ ...stage, number: index + 1 }));
+  );
 
+  const liveStages = stages.filter((stage) =>
+    isLiveDashboardPipelineStage(stage.key),
+  );
   const total = stages.reduce((sum, s) => sum + s.count, 0);
-  return { stages, total, valueTotal };
+  const liveTotal = liveStages.reduce((sum, s) => sum + s.count, 0);
+  const liveValueTotal = liveStages.reduce((sum, s) => sum + s.totalValue, 0);
+  return { stages, total, liveTotal, valueTotal, liveValueTotal };
 }
 
 function buildVolumeTrend(
@@ -493,8 +499,13 @@ export async function getDashboardOverview(options: {
     0,
   );
 
-  const { stages: pipeline, total: pipelineTotal, valueTotal: pipelineValueTotal } =
-    buildPipeline(scopedRows, submittedIds);
+  const {
+    stages: pipeline,
+    total: pipelineTotal,
+    liveTotal,
+    valueTotal: pipelineValueTotal,
+    liveValueTotal,
+  } = buildPipeline(scopedRows, submittedIds);
 
   const submittedCount = scopedRows.filter((row) => {
     const status = String(row.effective_qualification_status || "")
@@ -558,15 +569,15 @@ export async function getDashboardOverview(options: {
       {
         key: "pipelineTenders",
         label: "Pipeline Tenders",
-        value: pipelineTotal.toLocaleString("en-IN"),
-        supporting: `worth ${moneyLabel(pipelineValueTotal)}`,
+        value: liveTotal.toLocaleString("en-IN"),
+        supporting: `worth ${moneyLabel(liveValueTotal)}`,
         tone: "blue",
       },
       {
         key: "pipelineValue",
         label: "Pipeline Value",
-        value: moneyLabel(pipelineValueTotal),
-        supporting: `${pipelineTotal} live opportunities`,
+        value: moneyLabel(liveValueTotal),
+        supporting: `${liveTotal} live opportunities`,
         tone: "green",
       },
       {

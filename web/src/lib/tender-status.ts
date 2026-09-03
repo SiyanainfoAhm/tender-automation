@@ -54,6 +54,8 @@ export const TENDER_UI_STATUSES = [
   "partnership",
   "submitted",
   "won",
+  "lost",
+  "disqualified",
   "no_bid",
   "duplicate",
   "cancelled",
@@ -70,6 +72,8 @@ export const TENDER_UI_STATUS_LABELS: Record<TenderUiStatus, string> = {
   partnership: "Partnership",
   submitted: "Submitted",
   won: "Won",
+  lost: "Lost",
+  disqualified: "Disqualified",
   no_bid: "No Bid",
   duplicate: "Duplicate",
   cancelled: "Tender cancelled",
@@ -84,6 +88,8 @@ export const TENDER_UI_STATUS_COLORS: Record<TenderUiStatus, string> = {
   partnership: "#7c3aed",
   submitted: "#3b82f6",
   won: "#16a34a",
+  lost: "#b91c1c",
+  disqualified: "#9f1239",
   no_bid: "#dc2626",
   duplicate: "#6b7280",
   cancelled: "#78716c",
@@ -127,8 +133,8 @@ export function getTenderUiStatus(
   if (value === "CANCELLED" || value === "CANCELED") return "cancelled";
   if (value === "SUBMITTED") return "submitted";
   if (value === "WON" || value === "AWARDED") return "won";
-  if (value === "LOST") return "no_bid";
-  if (value === "DISQUALIFIED") return "no_bid";
+  if (value === "LOST") return "lost";
+  if (value === "DISQUALIFIED") return "disqualified";
   if (value === "VERIFY") return "verify";
   if (value === "CONDITIONAL_GO" || value === "MAY_BID") return "may_bid";
   if (value === "SCREENING") return "under_evaluation";

@@ -1,6 +1,6 @@
 /**
- * Executive Dashboard bid-pipeline stages (UI buckets).
- * CONDITIONAL_GO → May Bid here (list UI may still label it Screening).
+ * Dashboard status stages — mirrors tender status dropdown / list filters.
+ * Live bid funnel KPIs use DASHBOARD_LIVE_PIPELINE_STAGES only.
  */
 export const DASHBOARD_PIPELINE_STAGES = [
   "verify",
@@ -9,9 +9,36 @@ export const DASHBOARD_PIPELINE_STAGES = [
   "will_bid",
   "partnership",
   "submitted",
+  "won",
+  "lost",
+  "disqualified",
+  "no_bid",
+  "duplicate",
+  "cancelled",
 ] as const;
 
 export type DashboardPipelineStage = (typeof DASHBOARD_PIPELINE_STAGES)[number];
+
+/** Active opportunities counted in pipeline KPIs (excludes terminal statuses). */
+export const DASHBOARD_LIVE_PIPELINE_STAGES = [
+  "verify",
+  "under_evaluation",
+  "may_bid",
+  "will_bid",
+  "partnership",
+  "submitted",
+] as const;
+
+export type DashboardLivePipelineStage =
+  (typeof DASHBOARD_LIVE_PIPELINE_STAGES)[number];
+
+const LIVE_PIPELINE_STAGE_SET = new Set<string>(DASHBOARD_LIVE_PIPELINE_STAGES);
+
+export function isLiveDashboardPipelineStage(
+  stage: DashboardPipelineStage | null | undefined,
+): stage is DashboardLivePipelineStage {
+  return Boolean(stage && LIVE_PIPELINE_STAGE_SET.has(stage));
+}
 
 export const DASHBOARD_PIPELINE_META: Record<
   DashboardPipelineStage,
@@ -33,7 +60,7 @@ export const DASHBOARD_PIPELINE_META: Record<
     color: "#0ea5e9",
   },
   under_evaluation: {
-    label: "Under evaluation",
+    label: "Under Evaluation",
     number: 2,
     barClass: "bg-slate-400",
     iconBg: "bg-slate-100",
@@ -72,38 +99,84 @@ export const DASHBOARD_PIPELINE_META: Record<
     iconText: "text-blue-600",
     color: "#3b82f6",
   },
+  won: {
+    label: "Won",
+    number: 7,
+    barClass: "bg-emerald-600",
+    iconBg: "bg-emerald-50",
+    iconText: "text-emerald-800",
+    color: "#16a34a",
+  },
+  lost: {
+    label: "Lost",
+    number: 8,
+    barClass: "bg-rose-700",
+    iconBg: "bg-rose-50",
+    iconText: "text-rose-800",
+    color: "#b91c1c",
+  },
+  disqualified: {
+    label: "Disqualified",
+    number: 9,
+    barClass: "bg-red-600",
+    iconBg: "bg-red-50",
+    iconText: "text-red-800",
+    color: "#9f1239",
+  },
+  no_bid: {
+    label: "No Bid",
+    number: 10,
+    barClass: "bg-rose-500",
+    iconBg: "bg-rose-50",
+    iconText: "text-rose-700",
+    color: "#dc2626",
+  },
+  duplicate: {
+    label: "Duplicate",
+    number: 11,
+    barClass: "bg-slate-500",
+    iconBg: "bg-slate-50",
+    iconText: "text-slate-700",
+    color: "#6b7280",
+  },
+  cancelled: {
+    label: "Tender cancelled",
+    number: 12,
+    barClass: "bg-stone-500",
+    iconBg: "bg-stone-50",
+    iconText: "text-stone-700",
+    color: "#78716c",
+  },
 };
 
 /**
- * Map qualification + workspace flags into an active bid-pipeline stage.
- * Won / No Bid are excluded from the live funnel.
+ * Map qualification + workspace flags into a dashboard status stage.
+ * Matches tender dropdown / list filter buckets.
  */
 export function mapToDashboardPipelineStage(options: {
   qualificationStatus: string | null | undefined;
   submitted: boolean;
   won?: boolean;
-}): DashboardPipelineStage | null {
-  if (options.won) return null;
+}): DashboardPipelineStage {
+  if (options.won) return "won";
   const raw = String(options.qualificationStatus || "")
     .trim()
     .toUpperCase()
     .replace(/[\s-]+/g, "_");
-  if (raw === "WON" || raw === "AWARDED") return null;
-  if (raw === "NO_GO" || raw === "NO_BID") return null;
-  if (raw === "CANCELLED" || raw === "CANCELED") return null;
-  if (raw === "LOST" || raw === "DISQUALIFIED") return null;
+
+  if (raw === "WON" || raw === "AWARDED") return "won";
+  if (raw === "LOST") return "lost";
+  if (raw === "DISQUALIFIED") return "disqualified";
+  if (raw === "NO_GO" || raw === "NO_BID") return "no_bid";
+  if (raw === "DUPLICATE") return "duplicate";
+  if (raw === "CANCELLED" || raw === "CANCELED") return "cancelled";
   // qualification_status SUBMITTED (manual import / bid lock) counts as submitted
   // even when bid_workspace.submission_status is missing.
   if (raw === "SUBMITTED" || options.submitted) return "submitted";
-
-  const status = String(options.qualificationStatus || "")
-    .trim()
-    .toUpperCase()
-    .replace(/[\s-]+/g, "_");
-  if (status === "GO" || status === "WILL_BID") return "will_bid";
-  if (status === "PARTNER_BID" || status === "PARTNERSHIP") return "partnership";
-  if (status === "CONDITIONAL_GO" || status === "MAY_BID") return "may_bid";
-  if (status === "VERIFY") return "verify";
+  if (raw === "GO" || raw === "WILL_BID") return "will_bid";
+  if (raw === "PARTNER_BID" || raw === "PARTNERSHIP") return "partnership";
+  if (raw === "CONDITIONAL_GO" || raw === "MAY_BID") return "may_bid";
+  if (raw === "VERIFY") return "verify";
   return "under_evaluation";
 }
 

@@ -97,7 +97,7 @@ function exclusiveFunnelKey(options: {
   qualificationStatus: string | null;
   submitted: boolean;
   won: boolean;
-}): "new" | "screening" | "mayBid" | "willBid" | "submitted" | "won" {
+}): "new" | "screening" | "mayBid" | "willBid" | "submitted" | "won" | null {
   if (options.won) return "won";
   const status = String(options.qualificationStatus || "")
     .trim()
@@ -109,6 +109,16 @@ function exclusiveFunnelKey(options: {
     submitted: false,
     won: false,
   });
+  if (mapped === "won") return "won";
+  if (
+    mapped === "lost" ||
+    mapped === "disqualified" ||
+    mapped === "no_bid" ||
+    mapped === "cancelled" ||
+    mapped === "duplicate"
+  ) {
+    return null;
+  }
   if (mapped === "submitted") return "submitted";
   if (mapped === "will_bid") return "willBid";
   if (mapped === "may_bid") return "mayBid";
@@ -229,6 +239,7 @@ export async function getReportsAnalytics(options: {
       submitted: submittedIds.has(row.id),
       won: false,
     });
+    if (!key) continue;
     funnel[key] += 1;
     funnelValue[key] += toNumber(row.tender_value);
   }
@@ -287,7 +298,7 @@ export async function getReportsAnalytics(options: {
       submitted: submittedIds.has(row.id),
       won: false,
     });
-    return key !== "won" && row.effective_qualification_status !== "NO_GO";
+    return key != null && key !== "won";
   });
   const ageingCounts = { overdue: 0, lt7: 0, d7_14: 0, d14_30: 0 };
   for (const row of ageingSource) {

@@ -193,6 +193,8 @@ export type TenderListStatusCounts = {
   submitted: number;
   closingSoon: number;
   won: number;
+  lost: number;
+  disqualified: number;
   cancelled: number;
 };
 
@@ -249,6 +251,8 @@ export async function getTenderListStatusCounts(
     duplicateRes,
     partnershipRes,
     wonRes,
+    lostRes,
+    disqualifiedRes,
     closingRes,
     submittedRes,
     cancelledRes,
@@ -262,6 +266,8 @@ export async function getTenderListStatusCounts(
     base().eq("effective_qualification_status", "DUPLICATE"),
     base().eq("effective_qualification_status", "PARTNER_BID"),
     base().eq("effective_qualification_status", "WON"),
+    base().eq("effective_qualification_status", "LOST"),
+    base().eq("effective_qualification_status", "DISQUALIFIED"),
     base().gte("closing_date", todayDate).lte("closing_date", in3),
     // Prefer tender qualification status (manual import / bid lock).
     // Workspace-only submissions are still included via list filter union.
@@ -279,6 +285,8 @@ export async function getTenderListStatusCounts(
     ["duplicate", duplicateRes],
     ["partnership", partnershipRes],
     ["won", wonRes],
+    ["lost", lostRes],
+    ["disqualified", disqualifiedRes],
     ["closingSoon", closingRes],
     ["submitted", submittedRes],
     ["cancelled", cancelledRes],
@@ -302,6 +310,8 @@ export async function getTenderListStatusCounts(
   const duplicate = duplicateRes.count ?? 0;
   const partnership = partnershipRes.count ?? 0;
   const won = wonRes.count ?? 0;
+  const lost = lostRes.count ?? 0;
+  const disqualified = disqualifiedRes.count ?? 0;
   const submitted = submittedRes.count ?? 0;
   const cancelled = cancelledRes.count ?? 0;
 
@@ -314,6 +324,8 @@ export async function getTenderListStatusCounts(
     duplicate +
     partnership +
     won +
+    lost +
+    disqualified +
     submitted +
     cancelled;
   if (mappedSum < totalTenders) {
@@ -339,6 +351,8 @@ export async function getTenderListStatusCounts(
     submitted,
     closingSoon: closingRes.count ?? 0,
     won,
+    lost,
+    disqualified,
     cancelled,
   };
 }

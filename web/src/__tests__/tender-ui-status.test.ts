@@ -21,8 +21,12 @@ describe("tender UI status mapping", () => {
     expect(getTenderUiStatus("PARTNER_BID")).toBe("partnership");
     expect(getTenderUiStatus("NO_GO")).toBe("no_bid");
     expect(getTenderUiStatus("WON")).toBe("won");
+    expect(getTenderUiStatus("LOST")).toBe("lost");
+    expect(getTenderUiStatus("DISQUALIFIED")).toBe("disqualified");
     expect(getTenderUiStatus("CANCELLED")).toBe("cancelled");
     expect(tenderUiStatusLabel("CANCELLED")).toBe("Tender cancelled");
+    expect(tenderUiStatusLabel("DISQUALIFIED")).toBe("Disqualified");
+    expect(tenderUiStatusLabel("LOST")).toBe("Lost");
   });
 
   it("expands status filters to the correct DB values", () => {
@@ -49,6 +53,17 @@ describe("tender UI status mapping", () => {
     expect(qualificationStatusesForFilter("cancelled")).toEqual({
       kind: "in",
       values: ["CANCELLED"],
+    });
+    expect(qualificationStatusesForFilter("lost")).toEqual({
+      kind: "in",
+      values: ["LOST"],
+    });
+    expect(qualificationStatusesForFilter("disqualified")).toEqual({
+      kind: "in",
+      values: ["DISQUALIFIED"],
+    });
+    expect(qualificationStatusesForFilter("under_evaluation")).toEqual({
+      kind: "null",
     });
   });
 });

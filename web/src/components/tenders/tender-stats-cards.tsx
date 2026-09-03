@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+
 import {
   Ban,
   Briefcase,
@@ -11,8 +12,10 @@ import {
   Handshake,
   Send,
   ShieldAlert,
+  ShieldX,
   Target,
   Trophy,
+  XCircle,
 } from "lucide-react";
 
 import { CompactKpiCard } from "@/components/tenders/compact-kpi-card";
@@ -21,9 +24,12 @@ import type { TenderListStatusCounts } from "@/server/repositories/analyticsRepo
 
 type TenderStatsCardsProps = {
   counts: TenderListStatusCounts;
+
   /** Current URL status chip (`ALL` when none). */
   activeStatus?: string;
+
   onSelectStatus?: (status: string | undefined) => void;
+
   disabled?: boolean;
 };
 
@@ -32,6 +38,7 @@ type CardDef = {
   label: string;
   icon: typeof FileText;
   iconClassName: string;
+
   /** URL `status` value; undefined clears the status filter (Total). */
   filterStatus?: string;
 };
@@ -108,7 +115,8 @@ const EXTRA: CardDef[] = [
     label: "Closing Soon",
     icon: Clock,
     iconClassName: "bg-rose-100 text-rose-700",
-    // No dedicated status filter — display-only in View More.
+
+    // No dedicated status filter — display only.
   },
   {
     key: "won",
@@ -118,8 +126,22 @@ const EXTRA: CardDef[] = [
     filterStatus: "won",
   },
   {
+    key: "lost",
+    label: "Lost",
+    icon: XCircle,
+    iconClassName: "bg-rose-100 text-rose-800",
+    filterStatus: "lost",
+  },
+  {
+    key: "disqualified",
+    label: "Disqualified",
+    icon: ShieldX,
+    iconClassName: "bg-red-100 text-red-800",
+    filterStatus: "disqualified",
+  },
+  {
     key: "cancelled",
-    label: "Tender cancelled",
+    label: "Tender Cancelled",
     icon: Ban,
     iconClassName: "bg-stone-100 text-stone-700",
     filterStatus: "cancelled",
@@ -132,8 +154,15 @@ function isCardActive(
 ): boolean {
   const current =
     !activeStatus || activeStatus === "ALL" ? undefined : activeStatus;
-  if (card.key === "totalTenders") return current === undefined;
-  if (card.filterStatus === undefined) return false;
+
+  if (card.key === "totalTenders") {
+    return current === undefined;
+  }
+
+  if (card.filterStatus === undefined) {
+    return false;
+  }
+
   return current === card.filterStatus;
 }
 
@@ -144,7 +173,9 @@ export function TenderStatsCards({
   disabled = false,
 }: TenderStatsCardsProps) {
   const [expanded, setExpanded] = useState(false);
+
   const cards = expanded ? [...PRIMARY, ...EXTRA] : PRIMARY;
+
   const interactive = typeof onSelectStatus === "function";
 
   return (
@@ -153,7 +184,9 @@ export function TenderStatsCards({
         {cards.map((card) => {
           const clickable =
             interactive &&
-            (card.key === "totalTenders" || card.filterStatus !== undefined);
+            (card.key === "totalTenders" ||
+              card.filterStatus !== undefined);
+
           return (
             <CompactKpiCard
               key={card.key}
@@ -172,6 +205,7 @@ export function TenderStatsCards({
           );
         })}
       </div>
+
       <div className="flex justify-end">
         <Button
           type="button"

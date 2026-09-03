@@ -13,6 +13,9 @@ const CARD_STATUS_FILTERS = {
   mayBid: "may_bid",
   noBid: "no_bid",
   duplicate: "duplicate",
+  cancelled: "cancelled",
+  lost: "lost",
+  disqualified: "disqualified",
   partnership: "partnership",
   submitted: "submitted",
   won: "won",
@@ -51,5 +54,8 @@ describe("tender stats card status mapping", () => {
     assert.equal(CARD_STATUS_FILTERS.mayBid, "may_bid");
     assert.equal(CARD_STATUS_FILTERS.noBid, "no_bid");
     assert.equal(CARD_STATUS_FILTERS.underEvaluation, "under_evaluation");
+    assert.equal(CARD_STATUS_FILTERS.lost, "lost");
+    assert.equal(CARD_STATUS_FILTERS.disqualified, "disqualified");
+    assert.equal(CARD_STATUS_FILTERS.cancelled, "cancelled");
   });
 });

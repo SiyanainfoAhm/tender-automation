@@ -5,12 +5,15 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   AlertTriangle,
+  Ban,
   Briefcase,
   Building2,
   CalendarDays,
   CheckCircle2,
   ChevronRight,
   ClipboardCheck,
+  Copy,
+  FileText,
   Handshake,
   HelpCircle,
   IndianRupee,
@@ -18,8 +21,10 @@ import {
   Search,
   Send,
   Shield,
+  ShieldX,
   Trophy,
   X,
+  XCircle,
 } from "lucide-react";
 import {
   Bar,
@@ -39,6 +44,7 @@ import {
   type DashboardDateBasis,
   type DashboardPeriod,
 } from "@/lib/dashboard/time-range";
+import type { DashboardPipelineStage } from "@/lib/dashboard/pipeline";
 import type { DashboardOverview } from "@/lib/dashboard/types";
 import { financialExposureEmptySubtitles } from "@/lib/dashboard/financial-metrics";
 import { formatIndianCurrency } from "@/lib/format";
@@ -79,14 +85,23 @@ type DashboardOverviewProps = {
   data: DashboardOverview;
 };
 
-const PIPELINE_ICONS = {
+const PIPELINE_ICONS: Record<
+  DashboardPipelineStage,
+  typeof HelpCircle
+> = {
   verify: HelpCircle,
   under_evaluation: Search,
   may_bid: ClipboardCheck,
   will_bid: CheckCircle2,
   partnership: Handshake,
   submitted: Send,
-} as const;
+  won: Trophy,
+  lost: XCircle,
+  disqualified: ShieldX,
+  no_bid: FileText,
+  duplicate: Copy,
+  cancelled: Ban,
+};
 
 const KPI_ICONS = {
   pipelineTenders: Briefcase,
@@ -333,8 +348,9 @@ export function DashboardOverviewClient({ data }: DashboardOverviewProps) {
               Bid Pipeline by Stage
             </h2>
             <p className="mt-0.5 text-sm text-slate-500">
-              {data.pipelineTotal.toLocaleString("en-IN")} opportunities{" "}
-              {DASHBOARD_PERIOD_LABELS[data.period].toLowerCase()}
+              {data.pipelineTotal.toLocaleString("en-IN")} tenders{" "}
+              {DASHBOARD_PERIOD_LABELS[data.period].toLowerCase()} — all
+              statuses from the tender dropdown
             </p>
           </div>
           <ul className="space-y-3.5">
@@ -342,44 +358,50 @@ export function DashboardOverviewClient({ data }: DashboardOverviewProps) {
               const Icon = PIPELINE_ICONS[stage.key];
               return (
                 <li key={stage.key} className="space-y-1.5">
-                  <div className="flex items-center gap-3">
-                    <span className="w-4 text-xs font-semibold text-slate-400">
-                      {stage.number}
-                    </span>
-                    <div
-                      className={cn(
-                        "flex size-8 items-center justify-center rounded-lg",
-                        stage.iconBg,
-                        stage.iconText,
-                      )}
-                    >
-                      <Icon className="size-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-baseline justify-between gap-2">
-                        <p className="text-sm font-medium text-slate-800">
-                          {stage.label}
-                          <span className="ml-2 text-xs font-normal text-slate-500">
-                            {stage.count} tender{stage.count === 1 ? "" : "s"}
-                          </span>
-                        </p>
-                        <p className="text-sm font-semibold tabular-nums text-slate-900">
-                          {stage.valueLabel}
+                  <Link
+                    href={`/tenders?status=${stage.key}`}
+                    className="block rounded-lg -mx-1 px-1 py-0.5 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
+                    aria-label={`View ${stage.label} tenders`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className="w-4 text-xs font-semibold text-slate-400">
+                        {stage.number}
+                      </span>
+                      <div
+                        className={cn(
+                          "flex size-8 items-center justify-center rounded-lg",
+                          stage.iconBg,
+                          stage.iconText,
+                        )}
+                      >
+                        <Icon className="size-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-baseline justify-between gap-2">
+                          <p className="text-sm font-medium text-slate-800">
+                            {stage.label}
+                            <span className="ml-2 text-xs font-normal text-slate-500">
+                              {stage.count} tender{stage.count === 1 ? "" : "s"}
+                            </span>
+                          </p>
+                          <p className="text-sm font-semibold tabular-nums text-slate-900">
+                            {stage.valueLabel}
+                          </p>
+                        </div>
+                        <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-slate-100">
+                          <div
+                            className={cn("h-full rounded-full", stage.barClass)}
+                            style={{
+                              width: `${Math.max(stage.progress, stage.count > 0 ? 4 : 0)}%`,
+                            }}
+                          />
+                        </div>
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          {stage.progress}% of listed tender value
                         </p>
                       </div>
-                      <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-slate-100">
-                        <div
-                          className={cn("h-full rounded-full", stage.barClass)}
-                          style={{
-                            width: `${Math.max(stage.progress, stage.count > 0 ? 4 : 0)}%`,
-                          }}
-                        />
-                      </div>
-                      <p className="mt-1 text-[11px] text-slate-500">
-                        {stage.progress}% of pipeline value
-                      </p>
                     </div>
-                  </div>
+                  </Link>
                 </li>
               );
             })}

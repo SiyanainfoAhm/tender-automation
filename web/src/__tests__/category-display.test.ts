@@ -104,6 +104,8 @@ describe("formatDecisionStatus / compactTenderCount", () => {
     expect(formatDecisionStatus("PARTNER_BID")).toBe("Partnership");
     expect(formatDecisionStatus("NOT_EVALUATED")).toBe("Under Evaluation");
     expect(formatDecisionStatus("CANCELLED")).toBe("Tender cancelled");
+    expect(formatDecisionStatus("DISQUALIFIED")).toBe("Disqualified");
+    expect(formatDecisionStatus("LOST")).toBe("Lost");
   });
 
   it("formats tender counts", () => {

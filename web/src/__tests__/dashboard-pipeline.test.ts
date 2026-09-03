@@ -9,11 +9,13 @@ import {
   MIN_WIN_RATE_SAMPLE,
 } from "@/lib/dashboard/kpi-format";
 import {
+  DASHBOARD_PIPELINE_STAGES,
   isActionableQualificationStatus,
   isPendingReviewStatus,
   isWonQualificationStatus,
   mapToDashboardPipelineStage,
 } from "@/lib/dashboard/pipeline";
+import { TENDER_LIST_STATUS_FILTERS } from "@/lib/tender-status";
 import {
   DEFAULT_DASHBOARD_PERIOD,
   parseDashboardDateBasis,
@@ -126,7 +128,7 @@ describe("dashboard pipeline mapping", () => {
     ).toBe("submitted");
   });
 
-  it("maps Verify / May Bid / Partnership and excludes No Bid / Won", () => {
+  it("maps Verify / May Bid / Partnership and terminal statuses", () => {
     expect(
       mapToDashboardPipelineStage({
         qualificationStatus: "VERIFY",
@@ -147,23 +149,51 @@ describe("dashboard pipeline mapping", () => {
     ).toBe("partnership");
     expect(
       mapToDashboardPipelineStage({
+        qualificationStatus: null,
+        submitted: false,
+      }),
+    ).toBe("under_evaluation");
+    expect(
+      mapToDashboardPipelineStage({
         qualificationStatus: "NO_GO",
         submitted: false,
       }),
-    ).toBeNull();
+    ).toBe("no_bid");
     expect(
       mapToDashboardPipelineStage({
         qualificationStatus: "WON",
         submitted: true,
       }),
-    ).toBeNull();
+    ).toBe("won");
+    expect(
+      mapToDashboardPipelineStage({
+        qualificationStatus: "LOST",
+        submitted: false,
+      }),
+    ).toBe("lost");
+    expect(
+      mapToDashboardPipelineStage({
+        qualificationStatus: "DISQUALIFIED",
+        submitted: false,
+      }),
+    ).toBe("disqualified");
     expect(
       mapToDashboardPipelineStage({
         qualificationStatus: "CANCELLED",
         submitted: false,
       }),
-    ).toBeNull();
+    ).toBe("cancelled");
     expect(isWonQualificationStatus("WON")).toBe(true);
+  });
+
+  it("exposes every tender dropdown status as a dashboard stage", () => {
+    const filterValues = TENDER_LIST_STATUS_FILTERS.filter(
+      (item) => item.value !== "ALL",
+    ).map((item) => item.value);
+    expect([...DASHBOARD_PIPELINE_STAGES]).toEqual(filterValues);
+    expect(DASHBOARD_PIPELINE_STAGES).toContain("under_evaluation");
+    expect(DASHBOARD_PIPELINE_STAGES).toContain("disqualified");
+    expect(DASHBOARD_PIPELINE_STAGES).toContain("lost");
   });
 
   it("treats VERIFY as pending review", () => {
