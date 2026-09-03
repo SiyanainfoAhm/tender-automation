@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
-import { Loader2, Plus, Trash2, X } from "lucide-react";
+import { useMemo, useRef, useState, useTransition } from "react";
+import { Loader2, Plus, Trash2, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -24,8 +24,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { formatFileSize } from "@/lib/bid-fees";
 import { PROJECT_CATEGORIES } from "@/lib/project-category";
 import { STATUS_DISPLAY_LABELS, TENDER_STATUSES } from "@/lib/tender-status";
+import { MAX_DOCUMENT_UPLOAD_BYTES } from "@/lib/uploads/config";
+import { uploadTenderDocumentDirectToAzure } from "@/lib/uploads/directAzureUpload";
+import {
+  documentUploadAcceptAttr,
+  documentUploadHint,
+  validateDocumentFile,
+} from "@/lib/uploads/validation";
 import { cn } from "@/lib/utils";
 import { createManualTenderAction } from "@/server/actions/tender-create";
 
@@ -88,6 +96,8 @@ export function AddManualTenderModal({
   const [description, setDescription] = useState("");
   const [notes, setNotes] = useState("");
   const [noBidReason, setNoBidReason] = useState("");
+  const [documents, setDocuments] = useState<File[]>([]);
+  const documentInputRef = useRef<HTMLInputElement>(null);
 
   const showExemptions = msmeExemption || startupExemption;
   const showNoBidReason = initialStatus === "NO_GO";
@@ -126,6 +136,7 @@ export function AddManualTenderModal({
     setDescription("");
     setNotes("");
     setNoBidReason("");
+    setDocuments([]);
   }
 
   function err(key: string) {
@@ -143,6 +154,20 @@ export function AddManualTenderModal({
     setExemptionTypes((prev) =>
       prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value],
     );
+  }
+
+  function addDocuments(files: FileList | File[]) {
+    const next: File[] = [];
+    for (const file of Array.from(files)) {
+      const validation = validateDocumentFile(file, MAX_DOCUMENT_UPLOAD_BYTES);
+      if (validation) {
+        toast.error(`${file.name}: ${validation.message}`);
+        continue;
+      }
+      next.push(file);
+    }
+    if (next.length === 0) return;
+    setDocuments((prev) => [...prev, ...next]);
   }
 
   function submit() {
@@ -190,6 +215,33 @@ export function AddManualTenderModal({
         return;
       }
       toast.success(result.message);
+      if (documents.length > 0) {
+        let uploaded = 0;
+        const failed: string[] = [];
+        for (const file of documents) {
+          const upload = await uploadTenderDocumentDirectToAzure({
+            tenderId: result.id,
+            section: "tender",
+            file,
+          });
+          if (upload.ok) {
+            uploaded += 1;
+          } else {
+            failed.push(`${file.name}: ${upload.error}`);
+          }
+        }
+        if (failed.length === 0) {
+          toast.success(
+            uploaded === 1
+              ? "Document uploaded."
+              : `${uploaded} documents uploaded.`,
+          );
+        } else {
+          toast.error(
+            `Tender saved. ${uploaded} uploaded, ${failed.length} failed. Open the tender Documents tab to retry.`,
+          );
+        }
+      }
       resetForm();
       onOpenChange(false);
       onCreated?.(result.id);
@@ -615,6 +667,68 @@ export function AddManualTenderModal({
                   <FieldError message={err("noBidReason")} />
                 </div>
               ) : null}
+              <div className="space-y-2">
+                <Label>Tender documents</Label>
+                <p className="text-[11px] text-foreground-400">
+                  Optional. Files upload directly to Azure (not through Vercel).{" "}
+                  {documentUploadHint(MAX_DOCUMENT_UPLOAD_BYTES)}
+                </p>
+                <input
+                  ref={documentInputRef}
+                  type="file"
+                  className="hidden"
+                  multiple
+                  accept={documentUploadAcceptAttr()}
+                  disabled={pending}
+                  onChange={(event) => {
+                    const files = event.target.files;
+                    event.target.value = "";
+                    if (files?.length) addDocuments(files);
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-sm"
+                  disabled={pending}
+                  onClick={() => documentInputRef.current?.click()}
+                >
+                  <Upload className="size-3.5" />
+                  Add files
+                </Button>
+                {documents.length > 0 ? (
+                  <ul className="space-y-1.5 rounded-lg border border-border p-2">
+                    {documents.map((file, index) => (
+                      <li
+                        key={`${file.name}-${file.size}-${index}`}
+                        className="flex items-center justify-between gap-2 text-sm"
+                      >
+                        <span className="min-w-0 truncate text-foreground-800">
+                          {file.name}
+                          <span className="ml-2 text-[11px] text-foreground-400">
+                            {formatFileSize(file.size)}
+                          </span>
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-7 shrink-0"
+                          disabled={pending}
+                          aria-label={`Remove ${file.name}`}
+                          onClick={() =>
+                            setDocuments((prev) =>
+                              prev.filter((_, i) => i !== index),
+                            )
+                          }
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
             </div>
           </section>
         </div>
@@ -632,7 +746,7 @@ export function AddManualTenderModal({
             {pending ? (
               <>
                 <Loader2 className="size-4 animate-spin" />
-                Saving…
+                {documents.length > 0 ? "Saving & uploading…" : "Saving…"}
               </>
             ) : (
               "Add Tender"
