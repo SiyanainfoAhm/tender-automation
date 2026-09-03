@@ -193,6 +193,7 @@ export type TenderListStatusCounts = {
   submitted: number;
   closingSoon: number;
   won: number;
+  cancelled: number;
 };
 
 export type TenderListStatusCountFilters = {
@@ -250,6 +251,7 @@ export async function getTenderListStatusCounts(
     wonRes,
     closingRes,
     submittedRes,
+    cancelledRes,
   ] = await Promise.all([
     base(),
     base().eq("effective_qualification_status", "VERIFY"),
@@ -261,9 +263,10 @@ export async function getTenderListStatusCounts(
     base().eq("effective_qualification_status", "PARTNER_BID"),
     base().eq("effective_qualification_status", "WON"),
     base().gte("closing_date", todayDate).lte("closing_date", in3),
-    // Prefer tender qualification status (manual import + bid lock).
+    // Prefer tender qualification status (manual import / bid lock).
     // Workspace-only submissions are still included via list filter union.
     base().eq("effective_qualification_status", "SUBMITTED"),
+    base().eq("effective_qualification_status", "CANCELLED"),
   ]);
 
   const results = [
@@ -278,6 +281,7 @@ export async function getTenderListStatusCounts(
     ["won", wonRes],
     ["closingSoon", closingRes],
     ["submitted", submittedRes],
+    ["cancelled", cancelledRes],
   ] as const;
 
   for (const [name, res] of results) {
@@ -299,6 +303,7 @@ export async function getTenderListStatusCounts(
   const partnership = partnershipRes.count ?? 0;
   const won = wonRes.count ?? 0;
   const submitted = submittedRes.count ?? 0;
+  const cancelled = cancelledRes.count ?? 0;
 
   const mappedSum =
     verify +
@@ -309,7 +314,8 @@ export async function getTenderListStatusCounts(
     duplicate +
     partnership +
     won +
-    submitted;
+    submitted +
+    cancelled;
   if (mappedSum < totalTenders) {
     console.warn(
       "[tenderListStatusCounts] unmapped/legacy statuses present",
@@ -333,6 +339,7 @@ export async function getTenderListStatusCounts(
     submitted,
     closingSoon: closingRes.count ?? 0,
     won,
+    cancelled,
   };
 }
 

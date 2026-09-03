@@ -378,7 +378,14 @@ function buildUpcomingDeadlines(
       if (isWonQualificationStatus(row.effective_qualification_status)) {
         return false;
       }
-      if (row.effective_qualification_status === "NO_GO") return false;
+      if (
+        row.effective_qualification_status === "NO_GO" ||
+        row.effective_qualification_status === "CANCELLED" ||
+        row.effective_qualification_status === "LOST" ||
+        row.effective_qualification_status === "DISQUALIFIED"
+      ) {
+        return false;
+      }
       return true;
     })
     .map((row) => {

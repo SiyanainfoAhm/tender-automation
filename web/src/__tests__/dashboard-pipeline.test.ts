@@ -157,6 +157,12 @@ describe("dashboard pipeline mapping", () => {
         submitted: true,
       }),
     ).toBeNull();
+    expect(
+      mapToDashboardPipelineStage({
+        qualificationStatus: "CANCELLED",
+        submitted: false,
+      }),
+    ).toBeNull();
     expect(isWonQualificationStatus("WON")).toBe(true);
   });
 

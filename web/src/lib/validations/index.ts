@@ -102,10 +102,12 @@ export const QUALIFICATION_STATUSES = [
   "PARTNER_BID",
   "VERIFY",
   "NO_GO",
+  "DUPLICATE",
   "WON",
   "LOST",
   "DISQUALIFIED",
   "SUBMITTED",
+  "CANCELLED",
 ] as const;
 
 export const DATE_TYPES = [

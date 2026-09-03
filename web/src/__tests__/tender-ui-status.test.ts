@@ -21,6 +21,8 @@ describe("tender UI status mapping", () => {
     expect(getTenderUiStatus("PARTNER_BID")).toBe("partnership");
     expect(getTenderUiStatus("NO_GO")).toBe("no_bid");
     expect(getTenderUiStatus("WON")).toBe("won");
+    expect(getTenderUiStatus("CANCELLED")).toBe("cancelled");
+    expect(tenderUiStatusLabel("CANCELLED")).toBe("Tender cancelled");
   });
 
   it("expands status filters to the correct DB values", () => {
@@ -43,6 +45,10 @@ describe("tender UI status mapping", () => {
     expect(qualificationStatusesForFilter("GO")).toEqual({
       kind: "in",
       values: ["GO"],
+    });
+    expect(qualificationStatusesForFilter("cancelled")).toEqual({
+      kind: "in",
+      values: ["CANCELLED"],
     });
   });
 });

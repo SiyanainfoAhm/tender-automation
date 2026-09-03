@@ -100,9 +100,10 @@ describe("buildTopCategories", () => {
 describe("formatDecisionStatus / compactTenderCount", () => {
   it("formats status enums for display", () => {
     expect(formatDecisionStatus("NO_GO")).toBe("No Bid");
-    expect(formatDecisionStatus("CONDITIONAL_GO")).toBe("Screening");
+    expect(formatDecisionStatus("CONDITIONAL_GO")).toBe("May Bid");
     expect(formatDecisionStatus("PARTNER_BID")).toBe("Partnership");
-    expect(formatDecisionStatus("NOT_EVALUATED")).toBe("Not Evaluated");
+    expect(formatDecisionStatus("NOT_EVALUATED")).toBe("Under Evaluation");
+    expect(formatDecisionStatus("CANCELLED")).toBe("Tender cancelled");
   });
 
   it("formats tender counts", () => {

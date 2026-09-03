@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import {
+  Ban,
   Briefcase,
   CheckCircle2,
   Clock,
@@ -115,6 +116,13 @@ const EXTRA: CardDef[] = [
     icon: Trophy,
     iconClassName: "bg-emerald-100 text-emerald-800",
     filterStatus: "won",
+  },
+  {
+    key: "cancelled",
+    label: "Tender cancelled",
+    icon: Ban,
+    iconClassName: "bg-stone-100 text-stone-700",
+    filterStatus: "cancelled",
   },
 ];
 

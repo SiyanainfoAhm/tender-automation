@@ -64,6 +64,7 @@ export const CLASSIFICATION_DECISION_LABELS: Record<TenderStatus, string> = {
   LOST: "LOST",
   DISQUALIFIED: "DISQUALIFIED",
   SUBMITTED: "SUBMITTED",
+  CANCELLED: "CANCELLED",
 };
 
 export const CLASSIFICATION_REQUIRED_ACTIONS: Record<TenderStatus, string> = {
@@ -80,6 +81,7 @@ export const CLASSIFICATION_REQUIRED_ACTIONS: Record<TenderStatus, string> = {
   LOST: "Record the lost reason and close the opportunity.",
   DISQUALIFIED: "Record the disqualification reason and archive the tender.",
   SUBMITTED: "Track submission confirmation and await evaluation results.",
+  CANCELLED: "Record that the buyer cancelled or withdrew this tender.",
 };
 
 export function isTenderStatus(value: string | null | undefined): value is TenderStatus {

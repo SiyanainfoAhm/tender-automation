@@ -95,6 +95,14 @@ export const qualificationStatusStyles: Record<
     border: "border-blue-300",
     dot: "bg-blue-600",
   },
+  CANCELLED: {
+    label: STATUS_DISPLAY_LABELS.CANCELLED,
+    shortLabel: "Cancelled",
+    bg: "bg-stone-100",
+    text: "text-stone-800",
+    border: "border-stone-300",
+    dot: "bg-stone-500",
+  },
 };
 
 export type TenderSource = "TENDER247" | "BIDASSIST" | "MANUAL";

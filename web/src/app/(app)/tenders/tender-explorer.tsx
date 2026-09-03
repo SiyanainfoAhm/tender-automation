@@ -1423,21 +1423,8 @@ export function TenderExplorer({
                           </td>
                           <td className="max-w-0 overflow-hidden px-4 py-3 align-middle">
                             {status &&
-                            (
-                              [
-                                "GO",
-                                "CONDITIONAL_GO",
-                                "PARTNER_BID",
-                                "VERIFY",
-                                "NO_GO",
-                                "DUPLICATE",
-                                "WON",
-                                "LOST",
-                                "DISQUALIFIED",
-                                "SUBMITTED",
-                              ] as const
-                            ).includes(
-                              status as (typeof TENDER_STATUSES)[number],
+                            (TENDER_STATUSES as readonly string[]).includes(
+                              status,
                             ) ? (
                               <div className="space-y-1">
                                 <StatusBadge
