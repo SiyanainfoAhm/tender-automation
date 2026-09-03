@@ -105,11 +105,15 @@ import {
   duplicateMatchKindLabel,
   formatDuplicateReference,
 } from "@/lib/duplicate-reference";
-import { cn } from "@/lib/utils";
+import { MAX_DOCUMENT_UPLOAD_BYTES } from "@/lib/uploads/config";
+import { uploadTenderDocumentDirectToAzure } from "@/lib/uploads/directAzureUpload";
 import {
-  deleteTenderDocumentAction,
-  uploadTenderSectionDocumentAction,
-} from "@/server/actions/bid-fees";
+  documentUploadAcceptAttr,
+  documentUploadHint,
+  validateDocumentFile,
+} from "@/lib/uploads/validation";
+import { cn } from "@/lib/utils";
+import { deleteTenderDocumentAction } from "@/server/actions/bid-fees";
 import {
   updateTenderDetailsAction,
   updateTenderStatusAction,
@@ -485,11 +489,20 @@ function DocumentSection({
                 ref={inputRef}
                 type="file"
                 className="hidden"
-                accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.webp"
+                accept={documentUploadAcceptAttr()}
                 onChange={(e: ChangeEvent<HTMLInputElement>) => {
                   const file = e.target.files?.[0];
                   e.target.value = "";
-                  if (file) onUpload(file);
+                  if (!file) return;
+                  const validation = validateDocumentFile(
+                    file,
+                    MAX_DOCUMENT_UPLOAD_BYTES,
+                  );
+                  if (validation) {
+                    toast.error(validation.message);
+                    return;
+                  }
+                  onUpload(file);
                 }}
               />
               <Button
@@ -522,9 +535,16 @@ function DocumentSection({
       <div className="mx-5 border-b border-border" />
 
       {items.length === 0 ? (
-        <p className="px-5 py-6 text-sm text-muted-foreground">
-          No documents in this section yet.
-        </p>
+        <div className="space-y-1 px-5 py-6">
+          <p className="text-sm text-muted-foreground">
+            No documents in this section yet.
+          </p>
+          {showUpload && canEdit ? (
+            <p className="text-[11px] text-muted-foreground">
+              {documentUploadHint(MAX_DOCUMENT_UPLOAD_BYTES)}
+            </p>
+          ) : null}
+        </div>
       ) : (
         <div className="px-5 py-4">
           <ul className="max-h-[360px] space-y-2 overflow-y-auto rounded-lg border border-border/70 bg-background-50/50 p-2">
@@ -778,14 +798,20 @@ export function TenderDetailClient({
     file: File,
     feeId?: string | null,
   ) => {
-    startUploadTransition(async () => {
-      const formData = new FormData();
-      formData.set("tenderId", tender.id);
-      formData.set("section", section);
-      formData.set("file", file);
-      if (feeId) formData.set("feeId", feeId);
+    const validation = validateDocumentFile(file, MAX_DOCUMENT_UPLOAD_BYTES);
+    if (validation) {
+      toast.error(validation.message);
+      return;
+    }
 
-      const result = await uploadTenderSectionDocumentAction(formData);
+    startUploadTransition(async () => {
+      // Direct-to-Azure: file bytes never pass through Vercel Server Actions.
+      const result = await uploadTenderDocumentDirectToAzure({
+        tenderId: tender.id,
+        section,
+        file,
+        feeId,
+      });
       if (!result.ok) {
         toast.error(result.error);
         return;

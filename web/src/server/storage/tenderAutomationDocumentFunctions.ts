@@ -23,6 +23,12 @@ type EdgeJson = {
   workOrderUrl?: string | null;
   completionCertificateUrl?: string | null;
   workspaceDocumentId?: string;
+  uploadUrl?: string;
+  storageUrl?: string;
+  blobName?: string;
+  blobPath?: string;
+  expiresAt?: string;
+  headers?: Record<string, string>;
 };
 
 type EdgeResult = EdgeJson & { status: number };
@@ -160,6 +166,36 @@ export async function invokeDocumentDelete(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action: "delete", documentId }),
+  });
+}
+
+export async function invokeCreateDirectUpload(
+  payload: Record<string, unknown>,
+): Promise<EdgeResult> {
+  return invokeCompanyDocuments({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "create-direct-upload", ...payload }),
+  });
+}
+
+export async function invokeCompleteDirectUpload(
+  payload: Record<string, unknown>,
+): Promise<EdgeResult> {
+  return invokeCompanyDocuments({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "complete-direct-upload", ...payload }),
+  });
+}
+
+export async function invokeAbortDirectUpload(
+  payload: Record<string, unknown>,
+): Promise<EdgeResult> {
+  return invokeCompanyDocuments({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "abort-direct-upload", ...payload }),
   });
 }
 

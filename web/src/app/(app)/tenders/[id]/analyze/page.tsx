@@ -27,6 +27,7 @@ export default async function TenderAnalyzePage({ params }: AnalyzePageProps) {
     userId: session.user.id,
     role: session.user.role,
     sessionExpiresAt: session.expiresAt,
+    includeRawResult: true,
   });
   if (!loaded.ok && loaded.kind === "not_found") notFound();
   if (!loaded.ok) {

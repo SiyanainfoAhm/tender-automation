@@ -33,6 +33,7 @@ export async function loadTenderDetail(options: {
   role?: string | null;
   sessionExpiresAt?: string | null;
   correlationId?: string;
+  includeRawResult?: boolean;
 }): Promise<TenderDetailDTO | null> {
   const result = await loadTenderDetailSafe(options);
   if (result.ok) return result.tender;
@@ -48,6 +49,7 @@ export async function loadTenderDetailSafe(options: {
   role?: string | null;
   sessionExpiresAt?: string | null;
   correlationId?: string;
+  includeRawResult?: boolean;
 }): Promise<LoadTenderDetailResult> {
   const correlationId = options.correlationId ?? createCorrelationId();
 
@@ -142,6 +144,7 @@ export async function loadTenderDetailSafe(options: {
       submitted: workspace?.submissionStatus === "submitted",
       workspaceId: workspace?.id ?? null,
       activity,
+      includeRawResult: options.includeRawResult === true,
     });
 
     logDiagnostic({

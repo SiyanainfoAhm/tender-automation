@@ -450,88 +450,20 @@ export async function attachFeeDocumentAction(
 export async function uploadTenderSectionDocumentAction(
   formData: FormData,
 ): Promise<FeeActionResult> {
-  try {
-    const session = await requirePermissionStrict("tenders.edit");
-    const tenderId = String(formData.get("tenderId") || "").trim();
-    const section = String(formData.get("section") || "").trim() as TenderDocumentSection;
-    const feeId = String(formData.get("feeId") || "").trim() || null;
-    const file = formData.get("file");
-
-    if (!tenderId) return { ok: false, error: "Tender is required." };
-    if (!["tender", "bidding", "financial", "deliverable"].includes(section)) {
-      return { ok: false, error: "Invalid document section." };
-    }
-    if (!(file instanceof File) || file.size <= 0) {
-      return { ok: false, error: "Choose a file to upload." };
-    }
-    if (section === "financial" && !feeId) {
-      return {
-        ok: false,
-        error: "Select or create a fee before uploading financial documents.",
-      };
-    }
-
-    const tenderLookup = await getTenderById(tenderId);
-    if (!tenderLookup) return { ok: false, error: "Tender not found." };
-    const tenderRow = tenderLookup.tender;
-
-    if (feeId) {
-      await uploadLinkedAttachment({
-        companyId: session.companyId,
-        tenderId,
-        feeId,
-        section,
-        file,
-        userId: session.user.id,
-        tenderRow,
-      });
-    } else {
-      const uploadForm = new FormData();
-      uploadForm.set("action", "upload");
-      uploadForm.set("file", file);
-      uploadForm.set("documentName", file.name);
-      uploadForm.set("name", file.name);
-      uploadForm.set(
-        "category",
-        section === "deliverable" ? "Other" : "General",
-      );
-      uploadForm.set("uploadKind", "general");
-      uploadForm.set("notes", `tender:${tenderId}|section:${section}`);
-      applyManualTenderArtifactFields(uploadForm, tenderRow);
-      const uploaded = await invokeDocumentUpload(uploadForm);
-      const uploadedDocumentId = resolveUploadedDocumentId(uploaded);
-      if (!uploaded.success || !uploadedDocumentId) {
-        return {
-          ok: false,
-          error: uploaded.error || "Unable to upload document.",
-        };
-      }
-      await insertTenderDocument({
-        companyId: session.companyId,
-        tenderId,
-        section,
-        entityType: "manual",
-        companyDocumentId: uploadedDocumentId,
-        fileName: file.name,
-        originalName: file.name,
-        mimeType: file.type || null,
-        fileSizeBytes: file.size,
-        userId: session.user.id,
-      });
-    }
-
-    revalidateFeePaths(tenderId);
-    return { ok: true, message: "Document uploaded." };
-  } catch (error) {
-    if (error instanceof CompanyAccessError) {
-      return { ok: false, error: error.message };
-    }
+  // Hard stop: never accept file bytes via Server Action on Vercel.
+  // Tender Documents UI must use /api/tenders/[id]/documents/direct-upload.
+  if (formData.get("file") != null) {
     return {
       ok: false,
       error:
-        error instanceof Error ? error.message : "Unable to upload document.",
+        "Large document uploads must use Azure direct upload. Refresh the page and try again.",
     };
   }
+  return {
+    ok: false,
+    error:
+      "This upload path is disabled. Use the Documents tab direct upload flow.",
+  };
 }
 
 export async function deleteTenderDocumentAction(

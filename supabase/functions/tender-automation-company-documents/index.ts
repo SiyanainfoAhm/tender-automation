@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { createWriteOnlyBlobUploadUrl } from "./directUploadSas.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -2285,6 +2286,298 @@ async function handleWorkspaceDocumentDelete(
   return json({ success: true, documentId });
 }
 
+const TENDER_DOCUMENT_SECTIONS = new Set([
+  "tender",
+  "bidding",
+  "financial",
+  "deliverable",
+]);
+
+async function handleCreateDirectUpload(
+  req: Request,
+  body: Record<string, unknown>,
+) {
+  const azure = requireAzureConfig();
+  const user = await authenticate(req);
+  if (!UPLOAD_ROLES.has(user.role)) {
+    throw new HttpError(403, "You do not have permission to upload documents.");
+  }
+
+  const tenderId = String(body.tenderId || "").trim();
+  const section = String(body.section || "").trim();
+  const fileName = String(body.fileName || body.originalFileName || "").trim();
+  const mimeType = String(body.mimeType || "application/octet-stream");
+  const fileSizeBytes = Number(body.fileSizeBytes);
+  const documentName = String(body.documentName || body.name || fileName).trim();
+  const feeId = String(body.feeId || "").trim() || null;
+  const notes = String(body.notes || "").trim() || null;
+
+  if (!tenderId) throw new HttpError(400, "tenderId is required");
+  assertSafeId(tenderId, "tenderId");
+  if (!TENDER_DOCUMENT_SECTIONS.has(section)) {
+    throw new HttpError(400, "Invalid document section.");
+  }
+  if (section === "financial" && !feeId) {
+    throw new HttpError(400, "feeId is required for financial documents.");
+  }
+  if (!documentName) throw new HttpError(400, "Document name is required");
+  validateCompanyDocumentFile(fileName, mimeType, fileSizeBytes);
+
+  const category: Category =
+    section === "financial" ? "Financial" : "General";
+  const documentId = crypto.randomUUID();
+
+  const artifactPortal = String(body.tenderArtifactPortal || "").trim().toUpperCase();
+  const artifactId = String(body.tenderArtifactId || "").trim();
+  const artifactDate = String(body.tenderArtifactDate || "").trim();
+  const useManualArtifactPath =
+    artifactPortal === "MANUAL" && Boolean(artifactId);
+
+  const blobName = useManualArtifactPath
+    ? buildTenderArtifactBlobName({
+      sourcePortal: "MANUAL",
+      sourceTenderId: artifactId,
+      runDate: artifactDate,
+      fileName: `${documentId.slice(0, 8)}_${fileName}`,
+      companyKey: resolveCompanyArtifactKey(user.companyName),
+    })
+    : `${slugify(user.companyName)}_${user.companyId}/` +
+      `${slugify(documentName)}_${documentId}/` +
+      `${category}/` +
+      sanitizeFileName(fileName);
+
+  let sas;
+  try {
+    sas = createWriteOnlyBlobUploadUrl({
+      azure,
+      blobName,
+      contentType: mimeType || null,
+    });
+  } catch (error) {
+    console.error("[tender-automation-documents] direct-upload SAS failed", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw new HttpError(
+      503,
+      error instanceof Error
+        ? error.message
+        : "Direct upload is not configured. Set TENDER_AUTOMATION_AZURE_STORAGE_ACCOUNT_KEY.",
+    );
+  }
+
+  const supabase = serviceSupabase();
+  const { error: insertDocError } = await supabase
+    .from("agenttender_company_documents")
+    .insert({
+      id: documentId,
+      company_id: user.companyId,
+      name: documentName,
+      original_file_name: fileName,
+      document_category: category,
+      document_type: section === "financial" ? "Tender Fee Attachment" : null,
+      notes:
+        notes ||
+        `tender:${tenderId}|section:${section}${feeId ? `|fee:${feeId}` : ""}`,
+      mime_type: mimeType || null,
+      file_size_bytes: fileSizeBytes,
+      storage_provider: "azure",
+      storage_container: azure.containerName,
+      storage_blob_name: blobName,
+      storage_url: null,
+      content_hash: null,
+      verification_status: "pending",
+      status: "uploading",
+      created_by: user.id,
+    });
+
+  if (insertDocError) {
+    console.error("[tender-automation-documents] direct-upload pending insert failed", {
+      message: insertDocError.message,
+      documentId,
+    });
+    throw new HttpError(500, "Unable to start direct upload.");
+  }
+
+  console.info("[tender-automation-documents] direct-upload SAS issued", {
+    documentId,
+    tenderId,
+    section,
+    blobName,
+    expiresAt: sas.expiresAt,
+  });
+
+  return json({
+    success: true,
+    documentId,
+    blobPath: blobName,
+    blobName,
+    storageUrl: sas.storageUrl,
+    uploadUrl: sas.uploadUrl,
+    expiresAt: sas.expiresAt,
+    headers: {
+      "x-ms-blob-type": "BlockBlob",
+      "Content-Type": mimeType || "application/octet-stream",
+    },
+  });
+}
+
+async function handleCompleteDirectUpload(
+  req: Request,
+  body: Record<string, unknown>,
+) {
+  const azure = requireAzureConfig();
+  const user = await authenticate(req);
+  if (!UPLOAD_ROLES.has(user.role)) {
+    throw new HttpError(403, "You do not have permission to upload documents.");
+  }
+
+  const documentId = String(body.documentId || "").trim();
+  const blobName = String(body.blobPath || body.blobName || "").trim();
+  const mimeType = String(body.mimeType || "application/octet-stream");
+  const fileSizeBytes = Number(body.fileSizeBytes);
+  const originalFileName = String(
+    body.originalFileName || body.fileName || "",
+  ).trim();
+
+  if (!documentId) throw new HttpError(400, "documentId is required");
+  assertSafeId(documentId, "documentId");
+  if (!blobName || blobName.includes("..")) {
+    throw new HttpError(400, "blobPath is required");
+  }
+
+  const supabase = serviceSupabase();
+  const { data: doc, error } = await supabase
+    .from("agenttender_company_documents")
+    .select(
+      "id, company_id, status, storage_blob_name, file_size_bytes, original_file_name",
+    )
+    .eq("id", documentId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!doc) throw new HttpError(404, "Upload session not found.");
+  if (String(doc.company_id) !== user.companyId) {
+    throw new HttpError(403, "You cannot access another company's document.");
+  }
+  if (doc.status !== "uploading") {
+    throw new HttpError(409, "Upload is not awaiting completion.");
+  }
+  if (String(doc.storage_blob_name || "") !== blobName) {
+    throw new HttpError(400, "blobPath does not match the upload session.");
+  }
+
+  // Verify the browser actually wrote the blob before activating the row.
+  const head = await fetch(
+    `${azureBaseUrl(azure)}/${encodeBlobPath(blobName)}${normalizeSas(azure.sasToken)}`,
+    { method: "HEAD", headers: { "x-ms-version": "2020-10-02" } },
+  );
+  if (!head.ok) {
+    console.error("[tender-automation-documents] direct-upload blob missing", {
+      documentId,
+      blobName,
+      status: head.status,
+      errorCode: head.headers.get("x-ms-error-code"),
+    });
+    throw new HttpError(
+      400,
+      "Azure upload was not found. Upload the file again before saving metadata.",
+    );
+  }
+
+  const storageUrl = `${azureBaseUrl(azure)}/${encodeBlobPath(blobName)}`;
+  const { data: updated, error: updateError } = await supabase
+    .from("agenttender_company_documents")
+    .update({
+      status: "active",
+      storage_url: storageUrl,
+      mime_type: mimeType || null,
+      file_size_bytes: Number.isFinite(fileSizeBytes)
+        ? fileSizeBytes
+        : doc.file_size_bytes,
+      original_file_name: originalFileName || doc.original_file_name,
+      verification_status: "pending",
+    })
+    .eq("id", documentId)
+    .eq("company_id", user.companyId)
+    .eq("status", "uploading")
+    .select("*")
+    .maybeSingle();
+
+  if (updateError) {
+    console.error("[tender-automation-documents] direct-upload complete failed", {
+      message: updateError.message,
+      documentId,
+      blobName,
+    });
+    throw new HttpError(
+      500,
+      "The file reached Azure but metadata could not be saved. Support has been notified.",
+    );
+  }
+  if (!updated) {
+    throw new HttpError(409, "Upload is not awaiting completion.");
+  }
+
+  console.info("[tender-automation-documents] direct-upload complete", {
+    documentId,
+    blobName,
+  });
+  return json({ success: true, documentId, document: updated, storageUrl });
+}
+
+async function handleAbortDirectUpload(
+  req: Request,
+  body: Record<string, unknown>,
+) {
+  const azure = requireAzureConfig();
+  const user = await authenticate(req);
+  if (!UPLOAD_ROLES.has(user.role)) {
+    throw new HttpError(403, "You do not have permission to upload documents.");
+  }
+
+  const documentId = String(body.documentId || "").trim();
+  if (!documentId) throw new HttpError(400, "documentId is required");
+  assertSafeId(documentId, "documentId");
+
+  const supabase = serviceSupabase();
+  const { data: doc, error } = await supabase
+    .from("agenttender_company_documents")
+    .select("id, company_id, status, storage_blob_name, storage_url")
+    .eq("id", documentId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!doc) return json({ success: true, documentId });
+  if (String(doc.company_id) !== user.companyId) {
+    throw new HttpError(403, "You cannot access another company's document.");
+  }
+
+  const blobName =
+    (doc.storage_blob_name as string | null) ||
+    blobNameFromUrl(azure, doc.storage_url as string | null);
+
+  await supabase
+    .from("agenttender_company_documents")
+    .delete()
+    .eq("id", documentId)
+    .eq("company_id", user.companyId);
+
+  if (blobName) {
+    try {
+      await deleteAzureBlob(azure, blobName);
+    } catch (cleanupError) {
+      console.error("[tender-automation-documents] orphaned blob cleanup failed", {
+        documentId,
+        blobName,
+        message:
+          cleanupError instanceof Error
+            ? cleanupError.message
+            : String(cleanupError),
+      });
+    }
+  }
+
+  return json({ success: true, documentId });
+}
+
 function requireServiceRole(req: Request) {
   const auth = req.headers.get("Authorization")?.replace(/^Bearer\s+/i, "").trim();
   const key =
@@ -2466,6 +2759,15 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     if (body?.action === "create-upload-session") {
       return await handleCreateUploadSession(req, body);
+    }
+    if (body?.action === "create-direct-upload") {
+      return await handleCreateDirectUpload(req, body);
+    }
+    if (body?.action === "complete-direct-upload") {
+      return await handleCompleteDirectUpload(req, body);
+    }
+    if (body?.action === "abort-direct-upload") {
+      return await handleAbortDirectUpload(req, body);
     }
     if (body?.action === "complete-upload") {
       return await handleCompleteUpload(req, body);

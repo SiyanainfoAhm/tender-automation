@@ -182,6 +182,7 @@ export function mapExtractedRequirements(
 
 export function mapQualification(
   qualification: Record<string, unknown> | null,
+  options?: { includeRawResult?: boolean },
 ): TenderQualificationDTO | null {
   if (!qualification) return null;
   const status = asString(qualification.status);
@@ -207,7 +208,10 @@ export function mapQualification(
     partnershipRequiredFor: jsonArray(qualification.partnership_required_for),
     partnershipModeAllowed: jsonArray(qualification.partnership_mode_allowed),
     evidenceFiles: jsonArray(qualification.evidence_files),
-    rawResult: qualification.raw_result ?? null,
+    // Omit heavy AI payloads from the default tender detail page.
+    rawResult: options?.includeRawResult
+      ? (qualification.raw_result ?? null)
+      : null,
   };
 }
 
@@ -217,6 +221,7 @@ export function mapTenderDetail(options: {
   submitted: boolean;
   workspaceId: string | null;
   activity: TenderDetailDTO["activity"];
+  includeRawResult?: boolean;
 }): TenderDetailDTO {
   const { tender, qualification } = options;
   const title = asString(tender.title) || "Untitled tender";
@@ -321,7 +326,9 @@ export function mapTenderDetail(options: {
     prescreenedAt: asString(tender.prescreened_at),
     submitted: options.submitted,
     workspaceId: options.workspaceId,
-    qualification: mapQualification(qualification),
+    qualification: mapQualification(qualification, {
+      includeRawResult: options.includeRawResult === true,
+    }),
     archiveDocuments: mapArchiveDocuments(
       qualification,
       Boolean(tender.document_archive_available),
