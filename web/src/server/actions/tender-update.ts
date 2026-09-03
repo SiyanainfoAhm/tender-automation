@@ -173,26 +173,54 @@ export async function updateTenderDetailsAction(
 
     if (payload.qualificationStatus !== undefined) {
       const status = payload.qualificationStatus;
-      if (status && !(TENDER_STATUSES as readonly string[]).includes(status)) {
+    
+      if (
+        status !== null &&
+        !(TENDER_STATUSES as readonly string[]).includes(status)
+      ) {
         return { ok: false, error: "Invalid status." };
       }
+    
+      // Main tender status.
+      // NULL represents "Under Evaluation".
       patch.qualification_status = status;
-
-      if (existing.qualification && status) {
-        const { error: qualError } = await supabase
-          .from("agenttender_qualification_results")
-          .update({
-            status,
-            decision_label: CLASSIFICATION_DECISION_LABELS[status],
-            required_action: CLASSIFICATION_REQUIRED_ACTIONS[status],
-            reason:
-              payload.decisionReason ||
-              payload.lostReason ||
-              payload.disqualificationReason ||
-              existing.qualification.reason,
-          })
-          .eq("tender_id", tenderId);
-        if (qualError) throw new Error(qualError.message);
+    
+      if (existing.qualification) {
+        if (status === null) {
+          /*
+           * Under Evaluation is represented by NULL.
+           *
+           * Remove the old effective qualification result; otherwise
+           * agenttender_web_tender_list can continue showing the previous
+           * qualification status (e.g. DUPLICATE / NO_GO / GO).
+           */
+          const { error: clearQualificationError } = await supabase
+            .from("agenttender_qualification_results")
+            .delete()
+            .eq("tender_id", tenderId);
+    
+          if (clearQualificationError) {
+            throw new Error(clearQualificationError.message);
+          }
+        } else {
+          const { error: qualError } = await supabase
+            .from("agenttender_qualification_results")
+            .update({
+              status,
+              decision_label: CLASSIFICATION_DECISION_LABELS[status],
+              required_action: CLASSIFICATION_REQUIRED_ACTIONS[status],
+              reason:
+                payload.decisionReason ||
+                payload.lostReason ||
+                payload.disqualificationReason ||
+                existing.qualification.reason,
+            })
+            .eq("tender_id", tenderId);
+    
+          if (qualError) {
+            throw new Error(qualError.message);
+          }
+        }
       }
     }
 
@@ -225,12 +253,12 @@ export async function updateTenderDetailsAction(
 
 export async function updateTenderStatusAction(input: {
   tenderId: string;
-  status: string;
+  status: TenderStatus | null;
   reason?: string;
 }): Promise<UpdateTenderResult> {
   return updateTenderDetailsAction({
     tenderId: input.tenderId,
-    qualificationStatus: input.status as TenderStatus,
+    qualificationStatus: input.status,
     decisionReason: input.reason || null,
   });
 }

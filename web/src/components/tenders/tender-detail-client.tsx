@@ -123,6 +123,7 @@ const TABS = [
   { id: "overview", label: "Overview", icon: LayoutGrid },
   { id: "documents", label: "Documents", icon: FolderOpen },
 ] as const;
+const UNDER_EVALUATION_VALUE = "__UNDER_EVALUATION__";
 
 type TabId = (typeof TABS)[number]["id"];
 
@@ -201,8 +202,8 @@ function moneyOrNotBid(value: number | null | undefined): string {
 function buildDraft(tender: TenderDetailDTO): EditDraft {
   const portal =
     tender.sourcePortal === "BIDASSIST" ||
-    tender.sourcePortal === "TENDER247" ||
-    tender.sourcePortal === "MANUAL"
+      tender.sourcePortal === "TENDER247" ||
+      tender.sourcePortal === "MANUAL"
       ? tender.sourcePortal
       : "MANUAL";
 
@@ -235,10 +236,10 @@ function buildDraft(tender: TenderDetailDTO): EditDraft {
     contacts:
       tender.contacts.length > 0
         ? tender.contacts.map((c) => ({
-            name: c.name || "",
-            mobile: c.mobile || "",
-            email: c.email || "",
-          }))
+          name: c.name || "",
+          mobile: c.mobile || "",
+          email: c.email || "",
+        }))
         : [{ name: "", mobile: "", email: "" }],
     decisionReason: tender.decisionReason || "",
     lostReason: tender.lostReason || "",
@@ -669,24 +670,39 @@ export function TenderDetailClient({
   }, []);
 
   const handleStatusChange = (next: string) => {
+    const isUnderEvaluation = next === UNDER_EVALUATION_VALUE;
+  
     if (editing) {
       patchDraft({
-        qualificationStatus: (next || "") as TenderStatus | "",
+        qualificationStatus: isUnderEvaluation
+          ? ""
+          : (next as TenderStatus),
       });
       return;
     }
+  
     if (!canEdit) return;
-    if (!next || !(TENDER_STATUSES as readonly string[]).includes(next)) return;
-
+  
+    if (
+      !isUnderEvaluation &&
+      !(TENDER_STATUSES as readonly string[]).includes(next)
+    ) {
+      return;
+    }
+  
     startStatusTransition(async () => {
       const result = await updateTenderStatusAction({
         tenderId: tender.id,
-        status: next,
+        status: isUnderEvaluation
+          ? null
+          : (next as TenderStatus),
       });
+  
       if (!result.ok) {
         toast.error(result.error);
         return;
       }
+  
       toast.success(result.message);
       router.refresh();
     });
@@ -868,14 +884,18 @@ export function TenderDetailClient({
     });
   };
 
-  const statusSelectValue =
-    (editing ? draft.qualificationStatus : tender.qualificationStatus) ||
-    undefined;
-  const statusStyle =
-    statusSelectValue &&
-    (TENDER_STATUSES as readonly string[]).includes(statusSelectValue)
-      ? qualificationStatusStyles[statusSelectValue as TenderStatus]
-      : null;
+  const currentQualificationStatus = editing
+  ? draft.qualificationStatus
+  : tender.qualificationStatus;
+
+const statusSelectValue =
+  currentQualificationStatus || UNDER_EVALUATION_VALUE;
+
+const statusStyle =
+  statusSelectValue !== UNDER_EVALUATION_VALUE &&
+  (TENDER_STATUSES as readonly string[]).includes(statusSelectValue)
+    ? qualificationStatusStyles[statusSelectValue as TenderStatus]
+    : null;
 
   const showLost = displayStatus === "LOST";
   const showDisqualified = displayStatus === "DISQUALIFIED";
@@ -1022,6 +1042,10 @@ export function TenderDetailClient({
                   <SelectValue placeholder="Set status" />
                 </SelectTrigger>
                 <SelectContent>
+                  <SelectItem value={UNDER_EVALUATION_VALUE}>
+                    Under Evaluation
+                  </SelectItem>
+
                   {TENDER_STATUSES.map((status) => (
                     <SelectItem key={status} value={status}>
                       {STATUS_DISPLAY_LABELS[status]}
@@ -1398,7 +1422,7 @@ export function TenderDetailClient({
                       <StatusBadge status={statusBadge} size="sm" />
                     ) : (
                       <span className="font-normal text-muted-foreground">
-                        Not evaluated
+                        Under Evaluation
                       </span>
                     )}
                   </div>
@@ -1443,7 +1467,7 @@ export function TenderDetailClient({
                   </DecisionRow>
                 ) : null}
                 {showLost ||
-                (editing && draft.qualificationStatus === "LOST") ? (
+                  (editing && draft.qualificationStatus === "LOST") ? (
                   <DecisionRow label="Lost Reason">
                     {editing ? (
                       <Textarea
@@ -1461,7 +1485,7 @@ export function TenderDetailClient({
                   </DecisionRow>
                 ) : null}
                 {showDisqualified ||
-                (editing && draft.qualificationStatus === "DISQUALIFIED") ? (
+                  (editing && draft.qualificationStatus === "DISQUALIFIED") ? (
                   <DecisionRow label="Disqualification">
                     {editing ? (
                       <Textarea
@@ -1665,8 +1689,8 @@ export function TenderDetailClient({
                               onClick={() => {
                                 const next = active
                                   ? draft.exemptionTypes.filter(
-                                      (t) => t !== type,
-                                    )
+                                    (t) => t !== type,
+                                  )
                                   : [...draft.exemptionTypes, type];
                                 patchDraft({ exemptionTypes: next });
                               }}
@@ -1832,8 +1856,8 @@ export function TenderDetailClient({
               }}
             />
           ) : null}
-      </div>
+        </div>
       ) : null}
-              </div>
+    </div>
   );
 }
