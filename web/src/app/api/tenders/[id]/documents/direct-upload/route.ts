@@ -115,6 +115,16 @@ export async function POST(request: Request, context: RouteContext) {
       );
     }
 
+    console.info("[tenders/direct-upload] SAS issued", {
+      documentId: created.documentId,
+      serverUtcNow: new Date().toISOString(),
+      startsOn: created.startsAt ?? null,
+      expiresOn: created.expiresAt ?? null,
+      sasSt: created.sasSt ?? null,
+      sasSe: created.sasSe ?? null,
+      sasSp: created.sasSp ?? null,
+    });
+
     return NextResponse.json({
       success: true,
       documentId: created.documentId,
@@ -122,7 +132,11 @@ export async function POST(request: Request, context: RouteContext) {
       blobName: created.blobName || created.blobPath,
       storageUrl: created.storageUrl,
       uploadUrl: created.uploadUrl,
+      startsAt: created.startsAt,
       expiresAt: created.expiresAt,
+      sasSt: created.sasSt,
+      sasSe: created.sasSe,
+      sasSp: created.sasSp,
       headers: created.headers || {
         "x-ms-blob-type": "BlockBlob",
         "Content-Type": mimeType || "application/octet-stream",

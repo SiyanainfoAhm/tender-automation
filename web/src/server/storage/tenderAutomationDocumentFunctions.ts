@@ -28,6 +28,10 @@ type EdgeJson = {
   blobName?: string;
   blobPath?: string;
   expiresAt?: string;
+  startsAt?: string;
+  sasSt?: string | null;
+  sasSe?: string | null;
+  sasSp?: string | null;
   headers?: Record<string, string>;
 };
 

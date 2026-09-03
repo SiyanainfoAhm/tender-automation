@@ -14,14 +14,43 @@ type CreateSasResponse = {
   blobName?: string;
   uploadUrl?: string;
   storageUrl?: string;
+  startsAt?: string;
   expiresAt?: string;
   headers?: Record<string, string>;
 };
 
+function headerFrom(
+  headers: Record<string, string> | undefined,
+  name: string,
+): string | undefined {
+  if (!headers) return undefined;
+  const exact = headers[name];
+  if (exact) return exact;
+  const lower = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === lower) return value;
+  }
+  return undefined;
+}
+
+function azurePutFailureMessage(status: number, body: string): string {
+  const text = body.slice(0, 800);
+  if (/AuthenticationFailed|Signature not valid|expired/i.test(text)) {
+    return "Azure rejected the upload token (expired or invalid SAS). Retry the upload.";
+  }
+  if (status === 403 && !text.trim()) {
+    return "Azure blocked the upload (often CORS or SAS permissions). Check the red PUT response body.";
+  }
+  if (status === 403) {
+    return "Azure rejected the upload (403). Check the red PUT response for AuthenticationFailed vs CORS.";
+  }
+  return "Azure upload failed. Please try again.";
+}
+
 /**
  * Browser → Azure direct upload (bytes never touch Vercel).
  * 1) Request short-lived write SAS (JSON)
- * 2) PUT file to Azure
+ * 2) PUT file to Azure using headers from /direct-upload
  * 3) Complete with lightweight metadata (JSON)
  */
 export async function uploadTenderDocumentDirectToAzure(options: {
@@ -66,17 +95,20 @@ export async function uploadTenderDocumentDirectToAzure(options: {
 
   const documentId = created.documentId;
   const blobPath = String(created.blobPath || created.blobName || "");
-  const putHeaders = new Headers(created.headers || {});
-  if (!putHeaders.has("x-ms-blob-type")) {
-    putHeaders.set("x-ms-blob-type", "BlockBlob");
-  }
-  if (!putHeaders.has("Content-Type")) {
-    putHeaders.set(
-      "Content-Type",
-      options.file.type || "application/octet-stream",
-    );
-  }
-  putHeaders.set("x-ms-version", "2020-10-02");
+
+  // Only headers returned by /direct-upload (plus required BlockBlob default).
+  // Do not add x-ms-version here — extra headers can fail Azure CORS preflight.
+  const putHeaders = new Headers();
+  putHeaders.set(
+    "x-ms-blob-type",
+    headerFrom(created.headers, "x-ms-blob-type") || "BlockBlob",
+  );
+  putHeaders.set(
+    "Content-Type",
+    headerFrom(created.headers, "Content-Type") ||
+      options.file.type ||
+      "application/octet-stream",
+  );
 
   let azureOk = false;
   try {
@@ -93,6 +125,8 @@ export async function uploadTenderDocumentDirectToAzure(options: {
         status: put.status,
         documentId,
         blobPath,
+        expiresAt: created.expiresAt ?? null,
+        startsAt: created.startsAt ?? null,
         detail: detail.slice(0, 500),
       });
       await fetch(
@@ -105,7 +139,7 @@ export async function uploadTenderDocumentDirectToAzure(options: {
       ).catch(() => null);
       return {
         ok: false,
-        error: "Azure upload failed. Please try again.",
+        error: azurePutFailureMessage(put.status, detail),
       };
     }
   } catch (error) {

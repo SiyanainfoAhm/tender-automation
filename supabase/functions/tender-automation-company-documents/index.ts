@@ -2403,7 +2403,13 @@ async function handleCreateDirectUpload(
     tenderId,
     section,
     blobName,
-    expiresAt: sas.expiresAt,
+    serverUtcNow: new Date().toISOString(),
+    startsOn: sas.startsAt,
+    expiresOn: sas.expiresAt,
+    validityDurationMs: sas.validityDurationMs,
+    sasSt: sas.sasSt,
+    sasSe: sas.sasSe,
+    sasSp: sas.sasSp,
   });
 
   return json({
@@ -2413,7 +2419,11 @@ async function handleCreateDirectUpload(
     blobName,
     storageUrl: sas.storageUrl,
     uploadUrl: sas.uploadUrl,
+    startsAt: sas.startsAt,
     expiresAt: sas.expiresAt,
+    sasSt: sas.sasSt,
+    sasSe: sas.sasSe,
+    sasSp: sas.sasSp,
     headers: {
       "x-ms-blob-type": "BlockBlob",
       "Content-Type": mimeType || "application/octet-stream",
