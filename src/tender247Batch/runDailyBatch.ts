@@ -45,7 +45,7 @@ import {
   resolveExcelTenderValue,
 } from "./excelEarlyFinancialFilter.js";
 import { createDailyMasterZip, cleanOrphanUuidFilesInDayFolder, cleanPlaywrightDownloadTemp, playwrightDownloadsDir } from "./createTenderZip.js";
-import { readFreshExpectedCount } from "./liveListCards.js";
+import { readFreshExpectedCount, readFreshExpectedCountDetails } from "./liveListCards.js";
 import { processSurvivorsInParallel } from "./processSurvivorsInParallel.js";
 import { inspectTenderResumeState } from "./resumeArtifacts.js";
 import {
@@ -81,6 +81,7 @@ import {
 import { buildPhase1DetailQueue, allowTender247DetailScrape } from "../runScreening/phase1DetailQueue.js";
 import { emptyStatusCounts, saveRunState } from "../runScreening/screeningManifest.js";
 import { notifyAfterScreeningAndUpsert } from "../notify/sendScreeningRunNotify.js";
+import type { ParsedListCount } from "../tenderDetails/tender247ListUi.js";
 import { ensureDir } from "../fileUtils.js";
 import path from "node:path";
 import fs from "node:fs";
@@ -341,6 +342,7 @@ async function runDailyBatchBody(options: {
   let session: Awaited<ReturnType<typeof launchBrowserSession>> | undefined;
   /** Fresh(N) / filtered tab count from Tender247 web UI. */
   let webTenderCount: number | null = null;
+  let webTenderCountDetails: ParsedListCount | null = null;
   let excelRowCountForNotify = 0;
   let screeningNotifySent = false;
 
@@ -436,12 +438,18 @@ async function runDailyBatchBody(options: {
       );
       assertMailDateReadyForExcel(mailDate, dateIso);
 
-      webTenderCount = await readFreshExpectedCount(
+      webTenderCountDetails = await readFreshExpectedCountDetails(
         listPage,
         logger,
         dateIso,
       );
+      webTenderCount = webTenderCountDetails?.value ?? 0;
       logger.info(`TENDER247_WEB_TENDER_COUNT=${webTenderCount}`);
+      if (webTenderCountDetails?.approximate) {
+        logger.info(
+          `TENDER247_WEB_TENDER_COUNT_BADGE=${webTenderCountDetails.token} range=${webTenderCountDetails.min}-${webTenderCountDetails.max}`,
+        );
+      }
       console.log(`TENDER247_WEB_TENDER_COUNT=${webTenderCount}`);
 
       // -------- Excel-first deterministic pre-screen --------
@@ -513,12 +521,18 @@ async function runDailyBatchBody(options: {
           config.pageTimeoutMs,
         );
         assertMailDateReadyForExcel(detailMailDate, dateIso);
-        webTenderCount = await readFreshExpectedCount(
+        webTenderCountDetails = await readFreshExpectedCountDetails(
           listPage,
           logger,
           dateIso,
         );
+        webTenderCount = webTenderCountDetails?.value ?? 0;
         logger.info(`TENDER247_WEB_TENDER_COUNT=${webTenderCount}`);
+        if (webTenderCountDetails?.approximate) {
+          logger.info(
+            `TENDER247_WEB_TENDER_COUNT_BADGE=${webTenderCountDetails.token} range=${webTenderCountDetails.min}-${webTenderCountDetails.max}`,
+          );
+        }
         console.log(`TENDER247_WEB_TENDER_COUNT=${webTenderCount}`);
       } catch (error) {
         logger.warn(
@@ -532,6 +546,7 @@ async function runDailyBatchBody(options: {
       dateIso,
       dateFolder,
       webTenderCount,
+      webTenderCountDetails,
       excelRowCount: phase1.inputRows,
       screenedRowCount: phase1.outputRows,
       counts: phase1.counts,
@@ -1082,6 +1097,7 @@ async function runDailyBatchBody(options: {
           dateIso,
           dateFolder,
           webTenderCount,
+          webTenderCountDetails,
           excelRowCount: excelRowCountForNotify,
           screenedRowCount: excelRowCountForNotify,
           counts: emptyStatusCounts(),

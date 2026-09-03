@@ -4,6 +4,10 @@
  */
 import { PHASE1_STATUS_DISPLAY } from "../runScreening/phase1Statuses.js";
 import type { Phase1ScreeningStatus } from "../runScreening/phase1Statuses.js";
+import {
+  excelCountMatchesWebBadge,
+  type ParsedListCount,
+} from "../tenderDetails/tender247ListUi.js";
 
 export type ScreeningNotifyKind =
   | "success"
@@ -21,6 +25,11 @@ export type ScreeningNotifyInput = {
   kind: ScreeningNotifyKind;
   /** Fresh(N) count shown on Tender247 web (null if unavailable). */
   webTenderCount: number | null;
+  /**
+   * Parsed Fresh / dated-tab badge. When approximate (e.g. "1.00 K"),
+   * Excel within the rounding band is not treated as a mismatch.
+   */
+  webTenderCountDetails?: ParsedListCount | null;
   /** Rows in the Tender247 / uploaded daily Excel. */
   excelRowCount: number;
   /** Screened workbook row count (usually same as excel after GPT). */
@@ -234,9 +243,28 @@ function wrapEmail(opts: {
 export function hasWebExcelCountMismatch(input: {
   webTenderCount: number | null;
   excelRowCount: number;
+  webTenderCountDetails?: ParsedListCount | null;
 }): boolean {
   if (input.webTenderCount == null) return false;
-  return input.webTenderCount !== input.excelRowCount;
+  if (input.webTenderCount === input.excelRowCount) return false;
+
+  const details =
+    input.webTenderCountDetails ??
+    (input.webTenderCount != null
+      ? {
+          value: input.webTenderCount,
+          approximate: false,
+          min: input.webTenderCount,
+          max: input.webTenderCount,
+          token: String(input.webTenderCount),
+        }
+      : null);
+
+  // Compact UI badges like "1.00 K" round away a few rows; Excel is exact.
+  if (excelCountMatchesWebBadge(details, input.excelRowCount)) {
+    return false;
+  }
+  return true;
 }
 
 export function buildScreeningNotifyEmail(input: ScreeningNotifyInput): {
@@ -246,7 +274,11 @@ export function buildScreeningNotifyEmail(input: ScreeningNotifyInput): {
   const date = input.dateIso;
   const mismatch = hasWebExcelCountMismatch(input);
   const webLabel =
-    input.webTenderCount == null ? "N/A" : String(input.webTenderCount);
+    input.webTenderCount == null
+      ? "N/A"
+      : input.webTenderCountDetails?.approximate
+        ? `${input.webTenderCount} (badge ${input.webTenderCountDetails.token})`
+        : String(input.webTenderCount);
 
   if (input.kind === "failure") {
     const subject = `[Tender247] FAILED — ${date}`;

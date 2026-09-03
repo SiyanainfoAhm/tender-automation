@@ -489,9 +489,12 @@ export async function getDashboardOverview(options: {
   const { stages: pipeline, total: pipelineTotal, valueTotal: pipelineValueTotal } =
     buildPipeline(scopedRows, submittedIds);
 
-  const submittedCount = scopedRows.filter((row) =>
-    submittedIds.has(row.id),
-  ).length;
+  const submittedCount = scopedRows.filter((row) => {
+    const status = String(row.effective_qualification_status || "")
+      .trim()
+      .toUpperCase();
+    return status === "SUBMITTED" || submittedIds.has(row.id);
+  }).length;
   const wonAll = scopedRows.filter((row) =>
     isWonQualificationStatus(row.effective_qualification_status),
   );

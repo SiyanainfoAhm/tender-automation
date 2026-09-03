@@ -118,6 +118,12 @@ describe("dashboard pipeline mapping", () => {
         submitted: true,
       }),
     ).toBe("submitted");
+    expect(
+      mapToDashboardPipelineStage({
+        qualificationStatus: "SUBMITTED",
+        submitted: false,
+      }),
+    ).toBe("submitted");
   });
 
   it("maps Verify / May Bid / Partnership and excludes No Bid / Won", () => {

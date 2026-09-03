@@ -75,26 +75,34 @@ const MONTH_SHORT = [
 
 const MAIL_DATE_CARD_ATTR = "data-agenttender-mail-date-card";
 
-/** Parse "11-08-2026 (159)" / "Fresh (12)" style tab text. */
+import {
+  FRESH_TAB_BADGE_RE,
+  hasVisibleTender247Cards,
+  isFreshTabBadgeVisible,
+  parseCompactListCount,
+  parseCompactListCountDetails,
+} from "./tender247ListUi.js";
+
+/** Parse "11-08-2026 (159)" / "Fresh (1.00 K)" style tab text. */
 export function parseFilteredDateTabText(
   text: string,
 ): { dateLabel: string | null; count: number; isFresh: boolean } | null {
   const normalized = text.replace(/\s+/g, " ").trim();
   const dated = normalized.match(
-    /(\d{2}-\d{2}-\d{4})\s*\(\s*(\d+)\s*\)/i,
+    /(\d{2}-\d{2}-\d{4})\s*\(\s*([^)]+)\s*\)/i,
   );
   if (dated && !/Today\s+Tenders/i.test(normalized)) {
     return {
       dateLabel: dated[1]!,
-      count: Number(dated[2]),
+      count: parseCompactListCount(dated[2]!.trim()) ?? 0,
       isFresh: false,
     };
   }
-  const fresh = normalized.match(/^Fresh\s*\(\s*(\d+)\s*\)\s*$/i);
+  const fresh = normalized.match(/^Fresh\s*\(\s*([^)]+)\s*\)\s*$/i);
   if (fresh) {
     return {
       dateLabel: null,
-      count: Number(fresh[1]),
+      count: parseCompactListCount(fresh[1]!.trim()) ?? 0,
       isFresh: true,
     };
   }
@@ -103,7 +111,7 @@ export function parseFilteredDateTabText(
 
 export function buildFilteredDateLabelRegex(dateIso: string): RegExp {
   const label = formatIsoToDdMmYyyy(dateIso).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`${label}\\s*\\(\\s*(\\d+)\\s*\\)`, "i");
+  return new RegExp(`${label}\\s*\\(\\s*([^)]+)\\s*\\)`, "i");
 }
 
 export function mailDateInputMatchesRequested(
@@ -798,7 +806,11 @@ async function clickCalendarDay(
 export async function readFilteredMailDateTab(
   page: Page,
   dateIso: string,
-): Promise<{ filteredDateLabel: string; filteredTenderCount: number } | null> {
+): Promise<{
+  filteredDateLabel: string;
+  filteredTenderCount: number;
+  countDetails: ReturnType<typeof parseCompactListCountDetails>;
+} | null> {
   const expectedLabel = formatIsoToDdMmYyyy(dateIso);
   const labelRe = buildFilteredDateLabelRegex(dateIso);
   const datedTabs = page.getByText(labelRe);
@@ -823,9 +835,11 @@ export async function readFilteredMailDateTab(
     }
     const m = raw.match(labelRe);
     if (m) {
+      const countDetails = parseCompactListCountDetails(m[1]!.trim());
       return {
         filteredDateLabel: expectedLabel,
-        filteredTenderCount: Number(m[1]),
+        filteredTenderCount: countDetails?.value ?? 0,
+        countDetails,
       };
     }
   }
@@ -966,17 +980,14 @@ export async function selectAndVerifyTender247MailDate(options: {
 
     filtered = await readFilteredMailDateTab(page, parts.iso);
     const freshVisible =
-      parts.iso === getTodayIsoDate() &&
-      (await page
-        .getByText(/Fresh\s*\(\s*\d+\s*\)/i)
-        .first()
-        .isVisible()
-        .catch(() => false));
-    const hasTender = await page
-      .getByText(/T247\s*ID\s*[-:]?\s*\d+/i)
-      .first()
-      .isVisible()
-      .catch(() => false);
+      (await isFreshTabBadgeVisible(page)) ||
+      (parts.iso === getTodayIsoDate() &&
+        (await page
+          .getByText(FRESH_TAB_BADGE_RE)
+          .first()
+          .isVisible()
+          .catch(() => false)));
+    const hasTender = await hasVisibleTender247Cards(page);
 
     if (
       filtered ||
@@ -1001,11 +1012,7 @@ export async function selectAndVerifyTender247MailDate(options: {
 
   // Historical dates: dated tab is expected when Tender247 exposes it.
   if (parts.iso !== getTodayIsoDate() && !filtered) {
-    const hasTender = await page
-      .getByText(/T247\s*ID\s*[-:]?\s*\d+/i)
-      .first()
-      .isVisible()
-      .catch(() => false);
+    const hasTender = await hasVisibleTender247Cards(page);
     if (!hasTender) {
       logError(logger, "TENDER247_DATE_FILTER_VERIFIED=false");
       logError(logger, "TENDER247_EXCEL_DOWNLOAD_BLOCKED=true");

@@ -99,12 +99,17 @@ function exclusiveFunnelKey(options: {
   won: boolean;
 }): "new" | "screening" | "mayBid" | "willBid" | "submitted" | "won" {
   if (options.won) return "won";
-  if (options.submitted) return "submitted";
+  const status = String(options.qualificationStatus || "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+  if (options.submitted || status === "SUBMITTED") return "submitted";
   const mapped = mapToDashboardPipelineStage({
     qualificationStatus: options.qualificationStatus,
     submitted: false,
     won: false,
   });
+  if (mapped === "submitted") return "submitted";
   if (mapped === "will_bid") return "willBid";
   if (mapped === "may_bid") return "mayBid";
   if (mapped === "partnership") return "mayBid";

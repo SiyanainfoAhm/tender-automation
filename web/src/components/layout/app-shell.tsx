@@ -32,11 +32,24 @@ export function AppShell({
   const router = useRouter();
   const [collapsed, setCollapsed] = React.useState(preferences.sidebarCollapsed);
   const [searchValue, setSearchValue] = React.useState("");
+  const [commandOpen, setCommandOpen] = React.useState(false);
 
   // Light mode only — never apply .dark
   React.useEffect(() => {
     document.documentElement.classList.remove("dark");
   }, []);
+
+  // Live header search → tenders list (debounced). Skip while ⌘K palette is open
+  // so focus/typing there does not fight navigation.
+  React.useEffect(() => {
+    if (commandOpen) return;
+    const q = searchValue.trim();
+    const handle = window.setTimeout(() => {
+      if (!q) return;
+      router.push(`/tenders?q=${encodeURIComponent(q)}`);
+    }, 200);
+    return () => window.clearTimeout(handle);
+  }, [searchValue, router, commandOpen]);
 
   const sidebarUser = {
     fullName: user.fullName,
@@ -73,8 +86,14 @@ export function AppShell({
             searchValue={searchValue}
             onSearchChange={setSearchValue}
             onSearchSubmit={(q) => {
-              router.push(`/tenders?q=${encodeURIComponent(q)}`);
+              const next = q.trim();
+              if (!next) {
+                router.push("/tenders");
+                return;
+              }
+              router.push(`/tenders?q=${encodeURIComponent(next)}`);
             }}
+            onOpenCommandPalette={() => setCommandOpen(true)}
           />
 
           <main className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
@@ -82,7 +101,12 @@ export function AppShell({
           </main>
         </div>
 
-        <CommandPalette userRole={user.role} />
+        <CommandPalette
+          userRole={user.role}
+          open={commandOpen}
+          onOpenChange={setCommandOpen}
+          initialQuery={searchValue}
+        />
 
         <form
           id="logout-form"

@@ -18,6 +18,15 @@ import {
 import { startOfDay, endOfDay, subDays, addDays, formatISO } from "date-fns";
 import { randomUUID } from "crypto";
 
+/** Sanitize free-text for PostgREST `.or(...ilike...)` filters. */
+export function escapePostgrestSearchTerm(raw: string): string {
+  return String(raw || "")
+    .trim()
+    .replace(/[%_,.()\\]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export type WebTenderListRow = {
   id: string;
   source_portal: "TENDER247" | "BIDASSIST" | "MANUAL";
@@ -241,11 +250,16 @@ export async function listTenders(
   if (filters.status && filters.status !== "ALL") {
     const statusKey = String(filters.status).toLowerCase().replace(/[\s-]+/g, "_");
     if (statusKey === "submitted") {
+      // Count both qualification_status=SUBMITTED and bid-workspace submissions.
       const submittedIds = await listSubmittedTenderIds();
-      if (submittedIds.length === 0) {
-        return { rows: [], total: 0, page, pageSize };
+      if (submittedIds.length > 0) {
+        const idList = submittedIds.join(",");
+        query = query.or(
+          `effective_qualification_status.eq.SUBMITTED,id.in.(${idList})`,
+        );
+      } else {
+        query = query.eq("effective_qualification_status", "SUBMITTED");
       }
-      query = query.in("id", submittedIds);
     } else {
       const statusFilter = qualificationStatusesForFilter(filters.status);
       if (statusFilter.kind === "null") {
@@ -444,22 +458,24 @@ export async function listTenders(
   }
 
   if (filters.q?.trim()) {
-    const q = filters.q.trim();
-    query = query.or(
-      [
-        `title.ilike.%${q}%`,
-        `source_tender_id.ilike.%${q}%`,
-        `reference_no.ilike.%${q}%`,
-        `folder_id.ilike.%${q}%`,
-        `organization.ilike.%${q}%`,
-        `authority.ilike.%${q}%`,
-        `department.ilike.%${q}%`,
-        `city.ilike.%${q}%`,
-        `state.ilike.%${q}%`,
-        `category.ilike.%${q}%`,
-        `project_category.ilike.%${q}%`,
-      ].join(","),
-    );
+    const q = escapePostgrestSearchTerm(filters.q.trim());
+    if (q) {
+      query = query.or(
+        [
+          `title.ilike.%${q}%`,
+          `source_tender_id.ilike.%${q}%`,
+          `reference_no.ilike.%${q}%`,
+          `folder_id.ilike.%${q}%`,
+          `organization.ilike.%${q}%`,
+          `authority.ilike.%${q}%`,
+          `department.ilike.%${q}%`,
+          `city.ilike.%${q}%`,
+          `state.ilike.%${q}%`,
+          `category.ilike.%${q}%`,
+          `project_category.ilike.%${q}%`,
+        ].join(","),
+      );
+    }
   }
 
   // Sort entire filtered set, then paginate (nulls last for ASC/DESC).

@@ -38,6 +38,8 @@ type TopbarProps = {
   searchValue?: string;
   onSearchChange?: (value: string) => void;
   onSearchSubmit?: (value: string) => void;
+  onSearchFocus?: () => void;
+  onOpenCommandPalette?: () => void;
   className?: string;
 };
 
@@ -55,6 +57,8 @@ export function Topbar({
   searchValue = "",
   onSearchChange,
   onSearchSubmit,
+  onSearchFocus,
+  onOpenCommandPalette,
   className,
 }: TopbarProps) {
   const router = useRouter();
@@ -79,14 +83,38 @@ export function Topbar({
           placeholder="Search tenders, documents, users…"
           value={searchValue}
           onChange={(event) => onSearchChange?.(event.target.value)}
+          onFocus={() => onSearchFocus?.()}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+              event.preventDefault();
+              onOpenCommandPalette?.();
+            }
+          }}
           className="h-9 pl-9 text-sm"
+          autoComplete="off"
         />
-        <kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-muted lg:inline">
+        <button
+          type="button"
+          className="absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-surface-secondary px-1.5 py-0.5 text-[10px] text-text-muted lg:inline"
+          onClick={() => onOpenCommandPalette?.()}
+          aria-label="Open command palette"
+        >
           ⌘K
-        </kbd>
+        </button>
       </form>
 
       <div className="ml-auto flex items-center gap-1">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-8 text-text-muted md:hidden"
+          aria-label="Search"
+          type="button"
+          onClick={() => onOpenCommandPalette?.()}
+        >
+          <Search className="size-[18px]" />
+        </Button>
+
         <Button
           variant="ghost"
           size="icon"

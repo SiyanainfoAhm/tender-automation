@@ -90,7 +90,9 @@ export function mapToDashboardPipelineStage(options: {
     .replace(/[\s-]+/g, "_");
   if (raw === "WON" || raw === "AWARDED") return null;
   if (raw === "NO_GO" || raw === "NO_BID") return null;
-  if (options.submitted) return "submitted";
+  // qualification_status SUBMITTED (manual import / bid lock) counts as submitted
+  // even when bid_workspace.submission_status is missing.
+  if (raw === "SUBMITTED" || options.submitted) return "submitted";
 
   const status = String(options.qualificationStatus || "")
     .trim()

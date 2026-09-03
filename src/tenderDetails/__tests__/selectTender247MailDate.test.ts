@@ -87,6 +87,12 @@ test("historical filtered tab matches requested date only", () => {
   assert.equal(parsed?.count, 159);
 });
 
+test("Fresh tab compact counts parse for list readiness", () => {
+  const parsed = parseFilteredDateTabText("Fresh (1.00 K)");
+  assert.equal(parsed?.isFresh, true);
+  assert.equal(parsed?.count, 1000);
+});
+
 test("historical requested date → mail_date remains historical through gate", () => {
   const requested = "2026-08-11";
   const gate = evaluateMailDateExcelGate({

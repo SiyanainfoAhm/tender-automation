@@ -9,6 +9,7 @@ import {
   type WorkspaceDocumentStatus,
 } from "@/lib/bid-workspace";
 import { MAX_SINGLE_SHOT_UPLOAD_BYTES } from "@/lib/company/types";
+import { getServerSupabase } from "@/lib/db/server";
 import { CompanyAccessError } from "@/server/auth/company-access";
 import { requirePermissionStrict } from "@/server/auth/permissions";
 import { insertTenderActivity } from "@/server/repositories/tenderActivityRepository";
@@ -405,6 +406,16 @@ export async function markBidSubmittedAction(input: {
       submittedAt: new Date(submittedAt).toISOString(),
       notes: input.notes?.trim() || null,
     });
+
+    // Keep list/dashboard Submitted counts in sync (not workspace-only).
+    await getServerSupabase()
+      .from("agenttender_tenders")
+      .update({
+        qualification_status: "SUBMITTED",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", input.tenderId);
+
     await insertTenderActivity({
       tenderId: input.tenderId,
       companyId: session.companyId,

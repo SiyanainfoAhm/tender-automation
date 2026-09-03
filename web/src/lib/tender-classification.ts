@@ -105,7 +105,12 @@ export function derivePipelineStage(options: {
   qualificationStatus: TenderStatus | null;
   submitted: boolean;
 }): PipelineStage {
-  if (options.submitted) return "submitted";
+  if (
+    options.submitted ||
+    options.qualificationStatus === "SUBMITTED"
+  ) {
+    return "submitted";
+  }
   if (options.qualificationStatus === "GO") return "will_bid";
   if (options.qualificationStatus) return "screening";
   return "new";

@@ -21,10 +21,28 @@ import {
   type MailDateScreenshotHook,
   type Tender247MailDateSelectionResult,
 } from "../tenderDetails/selectTender247MailDate.js";
+import {
+  hasVisibleTender247Cards,
+  isFreshTabBadgeVisible,
+} from "../tenderDetails/tender247ListUi.js";
 
 function logLine(logger: Logger, message: string): void {
   logger.info(message);
   console.log(message);
+}
+
+async function freshListSignalsReady(
+  page: Page,
+  requestedDate: string,
+): Promise<{
+  filtered: Awaited<ReturnType<typeof readFilteredMailDateTab>>;
+  hasTender: boolean;
+  freshVisible: boolean;
+}> {
+  const filtered = await readFilteredMailDateTab(page, requestedDate);
+  const hasTender = await hasVisibleTender247Cards(page);
+  const freshVisible = await isFreshTabBadgeVisible(page);
+  return { filtered, hasTender, freshVisible };
 }
 
 /**
@@ -64,6 +82,29 @@ export async function ensureTender247FreshListForDate(
   const labelRe = buildFilteredDateLabelRegex(requestedDate);
   const deadline = Date.now() + timeoutMs;
 
+  const initial = await freshListSignalsReady(page, requestedDate);
+  if (initial.hasTender || initial.freshVisible || initial.filtered) {
+    logLine(logger, "TENDER247_FRESH_LIST_READY");
+    if (initial.filtered) {
+      logLine(
+        logger,
+        `TENDER247_FILTERED_DATE_LABEL=${initial.filtered.filteredDateLabel}`,
+      );
+      logLine(
+        logger,
+        `TENDER247_FILTERED_TENDER_COUNT=${initial.filtered.filteredTenderCount}`,
+      );
+    }
+    return {
+      ...mailDate,
+      filteredDateLabel:
+        initial.filtered?.filteredDateLabel ?? mailDate.filteredDateLabel,
+      filteredTenderCount:
+        initial.filtered?.filteredTenderCount ?? mailDate.filteredTenderCount,
+      listRefreshComplete: true,
+    };
+  }
+
   while (Date.now() < deadline) {
     const current = await readCurrentSelectMailDate(page);
     if (current.iso !== requestedDate) {
@@ -73,15 +114,12 @@ export async function ensureTender247FreshListForDate(
       );
     }
 
-    const filtered = await readFilteredMailDateTab(page, requestedDate);
-    const hasTender = await page
-      .getByText(/T247\s*ID\s*[-:]?\s*\d+/i)
-      .first()
-      .isVisible()
-      .catch(() => false);
+    const { filtered, hasTender, freshVisible } = await freshListSignalsReady(
+      page,
+      requestedDate,
+    );
 
     if (!isToday) {
-      // Historical: require dated tab when present, or at least tenders after verified input.
       if (filtered && hasTender) {
         logLine(
           logger,
@@ -100,7 +138,6 @@ export async function ensureTender247FreshListForDate(
         };
       }
       if (hasTender) {
-        // Input verified; dated tab may lag — accept tenders only if input still matches.
         const datedVisible = await page
           .getByText(labelRe)
           .first()
@@ -116,17 +153,10 @@ export async function ensureTender247FreshListForDate(
         }
       }
     } else {
-      const freshVisible = await page
-        .getByText(/Fresh\s*\(\s*\d+\s*\)/i)
-        .first()
-        .isVisible()
-        .catch(() => false);
       if ((freshVisible || filtered) && hasTender) {
         logLine(logger, "TENDER247_FRESH_LIST_READY");
         return { ...mailDate, listRefreshComplete: true };
       }
-      // Today + correct mail date + Fresh/filtered chrome, but zero tenders:
-      // valid for secondary accounts — do not block Excel / fatal the pipeline.
       if (
         (freshVisible || Boolean(filtered)) &&
         !hasTender &&
@@ -140,6 +170,14 @@ export async function ensureTender247FreshListForDate(
           filteredTenderCount: filtered?.filteredTenderCount ?? 0,
           listRefreshComplete: true,
         };
+      }
+      if (
+        mailDate.listRefreshComplete &&
+        (freshVisible || hasTender) &&
+        Date.now() > deadline - Math.min(8_000, Math.floor(timeoutMs / 3))
+      ) {
+        logLine(logger, "TENDER247_FRESH_LIST_READY");
+        return { ...mailDate, listRefreshComplete: true };
       }
     }
 
@@ -166,9 +204,12 @@ export async function waitForFreshTenderList(
     return;
   }
 
-  const freshTab = page.getByText(/Fresh\s*\(\s*\d+\s*\)/i).first();
+  const freshTab = page.getByText(/Fresh\s*\(\s*[^)]+\s*\)/i).first();
   await freshTab.waitFor({ state: "visible", timeout: 15_000 });
-  const firstTender = page.getByText(/T247\s*ID\s*[-:]?\s*\d+/i).first();
+  if (await isFreshTabBadgeVisible(page)) {
+    logger.info("TENDER247_FRESH_TAB_VISIBLE=true");
+  }
+  const firstTender = page.getByText(/T247\s*ID/i).first();
   await firstTender.waitFor({ state: "visible", timeout: 15_000 });
   logger.info("TENDER247_FRESH_LIST_READY");
 }

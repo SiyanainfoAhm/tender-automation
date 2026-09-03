@@ -261,10 +261,9 @@ export async function getTenderListStatusCounts(
     base().eq("effective_qualification_status", "PARTNER_BID"),
     base().eq("effective_qualification_status", "WON"),
     base().gte("closing_date", todayDate).lte("closing_date", in3),
-    supabase
-      .from("agenttender_bid_workspaces")
-      .select("tender_id", { count: "exact", head: true })
-      .eq("submission_status", "submitted"),
+    // Prefer tender qualification status (manual import + bid lock).
+    // Workspace-only submissions are still included via list filter union.
+    base().eq("effective_qualification_status", "SUBMITTED"),
   ]);
 
   const results = [
@@ -299,9 +298,18 @@ export async function getTenderListStatusCounts(
   const duplicate = duplicateRes.count ?? 0;
   const partnership = partnershipRes.count ?? 0;
   const won = wonRes.count ?? 0;
+  const submitted = submittedRes.count ?? 0;
 
   const mappedSum =
-    verify + underEvaluation + willBid + mayBid + noBid + duplicate + partnership + won;
+    verify +
+    underEvaluation +
+    willBid +
+    mayBid +
+    noBid +
+    duplicate +
+    partnership +
+    won +
+    submitted;
   if (mappedSum < totalTenders) {
     console.warn(
       "[tenderListStatusCounts] unmapped/legacy statuses present",
@@ -322,7 +330,7 @@ export async function getTenderListStatusCounts(
     noBid,
     duplicate,
     partnership,
-    submitted: submittedRes.count ?? 0,
+    submitted,
     closingSoon: closingRes.count ?? 0,
     won,
   };

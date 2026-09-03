@@ -2,6 +2,11 @@ import type { Locator, Page } from "playwright";
 import type { Logger } from "../logger.js";
 import { readFilteredMailDateTab } from "../tenderDetails/selectTender247MailDate.js";
 import {
+  parseCompactListCountDetails,
+  readFreshTabCountDetails,
+  type ParsedListCount,
+} from "../tenderDetails/tender247ListUi.js";
+import {
   ensureTender247FreshListForDate,
   waitForFreshTenderList as waitForFreshTenderListImpl,
 } from "./ensureTender247FreshListForDate.js";
@@ -198,29 +203,39 @@ export async function getLiveRowByMarker(
   return listPage.locator(`[data-playwright-live-tender-row="${marker}"]`).first();
 }
 
+export async function readFreshExpectedCountDetails(
+  listPage: Page,
+  logger: Logger,
+  dateIso?: string,
+): Promise<ParsedListCount | null> {
+  if (dateIso && /^\d{4}-\d{2}-\d{2}$/.test(dateIso)) {
+    const filtered = await readFilteredMailDateTab(listPage, dateIso);
+    if (filtered?.countDetails) {
+      return filtered.countDetails;
+    }
+    if (filtered) {
+      return (
+        parseCompactListCountDetails(String(filtered.filteredTenderCount)) ??
+        null
+      );
+    }
+  }
+
+  const fresh = listPage.getByText(/Fresh\s*\(\s*[^)]+\s*\)/i).first();
+  if (!(await fresh.isVisible().catch(() => false))) {
+    logger.warn("Fresh (N) badge not visible");
+    return null;
+  }
+  return readFreshTabCountDetails(listPage);
+}
+
 export async function readFreshExpectedCount(
   listPage: Page,
   logger: Logger,
   dateIso?: string,
 ): Promise<number> {
-  if (dateIso && /^\d{4}-\d{2}-\d{2}$/.test(dateIso)) {
-    const filtered = await readFilteredMailDateTab(listPage, dateIso);
-    if (filtered) {
-      return filtered.filteredTenderCount;
-    }
-  }
-
-  const fresh = listPage.getByText(/Fresh\s*\(\s*\d+\s*\)/i).first();
-  if (!(await fresh.isVisible().catch(() => false))) {
-    logger.warn("Fresh (N) badge not visible");
-    return 0;
-  }
-  const text = ((await fresh.innerText().catch(() => "")) || "").replace(
-    /\s+/g,
-    " ",
-  );
-  const match = text.match(/Fresh\s*\(\s*(\d+)\s*\)/i);
-  return match ? Number(match[1]) : 0;
+  return (await readFreshExpectedCountDetails(listPage, logger, dateIso))
+    ?.value ?? 0;
 }
 
 export function parseSecurityCodeFromUrl(url: string): string | null {

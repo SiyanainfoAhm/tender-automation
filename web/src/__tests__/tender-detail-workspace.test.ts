@@ -32,6 +32,12 @@ describe("classification presentation", () => {
     ).toBe("submitted");
     expect(
       derivePipelineStage({
+        qualificationStatus: "SUBMITTED",
+        submitted: false,
+      }),
+    ).toBe("submitted");
+    expect(
+      derivePipelineStage({
         qualificationStatus: "CONDITIONAL_GO",
         submitted: false,
       }),

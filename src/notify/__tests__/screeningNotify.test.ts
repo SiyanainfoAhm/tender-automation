@@ -30,6 +30,37 @@ test("mismatch when web Fresh count differs from Excel rows", () => {
   );
 });
 
+test("compact Fresh badge 1.00 K vs Excel 1003 is not a mismatch", () => {
+  assert.equal(
+    hasWebExcelCountMismatch({
+      webTenderCount: 1000,
+      webTenderCountDetails: {
+        value: 1000,
+        approximate: true,
+        min: 996,
+        max: 1004,
+        token: "1.00 K",
+      },
+      excelRowCount: 1003,
+    }),
+    false,
+  );
+  assert.equal(
+    hasWebExcelCountMismatch({
+      webTenderCount: 1000,
+      webTenderCountDetails: {
+        value: 1000,
+        approximate: true,
+        min: 996,
+        max: 1004,
+        token: "1.00 K",
+      },
+      excelRowCount: 980,
+    }),
+    true,
+  );
+});
+
 test("success email includes status counts and project numbers", () => {
   const email = buildScreeningNotifyEmail({
     dateIso: "2026-08-26",

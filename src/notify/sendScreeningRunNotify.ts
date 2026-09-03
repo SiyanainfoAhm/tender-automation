@@ -11,11 +11,14 @@ import {
   type ScreeningNotifyKind,
 } from "./buildScreeningNotifyEmail.js";
 import { sendPowerAutomatePipelineEmail } from "./powerAutomateEmail.js";
+import type { ParsedListCount } from "../tenderDetails/tender247ListUi.js";
 
 export type NotifyAfterScreeningInput = {
   dateIso: string;
   dateFolder: string;
   webTenderCount: number | null;
+  /** When Fresh badge used K/Lakh compact form, used to avoid false mismatches. */
+  webTenderCountDetails?: ParsedListCount | null;
   excelRowCount: number;
   screenedRowCount: number;
   counts: Record<Phase1ScreeningStatus, number>;
@@ -66,6 +69,7 @@ function resolveKind(input: NotifyAfterScreeningInput): ScreeningNotifyKind {
   if (
     hasWebExcelCountMismatch({
       webTenderCount: input.webTenderCount,
+      webTenderCountDetails: input.webTenderCountDetails,
       excelRowCount: input.excelRowCount,
     })
   ) {
@@ -85,6 +89,7 @@ export async function notifyAfterScreeningAndUpsert(
     dateIso: input.dateIso,
     kind,
     webTenderCount: input.webTenderCount,
+    webTenderCountDetails: input.webTenderCountDetails,
     excelRowCount: input.excelRowCount,
     screenedRowCount: input.screenedRowCount,
     counts: input.counts,

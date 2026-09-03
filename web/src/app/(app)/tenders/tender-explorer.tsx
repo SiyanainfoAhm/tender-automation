@@ -507,7 +507,8 @@ export function TenderExplorer({
 
   const navigate = React.useCallback(
     (updates: Record<string, string | undefined>) => {
-      if (isUpdatingRef.current) return;
+      // Allow overlapping navigations so a new search/filter can start
+      // while a previous one is still resolving.
       const qs = buildSearchParams(searchParams, updates);
       const nextHref = `${pathname}${qs}`;
       const currentHref = `${pathname}${queryKey ? `?${queryKey}` : ""}`;
@@ -523,15 +524,16 @@ export function TenderExplorer({
   );
 
   React.useEffect(() => {
-    if (isUpdating) return;
+    // Do not block on isUpdating — otherwise typing while a prior search is
+    // in-flight never schedules the next query until that request finishes.
     const handle = window.setTimeout(() => {
       const next = localQ.trim();
       const current = (filters.q ?? "").trim();
       if (next === current) return;
       navigate({ q: next || undefined, page: "1" });
-    }, 350);
+    }, 150);
     return () => window.clearTimeout(handle);
-  }, [localQ, filters.q, navigate, isUpdating]);
+  }, [localQ, filters.q, navigate]);
 
   const totalPages = Math.max(1, Math.ceil(total / filters.pageSize));
   const uiSortKey = normalizeSortKeyForUi(filters.sortBy);
