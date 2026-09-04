@@ -1,5 +1,7 @@
 /**
- * Master daily pipeline: Tender247 crawl → readiness → ChatGPT qualification.
+ * Master daily pipeline: Tender247 crawl → readiness.
+ * ChatGPT qualification is skipped; Tender247 rows are stored with status + reason
+ * during the crawl (Phase-1 Excel persist).
  * Phases run sequentially — never in parallel.
  */
 import { spawn } from "node:child_process";
@@ -8,18 +10,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AutomationError } from "./browserUtils.js";
 import {
-  isValidSavedQualificationResult,
-} from "./chatgptQualification/qualificationSchema.js";
-import {
   buildGptReadinessReport,
   listDownloadedTenderIds,
-  listNewReadyTenderIds,
   saveGptReadinessReport,
 } from "./chatgptQualification/readiness.js";
-import {
-  runQualificationBatch,
-  type QualificationBatchSummary,
-} from "./chatgptQualification/runQualificationBatch.js";
 import { loadConfig, type AppConfig } from "./config.js";
 import { ensureDir, resolveProjectPath } from "./fileUtils.js";
 import { Logger, safeErrorMessage } from "./logger.js";
@@ -330,7 +324,7 @@ export function printDailyPipelineSummary(summary: DailyPipelineSummary): void {
     `Tender247 manual review: ${summary.tender247ManualReview}`,
   );
   console.log(
-    `Tender247 ChatGPT submitted: ${summary.qualificationCompleted}`,
+    `Tender247 ChatGPT: SKIPPED (stored with Phase-1 status + reason)`,
   );
   console.log(`Tender folders discovered: ${summary.tenderFoldersDiscovered}`);
   console.log(`GPT ready: ${summary.gptReady}`);
@@ -410,16 +404,11 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
   );
 
   const bidassistConfig = loadBidassistConfig();
-  logger.info(`TENDER247_LIMIT=${formatProductionLimit(config.maxTenders)}`);
-  logger.info(
-    `BIDASSIST_LIMIT=${formatProductionLimit(bidassistConfig.maxTenders)}`,
-  );
-  logger.info(
-    `CHATGPT_QUALIFICATION_LIMIT=${formatProductionLimit(config.maxGptTenders)}`,
-  );
-  logger.info(
-    `CHATGPT_MIN_SUBMISSION_INTERVAL_MS=${config.chatgptMinSubmissionIntervalMs}`,
-  );
+    logger.info(`TENDER247_LIMIT=${formatProductionLimit(config.maxTenders)}`);
+    logger.info(
+      `BIDASSIST_LIMIT=${formatProductionLimit(bidassistConfig.maxTenders)}`,
+    );
+    logger.info("CHATGPT_QUALIFICATION_SKIPPED=true");
 
   const onSignal = (signal: string): void => {
     logger.warn(`DAILY_PIPELINE_SIGNAL=${signal}`);
@@ -485,7 +474,7 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
     summary.tender247 = "SUCCESS";
     logger.info("DAILY_PIPELINE_TENDER247_COMPLETE");
     logger.info("T247_ARTIFACT_ACQUISITION_BATCH_COMPLETE=true");
-    logger.info("PIPELINE_PHASE=CHATGPT_QUALIFICATION");
+    logger.info("PIPELINE_PHASE=STORE_STATUS_REASON");
 
     const excelAudit = readExcelFilterAudit(dateFolder);
     if (excelAudit) {
@@ -524,11 +513,23 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
       `DAILY_PIPELINE_GPT_NOT_READY_COUNT=${readiness.missingTenderIds.length}`,
     );
 
-    // Fresh runs must still qualify selected ready tenders even when an old
-    // result exists. Resume reuse is decided inside runQualificationBatch.
     summary.newReadyForQualification = readiness.readyTenderIds.length;
     summary.remainingReady = readiness.readyTenderIds.length;
 
+    // -------- ChatGPT qualification skipped --------
+    // Tender247 downloaded data is already stored with Phase-1 status + reason.
+    // Re-enable the block below to resume ChatGPT qualification.
+    logger.info("DAILY_PIPELINE_CHATGPT_SKIPPED=true");
+    logger.info("DAILY_PIPELINE_STORED_WITH_STATUS_REASON=true");
+    summary.chatgptStarted = false;
+    summary.qualificationCompleted = 0;
+    summary.skippedExisting = 0;
+    summary.finishedAt = new Date().toISOString();
+    writeDailyPipelineSummary(dateFolder, summary);
+    printDailyPipelineSummary(summary);
+    return summary;
+
+    /*
     // -------- Settle delay --------
     if (config.dailyPipelinePhaseDelayMs > 0) {
       logger.info(
@@ -596,6 +597,7 @@ export async function runDailyTenderPipeline(): Promise<DailyPipelineSummary> {
     writeDailyPipelineSummary(dateFolder, summary);
     printDailyPipelineSummary(summary);
     return summary;
+    */
   } catch (error) {
     const message = safeErrorMessage(error);
     const code =

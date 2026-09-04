@@ -1323,7 +1323,9 @@ export function TenderExplorer({
                         amount: row.emd_amount,
                         text: row.emd_text,
                       });
-                      const status = row.effective_qualification_status;
+                      const status =
+                        row.qualification_status ??
+                        row.effective_qualification_status;
                       const reference = row.reference_no || "—";
                       const place = locationLine(row);
                       const portal =

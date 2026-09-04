@@ -303,6 +303,8 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
   logger?: { info: (msg: string) => void; warn?: (msg: string) => void };
   /** Override raw_metadata.screeningSource (default CHATGPT_RUN_EXCEL). */
   screeningSource?: string;
+  /** Qualification model_name (default chatgpt-project-run-screening). */
+  modelName?: string;
 }): Promise<Phase1PersistResult> {
   const workbookLabel =
     options.screenedWorkbookPath ||
@@ -616,12 +618,20 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         manualReviewRequired: qual.manualReviewRequired,
         requiresDetailedTenderReview:
           !isPhase1Duplicate(status) && status !== "GO" && status !== "NO_GO",
-        evidenceFiles: ["CHATGPT_RUN_EXCEL", RUN_SCREENED_FILE],
+        evidenceFiles: [
+          options.screeningSource || "CHATGPT_RUN_EXCEL",
+          RUN_SCREENED_FILE,
+        ],
         rawResponse: row.screeningReason,
         rawResult: rawMetadata,
         chatUrl: null,
         promptVersion: PHASE1_SCREENING_POLICY_VERSION,
-        modelName: "chatgpt-project-run-screening",
+        modelName:
+          options.modelName ||
+          (options.screeningSource &&
+          options.screeningSource !== "CHATGPT_RUN_EXCEL"
+            ? options.screeningSource
+            : "chatgpt-project-run-screening"),
       });
       if (!upserted.ok) {
         result.errors.push(

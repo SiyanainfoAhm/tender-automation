@@ -504,6 +504,28 @@ test("skipChatGpt leaves SCREENING_PENDING and blocks detail crawl", async () =>
   );
 });
 
+test("without ChatGPT, Tender247 Excel is stored with local status and reason", async () => {
+  const { dateFolder, t247Path, baPath } = fixtureDateFolder();
+  const result = await runPhase1ExcelScreening({
+    dateFolder,
+    dateIso: "2026-08-18",
+    tender247ExcelPath: t247Path,
+    bidAssistExcelPath: baPath,
+    companySnapshot: snapshot(),
+    persistResults: false,
+  });
+  assert.equal(result.status, "complete");
+  assert.equal(result.aiScreeningComplete, true);
+  assert.equal(result.outputRows, result.inputRows);
+  assert.ok(result.screenedPath && fs.existsSync(result.screenedPath));
+  const stored = readRunWorkbook(result.screenedPath!);
+  assert.equal(stored.length, result.inputRows);
+  for (const row of stored) {
+    assert.ok(row.screeningStatus, `missing status for ${row.canonicalId}`);
+    assert.ok(row.screeningReason, `missing reason for ${row.canonicalId}`);
+  }
+});
+
 test("preference change invalidates resume and reruns screening", async () => {
   const { dateFolder, t247Path, baPath } = fixtureDateFolder();
   let chatgptCalls = 0;

@@ -240,7 +240,9 @@ export async function getTenderListStatusCounts(
     return q;
   };
 
-  // Parallel exact counts — never fetch row bodies (PostgREST 1000-row cap).
+  // Count from agenttender_tenders.qualification_status (exposed on the web
+  // view) — not effective_qualification_status, which prefers the joined
+  // qualification_results row and can diverge from the tender column.
   const [
     totalRes,
     verifyRes,
@@ -258,21 +260,19 @@ export async function getTenderListStatusCounts(
     cancelledRes,
   ] = await Promise.all([
     base(),
-    base().eq("effective_qualification_status", "VERIFY"),
-    base().is("effective_qualification_status", null),
-    base().eq("effective_qualification_status", "GO"),
-    base().eq("effective_qualification_status", "CONDITIONAL_GO"),
-    base().eq("effective_qualification_status", "NO_GO"),
-    base().eq("effective_qualification_status", "DUPLICATE"),
-    base().eq("effective_qualification_status", "PARTNER_BID"),
-    base().eq("effective_qualification_status", "WON"),
-    base().eq("effective_qualification_status", "LOST"),
-    base().eq("effective_qualification_status", "DISQUALIFIED"),
+    base().eq("qualification_status", "VERIFY"),
+    base().is("qualification_status", null),
+    base().eq("qualification_status", "GO"),
+    base().eq("qualification_status", "CONDITIONAL_GO"),
+    base().eq("qualification_status", "NO_GO"),
+    base().eq("qualification_status", "DUPLICATE"),
+    base().eq("qualification_status", "PARTNER_BID"),
+    base().eq("qualification_status", "WON"),
+    base().eq("qualification_status", "LOST"),
+    base().eq("qualification_status", "DISQUALIFIED"),
     base().gte("closing_date", todayDate).lte("closing_date", in3),
-    // Prefer tender qualification status (manual import / bid lock).
-    // Workspace-only submissions are still included via list filter union.
-    base().eq("effective_qualification_status", "SUBMITTED"),
-    base().eq("effective_qualification_status", "CANCELLED"),
+    base().eq("qualification_status", "SUBMITTED"),
+    base().eq("qualification_status", "CANCELLED"),
   ]);
 
   const results = [

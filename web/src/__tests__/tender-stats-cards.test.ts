@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 /**
  * Card → URL status mapping used by TenderStatsCards.
+ * Counts come from agenttender_tenders.qualification_status (not effective_*).
  * Kept as a pure module mirror so filters stay aligned with tender-status.ts.
  */
 const CARD_STATUS_FILTERS = {

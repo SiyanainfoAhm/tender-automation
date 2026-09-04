@@ -249,23 +249,25 @@ export async function listTenders(
 
   if (filters.status && filters.status !== "ALL") {
     const statusKey = String(filters.status).toLowerCase().replace(/[\s-]+/g, "_");
+    // Status cards + list filters use tender.qualification_status so counts
+    // match the Supabase column (not coalesce'd qualification_results status).
     if (statusKey === "submitted") {
-      // Count both qualification_status=SUBMITTED and bid-workspace submissions.
+      // Include qualification_status=SUBMITTED and bid-workspace submissions.
       const submittedIds = await listSubmittedTenderIds();
       if (submittedIds.length > 0) {
         const idList = submittedIds.join(",");
         query = query.or(
-          `effective_qualification_status.eq.SUBMITTED,id.in.(${idList})`,
+          `qualification_status.eq.SUBMITTED,id.in.(${idList})`,
         );
       } else {
-        query = query.eq("effective_qualification_status", "SUBMITTED");
+        query = query.eq("qualification_status", "SUBMITTED");
       }
     } else {
       const statusFilter = qualificationStatusesForFilter(filters.status);
       if (statusFilter.kind === "null") {
-        query = query.is("effective_qualification_status", null);
+        query = query.is("qualification_status", null);
       } else if (statusFilter.kind === "in") {
-        query = query.in("effective_qualification_status", statusFilter.values);
+        query = query.in("qualification_status", statusFilter.values);
       }
     }
   }
@@ -419,9 +421,9 @@ export async function listTenders(
   }
 
   if (filters.qualified === "true") {
-    query = query.not("effective_qualification_status", "is", null);
+    query = query.not("qualification_status", "is", null);
   } else if (filters.qualified === "false") {
-    query = query.is("effective_qualification_status", null);
+    query = query.is("qualification_status", null);
   }
 
   const dateCol = dateBounds.dateType;

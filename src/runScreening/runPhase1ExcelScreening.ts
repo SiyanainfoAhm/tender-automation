@@ -1,7 +1,7 @@
 /**
  * Phase-1 run-level Excel screening orchestrator.
- * Source of truth: Tender247 downloaded Excel → ChatGPT screening.
- * No local pre-filter, duplicate detection, or merge — GPT output is authoritative.
+ * Source of truth: Tender247 downloaded Excel.
+ * ChatGPT Excel screening is skipped; rows are stored with local status + reason.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -29,8 +29,10 @@ import {
 } from "./screeningDecisionSchema.js";
 import { logActiveScreeningRules, PHASE1_SCREENING_POLICY_VERSION } from "./screeningPolicy.js";
 import { persistGptScreenedWorkbookToDatabase, assertPhase1PersistComplete } from "./persistPhase1Results.js";
+import { enforcePhase1ScreeningDecisions } from "./phase1DecisionGuard.js";
 import { runCorrelationIdForDate } from "./phase1DetailQueue.js";
 import {
+  countPhase1Statuses,
   deriveDetailScrapeIds,
   hashFile,
   hashText,
@@ -39,6 +41,7 @@ import {
   readRunWorkbook,
   ScreeningOutputInvalidError,
   validateScreenedWorkbook,
+  writeRunWorkbook,
   type RunWorkbookRow,
 } from "./runWorkbook.js";
 import {
@@ -58,6 +61,9 @@ import {
 import type { AppConfig } from "../config.js";
 
 export { assertAiScreeningCompleteForDetailCrawl };
+
+/** When true, skip ChatGPT Excel screening and persist Tender247 rows with local status + reason. */
+const SKIP_CHATGPT_EXCEL_SCREENING = true;
 
 export type Phase1ExcelScreeningResult = {
   status: "complete" | "failed" | "pending";
@@ -201,6 +207,65 @@ function emptyResult(base: {
     noBidRows: [],
     error: base.error ?? null,
   };
+}
+
+/**
+ * Skip ChatGPT: assign local status + reason to every Tender247 Excel row
+ * and persist them (workbook + Supabase).
+ */
+async function persistTender247ExcelWithLocalStatusReason(options: {
+  dateFolder: string;
+  dateIso: string;
+  snapshot: CompanyPreferenceSnapshot;
+  inputWorkbookPath: string;
+  originalTender247Path: string;
+  inputFilename: string;
+  inputWorkbookHash: string;
+  preferencesHash: string;
+  companyPreferenceSnapshotHash: string;
+  screeningPromptHash: string;
+  inputRows: RunWorkbookRow[];
+  logger?: Logger;
+  persistResults?: boolean;
+}): Promise<Phase1ExcelScreeningResult> {
+  const enforced = enforcePhase1ScreeningDecisions({
+    inputRows: options.inputRows,
+    outputRows: options.inputRows,
+    snapshot: options.snapshot,
+    runDate: options.dateIso,
+    log: (message) => log(options.logger, message),
+  });
+  const screenedPath = screenedWorkbookPath(options.dateFolder);
+  writeRunWorkbook(enforced.rows, screenedPath);
+  const counts = countPhase1Statuses(enforced.rows);
+  log(options.logger, "CHATGPT_EXCEL_SCREENING_SKIPPED=true");
+  log(options.logger, "TENDER247_STORED_WITH_LOCAL_STATUS_REASON=true");
+  log(options.logger, `SCREENING_LOCAL_STATUS_ROWS=${enforced.rows.length}`);
+  log(options.logger, `[LOCAL SCREENING] DUPLICATE = ${counts.DUPLICATE}`);
+  log(options.logger, `[LOCAL SCREENING] NO_BID = ${counts.NO_GO}`);
+  log(options.logger, `[LOCAL SCREENING] VERIFY = ${counts.VERIFY}`);
+  log(options.logger, `[LOCAL SCREENING] MAY_BID = ${counts.CONDITIONAL_GO}`);
+  log(options.logger, `[LOCAL SCREENING] WILL_BID = ${counts.GO}`);
+
+  return finalizeScreening({
+    dateFolder: options.dateFolder,
+    dateIso: options.dateIso,
+    snapshot: options.snapshot,
+    inputWorkbookPath: options.inputWorkbookPath,
+    originalTender247Path: options.originalTender247Path,
+    inputFilename: options.inputFilename,
+    screenedPath,
+    inputWorkbookHash: options.inputWorkbookHash,
+    preferencesHash: options.preferencesHash,
+    companyPreferenceSnapshotHash: options.companyPreferenceSnapshotHash,
+    screeningPromptHash: options.screeningPromptHash,
+    inputRows: options.inputRows,
+    outputRows: enforced.rows,
+    counts,
+    logger: options.logger,
+    persistResults: options.persistResults,
+    screeningSource: "TENDER247_LOCAL_SKIP_CHATGPT",
+  });
 }
 
 /**
@@ -393,6 +458,25 @@ export async function runPhase1ExcelScreening(options: {
   log(logger, `CHATGPT_SCREENING_MD_WRITTEN=${screeningMdPath}`);
 
   const screenedPath = screenedWorkbookPath(dateFolder);
+
+  // Skip ChatGPT Excel screening: store downloaded Tender247 rows with status + reason.
+  if (SKIP_CHATGPT_EXCEL_SCREENING && !options.chatgptClient) {
+    return persistTender247ExcelWithLocalStatusReason({
+      dateFolder,
+      dateIso,
+      snapshot,
+      inputWorkbookPath: gptInputPath,
+      originalTender247Path: originalArchivePath,
+      inputFilename,
+      inputWorkbookHash,
+      preferencesHash,
+      companyPreferenceSnapshotHash,
+      screeningPromptHash,
+      inputRows,
+      logger,
+      persistResults: options.persistResults,
+    });
+  }
   const existingManifest = loadScreeningManifest(dateFolder);
   const existingScreened = resolveExistingScreenedWorkbook(dateFolder, dateIso);
   const screenedExists = Boolean(existingScreened);
@@ -465,6 +549,8 @@ export async function runPhase1ExcelScreening(options: {
   log(logger, `CHATGPT_INPUT_ROW_COUNT=${workbookInventory.totalRows || inputRows.length}`);
   log(logger, `[AI SCREENING] Uploading ${inputFilename} + screening.md to shared chat`);
 
+  // ChatGPT Excel screening (disabled by SKIP_CHATGPT_EXCEL_SCREENING).
+  // Re-enable: set SKIP_CHATGPT_EXCEL_SCREENING = false so live runs create this client.
   const client =
     options.chatgptClient ??
     (options.config
@@ -659,6 +745,7 @@ async function finalizeScreening(options: {
   counts: Phase1ScreeningManifest["counts"];
   logger?: Logger;
   persistResults?: boolean;
+  screeningSource?: string;
 }): Promise<Phase1ExcelScreeningResult> {
   const shortlist = deriveDetailScrapeIds(options.outputRows);
   const noBidRows = options.outputRows.filter((row) => row.screeningStatus === "NO_GO");
@@ -672,6 +759,7 @@ async function finalizeScreening(options: {
       screenedWorkbookPath: options.screenedPath,
       companyId: options.snapshot.company.id,
       logger: options.logger,
+      screeningSource: options.screeningSource,
     });
     assertPhase1PersistComplete(persistResult, options.outputRows.length);
     log(options.logger, `SUPABASE_UPSERT_SUCCESS=${persistResult.stored}`);
