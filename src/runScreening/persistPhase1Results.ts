@@ -510,11 +510,15 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         alwaysUpdate as string[],
       );
 
-      // Always force screening fields from GPT Excel.
+      // Always force screening fields from GPT Excel / local Phase-1 persist.
       next.qualification_status = qualificationStatus;
       next.raw_metadata = rawMetadata;
+      next.scraped_date = options.runDate;
       if (!updatedKeys.includes("qualification_status")) {
         updatedKeys.push("qualification_status");
+      }
+      if (!updatedKeys.includes("scraped_date")) {
+        updatedKeys.push("scraped_date");
       }
 
       const fieldLabels: Record<string, string> = {
