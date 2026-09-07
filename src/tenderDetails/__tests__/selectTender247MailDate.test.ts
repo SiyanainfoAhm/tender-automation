@@ -114,4 +114,7 @@ test("Select Mail Date helper never uses fill() or JS value assignment", () => {
   assert.doesNotMatch(src, /input\.value\s*=/);
   assert.match(src, /clickCalendarDay/);
   assert.match(src, /TENDER247_CALENDAR_DAY_CLICKED=/);
+  assert.match(src, /dismissTender247AdvanceSearchModal/);
+  assert.match(src, /isAdvanceSearchModalVisible/);
+  assert.match(src, /ADVANCE\\s\*SEARCH/);
 });

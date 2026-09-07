@@ -388,7 +388,7 @@ describe("Tender247 sequential selected-tender loop", () => {
     assert.ok(aDone < bStart);
     assert.equal(gptInitCount, 1);
     assert.ok(
-      events.includes("T247_SELECTED_ARTIFACT_BATCH_COMPLETE=true"),
+      events.includes("T247_SELECTED_ARTIFACT_BATCH_LOOP_DONE=true"),
     );
   });
 

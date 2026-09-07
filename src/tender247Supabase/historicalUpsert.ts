@@ -208,7 +208,7 @@ export async function upsertHistoricalTenders(
     const batchNo = Math.floor(i / UPSERT_BATCH_SIZE) + 1;
     const payload = batch.map((row) => toDbRow(row, companyId, now));
     const { error } = await client.from("agenttender_tenders").upsert(payload, {
-      onConflict: "source_portal,source_tender_id",
+      onConflict: "source_portal,source_tender_id,scraped_date",
     });
     if (error) {
       const ids = batch.map((r) => r.sourceTenderId).slice(0, 12).join(",");

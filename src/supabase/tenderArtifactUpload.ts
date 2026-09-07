@@ -328,16 +328,29 @@ export async function uploadTenderArtifactsAndPersistUrls(options: {
 
     if (Object.keys(patch).length > 1) {
       const client = getSupabaseAdminClient();
-      const { error } = await client
-        .from("agenttender_tenders")
-        .update(patch)
-        .eq("source_portal", options.sourcePortal)
-        .eq("source_tender_id", options.sourceTenderId);
-      if (error) {
-        result.errors.push(`db_url_persist: ${error.message}`);
-        options.logger?.warn?.(
-          `ARTIFACT_URL_DB_UPDATE_FAILED=${error.message}`,
+      const scrapedDate = options.runDate?.trim() || null;
+      // Hard require scraped_date — never update by source_tender_id alone
+      // (same Tender247 ID can exist on multiple mail dates).
+      if (!scrapedDate || !/^\d{4}-\d{2}-\d{2}$/.test(scrapedDate)) {
+        result.errors.push(
+          "db_url_persist: refused update without scraped_date (runDate)",
         );
+        options.logger?.warn?.(
+          "ARTIFACT_URL_DB_UPDATE_REFUSED=missing_scraped_date",
+        );
+      } else {
+        const { error } = await client
+          .from("agenttender_tenders")
+          .update(patch)
+          .eq("source_portal", options.sourcePortal)
+          .eq("source_tender_id", options.sourceTenderId)
+          .eq("scraped_date", scrapedDate);
+        if (error) {
+          result.errors.push(`db_url_persist: ${error.message}`);
+          options.logger?.warn?.(
+            `ARTIFACT_URL_DB_UPDATE_FAILED=${error.message}`,
+          );
+        }
       }
     }
   }

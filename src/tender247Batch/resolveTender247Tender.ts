@@ -28,8 +28,10 @@ export async function resolveTender247Tender(options: {
   logger: Logger;
   dateFolder?: string;
   phase1ScreeningStatus?: Phase1CrawlStatus | string;
+  /** AI-summary-first: allow NO_GO / No Bid detail opens. */
+  allowNoBidDetailOpen?: boolean;
 }): Promise<ResolvedTender247Detail> {
-  if (options.phase1ScreeningStatus) {
+  if (options.phase1ScreeningStatus && options.allowNoBidDetailOpen !== true) {
     assertOpenSingleTenderDetailsAllowed(
       options.phase1ScreeningStatus,
       options.tenderId,
@@ -44,6 +46,7 @@ export async function resolveTender247Tender(options: {
     {
       dateFolder: options.dateFolder,
       phase1ScreeningStatus: options.phase1ScreeningStatus,
+      allowNoBidDetailOpen: options.allowNoBidDetailOpen === true,
     },
   );
   return {

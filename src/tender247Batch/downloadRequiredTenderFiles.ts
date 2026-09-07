@@ -75,7 +75,8 @@ export interface RequiredDownloadResult {
  * Sequential per-tender artifact acquisition (concurrency = 1):
  * AI Summary, then Tender Documents (Download All, then individual fallback).
  * Documents always run after AI reaches a terminal state — metadata/AI
- * presence is never permission to skip Download All.
+ * presence is never permission to skip Download All — unless
+ * `documentsOnlyIfAiMissing` is set (AI-summary-first pipelines).
  */
 export async function downloadRequiredTenderFiles(options: {
   detailPage: Page;
@@ -87,6 +88,11 @@ export async function downloadRequiredTenderFiles(options: {
   logger: Logger;
   skipAiSummary?: boolean;
   skipAllDocuments?: boolean;
+  /**
+   * When true: download documents only if AI Summary was not captured.
+   * Used by the AI-summary-first pipeline.
+   */
+  documentsOnlyIfAiMissing?: boolean;
   keepDebugFiles?: boolean;
   aiSummaryTimeoutMs?: number;
   documentStage?: TenderDocumentStageTracker;
@@ -215,6 +221,12 @@ export async function downloadRequiredTenderFiles(options: {
   logger.info("AI_SUMMARY_COMPLETE");
   t247Event(logger, t247Id, "AI_DONE");
 
+  const aiSummaryOk =
+    ai.available === true &&
+    isValidAiSummaryPdf(ai.path || existingAi.aiSummaryPath);
+  const skipDocsBecauseAiPresent =
+    options.documentsOnlyIfAiMissing === true && aiSummaryOk;
+
   logger.info(`T247_DOCUMENTS_START=${t247Id}`);
   t247Event(logger, t247Id, "DOCUMENTS_START");
   const documentsStartedAt = Date.now();
@@ -246,7 +258,14 @@ export async function downloadRequiredTenderFiles(options: {
   const individualDocsFailed: string[] = [];
   let documentsAttempted = false;
 
-  if (options.skipAllDocuments && alreadyCanonical) {
+  if (skipDocsBecauseAiPresent && !alreadyCanonical) {
+    allDocumentsSkipped = true;
+    documentsAttempted = false;
+    documentsStatus = "missing";
+    logger.info("DOCUMENTS_SKIPPED_AI_SUMMARY_PRESENT=true");
+    t247Event(logger, t247Id, "DOCUMENTS_SKIPPED_AI_SUMMARY_PRESENT");
+    options.documentStage?.set("success");
+  } else if (options.skipAllDocuments && alreadyCanonical) {
     allDocumentsSkipped = true;
     documentsAttempted = true;
     documentsStatus = "complete";
@@ -259,6 +278,10 @@ export async function downloadRequiredTenderFiles(options: {
       documentsAttempted = true;
       allDocumentsSkipped = true;
     } else {
+      if (options.documentsOnlyIfAiMissing) {
+        logger.info("DOCUMENTS_DOWNLOAD_BECAUSE_AI_SUMMARY_MISSING=true");
+        t247Event(logger, t247Id, "DOCUMENTS_DOWNLOAD_BECAUSE_AI_SUMMARY_MISSING");
+      }
       try {
         const docs = await acquireTenderDocuments({
           detailPage,

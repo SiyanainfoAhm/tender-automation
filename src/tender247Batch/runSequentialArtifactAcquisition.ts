@@ -66,7 +66,6 @@ export async function runSequentialArtifactAcquisition<T>(options: {
     const id = getId(candidate);
     logger?.info(`T247_SELECTED_INDEX=${index + 1}/${total}`);
     emit(`T247_ARTIFACT_TRANSACTION_START=${id}`);
-    logger?.info(`[T247 ${id}] DETAIL_OPENED`);
     const result = await process(candidate, index + 1, total);
     previousTenderId = id;
     previousSafeToAdvance = Boolean(
@@ -89,9 +88,11 @@ export async function runSequentialArtifactAcquisition<T>(options: {
     emit(`T247_ARTIFACT_TRANSACTION_COMPLETE=${id}`);
   }
 
-  logger?.info("T247_ARTIFACT_ACQUISITION_BATCH_COMPLETE=true");
-  logger?.info("T247_SELECTED_ARTIFACT_BATCH_COMPLETE=true");
-  emit("T247_SELECTED_ARTIFACT_BATCH_COMPLETE=true");
+  logger?.info("T247_ARTIFACT_ACQUISITION_BATCH_LOOP_DONE=true");
+  logger?.info(
+    `T247_ARTIFACT_BATCH_OUTCOME selected=${counters.selected} full=${counters.full} partial=${counters.partial} none=${counters.none}`,
+  );
+  emit("T247_SELECTED_ARTIFACT_BATCH_LOOP_DONE=true");
   logger?.info(`SELECTED_TENDERS=${counters.selected}`);
   logger?.info(`ARTIFACT_TRANSACTIONS_COMPLETED=${counters.completed}`);
   logger?.info(`FULL_EVIDENCE=${counters.full}`);

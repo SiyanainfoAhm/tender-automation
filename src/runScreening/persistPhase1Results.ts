@@ -4,9 +4,10 @@
  *
  * Rules:
  * - Create/update tender rows from every GPT Excel row
- * - Match by T247 ID / BidAssist ID / reference / source_tender_id
- * - Fill missing fields only; always refresh screening status + reason
- * - Upload artifacts separately after detail crawl (AI Summary optional)
+ * - Match by (source_portal, source_tender_id, scraped_date) — daily snapshot identity
+ * - Same Tender247 ID on a new scraped_date inserts a NEW row (never moves prior dates)
+ * - Historical prior-date matches → INSERT today + qualification_status DUPLICATE
+ * - Fill missing fields only within the same-day snapshot; never rewrite scraped_date of another day
  */
 import path from "node:path";
 import { AutomationError } from "../browserUtils.js";
@@ -211,24 +212,33 @@ type ExistingTenderRow = {
   tender_value_text: string | null;
   emd_text: string | null;
   qualification_status: string | null;
+  scraped_date: string | null;
   raw_metadata: Record<string, unknown> | null;
 };
 
-async function findExistingTender(options: {
+const EXISTING_TENDER_SELECT =
+  "id, source_portal, source_tender_id, folder_id, title, organization, location_text, closing_date, tender_value_text, emd_text, qualification_status, scraped_date, raw_metadata";
+
+/**
+ * Same-day snapshot lookup only.
+ * Never returns a row from another scraped_date.
+ */
+async function findSameDayTender(options: {
   client: ReturnType<typeof getSupabaseAdminClient>;
   sourcePortal: "TENDER247" | "BIDASSIST";
   sourceTenderId: string;
+  scrapedDate: string;
   references: string[];
 }): Promise<ExistingTenderRow | null> {
-  const { client, sourcePortal, sourceTenderId, references } = options;
+  const { client, sourcePortal, sourceTenderId, scrapedDate, references } =
+    options;
 
   const byId = await client
     .from("agenttender_tenders")
-    .select(
-      "id, source_portal, source_tender_id, folder_id, title, organization, location_text, closing_date, tender_value_text, emd_text, qualification_status, raw_metadata",
-    )
+    .select(EXISTING_TENDER_SELECT)
     .eq("source_portal", sourcePortal)
     .eq("source_tender_id", sourceTenderId)
+    .eq("scraped_date", scrapedDate)
     .maybeSingle();
   if (byId.data) return byId.data as ExistingTenderRow;
 
@@ -236,21 +246,19 @@ async function findExistingTender(options: {
     if (!reference || reference === sourceTenderId) continue;
     const byFolder = await client
       .from("agenttender_tenders")
-      .select(
-        "id, source_portal, source_tender_id, folder_id, title, organization, location_text, closing_date, tender_value_text, emd_text, qualification_status, raw_metadata",
-      )
+      .select(EXISTING_TENDER_SELECT)
       .eq("source_portal", sourcePortal)
       .eq("folder_id", reference)
+      .eq("scraped_date", scrapedDate)
       .maybeSingle();
     if (byFolder.data) return byFolder.data as ExistingTenderRow;
 
     const byAltId = await client
       .from("agenttender_tenders")
-      .select(
-        "id, source_portal, source_tender_id, folder_id, title, organization, location_text, closing_date, tender_value_text, emd_text, qualification_status, raw_metadata",
-      )
+      .select(EXISTING_TENDER_SELECT)
       .eq("source_portal", sourcePortal)
       .eq("source_tender_id", reference)
+      .eq("scraped_date", scrapedDate)
       .maybeSingle();
     if (byAltId.data) return byAltId.data as ExistingTenderRow;
   }
@@ -258,17 +266,56 @@ async function findExistingTender(options: {
   return null;
 }
 
+/**
+ * Earliest prior-day occurrence of the same portal tender id (historical duplicate).
+ */
+async function findHistoricalPriorTender(options: {
+  client: ReturnType<typeof getSupabaseAdminClient>;
+  sourcePortal: "TENDER247" | "BIDASSIST";
+  sourceTenderId: string;
+  scrapedDate: string;
+}): Promise<{ id: string; scraped_date: string; source_tender_id: string } | null> {
+  const { data, error } = await options.client
+    .from("agenttender_tenders")
+    .select("id, scraped_date, source_tender_id")
+    .eq("source_portal", options.sourcePortal)
+    .eq("source_tender_id", options.sourceTenderId)
+    .lt("scraped_date", options.scrapedDate)
+    .order("scraped_date", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) return null;
+  return {
+    id: String(data.id),
+    scraped_date: String(data.scraped_date).slice(0, 10),
+    source_tender_id: String(data.source_tender_id),
+  };
+}
+
+function historicalDuplicateReason(
+  sourceTenderId: string,
+  priorScrapedDate: string,
+): string {
+  return `Duplicate Tender247 ID – previously seen on ${priorScrapedDate}`;
+}
+
 async function resolveDuplicateOfTenderId(options: {
   client: ReturnType<typeof getSupabaseAdminClient>;
   sourcePortal: "TENDER247" | "BIDASSIST";
   matchedSourceTenderId: string;
   excludeTenderId?: string | null;
+  /** Prefer the prior historical snapshot UUID when known. */
+  preferredTenderId?: string | null;
 }): Promise<string | null> {
+  if (options.preferredTenderId) {
+    return options.preferredTenderId;
+  }
   let query = options.client
     .from("agenttender_tenders")
     .select("id")
     .eq("source_portal", options.sourcePortal)
     .eq("source_tender_id", options.matchedSourceTenderId)
+    .order("scraped_date", { ascending: true })
     .order("first_seen_at", { ascending: true })
     .limit(1);
   if (options.excludeTenderId) {
@@ -305,6 +352,12 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
   screeningSource?: string;
   /** Qualification model_name (default chatgpt-project-run-screening). */
   modelName?: string;
+  /**
+   * When true, same-day updates keep the existing qualification_status
+   * (and skip overwriting qualification results). Used by AI-summary daily
+   * Excel ingest so mid-day re-downloads do not wipe Phase-1 statuses.
+   */
+  preserveExistingQualificationStatus?: boolean;
 }): Promise<Phase1PersistResult> {
   const workbookLabel =
     options.screenedWorkbookPath ||
@@ -382,21 +435,67 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
     const references = referenceCandidates(row);
 
     try {
-      const existing = await findExistingTender({
+      // STEP 1 — same-day snapshot only
+      const existing = await findSameDayTender({
         client,
         sourcePortal,
         sourceTenderId: id,
+        scrapedDate: options.runDate,
         references,
       });
 
       options.logger?.info(
-        `[${label}] Existing record found=${Boolean(existing)}`,
+        `[${label}] Same-day snapshot found=${Boolean(existing)} scraped_date=${options.runDate}`,
       );
 
-      const qualificationStatus = isPhase1Duplicate(status)
+      // STEP 2 — historical prior-day check (only when inserting a new day)
+      const historicalPrior =
+        existing
+          ? null
+          : await findHistoricalPriorTender({
+              client,
+              sourcePortal,
+              sourceTenderId: id,
+              scrapedDate: options.runDate,
+            });
+
+      let effectiveStatus = status;
+      let effectiveReason = row.screeningReason || "";
+      if (!existing && historicalPrior && !isPhase1Duplicate(status)) {
+        effectiveStatus = "DUPLICATE";
+        effectiveReason = historicalDuplicateReason(
+          id,
+          historicalPrior.scraped_date,
+        );
+        options.logger?.info(
+          `[${label}] HISTORICAL_DUPLICATE prior_scraped_date=${historicalPrior.scraped_date}`,
+        );
+      }
+
+      const preserveStatus =
+        Boolean(options.preserveExistingQualificationStatus) &&
+        Boolean(existing?.qualification_status);
+      if (preserveStatus) {
+        const priorStatus = normalizePhase1ScreeningStatus(
+          existing?.qualification_status || null,
+        );
+        if (priorStatus) {
+          effectiveStatus = priorStatus;
+          effectiveReason =
+            String(
+              (existing?.raw_metadata as { screeningReason?: unknown } | null)
+                ?.screeningReason || "",
+            ).trim() || effectiveReason;
+          options.logger?.info(
+            `[${label}] PRESERVE_EXISTING_STATUS=${priorStatus}`,
+          );
+        }
+      }
+
+      const qualificationStatus = isPhase1Duplicate(effectiveStatus)
         ? "DUPLICATE"
         : mapScreeningToQualificationStatus(
-            status,
+            effectiveStatus,
             existing?.qualification_status,
             {
               // Phase-1 Excel Status is authoritative — keep Will Bid as written.
@@ -409,33 +508,49 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
       const titleParts = truncateForDatabaseIndex(row.tenderName || id);
       const orgParts = truncateForDatabaseIndex(row.organization || null);
 
-      const duplicateRef = isPhase1Duplicate(status)
-        ? parseDuplicateReferenceFromReason(row.screeningReason || "")
+      const duplicateRef = isPhase1Duplicate(effectiveStatus)
+        ? parseDuplicateReferenceFromReason(effectiveReason)
         : { matchedSourceTenderId: null, matchKind: null };
+      const matchedHistoricalId =
+        historicalPrior?.source_tender_id ||
+        duplicateRef.matchedSourceTenderId ||
+        (isPhase1Duplicate(effectiveStatus) ? id : null);
       const duplicateOfTenderId =
-        duplicateRef.matchedSourceTenderId && isPhase1Duplicate(status)
+        matchedHistoricalId && isPhase1Duplicate(effectiveStatus)
           ? await resolveDuplicateOfTenderId({
               client,
               sourcePortal,
-              matchedSourceTenderId: duplicateRef.matchedSourceTenderId,
+              matchedSourceTenderId: matchedHistoricalId,
               excludeTenderId: existing?.id ?? null,
+              preferredTenderId: historicalPrior?.id ?? null,
             })
           : null;
 
-      const rawMetadata = {
-        ...(existing?.raw_metadata &&
+      const priorRaw =
+        existing?.raw_metadata &&
         typeof existing.raw_metadata === "object" &&
         !Array.isArray(existing.raw_metadata)
-          ? existing.raw_metadata
-          : {}),
+          ? (existing.raw_metadata as Record<string, unknown>)
+          : {};
+      const priorScreeningSource =
+        preserveStatus && priorRaw.screeningSource
+          ? String(priorRaw.screeningSource)
+          : null;
+      const rawMetadata = {
+        ...priorRaw,
         phase1Screening: true,
         screeningSource:
-          options.screeningSource || "CHATGPT_RUN_EXCEL",
-        screeningWorkbook: RUN_SCREENED_FILE,
+          priorScreeningSource ||
+          options.screeningSource ||
+          "CHATGPT_RUN_EXCEL",
+        screeningWorkbook:
+          preserveStatus && priorRaw.screeningWorkbook
+            ? priorRaw.screeningWorkbook
+            : RUN_SCREENED_FILE,
         companyId,
         runDate: options.runDate,
-        screeningStatus: status,
-        screeningReason: row.screeningReason,
+        screeningStatus: effectiveStatus,
+        screeningReason: effectiveReason,
         source: row.source,
         sourceRefs: row.sourceRefs || null,
         tenderCategory: row.tenderCategory || null,
@@ -449,10 +564,13 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         ...(orgParts.truncated
           ? { fullOrganization: String(row.organization || "").trim() }
           : {}),
-        ...(duplicateRef.matchedSourceTenderId
+        ...(matchedHistoricalId
           ? {
-              duplicateOfSourceTenderId: duplicateRef.matchedSourceTenderId,
-              duplicateMatchKind: duplicateRef.matchKind,
+              duplicateOfSourceTenderId: matchedHistoricalId,
+              duplicateMatchKind:
+                duplicateRef.matchKind ||
+                (historicalPrior ? "historical" : null),
+              duplicatePriorScrapedDate: historicalPrior?.scraped_date ?? null,
             }
           : {}),
       };
@@ -475,14 +593,17 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         qualification_status: qualificationStatus,
         category: row.tenderCategory || null,
         project_category: "Other",
-        duplicate_of_source_tender_id: duplicateRef.matchedSourceTenderId,
+        duplicate_of_source_tender_id: matchedHistoricalId,
         duplicate_of_tender_id: duplicateOfTenderId,
-        duplicate_match_kind: duplicateRef.matchKind,
+        duplicate_match_kind:
+          duplicateRef.matchKind ||
+          (historicalPrior ? "historical" : null),
         raw_metadata: rawMetadata,
         metadata_version: 1,
-        content_hash: `phase1-gpt:${sourcePortal}:${id}:${options.runDate}:${status}`,
+        content_hash: `phase1-gpt:${sourcePortal}:${id}:${options.runDate}:${effectiveStatus}`,
         last_seen_at: now,
         supabase_synced_at: now,
+        // Never rewrite another day's scraped_date. Same-day updates keep runDate.
         scraped_date: options.runDate,
         download_status: existing ? undefined : ("DISCOVERED" as const),
         ai_summary_available: existing ? undefined : false,
@@ -491,18 +612,27 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         crawled_at: existing ? undefined : null,
       };
 
-      const alwaysUpdate: Array<keyof typeof incoming> = [
-        "qualification_status",
-        "reference_no",
-        "raw_metadata",
-        "content_hash",
-        "last_seen_at",
-        "supabase_synced_at",
-        "scraped_date",
-        "duplicate_of_source_tender_id",
-        "duplicate_of_tender_id",
-        "duplicate_match_kind",
-      ];
+      const alwaysUpdate: Array<keyof typeof incoming> = preserveStatus
+        ? [
+            "reference_no",
+            "raw_metadata",
+            "content_hash",
+            "last_seen_at",
+            "supabase_synced_at",
+            // scraped_date intentionally NOT in alwaysUpdate — immutable via trigger
+          ]
+        : [
+            "qualification_status",
+            "reference_no",
+            "raw_metadata",
+            "content_hash",
+            "last_seen_at",
+            "supabase_synced_at",
+            "duplicate_of_source_tender_id",
+            "duplicate_of_tender_id",
+            "duplicate_match_kind",
+            // scraped_date intentionally NOT in alwaysUpdate — immutable via trigger
+          ];
 
       const { next, updatedKeys } = mergeNullOnlyRecord(
         existing as Record<string, unknown> | null,
@@ -510,15 +640,19 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         alwaysUpdate as string[],
       );
 
-      // Always force screening fields from GPT Excel / local Phase-1 persist.
-      next.qualification_status = qualificationStatus;
-      next.raw_metadata = rawMetadata;
-      next.scraped_date = options.runDate;
-      if (!updatedKeys.includes("qualification_status")) {
-        updatedKeys.push("qualification_status");
+      // Force screening fields from GPT Excel / Phase-1 unless preserving.
+      if (!preserveStatus) {
+        next.qualification_status = qualificationStatus;
+        if (!updatedKeys.includes("qualification_status")) {
+          updatedKeys.push("qualification_status");
+        }
       }
-      if (!updatedKeys.includes("scraped_date")) {
-        updatedKeys.push("scraped_date");
+      next.raw_metadata = rawMetadata;
+      // Keep existing scraped_date on update; set only for insert path below.
+      if (existing) {
+        next.scraped_date = existing.scraped_date || options.runDate;
+      } else {
+        next.scraped_date = options.runDate;
       }
 
       const fieldLabels: Record<string, string> = {
@@ -543,18 +677,21 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         `[${label}] Status updated:\n${qualificationStatus}`,
       );
 
+      let persistedTenderId: string | null = existing?.id ?? null;
+
       if (existing) {
         const { error: updateError } = await client
           .from("agenttender_tenders")
           .update({ ...next, updated_at: now })
-          .eq("id", existing.id);
+          .eq("id", existing.id)
+          .eq("scraped_date", options.runDate);
         if (updateError) {
           result.errors.push(`${id}: ${updateError.message}`);
           continue;
         }
         result.updated += 1;
       } else {
-        const { error: insertError } = await client
+        const { data: inserted, error: insertError } = await client
           .from("agenttender_tenders")
           .upsert(
             {
@@ -579,9 +716,11 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
               qualification_status: qualificationStatus,
               category: row.tenderCategory || null,
               project_category: "Other",
-              duplicate_of_source_tender_id: duplicateRef.matchedSourceTenderId,
+              duplicate_of_source_tender_id: matchedHistoricalId,
               duplicate_of_tender_id: duplicateOfTenderId,
-              duplicate_match_kind: duplicateRef.matchKind,
+              duplicate_match_kind:
+                duplicateRef.matchKind ||
+                (historicalPrior ? "historical" : null),
               raw_metadata: rawMetadata,
               metadata_version: 1,
               content_hash: incoming.content_hash,
@@ -590,58 +729,69 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
               supabase_synced_at: now,
               scraped_date: options.runDate,
             },
-            { onConflict: "source_portal,source_tender_id" },
-          );
+            {
+              onConflict: "source_portal,source_tender_id,scraped_date",
+            },
+          )
+          .select("id")
+          .maybeSingle();
         if (insertError) {
           result.errors.push(`${id}: ${insertError.message}`);
           continue;
         }
+        persistedTenderId = inserted?.id ? String(inserted.id) : null;
         result.created += 1;
       }
 
-      const qual = qualificationPayloadForStatus(
-        status,
-        row.screeningReason || "",
-      );
-      const upserted = await upsertQualificationResult({
-        sourcePortal,
-        sourceTenderId: existing?.source_tender_id || id,
-        status: qual.status,
-        decisionLabel: qual.decisionLabel,
-        verdict: qual.verdict,
-        reason: qual.reason,
-        requiredAction: qual.requiredAction,
-        confidence: qual.confidence,
-        matchedCriteria: qual.matchedCriteria,
-        failedCriteria: qual.failedCriteria,
-        unclearCriteria: qual.unclearCriteria,
-        missingDocuments: qual.missingDocuments,
-        conditions: [],
-        partnershipRequiredFor: [],
-        partnershipModeAllowed: [],
-        manualReviewRequired: qual.manualReviewRequired,
-        requiresDetailedTenderReview:
-          !isPhase1Duplicate(status) && status !== "GO" && status !== "NO_GO",
-        evidenceFiles: [
-          options.screeningSource || "CHATGPT_RUN_EXCEL",
-          RUN_SCREENED_FILE,
-        ],
-        rawResponse: row.screeningReason,
-        rawResult: rawMetadata,
-        chatUrl: null,
-        promptVersion: PHASE1_SCREENING_POLICY_VERSION,
-        modelName:
-          options.modelName ||
-          (options.screeningSource &&
-          options.screeningSource !== "CHATGPT_RUN_EXCEL"
-            ? options.screeningSource
-            : "chatgpt-project-run-screening"),
-      });
-      if (!upserted.ok) {
-        result.errors.push(
-          `${id}: ${upserted.error || "qualification upsert failed"}`,
+      if (!(preserveStatus && existing)) {
+        const qual = qualificationPayloadForStatus(
+          effectiveStatus,
+          effectiveReason || "",
         );
-        continue;
+        const upserted = await upsertQualificationResult({
+          sourcePortal,
+          sourceTenderId: existing?.source_tender_id || id,
+          scrapedDate: options.runDate,
+          tenderId: persistedTenderId,
+          status: qual.status,
+          decisionLabel: qual.decisionLabel,
+          verdict: qual.verdict,
+          reason: qual.reason,
+          requiredAction: qual.requiredAction,
+          confidence: qual.confidence,
+          matchedCriteria: qual.matchedCriteria,
+          failedCriteria: qual.failedCriteria,
+          unclearCriteria: qual.unclearCriteria,
+          missingDocuments: qual.missingDocuments,
+          conditions: [],
+          partnershipRequiredFor: [],
+          partnershipModeAllowed: [],
+          manualReviewRequired: qual.manualReviewRequired,
+          requiresDetailedTenderReview:
+            !isPhase1Duplicate(effectiveStatus) &&
+            effectiveStatus !== "GO" &&
+            effectiveStatus !== "NO_GO",
+          evidenceFiles: [
+            options.screeningSource || "CHATGPT_RUN_EXCEL",
+            RUN_SCREENED_FILE,
+          ],
+          rawResponse: effectiveReason,
+          rawResult: rawMetadata,
+          chatUrl: null,
+          promptVersion: PHASE1_SCREENING_POLICY_VERSION,
+          modelName:
+            options.modelName ||
+            (options.screeningSource &&
+            options.screeningSource !== "CHATGPT_RUN_EXCEL"
+              ? options.screeningSource
+              : "chatgpt-project-run-screening"),
+        });
+        if (!upserted.ok) {
+          result.errors.push(
+            `${id}: ${upserted.error || "qualification upsert failed"}`,
+          );
+          continue;
+        }
       }
 
       result.stored += 1;

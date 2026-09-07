@@ -83,12 +83,26 @@ export async function upsertTender247Metadata(options: {
 
   try {
     const client = getSupabaseAdminClient();
-    const { data: existing } = await client
+    const scrapedDate = row.scraped_date
+      ? String(row.scraped_date).slice(0, 10)
+      : options.scrapedDate
+        ? String(options.scrapedDate).slice(0, 10)
+        : null;
+
+    let existingQuery = client
       .from(TABLE)
       .select("*")
       .eq("source_portal", SOURCE)
-      .eq("source_tender_id", String(metadata.t247Id))
-      .maybeSingle();
+      .eq("source_tender_id", String(metadata.t247Id));
+    if (scrapedDate && /^\d{4}-\d{2}-\d{2}$/.test(scrapedDate)) {
+      existingQuery = existingQuery.eq("scraped_date", scrapedDate);
+    } else {
+      // Prefer the latest snapshot when scrape date is unknown (ambiguous).
+      existingQuery = existingQuery
+        .order("scraped_date", { ascending: false })
+        .limit(1);
+    }
+    const { data: existing } = await existingQuery.maybeSingle();
 
     // Crawl enriches GPT-Excel rows: fill missing fields only; never wipe screening status.
     const alwaysUpdate: Array<keyof AgenttenderTenderRow> = [
@@ -118,6 +132,8 @@ export async function upsertTender247Metadata(options: {
       ) {
         delete next.qualification_status;
       }
+      // Never move scraped_date across days via metadata sync.
+      delete next.scraped_date;
       payload = {
         ...next,
         source_portal: SOURCE,
@@ -158,7 +174,7 @@ export async function upsertTender247Metadata(options: {
           ...row,
         } satisfies AgenttenderTenderRow,
         {
-          onConflict: "source_portal,source_tender_id",
+          onConflict: "source_portal,source_tender_id,scraped_date",
           ignoreDuplicates: false,
         },
       )
@@ -173,7 +189,7 @@ export async function upsertTender247Metadata(options: {
             ...row,
             download_status: "DB_SYNC_FAILED",
           },
-          { onConflict: "source_portal,source_tender_id" },
+          { onConflict: "source_portal,source_tender_id,scraped_date" },
         );
       } catch {
         // ignore secondary failure
@@ -315,7 +331,7 @@ export async function upsertBidassistMetadata(options: {
           ...row,
         } satisfies AgenttenderTenderRow,
         {
-          onConflict: "source_portal,source_tender_id",
+          onConflict: "source_portal,source_tender_id,scraped_date",
           ignoreDuplicates: false,
         },
       )

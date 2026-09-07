@@ -11,6 +11,10 @@ export type QualificationStatus =
 export type QualificationResultInput = {
   sourcePortal: "TENDER247" | "BIDASSIST";
   sourceTenderId: string;
+  /** Daily snapshot date — required once tenders are unique per scraped_date. */
+  scrapedDate?: string | null;
+  /** Prefer resolving by UUID when the parent row was just inserted/updated. */
+  tenderId?: string | null;
 
   status: QualificationStatus;
   decisionLabel: string;
@@ -81,12 +85,44 @@ export async function upsertQualificationResult(
 
   const client = getSupabaseAdminClient();
 
-  const { data: tender, error: tenderError } = await client
-    .from(TENDERS)
-    .select("id")
-    .eq("source_portal", input.sourcePortal)
-    .eq("source_tender_id", String(input.sourceTenderId))
-    .maybeSingle();
+  let tender: { id: string } | null = null;
+  let tenderError: { message: string } | null = null;
+
+  if (input.tenderId) {
+    const byUuid = await client
+      .from(TENDERS)
+      .select("id")
+      .eq("id", String(input.tenderId))
+      .maybeSingle();
+    tender = byUuid.data ? { id: String(byUuid.data.id) } : null;
+    tenderError = byUuid.error;
+  }
+
+  if (!tender && input.scrapedDate) {
+    const byDay = await client
+      .from(TENDERS)
+      .select("id")
+      .eq("source_portal", input.sourcePortal)
+      .eq("source_tender_id", String(input.sourceTenderId))
+      .eq("scraped_date", String(input.scrapedDate).slice(0, 10))
+      .maybeSingle();
+    tender = byDay.data ? { id: String(byDay.data.id) } : null;
+    tenderError = byDay.error;
+  }
+
+  if (!tender) {
+    // Ambiguous after daily-snapshot uniqueness — prefer most recent scraped_date.
+    const fallback = await client
+      .from(TENDERS)
+      .select("id")
+      .eq("source_portal", input.sourcePortal)
+      .eq("source_tender_id", String(input.sourceTenderId))
+      .order("scraped_date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    tender = fallback.data ? { id: String(fallback.data.id) } : null;
+    tenderError = fallback.error;
+  }
 
   if (tenderError) {
     return {
@@ -140,7 +176,7 @@ export async function upsertQualificationResult(
   const { data, error } = await client
     .from(QUALIFICATIONS)
     .upsert(row, {
-      onConflict: "source_portal,source_tender_id",
+      onConflict: "tender_id",
       ignoreDuplicates: false,
     })
     .select("id, tender_id, status, updated_at")
@@ -163,6 +199,7 @@ export async function upsertQualificationResult(
     input.sourcePortal,
     input.sourceTenderId,
     input.status,
+    { tenderId: String(tender.id) },
   );
   if (!verified.ok) {
     return {
@@ -191,20 +228,30 @@ export async function verifyQualificationResultRow(
   sourcePortal: "TENDER247" | "BIDASSIST",
   sourceTenderId: string,
   expectedStatus?: QualificationStatus,
+  options?: { tenderId?: string | null },
 ): Promise<{ ok: boolean; error: string | null }> {
   if (!isSupabaseConfigured()) {
     return { ok: false, error: "Supabase is not configured" };
   }
 
   const client = getSupabaseAdminClient();
-  const { data, error } = await client
+  // Prefer tender_id: same source_tender_id can have one qual row per scraped_date.
+  let query = client
     .from(QUALIFICATIONS)
     .select(
-      "id, source_portal, source_tender_id, status, raw_response, raw_result",
+      "id, tender_id, source_portal, source_tender_id, status, raw_response, raw_result",
     )
     .eq("source_portal", sourcePortal)
-    .eq("source_tender_id", String(sourceTenderId))
-    .maybeSingle();
+    .eq("source_tender_id", String(sourceTenderId));
+
+  if (options?.tenderId) {
+    query = query.eq("tender_id", String(options.tenderId));
+  } else {
+    // Legacy callers without tender UUID — take the newest row only.
+    query = query.order("qualified_at", { ascending: false }).limit(1);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     return { ok: false, error: error.message };
@@ -217,6 +264,12 @@ export async function verifyQualificationResultRow(
   }
   if (String(data.source_tender_id) !== String(sourceTenderId)) {
     return { ok: false, error: "source_tender_id mismatch" };
+  }
+  if (
+    options?.tenderId &&
+    String(data.tender_id) !== String(options.tenderId)
+  ) {
+    return { ok: false, error: "tender_id mismatch" };
   }
   if (expectedStatus && data.status !== expectedStatus) {
     return { ok: false, error: "status mismatch" };

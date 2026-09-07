@@ -6,6 +6,7 @@ import type { BrowserContext, Locator, Page } from "playwright";
 import { AutomationError } from "../browserUtils.js";
 import type { Logger } from "../logger.js";
 import {
+  dismissTender247AdvanceSearchModal,
   dismissTender247ReminderModal,
   isReminderModalVisible,
 } from "./dismissTender247Interruptions.js";
@@ -121,6 +122,123 @@ async function countLowerRightSvgs(row: Locator): Promise<number> {
   return lowerRight;
 }
 
+async function findDetailHrefControl(
+  row: Locator,
+  t247Id: string,
+): Promise<Locator | null> {
+  const hrefRe = new RegExp(`/auth/tender/${t247Id}(?:/|\\?|$)`, "i");
+  // Include hidden anchors — Tender247 sometimes keeps the portal link off-screen.
+  const links = row.locator('a[href*="/auth/tender/"]');
+  const count = await links.count().catch(() => 0);
+  for (let i = 0; i < count; i += 1) {
+    const link = links.nth(i);
+    const href = (await link.getAttribute("href").catch(() => null)) || "";
+    if (!hrefRe.test(href) && !href.toLowerCase().includes(`/auth/tender/${t247Id}`)) {
+      continue;
+    }
+    if (await isBlacklistedExpansionControl(link)) continue;
+    return link;
+  }
+
+  const loose = row.locator(`a[href*="/auth/tender/${t247Id}"]`).first();
+  if (
+    (await loose.count().catch(() => 0)) > 0 &&
+    !(await isBlacklistedExpansionControl(loose))
+  ) {
+    return loose;
+  }
+  return null;
+}
+
+/**
+ * Recover a detail portal URL from row HTML / data attrs when no visible <a> exists.
+ * Title clicks open Set Reminder on some cards; this is the escape hatch.
+ */
+async function findDetailUrlInRow(
+  row: Locator,
+  t247Id: string,
+): Promise<string | null> {
+  const hrefRe = new RegExp(
+    `(?:https?:\\/\\/[^"'\\s]+)?\\/auth\\/tender\\/${t247Id}\\/([0-9a-f-]{8,})`,
+    "i",
+  );
+
+  const html = (await row.innerHTML().catch(() => "")) || "";
+  const htmlMatch = html.match(hrefRe);
+  if (htmlMatch?.[1]) {
+    return `https://www.tender247.com/auth/tender/${t247Id}/${htmlMatch[1]}`;
+  }
+
+  const fromAttrs = await row
+    .evaluate(
+      (el, id) => {
+        const re = new RegExp(
+          `(?:https?:\\/\\/[^"'\\s]+)?\\/auth\\/tender\\/${id}\\/([0-9a-f-]{8,})`,
+          "i",
+        );
+        const attrs = [
+          "href",
+          "data-href",
+          "data-url",
+          "data-link",
+          "data-tender-url",
+          "data-security-code",
+          "data-security_code",
+        ];
+        const walk = (node: Element): string | null => {
+          for (const attr of attrs) {
+            const val = node.getAttribute(attr);
+            if (!val) continue;
+            if (
+              /security/i.test(attr) &&
+              /^[0-9a-f-]{8,}$/i.test(val.trim())
+            ) {
+              return `https://www.tender247.com/auth/tender/${id}/${val.trim()}`;
+            }
+            const m = val.match(re);
+            if (m?.[1]) {
+              return `https://www.tender247.com/auth/tender/${id}/${m[1]}`;
+            }
+          }
+          for (const child of Array.from(node.children)) {
+            const found = walk(child);
+            if (found) return found;
+          }
+          return null;
+        };
+        return walk(el);
+      },
+      t247Id,
+    )
+    .catch(() => null);
+
+  return fromAttrs || null;
+}
+
+async function openDetailUrlInNewPage(
+  context: BrowserContext,
+  detailUrl: string,
+  logger: ExpansionLog,
+  t247Id: string,
+): Promise<boolean> {
+  try {
+    t247Log(logger, t247Id, `DETAIL_URL_NAVIGATE=${detailUrl}`);
+    const detailPage = await context.newPage();
+    await detailPage.goto(detailUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    });
+    return true;
+  } catch (error) {
+    logger.warn(
+      `DETAIL_URL_NAVIGATE_FAILED=${
+        error instanceof Error ? error.message.slice(0, 160) : String(error)
+      }`,
+    );
+    return false;
+  }
+}
+
 async function findExplicitViewControl(
   row: Locator,
 ): Promise<Locator | null> {
@@ -230,6 +348,21 @@ async function clickControl(control: Locator): Promise<void> {
   }
 }
 
+/**
+ * Click the left portion of the title — right-side action icons (Reminder)
+ * sit next to the title and steal center/right clicks.
+ */
+async function clickTitleAwayFromActions(control: Locator): Promise<void> {
+  const box = await control.boundingBox().catch(() => null);
+  if (box && box.width >= 48 && box.height >= 8) {
+    const x = box.x + Math.min(36, Math.max(8, box.width * 0.18));
+    const y = box.y + box.height / 2;
+    await control.page().mouse.click(x, y);
+    return;
+  }
+  await clickControl(control);
+}
+
 async function expansionLooksVerified(
   page: Page,
   row: Locator,
@@ -269,10 +402,64 @@ export async function expandTender247Row(options: {
   const { page, row, t247Id, logger } = options;
   const pagesBefore = options.context?.pages().length ?? 0;
   t247Log(logger, t247Id, "EXPAND_START");
+  await dismissTender247AdvanceSearchModal(page, logger);
 
   const lowerRight = await countLowerRightSvgs(row);
   logger.info(`TENDER247_LOWER_RIGHT_SVG_CANDIDATES=${lowerRight}`);
   console.log(`TENDER247_LOWER_RIGHT_SVG_CANDIDATES=${lowerRight}`);
+
+  // Prefer a real detail href — title clicks open Set Reminder on some cards.
+  const detailLink = await findDetailHrefControl(row, t247Id);
+  t247Log(
+    logger,
+    t247Id,
+    `DETAIL_HREF_FOUND=${detailLink ? "true" : "false"}`,
+  );
+  if (detailLink) {
+    await clickControl(detailLink);
+    t247Log(logger, t247Id, "DETAIL_HREF_CLICKED=true");
+    if (await isReminderModalVisible(page)) {
+      logger.warn("REMINDER_MODAL_OPENED_UNEXPECTEDLY");
+      await dismissTender247ReminderModal(page, logger);
+      await dismissTender247AdvanceSearchModal(page, logger);
+    } else {
+      const verified = await waitForExpansion(
+        page,
+        row,
+        options.context,
+        pagesBefore,
+      );
+      t247Log(logger, t247Id, `EXPANSION_VERIFIED=${verified}`);
+      t247Log(logger, t247Id, "EXPAND_METHOD=HREF");
+      return {
+        method: "VIEW",
+        titleText: options.titleHint ?? (await readTender247CardTitle(row)),
+      };
+    }
+  }
+
+  // Embedded portal URL in row markup (often no visible <a>) — skip title/Reminder.
+  const embeddedUrl = await findDetailUrlInRow(row, t247Id);
+  t247Log(
+    logger,
+    t247Id,
+    `DETAIL_URL_EMBEDDED=${embeddedUrl ? "true" : "false"}`,
+  );
+  if (embeddedUrl && options.context) {
+    const opened = await openDetailUrlInNewPage(
+      options.context,
+      embeddedUrl,
+      logger,
+      t247Id,
+    );
+    if (opened) {
+      t247Log(logger, t247Id, "EXPAND_METHOD=DETAIL_URL");
+      return {
+        method: "VIEW",
+        titleText: options.titleHint ?? (await readTender247CardTitle(row)),
+      };
+    }
+  }
 
   const explicitView = await findExplicitViewControl(row);
   t247Log(
@@ -350,6 +537,24 @@ async function waitForExpansion(
   return expansionLooksVerified(page, row);
 }
 
+async function resolveFreshTenderRow(
+  page: Page,
+  t247Id: string,
+): Promise<Locator | null> {
+  const idRe = new RegExp(`T247\\s*ID\\s*[-:]?\\s*${t247Id}\\b`, "i");
+  const idText = page.getByText(idRe).first();
+  if (!(await idText.isVisible().catch(() => false))) {
+    return null;
+  }
+  const row = idText.locator(
+    'xpath=ancestor::div[contains(@class,"border") and contains(@class,"w-full")][1]',
+  );
+  if (!(await row.isVisible().catch(() => false))) {
+    return null;
+  }
+  return row;
+}
+
 async function clickTitleFallback(options: {
   page: Page;
   row: Locator;
@@ -359,7 +564,8 @@ async function clickTitleFallback(options: {
   context?: BrowserContext;
   pagesBefore?: number;
 }): Promise<{ method: "TITLE"; titleText: string | null }> {
-  const { page, row, t247Id, logger, titleHint } = options;
+  const { page, t247Id, logger, titleHint } = options;
+  let row = options.row;
   t247Log(logger, t247Id, "TITLE_FALLBACK_START=true");
 
   const found = await findTitleCursorSpan(row, titleHint);
@@ -373,7 +579,7 @@ async function clickTitleFallback(options: {
   t247Log(logger, t247Id, `TITLE_TEXT="${found.text}"`);
   t247Log(logger, t247Id, "TITLE_CURSOR_SPAN_FOUND=true");
 
-  await clickControl(found.locator);
+  await clickTitleAwayFromActions(found.locator);
   t247Log(logger, t247Id, "TITLE_CLICKED=true");
 
   if (await isReminderModalVisible(page)) {
@@ -381,9 +587,124 @@ async function clickTitleFallback(options: {
     console.log("REMINDER_MODAL_OPENED_UNEXPECTEDLY");
     t247Log(logger, t247Id, "REMINDER_MODAL_OPENED_UNEXPECTEDLY");
     await dismissTender247ReminderModal(page, logger);
+    await page.keyboard.press("Escape").catch(() => undefined);
+    await page.waitForTimeout(400);
+    await dismissTender247AdvanceSearchModal(page, logger);
+    if (await isReminderModalVisible(page)) {
+      await dismissTender247ReminderModal(page, logger);
+    }
+
+    // Reminder/overlays detach the original row — re-resolve from T247 ID.
+    const fresh = await resolveFreshTenderRow(page, t247Id);
+    if (fresh) {
+      row = fresh;
+      t247Log(logger, t247Id, "TITLE_FALLBACK_ROW_REFRESHED=true");
+    }
+
     t247Log(logger, t247Id, "TITLE_FALLBACK_RETRY=true");
-    await clickControl(found.locator);
+    let retry = await findTitleCursorSpan(row, titleHint ?? found.text);
+
+    // Prefer clicking a detail href — title click opens Set Reminder on some cards.
+    const href = await findDetailHrefControl(row, t247Id);
+    if (href) {
+      t247Log(logger, t247Id, "TITLE_FALLBACK_CLICK_DETAIL_HREF=true");
+      try {
+        await href.click({ timeout: 8_000, force: true });
+      } catch {
+        await href.evaluate((el: HTMLElement) => el.click());
+      }
+      t247Log(logger, t247Id, "TITLE_CLICKED=true");
+      if (!(await isReminderModalVisible(page))) {
+        const verifiedViaHref = await waitForExpansion(
+          page,
+          row,
+          options.context,
+          options.pagesBefore ?? 0,
+        );
+        t247Log(logger, t247Id, `EXPANSION_VERIFIED=${verifiedViaHref}`);
+        t247Log(logger, t247Id, "EXPAND_METHOD=HREF");
+        return { method: "TITLE", titleText: found.text };
+      }
+      await dismissTender247ReminderModal(page, logger);
+    }
+
+    // No clickable title/href left — navigate via security-code URL embedded in the row.
+    const detailUrl = await findDetailUrlInRow(row, t247Id);
+    if (detailUrl && options.context) {
+      const opened = await openDetailUrlInNewPage(
+        options.context,
+        detailUrl,
+        logger,
+        t247Id,
+      );
+      if (opened) {
+        t247Log(logger, t247Id, "EXPAND_METHOD=DETAIL_URL");
+        return { method: "TITLE", titleText: found.text };
+      }
+    }
+
+    // Prefer clicking the T247 ID label — title click can open Set Reminder.
+    const idLabel = page
+      .getByText(new RegExp(`T247\\s*ID\\s*[-:]?\\s*${t247Id}\\b`, "i"))
+      .first();
+    if (await idLabel.isVisible().catch(() => false)) {
+      t247Log(logger, t247Id, "TITLE_FALLBACK_CLICK_ID_LABEL=true");
+      try {
+        // Modifier click sometimes opens detail instead of Reminder.
+        await idLabel.click({ timeout: 8_000, force: true, modifiers: ["Control"] });
+      } catch {
+        try {
+          await idLabel.click({ timeout: 8_000, force: true });
+        } catch {
+          await idLabel.evaluate((el: HTMLElement) => el.click());
+        }
+      }
+      t247Log(logger, t247Id, "TITLE_CLICKED=true");
+      if (!(await isReminderModalVisible(page))) {
+        const verifiedViaId = await waitForExpansion(
+          page,
+          row,
+          options.context,
+          options.pagesBefore ?? 0,
+        );
+        t247Log(logger, t247Id, `EXPANSION_VERIFIED=${verifiedViaId}`);
+        t247Log(logger, t247Id, "EXPAND_METHOD=TITLE");
+        return { method: "TITLE", titleText: found.text };
+      }
+      await dismissTender247ReminderModal(page, logger);
+    }
+
+    if (!retry) {
+      retry = await findTitleCursorSpan(row, titleHint ?? found.text);
+    }
+    if (!retry) {
+      // Last resort: Ctrl+click original title coords if we still have a span, else fail.
+      if (detailUrl && options.context) {
+        const opened = await openDetailUrlInNewPage(
+          options.context,
+          detailUrl,
+          logger,
+          t247Id,
+        );
+        if (opened) {
+          t247Log(logger, t247Id, "EXPAND_METHOD=DETAIL_URL");
+          return { method: "TITLE", titleText: found.text };
+        }
+      }
+      throw new AutomationError(
+        "TENDER247_TITLE_FALLBACK_NOT_FOUND",
+        `No p > span.cursor-pointer title for T247-${t247Id} after reminder dismiss`,
+      );
+    }
+    try {
+      await clickTitleAwayFromActions(retry.locator);
+    } catch {
+      await retry.locator.evaluate((el: HTMLElement) => el.click());
+    }
     t247Log(logger, t247Id, "TITLE_CLICKED=true");
+    if (await isReminderModalVisible(page)) {
+      await dismissTender247ReminderModal(page, logger);
+    }
   }
 
   const verified = await waitForExpansion(
@@ -393,6 +714,25 @@ async function clickTitleFallback(options: {
     options.pagesBefore ?? 0,
   );
   t247Log(logger, t247Id, `EXPANSION_VERIFIED=${verified}`);
+  if (!verified) {
+    const detailUrl = await findDetailUrlInRow(row, t247Id);
+    if (detailUrl && options.context) {
+      const opened = await openDetailUrlInNewPage(
+        options.context,
+        detailUrl,
+        logger,
+        t247Id,
+      );
+      if (opened) {
+        t247Log(logger, t247Id, "EXPAND_METHOD=DETAIL_URL");
+        return { method: "TITLE", titleText: found.text };
+      }
+    }
+    throw new AutomationError(
+      "TENDER247_EXPANSION_NOT_VERIFIED",
+      `Title click did not open detail for T247-${t247Id}`,
+    );
+  }
   t247Log(logger, t247Id, "EXPAND_METHOD=TITLE");
   return { method: "TITLE", titleText: found.text };
 }

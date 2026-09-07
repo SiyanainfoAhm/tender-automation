@@ -25,6 +25,11 @@ import {
 } from "../dateUtils.js";
 import { ensureDir } from "../fileUtils.js";
 import type { Logger } from "../logger.js";
+import {
+  dismissTender247AdvanceSearchModal,
+  dismissTender247Interruptions,
+  isAdvanceSearchModalVisible,
+} from "./dismissTender247Interruptions.js";
 
 export type Tender247MailDateSelectionResult = {
   requestedIso: string;
@@ -359,14 +364,29 @@ async function dismissOpenCalendar(page: Page): Promise<void> {
   }
 }
 
+async function looksLikeAdvanceSearchControl(candidate: Locator): Promise<boolean> {
+  const blob = [
+    ((await candidate.innerText().catch(() => "")) || "").trim(),
+    (await candidate.getAttribute("aria-label").catch(() => null)) || "",
+    (await candidate.getAttribute("title").catch(() => null)) || "",
+  ]
+    .join(" ")
+    .replace(/\s+/g, " ");
+  return /ADVANCE\s*SEARCH/i.test(blob);
+}
+
 /**
  * Open the real Tender247 datepicker by clicking the Select Mail Date control.
  * Prefer the visible date input, then calendar icon — NEVER fill()/JS value.
+ * Never click ADVANCE SEARCH (opens a drawer that blocks the calendar).
  */
 async function openMailDatePicker(
   page: Page,
   card: Locator,
 ): Promise<Locator> {
+  // Leftover reminder / Advance Search / promo overlays block the calendar portal.
+  await dismissTender247Interruptions(page).catch(() => undefined);
+  await dismissTender247AdvanceSearchModal(page).catch(() => undefined);
   await dismissOpenCalendar(page);
 
   // Build an ordered list of human-like click targets inside the card only.
@@ -387,7 +407,7 @@ async function openMailDatePicker(
     }
   }
 
-  // 2) Calendar / date icons next to the field.
+  // 2) Calendar / date icons next to the field (never bare ADVANCE SEARCH buttons).
   targets.push(
     card
       .locator(
@@ -404,8 +424,6 @@ async function openMailDatePicker(
           "img",
           "i.fa-calendar",
           "i.fa-calendar-alt",
-          "button",
-          '[role="button"]',
         ].join(", "),
       )
       .first(),
@@ -426,16 +444,25 @@ async function openMailDatePicker(
 
   for (const candidate of targets) {
     if (!(await candidate.isVisible().catch(() => false))) continue;
+    if (await looksLikeAdvanceSearchControl(candidate)) continue;
+
+    await dismissTender247AdvanceSearchModal(page).catch(() => undefined);
     await candidate.click({ timeout: 10_000 }).catch(() => undefined);
     // Give the real Tender247 popup time to mount (portal/animation).
     for (let wait = 0; wait < 8; wait += 1) {
       await page.waitForTimeout(250);
+      if (await isAdvanceSearchModalVisible(page)) {
+        // Accidental ADVANCE SEARCH opener — close and try the next target.
+        await dismissTender247AdvanceSearchModal(page).catch(() => undefined);
+        break;
+      }
       const calendar = await findVisibleCalendar(page);
       if (calendar) {
         return calendar;
       }
     }
     // Click did not open a calendar — dismiss any partial UI and try next target.
+    await dismissTender247AdvanceSearchModal(page).catch(() => undefined);
     await dismissOpenCalendar(page);
   }
 
@@ -887,6 +914,10 @@ export async function selectAndVerifyTender247MailDate(options: {
   const expectedLabel = formatIsoToDdMmYyyy(parts.iso);
 
   logLine(logger, `TENDER247_REQUESTED_DATE=${parts.iso}`);
+
+  // Advance Search drawer blocks Select Mail Date / calendar portal.
+  await dismissTender247Interruptions(page).catch(() => undefined);
+  await dismissTender247AdvanceSearchModal(page).catch(() => undefined);
 
   const card = await markSelectMailDateCard(page);
   const beforeValue = await readMailDateInputFromCard(card);

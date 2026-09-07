@@ -5,7 +5,7 @@ import type { AppConfig } from "../config.js";
 import { ensureDir } from "../fileUtils.js";
 import type { Logger } from "../logger.js";
 import { AutomationError } from "../browserUtils.js";
-import { dismissTender247Interruptions } from "../tenderDetails/dismissTender247Interruptions.js";
+import { dismissTender247Interruptions, dismissTender247AdvanceSearchModal } from "../tenderDetails/dismissTender247Interruptions.js";
 import { dismissTender247BlockingOverlays } from "../tenderDetails/dismissPromotionalPopups.js";
 import { dismissTender247SupportChat } from "../tenderDetails/dismissSupportChat.js";
 import { sanitizeFileName, sanitizeT247Id } from "../tenderDetails/tenderFolder.js";
@@ -119,11 +119,31 @@ export interface ProcessLiveTenderOptions {
    * Preferred for kept-pipeline — no search-tender API.
    */
   openViaSingleTenderDirect?: boolean;
+  /**
+   * When true, bypass TENDER247_ALREADY_COMPLETED_SKIP and reopen the detail
+   * page even when local core artifacts look complete.
+   */
+  force?: boolean;
+  /**
+   * AI-summary-first mode: download documents ZIP only when AI Summary is
+   * missing/unavailable after the AI attempt.
+   */
+  documentsOnlyIfAiMissing?: boolean;
+  /**
+   * Allow opening NO_GO / No Bid tenders (AI Summary downloads for every row).
+   */
+  allowNoBidDetailOpen?: boolean;
   recoveryBudgetMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /** ChatGPT Phase-1 screening is authoritative — do not locally drop as NON_IT. */
   phase1ScreeningAuthoritative?: boolean;
+  /**
+   * When set, use this Phase-1 crawl status for open/scrape guards instead of
+   * (or ahead of) the on-disk screened workbook. Used by the Supabase-driven
+   * Verify/May Bid document pipeline.
+   */
+  phase1ScreeningStatusOverride?: string | null;
 }
 
 /**
@@ -168,7 +188,29 @@ export async function processLiveTender(
   logger.info(`[${index}/${total}] START T247-${t247Id}`);
 
   const phase1Decisions = loadPhase1DecisionsFromDisk(dateFolder);
-  if (phase1Decisions) {
+  const overrideStatus = options.phase1ScreeningStatusOverride
+    ? String(options.phase1ScreeningStatusOverride).trim()
+    : "";
+  const resolvedPhase1Status = overrideStatus
+    ? overrideStatus
+    : phase1Decisions
+      ? lookupScreeningDecision(phase1Decisions, t247Id)?.status
+      : undefined;
+
+  if (overrideStatus) {
+    if (options.allowNoBidDetailOpen === true) {
+      logger.info(
+        `[T247 ${t247Id}] PHASE1_STATUS=${overrideStatus} (supabase-queue; allowNoBidDetailOpen)`,
+      );
+      logger.info(`[T247 ${t247Id}] DETAIL_SCRAPE_ALLOWED=true`);
+    } else {
+      assertOpenSingleTenderDetailsAllowed(overrideStatus, t247Id);
+      logger.info(
+        `[T247 ${t247Id}] PHASE1_STATUS=${overrideStatus} (supabase-queue)`,
+      );
+      logger.info(`[T247 ${t247Id}] DETAIL_SCRAPE_ALLOWED=true`);
+    }
+  } else if (phase1Decisions) {
     const decision = lookupScreeningDecision(phase1Decisions, t247Id);
     if (!decision) {
       throw new AutomationError(
@@ -177,7 +219,7 @@ export async function processLiveTender(
       );
     }
     logger.info(`[T247 ${t247Id}] PHASE1_STATUS=${decision.status}`);
-    if (decision.status === "NO_BID") {
+    if (decision.status === "NO_BID" && options.allowNoBidDetailOpen !== true) {
       logger.error(`T247_REFUSING_TO_SCRAPE_NO_BID id=${t247Id}`);
       const folder = path.join(dateFolder, `T247-${t247Id}`);
       if (fs.existsSync(folder)) {
@@ -208,18 +250,37 @@ export async function processLiveTender(
         chatgptSkipped: true,
       };
     }
+    if (decision.status === "NO_BID" && options.allowNoBidDetailOpen === true) {
+      logger.info(
+        `[T247 ${t247Id}] NO_BID_ALLOWED_FOR_AI_SUMMARY=true`,
+      );
+    }
     logger.info(`[T247 ${t247Id}] DETAIL_SCRAPE_ALLOWED=true`);
   }
 
   // -------- LEVEL A: skip reopen when core artifacts are ready and AI is
   // present or has already reached an explicit terminal failure --------
   let resume = inspectTenderResumeState(dateFolder, t247Id);
-  if (isTenderSafeToSkipReopen(resume.tenderFolder, t247Id)) {
+  if (
+    !options.force &&
+    isTenderSafeToSkipReopen(resume.tenderFolder, t247Id)
+  ) {
     const artifacts = inspectTenderArtifactState(resume.tenderFolder, t247Id);
     const aiStage = resolveAiSummaryStage({
       tenderDir: resume.tenderFolder,
       aiSummaryValid: artifacts.aiSummaryValid,
     });
+    // AI-summary-first: never skip reopen while local AI PDF is missing.
+    // Queue membership already means DB ai_summary_url is empty — coreReady /
+    // UNAVAILABLE must not prevent another AI attempt.
+    if (
+      options.documentsOnlyIfAiMissing === true &&
+      !artifacts.aiSummaryValid
+    ) {
+      logger.info(
+        `TENDER247_SKIP_BYPASS_AI_SUMMARY_MISSING=T247-${t247Id} localStage=${aiStage}`,
+      );
+    } else {
     logger.info(`TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id}`);
     if (!artifacts.aiSummaryValid && isAiSummaryTerminalFailure(aiStage)) {
       t247Event(logger, t247Id, "AI_SUMMARY_DOWNLOAD_FAILED");
@@ -258,6 +319,34 @@ export async function processLiveTender(
       zipPath = resume.zipPath;
       zipSize = fs.statSync(resume.zipPath).size;
     }
+    // Still persist Azure URLs when local artifacts are ready (document pipeline).
+    // Existing URLs are preserved if a retry upload fails.
+    if (fs.existsSync(resume.tenderFolder)) {
+      try {
+        const runDate =
+          getActiveTender247RunContext()?.requestedDate ??
+          requestedDateFromDateFolderSafe(dateFolder) ??
+          requestedDateFromDateFolder(dateFolder);
+        const artifactUpload = await uploadTenderArtifactsAndPersistUrls({
+          sourcePortal: "TENDER247",
+          sourceTenderId: t247Id,
+          tenderFolder: resume.tenderFolder,
+          runDate,
+          logger,
+        });
+        logger.info(`ARTIFACT_UPLOAD_SUCCESS=${artifactUpload.uploaded}`);
+        logger.info(`ARTIFACT_UPLOAD_FAILED=${artifactUpload.failed}`);
+        logger.info(`ARTIFACT_UPLOAD_SKIPPED=${artifactUpload.skipped}`);
+      } catch (uploadError) {
+        logger.warn(
+          `ARTIFACT_UPLOAD_FAILED_BATCH=${
+            uploadError instanceof Error
+              ? uploadError.message
+              : String(uploadError)
+          }`,
+        );
+      }
+    }
     if (
       artifacts.complete &&
       !config.keepUnzippedTenderFolders &&
@@ -295,6 +384,10 @@ export async function processLiveTender(
         !artifacts.aiSummaryValid &&
         isAiSummaryTerminalFailure(aiStage),
     });
+    }
+  }
+  if (options.force && isTenderSafeToSkipReopen(resume.tenderFolder, t247Id)) {
+    logger.info(`TENDER247_FORCE_BYPASS_COMPLETION_SKIP=T247-${t247Id}`);
   }
 
   // -------- LEVEL B: partial folder resume without opening if already complete enough --------
@@ -456,9 +549,8 @@ export async function processLiveTender(
 
   // Need live detail page for missing steps
   try {
-    if (phase1Decisions) {
-      const decision = lookupScreeningDecision(phase1Decisions, t247Id);
-      assertOpenSingleTenderDetailsAllowed(decision?.status, t247Id);
+    if (resolvedPhase1Status && options.allowNoBidDetailOpen !== true) {
+      assertOpenSingleTenderDetailsAllowed(resolvedPhase1Status, t247Id);
     }
     await closeExtraTender247DetailPages(context, listPage);
     assertSingleTender247DetailPage(context, listPage, logger);
@@ -477,9 +569,8 @@ export async function processLiveTender(
         config,
         logger,
         dateFolder,
-        phase1ScreeningStatus: phase1Decisions
-          ? lookupScreeningDecision(phase1Decisions, t247Id)?.status
-          : undefined,
+        phase1ScreeningStatus: resolvedPhase1Status,
+        allowNoBidDetailOpen: options.allowNoBidDetailOpen === true,
       });
       detailPage = resolved.detailPage;
       titleHint = options.titleHint ?? resolved.item.listTitle;
@@ -558,7 +649,6 @@ export async function processLiveTender(
     logger.info("OPENING_DETAIL");
     logger.info("DETAIL_PAGE_READY");
     logger.info("T247_DETAIL_PAGE_OPENED=true");
-    t247Event(logger, t247Id, "DETAIL_OPENED");
     assertSingleTender247DetailPage(context, listPage, logger);
 
     const portalUrl = securityCode
@@ -566,6 +656,9 @@ export async function processLiveTender(
       : detailPage.url();
 
     await verifyCurrentTenderId(detailPage, t247Id, logger);
+    // Only after the detail page is confirmed for the requested ID.
+    t247Event(logger, t247Id, "DETAIL_OPENED");
+    logger.info(`DETAIL_OPENED id=${t247Id}`);
 
     // Minimum metadata first (in-memory / Supabase / legacy — never permanent metadata.json)
     logger.info("METADATA_CAPTURE_START");
@@ -739,6 +832,7 @@ export async function processLiveTender(
           }),
         ),
         skipAllDocuments: resume.allDocumentsValid,
+        documentsOnlyIfAiMissing: options.documentsOnlyIfAiMissing === true,
         keepDebugFiles: config.keepDebugFiles,
         documentStage,
       });
@@ -773,6 +867,13 @@ export async function processLiveTender(
           `TENDER247_DOCUMENT_ARCHIVE_DOWNLOADED=${allDocumentsPath}`,
         );
         logger.info("TENDER247_DOCUMENT_ARCHIVE_VALID=true");
+      } else if (
+        options.documentsOnlyIfAiMissing === true &&
+        downloads.aiSummarySkipped === false &&
+        downloads.aiSummaryStatus === "complete"
+      ) {
+        lastCompletedStep = "ai_summary";
+        logger.info("DOCUMENT_DOWNLOAD_SKIPPED_AI_PRESENT=true");
       } else {
         logger.warn(`TENDER247_DOCUMENT_DOWNLOAD_FAILED=T247-${t247Id}`);
         hardError =
@@ -862,6 +963,12 @@ export async function processLiveTender(
             aiSummaryValid: current.aiSummaryValid,
           });
           if (current.ready) return;
+          if (
+            options.documentsOnlyIfAiMissing === true &&
+            current.aiSummaryValid
+          ) {
+            return;
+          }
           await downloadRequiredTenderFiles({
             detailPage,
             context,
@@ -877,33 +984,57 @@ export async function processLiveTender(
             logger,
             skipAiSummary: shouldSkipAiSummaryRetry(current.aiSummaryValid, aiStage),
             skipAllDocuments: current.documentsZipValid,
+            documentsOnlyIfAiMissing: options.documentsOnlyIfAiMissing === true,
             keepDebugFiles: config.keepDebugFiles,
             documentStage,
           });
         };
-        lastGate = await runFinalTenderAdvanceGate({
-          tenderDir: resume.tenderFolder,
-          t247Id,
-          logger,
-          recoveryBudgetMs: options.recoveryBudgetMs,
-          now: options.now,
-          sleep: options.sleep,
-          retryAi: retryMissing,
-          retryDocuments: retryMissing,
-        });
-        terminalKind = lastGate.ready
-          ? "complete"
-          : lastGate.pendingTimeout
-            ? "pending_timeout"
-            : "none";
-        assertCanCloseAfterFinalGate(t247Id, lastGate);
+        const preGate = inspectTenderArtifactState(resume.tenderFolder, t247Id);
+        if (
+          options.documentsOnlyIfAiMissing === true &&
+          preGate.aiSummaryValid
+        ) {
+          logger.info("FINAL_GATE_SKIPPED_AI_SUMMARY_PRESENT=true");
+          terminalKind = "complete";
+        } else {
+          lastGate = await runFinalTenderAdvanceGate({
+            tenderDir: resume.tenderFolder,
+            t247Id,
+            logger,
+            recoveryBudgetMs: options.recoveryBudgetMs,
+            now: options.now,
+            sleep: options.sleep,
+            retryAi: retryMissing,
+            retryDocuments: retryMissing,
+          });
+          terminalKind = lastGate.ready
+            ? "complete"
+            : lastGate.pendingTimeout
+              ? "pending_timeout"
+              : "none";
+          assertCanCloseAfterFinalGate(t247Id, lastGate);
+        }
       }
       if (detailPage && !detailPage.isClosed()) {
         await verifyCurrentTenderId(detailPage, t247Id, logger).catch(() => undefined);
         t247Event(logger, t247Id, "DETAIL_CLOSE_START");
         logger.info("DETAIL_CLOSE_START");
-        await detailPage.close({ runBeforeUnload: false });
-        logger.info(`DETAIL_TAB_CLOSED T247-${t247Id}`);
+        if (detailPage === listPage) {
+          // Same-tab open: never close the list page; return to the tender list.
+          const listUrl =
+            config.tender247Url?.trim() ||
+            "https://www.tender247.com/auth/tender";
+          await listPage
+            .goto(listUrl, {
+              waitUntil: "domcontentloaded",
+              timeout: config.pageTimeoutMs,
+            })
+            .catch(() => undefined);
+          logger.info(`DETAIL_SAME_TAB_RETURNED_TO_LIST T247-${t247Id}`);
+        } else {
+          await detailPage.close({ runBeforeUnload: false });
+          logger.info(`DETAIL_TAB_CLOSED T247-${t247Id}`);
+        }
         logger.info("T247_DETAIL_PAGE_CLOSED=true");
         t247Event(logger, t247Id, "DETAIL_CLOSED");
       }
@@ -927,6 +1058,11 @@ export async function processLiveTender(
     }
     if (!listPage.isClosed()) {
       await listPage.bringToFront().catch(() => undefined);
+      // Closing detail / failed expand can leave Advance Search open on the list.
+      await dismissForTenderPage(listPage, logger, config).catch(() => undefined);
+      await dismissTender247AdvanceSearchModal(listPage, logger).catch(
+        () => undefined,
+      );
     }
     t247Event(
       logger,
