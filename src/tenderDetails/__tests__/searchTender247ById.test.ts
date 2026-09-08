@@ -118,5 +118,37 @@ test("processSurvivors recovers list UI between tenders after failure", () => {
   );
   assert.match(src, /recoverListPageBetweenTenders/);
   assert.match(src, /T247_LIST_RECOVER/);
+  assert.match(src, /T247_LIST_RECOVER_MAIL_DATE_OK/);
+  assert.match(src, /T247_LIST_RECOVER_RETURN_DASHBOARD/);
   assert.match(src, /continuing to next tender/);
+});
+
+test("openSingleTenderDirectly skips calendar when mail date already matches", () => {
+  const src = fs.readFileSync(
+    path.join(root, "src/tenderDetails/openSingleTenderDirectly.ts"),
+    "utf8",
+  );
+  assert.match(src, /TENDER247_DETAIL_MAIL_DATE_OK/);
+  assert.match(src, /TENDER247_DETAIL_RETURN_DASHBOARD/);
+  assert.match(src, /mail-date-card-missing/);
+});
+
+test("openSingleTenderDirectly prefers API detail URL and recovers list expand", () => {
+  const src = fs.readFileSync(
+    path.join(root, "src/tenderDetails/openSingleTenderDirectly.ts"),
+    "utf8",
+  );
+  assert.match(src, /EXPAND_PREFER_API_DETAIL_URL/);
+  assert.match(src, /EXPAND_STILL_ON_LIST/);
+  assert.match(src, /openViaSecurityCode/);
+});
+
+test("expansion verification requires height growth not absolute 220px", () => {
+  const src = fs.readFileSync(
+    path.join(root, "src/tenderDetails/tender247Expansion.ts"),
+    "utf8",
+  );
+  assert.match(src, /beforeHeight \+ 80/);
+  assert.match(src, /EXPAND_BEFORE_HEIGHT/);
+  assert.doesNotMatch(src, /rowBox\.height > 220/);
 });

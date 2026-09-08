@@ -11,6 +11,10 @@ import { resolveTenderSortColumn } from "@/lib/tender-sort";
 import { qualificationStatusesForFilter, type TenderStatus } from "@/lib/tender-status";
 import type { TenderFilters } from "@/lib/validations";
 import {
+  buildTenderSearchOrFilter,
+  shouldRunTenderSearch,
+} from "@/lib/tender-search";
+import {
   normalizeTenderCity,
   stripLocationDecorators,
   uniqueNormalizedCities,
@@ -221,7 +225,7 @@ function applyQuickDate(
 
 export async function listTenders(
   filters: TenderFilters,
-  overrides?: { page?: number; pageSize?: number },
+  overrides?: { page?: number; pageSize?: number; includeCount?: boolean },
 ): Promise<{
   rows: WebTenderListRow[];
   total: number;
@@ -233,15 +237,20 @@ export async function listTenders(
   const pageSize = overrides?.pageSize ?? filters.pageSize;
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
+  // Exact counts are relatively expensive; callers may set includeCount=false
+  // when paginating with a cached total (UI page>1). Export always counts.
+  const includeCount = overrides?.includeCount ?? true;
 
   const sortCol =
     SORTABLE[filters.sortBy] || resolveTenderSortColumn(filters.sortBy);
   const ascending = filters.sortDir === "asc";
   const dateBounds = applyQuickDate(filters);
 
-  let query = supabase
-    .from("agenttender_web_tender_list")
-    .select(WEB_TENDER_LIST_SELECT, { count: "exact" });
+  let query = includeCount
+    ? supabase
+        .from("agenttender_web_tender_list")
+        .select(WEB_TENDER_LIST_SELECT, { count: "exact" })
+    : supabase.from("agenttender_web_tender_list").select(WEB_TENDER_LIST_SELECT);
 
   if (filters.source && filters.source !== "ALL") {
     query = query.eq("source_portal", filters.source);
@@ -459,24 +468,10 @@ export async function listTenders(
     query = query.lte("closing_date", closingFilter.lte);
   }
 
-  if (filters.q?.trim()) {
-    const q = escapePostgrestSearchTerm(filters.q.trim());
+  if (shouldRunTenderSearch(filters.q)) {
+    const q = escapePostgrestSearchTerm(filters.q!);
     if (q) {
-      query = query.or(
-        [
-          `title.ilike.%${q}%`,
-          `source_tender_id.ilike.%${q}%`,
-          `reference_no.ilike.%${q}%`,
-          `folder_id.ilike.%${q}%`,
-          `organization.ilike.%${q}%`,
-          `authority.ilike.%${q}%`,
-          `department.ilike.%${q}%`,
-          `city.ilike.%${q}%`,
-          `state.ilike.%${q}%`,
-          `category.ilike.%${q}%`,
-          `project_category.ilike.%${q}%`,
-        ].join(","),
-      );
+      query = query.or(buildTenderSearchOrFilter(q));
     }
   }
 
@@ -502,7 +497,8 @@ export async function listTenders(
 
   return {
     rows: (data || []) as unknown as WebTenderListRow[],
-    total: result.count ?? 0,
+    // -1 signals "count not computed"; clients should keep the prior total.
+    total: includeCount ? (result.count ?? 0) : -1,
     page,
     pageSize,
   };
@@ -667,30 +663,45 @@ function quoteOrFilterValue(value: string): string {
   return `"${value.replace(/"/g, '\\"')}"`;
 }
 
-/**
- * Map a user-selected display city to raw DB city/location_text values that
- * normalize to the same city (handles legacy dirty rows without a migration).
- */
-async function resolveCityFilterValues(
-  selectedCity: string,
-): Promise<
+type CityFilterResolved =
   | { kind: "empty" }
   | {
       kind: "in";
       cities: string[];
       locationTexts: string[];
       states: string[];
-    }
-> {
+    };
+
+const cityFilterCache = new Map<string, CityFilterResolved>();
+
+/**
+ * Map a user-selected display city to raw DB city/location_text values that
+ * normalize to the same city (handles legacy dirty rows without a migration).
+ * Prefetches only rows that already look like the selected city (ilike),
+ * instead of scanning thousands of unrelated tenders.
+ */
+async function resolveCityFilterValues(
+  selectedCity: string,
+): Promise<CityFilterResolved> {
   const target = normalizeTenderCity(selectedCity);
   if (!target) return { kind: "empty" };
 
+  const cacheKey = target.toLowerCase();
+  const cached = cityFilterCache.get(cacheKey);
+  if (cached) return cached;
+
   const supabase = getServerSupabase();
+  const pattern = escapePostgrestSearchTerm(target);
+  if (!pattern) return { kind: "empty" };
+
   const data = assertSupabaseOk(
     await supabase
       .from("agenttender_tenders")
       .select("city, state, location_text")
-      .limit(5000),
+      .or(
+        `city.ilike.%${pattern}%,location_text.ilike.%${pattern}%,state.ilike.%${pattern}%`,
+      )
+      .limit(500),
     {
       queryName: "resolveCityFilterValues",
       selectedColumns: "city, state, location_text",
@@ -714,21 +725,27 @@ async function resolveCityFilterValues(
     const stateRaw = String(row.state || "").trim();
     if (cityRaw) cities.add(cityRaw);
     if (locationRaw) locationTexts.add(locationRaw);
-    if (stateRaw && normalizeTenderCity(stateRaw)?.toLowerCase() === target.toLowerCase()) {
+    if (
+      stateRaw &&
+      normalizeTenderCity(stateRaw)?.toLowerCase() === target.toLowerCase()
+    ) {
       states.add(stateRaw);
     }
     cities.add(target);
   }
 
-  if (cities.size === 0 && locationTexts.size === 0 && states.size === 0) {
-    return { kind: "empty" };
-  }
-  return {
-    kind: "in",
-    cities: [...cities],
-    locationTexts: [...locationTexts],
-    states: [...states],
-  };
+  const resolved: CityFilterResolved =
+    cities.size === 0 && locationTexts.size === 0 && states.size === 0
+      ? { kind: "empty" }
+      : {
+          kind: "in",
+          cities: [...cities],
+          locationTexts: [...locationTexts],
+          states: [...states],
+        };
+
+  cityFilterCache.set(cacheKey, resolved);
+  return resolved;
 }
 
 async function listSubmittedTenderIds(): Promise<string[]> {

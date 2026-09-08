@@ -26,10 +26,30 @@ test("ai-summary pipeline uses search-by-ID and documentsOnlyIfAiMissing", () =>
   assert.match(src, /persistGptScreenedWorkbookToDatabase/);
   assert.match(src, /listAiSummaryQueueForDate/);
   assert.match(src, /ai_summary_url/);
+  assert.match(src, /skippedLocalArtifacts/);
+  assert.match(src, /AI_SUMMARY_PIPELINE_SKIP_LOCAL/);
+  assert.match(src, /hasAiSummaryOrDocumentsLocally|inspectTenderArtifactState/);
   assert.match(src, /INVALID_ACCOUNT_FLAG/);
   assert.doesNotMatch(
     src,
     /crawl !== "VERIFY" && crawl !== "MAY_BID" && crawl !== "WILL_BID"/,
+  );
+});
+
+test("processTender skips AI-summary reopen when local AI or docs exist", () => {
+  const src = fs.readFileSync(
+    path.join(root, "src/tender247Batch/processTender.ts"),
+    "utf8",
+  );
+  assert.match(src, /aiSummaryPipelineLocalDone/);
+  assert.match(src, /local_ai_or_docs/);
+  assert.doesNotMatch(src, /TENDER247_SKIP_BYPASS_AI_SUMMARY_MISSING/);
+  assert.match(
+    fs.readFileSync(
+      path.join(root, "src/tender247Batch/tenderArtifactState.ts"),
+      "utf8",
+    ),
+    /hasAiSummaryOrDocumentsLocally/,
   );
 });
 

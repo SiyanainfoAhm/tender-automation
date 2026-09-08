@@ -39,6 +39,7 @@ import {
 import { waitForAllActiveDownloads } from "../tenderDetails/downloadHelpers.js";
 import { verifyCurrentTenderId } from "./verifyCurrentTenderId.js";
 import {
+  hasAiSummaryOrDocumentsLocally,
   inspectTenderArtifactState,
   isTenderSafeToSkipReopen,
   pendingTimeoutReasonFromState,
@@ -258,30 +259,27 @@ export async function processLiveTender(
     logger.info(`[T247 ${t247Id}] DETAIL_SCRAPE_ALLOWED=true`);
   }
 
-  // -------- LEVEL A: skip reopen when core artifacts are ready and AI is
-  // present or has already reached an explicit terminal failure --------
+  // -------- LEVEL A: skip reopen when local artifacts already satisfy the run --------
   let resume = inspectTenderResumeState(dateFolder, t247Id);
-  if (
-    !options.force &&
-    isTenderSafeToSkipReopen(resume.tenderFolder, t247Id)
-  ) {
-    const artifacts = inspectTenderArtifactState(resume.tenderFolder, t247Id);
+  const localArtifacts = inspectTenderArtifactState(resume.tenderFolder, t247Id);
+  // AI-summary-first: skip search/expand when AI PDF or docs zip already exists.
+  const aiSummaryPipelineLocalDone =
+    options.documentsOnlyIfAiMissing === true &&
+    (localArtifacts.aiSummaryValid || localArtifacts.documentsZipValid);
+  const classicCoreDone =
+    options.documentsOnlyIfAiMissing !== true &&
+    isTenderSafeToSkipReopen(resume.tenderFolder, t247Id);
+  if (!options.force && (aiSummaryPipelineLocalDone || classicCoreDone)) {
+    const artifacts = localArtifacts;
     const aiStage = resolveAiSummaryStage({
       tenderDir: resume.tenderFolder,
       aiSummaryValid: artifacts.aiSummaryValid,
     });
-    // AI-summary-first: never skip reopen while local AI PDF is missing.
-    // Queue membership already means DB ai_summary_url is empty — coreReady /
-    // UNAVAILABLE must not prevent another AI attempt.
-    if (
-      options.documentsOnlyIfAiMissing === true &&
-      !artifacts.aiSummaryValid
-    ) {
-      logger.info(
-        `TENDER247_SKIP_BYPASS_AI_SUMMARY_MISSING=T247-${t247Id} localStage=${aiStage}`,
-      );
-    } else {
-    logger.info(`TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id}`);
+    logger.info(
+      aiSummaryPipelineLocalDone
+        ? `TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id} reason=local_ai_or_docs ai=${artifacts.aiSummaryValid} docs=${artifacts.documentsZipValid}`
+        : `TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id}`,
+    );
     if (!artifacts.aiSummaryValid && isAiSummaryTerminalFailure(aiStage)) {
       t247Event(logger, t247Id, "AI_SUMMARY_DOWNLOAD_FAILED");
       t247Event(logger, t247Id, "AI_SUMMARY_NON_BLOCKING=true");
@@ -384,10 +382,18 @@ export async function processLiveTender(
         !artifacts.aiSummaryValid &&
         isAiSummaryTerminalFailure(aiStage),
     });
-    }
   }
   if (options.force && isTenderSafeToSkipReopen(resume.tenderFolder, t247Id)) {
     logger.info(`TENDER247_FORCE_BYPASS_COMPLETION_SKIP=T247-${t247Id}`);
+  }
+  if (
+    options.force &&
+    options.documentsOnlyIfAiMissing === true &&
+    hasAiSummaryOrDocumentsLocally(resume.tenderFolder, t247Id)
+  ) {
+    logger.info(
+      `TENDER247_FORCE_BYPASS_LOCAL_AI_OR_DOCS_SKIP=T247-${t247Id}`,
+    );
   }
 
   // -------- LEVEL B: partial folder resume without opening if already complete enough --------

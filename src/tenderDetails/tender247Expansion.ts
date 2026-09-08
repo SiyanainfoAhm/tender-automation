@@ -366,18 +366,29 @@ async function clickTitleAwayFromActions(control: Locator): Promise<void> {
 async function expansionLooksVerified(
   page: Page,
   row: Locator,
+  beforeHeight?: number | null,
 ): Promise<boolean> {
   if ((await row.getAttribute("data-expanded").catch(() => null)) === "true") {
     return true;
   }
+  // Require real growth vs pre-click height. Absolute height>220 is a false
+  // positive — search-result cards are often already ~222px tall when collapsed.
   const rowBox = await row.boundingBox().catch(() => null);
-  if (rowBox && rowBox.height > 220) {
+  if (
+    rowBox &&
+    beforeHeight != null &&
+    Number.isFinite(beforeHeight) &&
+    beforeHeight > 0 &&
+    rowBox.height >= beforeHeight + 80
+  ) {
     return true;
   }
   const markers = [
     page.getByText(/^Brief$/i).first(),
     page.getByText(/^Description$/i).first(),
     page.getByText(/Submission\s*Date/i).first(),
+    page.getByText(/AI\s*Summary/i).first(),
+    page.getByRole("button", { name: /download\s*all|all\s*documents/i }).first(),
   ];
   for (const marker of markers) {
     if (await marker.isVisible().catch(() => false)) {
@@ -401,7 +412,12 @@ export async function expandTender247Row(options: {
 }): Promise<{ method: Tender247ExpansionMethod; titleText: string | null }> {
   const { page, row, t247Id, logger } = options;
   const pagesBefore = options.context?.pages().length ?? 0;
+  const beforeHeight =
+    (await row.boundingBox().catch(() => null))?.height ?? null;
   t247Log(logger, t247Id, "EXPAND_START");
+  if (beforeHeight != null) {
+    t247Log(logger, t247Id, `EXPAND_BEFORE_HEIGHT=${Math.round(beforeHeight)}`);
+  }
   await dismissTender247AdvanceSearchModal(page, logger);
 
   const lowerRight = await countLowerRightSvgs(row);
@@ -428,13 +444,16 @@ export async function expandTender247Row(options: {
         row,
         options.context,
         pagesBefore,
+        beforeHeight,
       );
       t247Log(logger, t247Id, `EXPANSION_VERIFIED=${verified}`);
-      t247Log(logger, t247Id, "EXPAND_METHOD=HREF");
-      return {
-        method: "VIEW",
-        titleText: options.titleHint ?? (await readTender247CardTitle(row)),
-      };
+      if (verified) {
+        t247Log(logger, t247Id, "EXPAND_METHOD=HREF");
+        return {
+          method: "VIEW",
+          titleText: options.titleHint ?? (await readTender247CardTitle(row)),
+        };
+      }
     }
   }
 
@@ -485,6 +504,7 @@ export async function expandTender247Row(options: {
         logger,
         context: options.context,
         pagesBefore,
+        beforeHeight,
       });
     }
     const verified = await waitForExpansion(
@@ -492,13 +512,17 @@ export async function expandTender247Row(options: {
       row,
       options.context,
       pagesBefore,
+      beforeHeight,
     );
     t247Log(logger, t247Id, `EXPANSION_VERIFIED=${verified}`);
-    t247Log(logger, t247Id, "EXPAND_METHOD=VIEW");
-    return {
-      method: "VIEW",
-      titleText: options.titleHint ?? (await readTender247CardTitle(row)),
-    };
+    if (verified) {
+      t247Log(logger, t247Id, "EXPAND_METHOD=VIEW");
+      return {
+        method: "VIEW",
+        titleText: options.titleHint ?? (await readTender247CardTitle(row)),
+      };
+    }
+    t247Log(logger, t247Id, "EXPAND_VIEW_NOT_VERIFIED=true");
   }
 
   logger.info("TENDER247_TITLE_FALLBACK_START=true");
@@ -512,6 +536,7 @@ export async function expandTender247Row(options: {
     logger,
     context: options.context,
     pagesBefore,
+    beforeHeight,
   });
 }
 
@@ -520,21 +545,26 @@ async function waitForExpansion(
   row: Locator,
   context?: BrowserContext,
   pagesBefore = 0,
+  beforeHeight?: number | null,
 ): Promise<boolean> {
-  const deadline = Date.now() + 400;
+  const deadline = Date.now() + 2_500;
   while (Date.now() < deadline) {
-    if (await expansionLooksVerified(page, row)) {
+    if (await expansionLooksVerified(page, row, beforeHeight)) {
       return true;
     }
     if (context && context.pages().length > pagesBefore) {
       return true;
     }
-    await page.waitForTimeout(50);
+    const url = page.url();
+    if (/security_code=|\/tender\/\d+/i.test(url) && !/\/auth\/tender\/?(\?|$)/i.test(url)) {
+      return true;
+    }
+    await page.waitForTimeout(100);
   }
   if (context && context.pages().length > pagesBefore) {
     return true;
   }
-  return expansionLooksVerified(page, row);
+  return expansionLooksVerified(page, row, beforeHeight);
 }
 
 async function resolveFreshTenderRow(
@@ -563,9 +593,14 @@ async function clickTitleFallback(options: {
   logger: ExpansionLog;
   context?: BrowserContext;
   pagesBefore?: number;
+  beforeHeight?: number | null;
 }): Promise<{ method: "TITLE"; titleText: string | null }> {
   const { page, t247Id, logger, titleHint } = options;
   let row = options.row;
+  const beforeHeight =
+    options.beforeHeight ??
+    (await row.boundingBox().catch(() => null))?.height ??
+    null;
   t247Log(logger, t247Id, "TITLE_FALLBACK_START=true");
 
   const found = await findTitleCursorSpan(row, titleHint);
@@ -620,10 +655,13 @@ async function clickTitleFallback(options: {
           row,
           options.context,
           options.pagesBefore ?? 0,
+          beforeHeight,
         );
         t247Log(logger, t247Id, `EXPANSION_VERIFIED=${verifiedViaHref}`);
-        t247Log(logger, t247Id, "EXPAND_METHOD=HREF");
-        return { method: "TITLE", titleText: found.text };
+        if (verifiedViaHref) {
+          t247Log(logger, t247Id, "EXPAND_METHOD=HREF");
+          return { method: "TITLE", titleText: found.text };
+        }
       }
       await dismissTender247ReminderModal(page, logger);
     }
@@ -666,10 +704,13 @@ async function clickTitleFallback(options: {
           row,
           options.context,
           options.pagesBefore ?? 0,
+          beforeHeight,
         );
         t247Log(logger, t247Id, `EXPANSION_VERIFIED=${verifiedViaId}`);
-        t247Log(logger, t247Id, "EXPAND_METHOD=TITLE");
-        return { method: "TITLE", titleText: found.text };
+        if (verifiedViaId) {
+          t247Log(logger, t247Id, "EXPAND_METHOD=TITLE");
+          return { method: "TITLE", titleText: found.text };
+        }
       }
       await dismissTender247ReminderModal(page, logger);
     }
@@ -712,6 +753,7 @@ async function clickTitleFallback(options: {
     row,
     options.context,
     options.pagesBefore ?? 0,
+    beforeHeight,
   );
   t247Log(logger, t247Id, `EXPANSION_VERIFIED=${verified}`);
   if (!verified) {

@@ -132,6 +132,16 @@ export async function upsertTender247Metadata(options: {
       ) {
         delete next.qualification_status;
       }
+      // Preserve ChatGPT tender category / project category when already set.
+      if (existing.category && String(existing.category).trim()) {
+        delete next.category;
+      }
+      if (
+        existing.project_category &&
+        String(existing.project_category).trim()
+      ) {
+        delete next.project_category;
+      }
       // Never move scraped_date across days via metadata sync.
       delete next.scraped_date;
       payload = {

@@ -39,15 +39,17 @@ export function AppShell({
     document.documentElement.classList.remove("dark");
   }, []);
 
-  // Live header search → tenders list (debounced). Skip while ⌘K palette is open
-  // so focus/typing there does not fight navigation.
+  // Live header search → tenders list (debounced, min 3 chars).
+  // Skip while ⌘K palette is open so focus/typing there does not fight navigation.
   React.useEffect(() => {
     if (commandOpen) return;
     const q = searchValue.trim();
+    if (q.length > 0 && q.length < 3) return;
     const handle = window.setTimeout(() => {
       if (!q) return;
+      if (q.length < 3) return;
       router.push(`/tenders?q=${encodeURIComponent(q)}`);
-    }, 200);
+    }, 450);
     return () => window.clearTimeout(handle);
   }, [searchValue, router, commandOpen]);
 
@@ -91,6 +93,7 @@ export function AppShell({
                 router.push("/tenders");
                 return;
               }
+              if (next.length < 3) return;
               router.push(`/tenders?q=${encodeURIComponent(next)}`);
             }}
             onOpenCommandPalette={() => setCommandOpen(true)}

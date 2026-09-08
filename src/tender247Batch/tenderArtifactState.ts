@@ -240,6 +240,18 @@ export function isTenderSafeToSkipReopen(
 }
 
 /**
+ * AI-summary-first local completeness: skip search/expand when either
+ * AI_Summary.pdf or Tender_All_Documents.zip is already on disk.
+ */
+export function hasAiSummaryOrDocumentsLocally(
+  tenderDir: string,
+  t247Id?: string,
+): boolean {
+  const state = inspectTenderArtifactState(tenderDir, t247Id);
+  return state.aiSummaryValid || state.documentsZipValid;
+}
+
+/**
  * Resume/recovery discovery: filesystem artifacts are authoritative.
  * Manifest completed / outer T247-id.zip cannot hide an incomplete folder.
  * AI_Summary.pdf is optional: core-ready tenders are not recrawled to

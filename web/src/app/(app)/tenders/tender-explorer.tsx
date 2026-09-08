@@ -14,6 +14,7 @@ import {
   Eye,
   FileSearch,
   Filter,
+  Loader2,
   MapPin,
   Search,
   X,
@@ -62,6 +63,13 @@ import {
   type CreatedDatePreset,
 } from "@/lib/tender-date-filter";
 import {
+  createRequestSerial,
+  effectiveTenderSearchQuery,
+  nextSearchQueryParam,
+  tenderSearchHint,
+  TENDER_SEARCH_DEBOUNCE_MS,
+} from "@/lib/tender-search";
+import {
   nextSortState,
   normalizeSortKeyForUi,
   type TableSortKey,
@@ -96,73 +104,16 @@ type ListResponse = {
   pageSize: number;
 };
 
-const MIN_OVERLAY_MS = 300;
-
-function overlayCopy(
-  updates: Record<string, string | undefined>,
-): { title: string; description: string } {
-  if (updates.selectedDate) {
-    return {
-      title: "Loading tenders",
-      description: `Fetching tenders for ${formatCompactAppDate(updates.selectedDate)}...`,
-    };
-  }
-  if ("date" in updates) {
-    return {
-      title: "Loading tenders",
-      description: "Fetching selected date...",
-    };
-  }
-  if ("status" in updates) {
-    return {
-      title: "Updating tenders",
-      description: "Applying status filter...",
-    };
-  }
-  if ("category" in updates) {
-    return {
-      title: "Updating tenders",
-      description: "Applying category filter...",
-    };
-  }
-  if ("source" in updates) {
-    return {
-      title: "Updating tenders",
-      description: "Applying portal filter...",
-    };
-  }
-  if ("sort" in updates || "direction" in updates) {
-    return {
-      title: "Sorting tenders",
-      description: "Updating tender order...",
-    };
-  }
-  if ("pageSize" in updates) {
-    return {
-      title: "Loading tenders",
-      description: "Updating page size...",
-    };
-  }
-  if ("page" in updates) {
-    return {
-      title: "Loading tenders",
-      description: "Fetching next page...",
-    };
-  }
-  if ("q" in updates) {
-    return {
-      title: "Updating tenders",
-      description: "Applying search...",
-    };
-  }
-  return {
-    title: "Updating tenders",
-    description: "Applying filters, please wait...",
-  };
-}
-
 const listCache = new Map<string, ListResponse>();
 const CACHE_LIMIT = 24;
+const totalsByFilterKey = new Map<string, number>();
+
+function filterKeyWithoutPage(queryKey: string): string {
+  const params = new URLSearchParams(queryKey);
+  params.delete("page");
+  params.delete("includeCount");
+  return params.toString();
+}
 
 function readFilters(searchParams: URLSearchParams): TenderFilters {
   const raw: Record<string, string> = {};
@@ -357,13 +308,10 @@ export function TenderExplorer({
   const [rows, setRows] = React.useState<WebTenderListRow[]>([]);
   const [total, setTotal] = React.useState(0);
   const [hasResolvedData, setHasResolvedData] = React.useState(false);
-  const [initialLoading, setInitialLoading] = React.useState(true);
-  const [isUpdating, setIsUpdating] = React.useState(false);
-  const [overlay, setOverlay] = React.useState({
-    title: "Updating tenders",
-    description: "Applying filters, please wait...",
-  });
-  const [exportingAll, setExportingAll] = React.useState(false);
+  const [isInitialLoading, setIsInitialLoading] = React.useState(true);
+  const [isTableRefreshing, setIsTableRefreshing] = React.useState(false);
+  const [listError, setListError] = React.useState<string | null>(null);
+  const [isExporting, setIsExporting] = React.useState(false);
   const [refreshToken, setRefreshToken] = React.useState(0);
   const [localQ, setLocalQ] = React.useState(filters.q ?? "");
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(
@@ -371,10 +319,16 @@ export function TenderExplorer({
   );
   const activePanelCount = panelFilterCount(filters);
   const [filtersOpen, setFiltersOpen] = React.useState(activePanelCount > 0);
-  const overlayStartedAt = React.useRef(0);
   const hasResolvedDataRef = React.useRef(false);
-  const isUpdatingRef = React.useRef(false);
-  isUpdatingRef.current = isUpdating;
+  const listRequestSerial = React.useRef(createRequestSerial());
+  const skipFirstStatusCountsFetch = React.useRef(
+    !searchParams.get("date") &&
+      !searchParams.get("selectedDate") &&
+      !searchParams.get("createdFrom") &&
+      !searchParams.get("createdTo") &&
+      (!searchParams.get("source") || searchParams.get("source") === "ALL") &&
+      !!statusCounts,
+  );
 
   const [statusCountsState, setStatusCountsState] =
     React.useState<TenderListStatusCounts | null>(statusCounts);
@@ -384,6 +338,10 @@ export function TenderExplorer({
   }, [statusCounts]);
 
   const queryKey = searchParams.toString();
+  const listFilterKey = React.useMemo(
+    () => filterKeyWithoutPage(queryKey),
+    [queryKey],
+  );
 
   const statusCountQueryKey = React.useMemo(() => {
     const params = new URLSearchParams();
@@ -401,6 +359,10 @@ export function TenderExplorer({
   }, [searchParams]);
 
   React.useEffect(() => {
+    if (skipFirstStatusCountsFetch.current) {
+      skipFirstStatusCountsFetch.current = false;
+      return;
+    }
     const controller = new AbortController();
     void (async () => {
       try {
@@ -424,65 +386,86 @@ export function TenderExplorer({
 
   React.useEffect(() => {
     const controller = new AbortController();
-    const startedAt = Date.now();
-    const showOverlay = hasResolvedDataRef.current;
-    if (showOverlay) {
-      setIsUpdating(true);
-      overlayStartedAt.current = overlayStartedAt.current || startedAt;
-    } else {
-      setInitialLoading(true);
-    }
+    const requestId = listRequestSerial.current.next();
+    const showTableRefresh = hasResolvedDataRef.current;
 
-    const finish = async () => {
-      if (controller.signal.aborted) return;
-      if (showOverlay) {
-        const elapsed = Date.now() - (overlayStartedAt.current || startedAt);
-        const remaining = Math.max(0, MIN_OVERLAY_MS - elapsed);
-        if (remaining > 0) {
-          await new Promise((resolve) => window.setTimeout(resolve, remaining));
-        }
-      }
-      if (controller.signal.aborted) return;
-      setInitialLoading(false);
-      setIsUpdating(false);
-      overlayStartedAt.current = 0;
-    };
+    if (showTableRefresh) {
+      setIsTableRefreshing(true);
+    } else {
+      setIsInitialLoading(true);
+    }
+    setListError(null);
+
+    const cachedTotal = totalsByFilterKey.get(listFilterKey);
+    const includeCount =
+      filters.page === 1 || cachedTotal === undefined ? true : false;
 
     void (async () => {
       try {
-        const response = await fetch(
-          `/api/tenders${queryKey ? `?${queryKey}` : ""}`,
-          { signal: controller.signal, cache: "no-store" },
-        );
+        const params = new URLSearchParams(queryKey);
+        if (!includeCount) params.set("includeCount", "0");
+        const qs = params.toString();
+        const response = await fetch(`/api/tenders${qs ? `?${qs}` : ""}`, {
+          signal: controller.signal,
+          cache: "no-store",
+        });
         if (!response.ok) throw new Error("Failed to load tenders");
         const data = (await response.json()) as ListResponse;
         if (controller.signal.aborted) return;
-        listCache.set(queryKey, data);
+        if (!listRequestSerial.current.isLatest(requestId)) return;
+
+        const nextTotal =
+          data.total >= 0 ? data.total : (cachedTotal ?? total);
+        if (data.total >= 0) {
+          totalsByFilterKey.set(listFilterKey, data.total);
+        }
+
+        const cached: ListResponse = {
+          ...data,
+          total: nextTotal,
+        };
+        listCache.set(queryKey, cached);
         if (listCache.size > CACHE_LIMIT) {
           const first = listCache.keys().next().value;
           if (typeof first === "string") listCache.delete(first);
         }
+
         setRows(data.rows);
-        setTotal(data.total);
+        setTotal(nextTotal);
         hasResolvedDataRef.current = true;
         setHasResolvedData(true);
-        await finish();
+        setListError(null);
       } catch (error) {
         if (controller.signal.aborted) return;
         if (error instanceof DOMException && error.name === "AbortError") {
           return;
         }
+        if (!listRequestSerial.current.isLatest(requestId)) return;
+        const message =
+          error instanceof Error ? error.message : "Unable to load tenders.";
+        setListError(message);
         if (hasResolvedDataRef.current) {
-          toast.error("Unable to update tenders. Please try again.");
+          toast.error("Unable to update tenders.", {
+            action: {
+              label: "Retry",
+              onClick: () => setRefreshToken((value) => value + 1),
+            },
+          });
         }
-        await finish();
+      } finally {
+        if (controller.signal.aborted) return;
+        if (!listRequestSerial.current.isLatest(requestId)) return;
+        setIsInitialLoading(false);
+        setIsTableRefreshing(false);
       }
     })();
 
     return () => {
       controller.abort();
     };
-  }, [queryKey, refreshToken]);
+    // total is only used as fallback when count is skipped; omit from deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stable filter key + page drive fetches
+  }, [queryKey, refreshToken, listFilterKey, filters.page]);
 
   React.useEffect(() => {
     setSelectedIds(new Set());
@@ -507,16 +490,12 @@ export function TenderExplorer({
 
   const navigate = React.useCallback(
     (updates: Record<string, string | undefined>) => {
-      // Allow overlapping navigations so a new search/filter can start
-      // while a previous one is still resolving.
       const qs = buildSearchParams(searchParams, updates);
       const nextHref = `${pathname}${qs}`;
       const currentHref = `${pathname}${queryKey ? `?${queryKey}` : ""}`;
       if (nextHref === currentHref) return;
       if (hasResolvedDataRef.current) {
-        setOverlay(overlayCopy(updates));
-        overlayStartedAt.current = Date.now();
-        setIsUpdating(true);
+        setIsTableRefreshing(true);
       }
       router.push(nextHref, { scroll: false });
     },
@@ -524,17 +503,32 @@ export function TenderExplorer({
   );
 
   React.useEffect(() => {
-    // Do not block on isUpdating — otherwise typing while a prior search is
-    // in-flight never schedules the next query until that request finishes.
+    const decision = nextSearchQueryParam(localQ, filters.q);
+    if (decision.action === "none") return;
+
+    if (decision.action === "clear") {
+      navigate({ q: undefined, page: "1" });
+      return;
+    }
+
     const handle = window.setTimeout(() => {
-      const next = localQ.trim();
-      const current = (filters.q ?? "").trim();
-      if (next === current) return;
-      navigate({ q: next || undefined, page: "1" });
-    }, 150);
+      const latest = nextSearchQueryParam(localQ, filters.q);
+      if (latest.action !== "search" || !latest.q) return;
+      navigate({ q: latest.q, page: "1" });
+    }, TENDER_SEARCH_DEBOUNCE_MS);
+
     return () => window.clearTimeout(handle);
   }, [localQ, filters.q, navigate]);
 
+  const commitSearchNow = React.useCallback(() => {
+    const q = effectiveTenderSearchQuery(localQ);
+    if (!q) return;
+    const current = (filters.q ?? "").trim();
+    if (q === current) return;
+    navigate({ q, page: "1" });
+  }, [filters.q, localQ, navigate]);
+
+  const searchHint = tenderSearchHint(localQ);
   const totalPages = Math.max(1, Math.ceil(total / filters.pageSize));
   const uiSortKey = normalizeSortKeyForUi(filters.sortBy);
   const filtersActive = hasActiveFilters(filters);
@@ -577,13 +571,14 @@ export function TenderExplorer({
 
   function refreshList() {
     listCache.clear();
+    totalsByFilterKey.clear();
     setRefreshToken((value) => value + 1);
     router.refresh();
   }
 
   const handleExportAll = React.useCallback(async () => {
-    if (exportingAll || total === 0) return;
-    setExportingAll(true);
+    if (isExporting || total === 0) return;
+    setIsExporting(true);
     try {
       const { exported } = await exportAllFilteredTenders(queryKey);
       toast.success(
@@ -596,11 +591,11 @@ export function TenderExplorer({
         error instanceof Error ? error.message : "Unable to export tenders.";
       toast.error(message);
     } finally {
-      setExportingAll(false);
+      setIsExporting(false);
     }
-  }, [exportingAll, queryKey, total]);
+  }, [isExporting, queryKey, total]);
 
-  const tableBusy = isUpdating || exportingAll;
+  const tableBusy = isTableRefreshing || isExporting;
 
   const onSort = React.useCallback(
     (clicked: TableSortKey) => {
@@ -633,15 +628,9 @@ export function TenderExplorer({
   );
 
   function clearFilters() {
-    if (isUpdatingRef.current) return;
     setLocalQ("");
     if (hasResolvedDataRef.current) {
-      setOverlay({
-        title: "Updating tenders",
-        description: "Applying filters, please wait...",
-      });
-      overlayStartedAt.current = Date.now();
-      setIsUpdating(true);
+      setIsTableRefreshing(true);
     }
     router.push(pathname, { scroll: false });
   }
@@ -667,8 +656,12 @@ export function TenderExplorer({
     });
   }
 
-  const showSkeleton = initialLoading && !hasResolvedData;
-  const showEmpty = !showSkeleton && !isUpdating && rows.length === 0;
+  const showSkeleton = isInitialLoading && !hasResolvedData;
+  const showEmpty =
+    !showSkeleton &&
+    !isTableRefreshing &&
+    !listError &&
+    rows.length === 0;
 
   return (
     <div className="relative" aria-busy={tableBusy}>
@@ -683,7 +676,7 @@ export function TenderExplorer({
           <TenderPageActions
             canImport={canImport}
             canCreate={canCreate}
-            disabled={isUpdating}
+            disabled={isExporting}
             onCreated={refreshList}
           />
         </div>
@@ -692,7 +685,6 @@ export function TenderExplorer({
           <TenderStatsCards
             counts={statusCountsState}
             activeStatus={currentStatus}
-            disabled={isUpdating}
             onSelectStatus={(status) =>
               navigate({
                 status: status ?? undefined,
@@ -710,16 +702,29 @@ export function TenderExplorer({
             placeholder="Search by name, tender ID or reference no..."
             value={localQ}
             onChange={(e) => setLocalQ(e.target.value)}
-            disabled={isUpdating}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitSearchNow();
+              }
+            }}
             className="h-9 pl-9 text-sm"
+            aria-describedby={searchHint ? "tender-search-hint" : undefined}
           />
+          {searchHint ? (
+            <p
+              id="tender-search-hint"
+              className="mt-1 text-xs text-foreground-500"
+            >
+              {searchHint}
+            </p>
+          ) : null}
         </div>
 
         <Button
           type="button"
           variant="secondary"
           className="h-9 gap-1.5 text-sm"
-          disabled={isUpdating}
           onClick={() => setFiltersOpen((open) => !open)}
         >
           <Filter className="size-3.5" />
@@ -736,7 +741,6 @@ export function TenderExplorer({
             type="button"
             variant="ghost"
             className="h-9 gap-1 text-sm"
-            disabled={isUpdating}
             onClick={clearFilters}
           >
             <X className="size-3.5" />
@@ -757,7 +761,6 @@ export function TenderExplorer({
               type="button"
               variant={uiSortKey === item.key ? "default" : "secondary"}
               className="h-9 gap-1 text-sm"
-              disabled={isUpdating}
               onClick={() => onSort(item.key)}
             >
               {item.label}
@@ -782,7 +785,6 @@ export function TenderExplorer({
               Scraped: {dateTriggerLabel}
               <button
                 type="button"
-                disabled={isUpdating}
                 className="rounded-full p-0.5 hover:bg-background-200 disabled:opacity-50"
                 aria-label="Clear created date filter"
                 onClick={() =>
@@ -804,7 +806,6 @@ export function TenderExplorer({
               Closing: {closingTriggerLabel}
               <button
                 type="button"
-                disabled={isUpdating}
                 className="rounded-full p-0.5 hover:bg-background-200 disabled:opacity-50"
                 aria-label="Clear closing date filter"
                 onClick={() =>
@@ -827,7 +828,6 @@ export function TenderExplorer({
                 ?.label ?? currentStatus}
               <button
                 type="button"
-                disabled={isUpdating}
                 className="rounded-full p-0.5 hover:bg-background-200 disabled:opacity-50"
                 aria-label="Clear status filter"
                 onClick={() => navigate({ status: undefined, page: "1" })}
@@ -841,7 +841,6 @@ export function TenderExplorer({
               City: {filters.city}
               <button
                 type="button"
-                disabled={isUpdating}
                 className="rounded-full p-0.5 hover:bg-background-200 disabled:opacity-50"
                 aria-label="Clear city filter"
                 onClick={() => navigate({ city: undefined, page: "1" })}
@@ -855,7 +854,6 @@ export function TenderExplorer({
               Category: {filters.category}
               <button
                 type="button"
-                disabled={isUpdating}
                 className="rounded-full p-0.5 hover:bg-background-200 disabled:opacity-50"
                 aria-label="Clear category filter"
                 onClick={() => navigate({ category: undefined, page: "1" })}
@@ -876,7 +874,6 @@ export function TenderExplorer({
               </p>
               <Select
                 value={currentStatus}
-                disabled={isUpdating}
                 onValueChange={(value) =>
                   navigate({
                     status: value === "ALL" ? undefined : value,
@@ -903,7 +900,6 @@ export function TenderExplorer({
               </p>
               <Select
                 value={filters.city || "ALL"}
-                disabled={isUpdating}
                 onValueChange={(value) =>
                   navigate({
                     city: value === "ALL" ? undefined : value,
@@ -931,7 +927,6 @@ export function TenderExplorer({
               </p>
               <Select
                 value={dateValue}
-                disabled={isUpdating}
                 onValueChange={(value) => {
                   if (value === "all") {
                     navigate({
@@ -969,7 +964,6 @@ export function TenderExplorer({
                   <Input
                     type="date"
                     value={filters.createdFrom ?? filters.selectedDate ?? ""}
-                    disabled={isUpdating}
                     aria-label="Scraped from"
                     onChange={(event) =>
                       navigate({
@@ -984,7 +978,6 @@ export function TenderExplorer({
                   <Input
                     type="date"
                     value={filters.createdTo ?? ""}
-                    disabled={isUpdating}
                     aria-label="Scraped to"
                     onChange={(event) =>
                       navigate({
@@ -1006,7 +999,6 @@ export function TenderExplorer({
               </p>
               <Select
                 value={closingDateValue}
-                disabled={isUpdating}
                 onValueChange={(value) => {
                   if (value === "all") {
                     navigate({
@@ -1042,7 +1034,6 @@ export function TenderExplorer({
                   <Input
                     type="date"
                     value={filters.closingFrom ?? ""}
-                    disabled={isUpdating}
                     aria-label="Closing from"
                     onChange={(event) =>
                       navigate({
@@ -1056,7 +1047,6 @@ export function TenderExplorer({
                   <Input
                     type="date"
                     value={filters.closingTo ?? ""}
-                    disabled={isUpdating}
                     aria-label="Closing to"
                     onChange={(event) =>
                       navigate({
@@ -1081,7 +1071,6 @@ export function TenderExplorer({
                 <div className="flex flex-wrap gap-1.5">
                   <FilterCapsule
                     active={!filters.category}
-                    disabled={isUpdating}
                     onClick={() =>
                       navigate({ category: undefined, page: "1" })
                     }
@@ -1092,7 +1081,6 @@ export function TenderExplorer({
                     <FilterCapsule
                       key={option.value}
                       active={filters.category === option.value}
-                      disabled={isUpdating}
                       onClick={() =>
                         navigate({
                           category:
@@ -1115,7 +1103,6 @@ export function TenderExplorer({
                 <div className="flex flex-wrap gap-1.5">
                   <FilterCapsule
                     active={!filters.source || filters.source === "ALL"}
-                    disabled={isUpdating}
                     onClick={() => navigate({ source: undefined, page: "1" })}
                   >
                     All
@@ -1124,7 +1111,6 @@ export function TenderExplorer({
                     <FilterCapsule
                       key={portal}
                       active={filters.source === portal}
-                      disabled={isUpdating}
                       onClick={() =>
                         navigate({
                           source:
@@ -1164,13 +1150,13 @@ export function TenderExplorer({
             rows={rows}
             total={total}
             page={filters.page}
-            exportingAll={exportingAll}
-            disabled={tableBusy}
+            exportingAll={isExporting}
+            disabled={isExporting}
             onExportAll={() => void handleExportAll()}
           />
           <Select
             value={String(filters.pageSize)}
-            disabled={tableBusy}
+            disabled={isExporting}
             onValueChange={(v) => navigate({ pageSize: v, page: "1" })}
           >
             <SelectTrigger className="h-8 w-[100px]">
@@ -1198,7 +1184,6 @@ export function TenderExplorer({
               type="button"
               variant="secondary"
               className="h-8 text-sm"
-              disabled={isUpdating}
               onClick={() =>
                 void downloadTenderExportXlsx(
                   selectedRows,
@@ -1214,13 +1199,27 @@ export function TenderExplorer({
               variant="ghost"
               size="icon"
               className="size-8"
-              disabled={isUpdating}
               aria-label="Clear selection"
               onClick={() => setSelectedIds(new Set())}
             >
               <X className="size-4" />
             </Button>
           </div>
+        </div>
+      ) : null}
+
+      {listError && hasResolvedData ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm text-rose-800">
+          <span>{listError}</span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8"
+            onClick={() => setRefreshToken((value) => value + 1)}
+          >
+            Retry
+          </Button>
         </div>
       ) : null}
 
@@ -1234,23 +1233,31 @@ export function TenderExplorer({
             Try adjusting your filters or search query to find matching tenders.
           </p>
           {filtersActive ? (
-            <Button variant="outline" className="mt-4" disabled={isUpdating} onClick={clearFilters}>
+            <Button variant="outline" className="mt-4" onClick={clearFilters}>
               Clear filters
             </Button>
           ) : null}
         </div>
       ) : (
-        <div
-          className="overflow-hidden rounded-lg border border-border bg-card shadow-sm"
-        >
-          <div className="overflow-x-auto">
+        <div className="relative overflow-hidden rounded-lg border border-border bg-card shadow-sm">
+          {isTableRefreshing ? (
+            <div className="absolute inset-x-0 top-0 z-10 flex items-center justify-center gap-2 border-b border-border bg-card/95 px-3 py-2 text-sm text-foreground-600">
+              <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              Loading tenders…
+            </div>
+          ) : null}
+          <div
+            className={cn(
+              "overflow-x-auto transition-opacity",
+              isTableRefreshing && "opacity-60",
+            )}
+          >
             <table className="w-full min-w-[1120px] table-fixed">
               <thead>
                 <tr className="border-b border-background-200/70 bg-background-50">
                   <th className="w-10 px-4 py-3">
                     <Checkbox
                       checked={allPageSelected}
-                      disabled={isUpdating}
                       onCheckedChange={(value) =>
                         toggleAllPage(value === true)
                       }
@@ -1269,7 +1276,6 @@ export function TenderExplorer({
                       sortKey="value"
                       activeKey={uiSortKey}
                       direction={filters.sortDir}
-                      disabled={isUpdating}
                       onSort={onSort}
                     />
                   </th>
@@ -1279,7 +1285,6 @@ export function TenderExplorer({
                       sortKey="emd"
                       activeKey={uiSortKey}
                       direction={filters.sortDir}
-                      disabled={isUpdating}
                       onSort={onSort}
                     />
                   </th>
@@ -1289,7 +1294,6 @@ export function TenderExplorer({
                       sortKey="closing"
                       activeKey={uiSortKey}
                       direction={filters.sortDir}
-                      disabled={isUpdating}
                       onSort={onSort}
                     />
                   </th>
@@ -1299,7 +1303,6 @@ export function TenderExplorer({
                       sortKey="status"
                       activeKey={uiSortKey}
                       direction={filters.sortDir}
-                      disabled={isUpdating}
                       onSort={onSort}
                     />
                   </th>
@@ -1338,14 +1341,8 @@ export function TenderExplorer({
                       return (
                         <tr
                           key={row.id}
-                          className={cn(
-                            "group border-b border-background-200/70 last:border-0 hover:bg-background-50",
-                            isUpdating
-                              ? "cursor-wait"
-                              : "cursor-pointer",
-                          )}
+                          className="group cursor-pointer border-b border-background-200/70 last:border-0 hover:bg-background-50"
                           onClick={() => {
-                            if (isUpdating) return;
                             router.push(`/tenders/${row.id}`);
                           }}
                         >
@@ -1355,7 +1352,6 @@ export function TenderExplorer({
                           >
                             <Checkbox
                               checked={selectedIds.has(row.id)}
-                              disabled={isUpdating}
                               onCheckedChange={(value) =>
                                 toggleRow(row.id, value === true)
                               }
@@ -1494,7 +1490,6 @@ export function TenderExplorer({
                               variant="ghost"
                               size="icon"
                               className="size-8"
-                              disabled={isUpdating}
                               aria-label={`View ${row.title}`}
                               onClick={() => router.push(`/tenders/${row.id}`)}
                             >
@@ -1519,7 +1514,7 @@ export function TenderExplorer({
             <Button
               variant="outline"
               size="sm"
-              disabled={filters.page <= 1 || isUpdating}
+              disabled={filters.page <= 1}
               onClick={() =>
                 navigate({ page: String(Math.max(1, filters.page - 1)) })
               }
@@ -1530,7 +1525,7 @@ export function TenderExplorer({
             <Button
               variant="outline"
               size="sm"
-              disabled={filters.page >= totalPages || isUpdating}
+              disabled={filters.page >= totalPages}
               onClick={() =>
                 navigate({
                   page: String(Math.min(totalPages, filters.page + 1)),
@@ -1545,14 +1540,10 @@ export function TenderExplorer({
       ) : null}
         </div>
       </div>
-      {isUpdating || exportingAll ? (
+      {isExporting ? (
         <TenderLoadingOverlay
-          title={exportingAll ? "Exporting tenders" : overlay.title}
-          description={
-            exportingAll
-              ? `Preparing ${total.toLocaleString("en-IN")} matching tenders for download…`
-              : overlay.description
-          }
+          title="Exporting tenders"
+          description={`Preparing ${total.toLocaleString("en-IN")} matching tenders for download…`}
         />
       ) : null}
     </div>

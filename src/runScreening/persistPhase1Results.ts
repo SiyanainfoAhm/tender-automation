@@ -212,12 +212,14 @@ type ExistingTenderRow = {
   tender_value_text: string | null;
   emd_text: string | null;
   qualification_status: string | null;
+  category: string | null;
+  project_category: string | null;
   scraped_date: string | null;
   raw_metadata: Record<string, unknown> | null;
 };
 
 const EXISTING_TENDER_SELECT =
-  "id, source_portal, source_tender_id, folder_id, title, organization, location_text, closing_date, tender_value_text, emd_text, qualification_status, scraped_date, raw_metadata";
+  "id, source_portal, source_tender_id, folder_id, title, organization, location_text, closing_date, tender_value_text, emd_text, qualification_status, category, project_category, scraped_date, raw_metadata";
 
 /**
  * Same-day snapshot lookup only.
@@ -353,9 +355,9 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
   /** Qualification model_name (default chatgpt-project-run-screening). */
   modelName?: string;
   /**
-   * When true, same-day updates keep the existing qualification_status
-   * (and skip overwriting qualification results). Used by AI-summary daily
-   * Excel ingest so mid-day re-downloads do not wipe Phase-1 statuses.
+   * When true (or when screeningSource is AI_SUMMARY_DAILY_EXCEL /
+   * REUPSERT_DAILY_EXCEL), same-day updates never overwrite a non-null
+   * qualification_status or category already in the database.
    */
   preserveExistingQualificationStatus?: boolean;
 }): Promise<Phase1PersistResult> {
@@ -365,8 +367,21 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
       ? path.join(options.dateFolder, "screening", RUN_SCREENED_FILE)
       : RUN_SCREENED_FILE);
 
+  const screeningSource =
+    options.screeningSource || "CHATGPT_RUN_EXCEL";
+  /** Non-ChatGPT ingest must not wipe statuses ChatGPT already wrote. */
+  const protectExistingScreeningFields =
+    options.preserveExistingQualificationStatus === true ||
+    screeningSource === "AI_SUMMARY_DAILY_EXCEL" ||
+    screeningSource === "REUPSERT_DAILY_EXCEL";
+
   options.logger?.info(`GPT_SCREENED_WORKBOOK=${workbookLabel}`);
   options.logger?.info(`GPT_ROWS_FOUND=${options.rows.length}`);
+  if (protectExistingScreeningFields) {
+    options.logger?.info(
+      "GPT_EXCEL_PROTECT_EXISTING_STATUS=true (skip non-null qualification_status/category)",
+    );
+  }
 
   const result: Phase1PersistResult = {
     attempted: options.rows.length,
@@ -472,9 +487,16 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         );
       }
 
+      const existingStatusNonNull = Boolean(
+        String(existing?.qualification_status || "").trim(),
+      );
+      const existingCategoryNonNull = Boolean(
+        String(existing?.category || "").trim(),
+      );
       const preserveStatus =
-        Boolean(options.preserveExistingQualificationStatus) &&
-        Boolean(existing?.qualification_status);
+        protectExistingScreeningFields && existingStatusNonNull;
+      const preserveCategory =
+        protectExistingScreeningFields && existingCategoryNonNull;
       if (preserveStatus) {
         const priorStatus = normalizePhase1ScreeningStatus(
           existing?.qualification_status || null,
@@ -490,6 +512,11 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
             `[${label}] PRESERVE_EXISTING_STATUS=${priorStatus}`,
           );
         }
+      }
+      if (preserveCategory) {
+        options.logger?.info(
+          `[${label}] PRESERVE_EXISTING_CATEGORY=${String(existing?.category).trim()}`,
+        );
       }
 
       const qualificationStatus = isPhase1Duplicate(effectiveStatus)
@@ -536,12 +563,18 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         preserveStatus && priorRaw.screeningSource
           ? String(priorRaw.screeningSource)
           : null;
+      const preservedTenderCategory =
+        preserveCategory && priorRaw.tenderCategory != null
+          ? priorRaw.tenderCategory
+          : preserveCategory && existing?.category
+            ? existing.category
+            : row.tenderCategory || null;
       const rawMetadata = {
         ...priorRaw,
         phase1Screening: true,
         screeningSource:
           priorScreeningSource ||
-          options.screeningSource ||
+          screeningSource ||
           "CHATGPT_RUN_EXCEL",
         screeningWorkbook:
           preserveStatus && priorRaw.screeningWorkbook
@@ -549,11 +582,15 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
             : RUN_SCREENED_FILE,
         companyId,
         runDate: options.runDate,
-        screeningStatus: effectiveStatus,
-        screeningReason: effectiveReason,
+        screeningStatus: preserveStatus
+          ? priorRaw.screeningStatus ?? effectiveStatus
+          : effectiveStatus,
+        screeningReason: preserveStatus
+          ? priorRaw.screeningReason ?? effectiveReason
+          : effectiveReason,
         source: row.source,
         sourceRefs: row.sourceRefs || null,
-        tenderCategory: row.tenderCategory || null,
+        tenderCategory: preservedTenderCategory,
         msmeExemption:
           row.msmeExemption != null ? row.msmeExemption : null,
         startupExemption:
@@ -591,8 +628,12 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         emd_amount: emdAmount,
         currency: "INR",
         qualification_status: qualificationStatus,
-        category: row.tenderCategory || null,
-        project_category: "Other",
+        category: preserveCategory
+          ? existing?.category || null
+          : row.tenderCategory || null,
+        project_category: preserveCategory
+          ? existing?.project_category || "Other"
+          : "Other",
         duplicate_of_source_tender_id: matchedHistoricalId,
         duplicate_of_tender_id: duplicateOfTenderId,
         duplicate_match_kind:
@@ -612,27 +653,27 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         crawled_at: existing ? undefined : null,
       };
 
-      const alwaysUpdate: Array<keyof typeof incoming> = preserveStatus
-        ? [
-            "reference_no",
-            "raw_metadata",
-            "content_hash",
-            "last_seen_at",
-            "supabase_synced_at",
-            // scraped_date intentionally NOT in alwaysUpdate — immutable via trigger
-          ]
-        : [
-            "qualification_status",
-            "reference_no",
-            "raw_metadata",
-            "content_hash",
-            "last_seen_at",
-            "supabase_synced_at",
-            "duplicate_of_source_tender_id",
-            "duplicate_of_tender_id",
-            "duplicate_match_kind",
-            // scraped_date intentionally NOT in alwaysUpdate — immutable via trigger
-          ];
+      const alwaysUpdate: Array<keyof typeof incoming> =
+        protectExistingScreeningFields
+          ? [
+              "reference_no",
+              "raw_metadata",
+              "content_hash",
+              "last_seen_at",
+              "supabase_synced_at",
+              // Never force qualification_status / category when protecting.
+            ]
+          : [
+              "qualification_status",
+              "reference_no",
+              "raw_metadata",
+              "content_hash",
+              "last_seen_at",
+              "supabase_synced_at",
+              "duplicate_of_source_tender_id",
+              "duplicate_of_tender_id",
+              "duplicate_match_kind",
+            ];
 
       const { next, updatedKeys } = mergeNullOnlyRecord(
         existing as Record<string, unknown> | null,
@@ -640,13 +681,36 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         alwaysUpdate as string[],
       );
 
-      // Force screening fields from GPT Excel / Phase-1 unless preserving.
-      if (!preserveStatus) {
+      // ChatGPT Phase-1 may overwrite status. AI-summary / protect mode:
+      // only fill status/category when the DB value is currently null/blank.
+      if (!protectExistingScreeningFields) {
         next.qualification_status = qualificationStatus;
         if (!updatedKeys.includes("qualification_status")) {
           updatedKeys.push("qualification_status");
         }
+      } else {
+        if (existingStatusNonNull) {
+          delete next.qualification_status;
+        } else if (!existing) {
+          next.qualification_status = qualificationStatus;
+        } else if (!String(next.qualification_status || "").trim()) {
+          next.qualification_status = qualificationStatus;
+        }
+        if (existingCategoryNonNull) {
+          delete next.category;
+          delete next.project_category;
+        }
       }
+
+      // Final hard guard: never send non-null→overwrite for protected fields.
+      if (protectExistingScreeningFields && existing) {
+        if (existingStatusNonNull) delete next.qualification_status;
+        if (existingCategoryNonNull) {
+          delete next.category;
+          delete next.project_category;
+        }
+      }
+
       next.raw_metadata = rawMetadata;
       // Keep existing scraped_date on update; set only for insert path below.
       if (existing) {
@@ -674,15 +738,35 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         );
       }
       options.logger?.info(
-        `[${label}] Status updated:\n${qualificationStatus}`,
+        preserveStatus
+          ? `[${label}] Status preserved (non-null):\n${existing?.qualification_status}`
+          : `[${label}] Status updated:\n${qualificationStatus}`,
       );
 
       let persistedTenderId: string | null = existing?.id ?? null;
+      let statusAlreadyInDb = existingStatusNonNull;
 
       if (existing) {
+        const updatePayload: Record<string, unknown> = {
+          ...next,
+          updated_at: now,
+        };
+        if (
+          protectExistingScreeningFields &&
+          String(existing.qualification_status || "").trim()
+        ) {
+          delete updatePayload.qualification_status;
+        }
+        if (
+          protectExistingScreeningFields &&
+          String(existing.category || "").trim()
+        ) {
+          delete updatePayload.category;
+          delete updatePayload.project_category;
+        }
         const { error: updateError } = await client
           .from("agenttender_tenders")
-          .update({ ...next, updated_at: now })
+          .update(updatePayload)
           .eq("id", existing.id)
           .eq("scraped_date", options.runDate);
         if (updateError) {
@@ -691,10 +775,45 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         }
         result.updated += 1;
       } else {
-        const { data: inserted, error: insertError } = await client
-          .from("agenttender_tenders")
-          .upsert(
-            {
+        // Re-check before insert — avoid onConflict upsert overwriting status.
+        const raced = await findSameDayTender({
+          client,
+          sourcePortal,
+          sourceTenderId: id,
+          scrapedDate: options.runDate,
+          references,
+        });
+        if (raced) {
+          statusAlreadyInDb = Boolean(
+            String(raced.qualification_status || "").trim(),
+          );
+          const racedPayload: Record<string, unknown> = {
+            ...next,
+            scraped_date: raced.scraped_date || options.runDate,
+            updated_at: now,
+          };
+          if (statusAlreadyInDb) {
+            delete racedPayload.qualification_status;
+          }
+          if (String(raced.category || "").trim()) {
+            delete racedPayload.category;
+            delete racedPayload.project_category;
+          }
+          const { error: racedUpdateError } = await client
+            .from("agenttender_tenders")
+            .update(racedPayload)
+            .eq("id", raced.id)
+            .eq("scraped_date", options.runDate);
+          if (racedUpdateError) {
+            result.errors.push(`${id}: ${racedUpdateError.message}`);
+            continue;
+          }
+          persistedTenderId = raced.id;
+          result.updated += 1;
+        } else {
+          const { data: inserted, error: insertError } = await client
+            .from("agenttender_tenders")
+            .insert({
               source_portal: sourcePortal,
               source_tender_id: id,
               folder_id: row.tender247Id || row.bidAssistId || null,
@@ -728,22 +847,53 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
               crawled_at: null,
               supabase_synced_at: now,
               scraped_date: options.runDate,
-            },
-            {
-              onConflict: "source_portal,source_tender_id,scraped_date",
-            },
-          )
-          .select("id")
-          .maybeSingle();
-        if (insertError) {
-          result.errors.push(`${id}: ${insertError.message}`);
-          continue;
+            })
+            .select("id")
+            .maybeSingle();
+          if (insertError) {
+            const afterConflict = await findSameDayTender({
+              client,
+              sourcePortal,
+              sourceTenderId: id,
+              scrapedDate: options.runDate,
+              references,
+            });
+            if (afterConflict) {
+              statusAlreadyInDb = Boolean(
+                String(afterConflict.qualification_status || "").trim(),
+              );
+              const conflictPayload: Record<string, unknown> = {
+                last_seen_at: now,
+                supabase_synced_at: now,
+                updated_at: now,
+              };
+              const { error: conflictErr } = await client
+                .from("agenttender_tenders")
+                .update(conflictPayload)
+                .eq("id", afterConflict.id)
+                .eq("scraped_date", options.runDate);
+              if (conflictErr) {
+                result.errors.push(`${id}: ${insertError.message}`);
+                continue;
+              }
+              persistedTenderId = afterConflict.id;
+              result.updated += 1;
+            } else {
+              result.errors.push(`${id}: ${insertError.message}`);
+              continue;
+            }
+          } else {
+            persistedTenderId = inserted?.id ? String(inserted.id) : null;
+            result.created += 1;
+          }
         }
-        persistedTenderId = inserted?.id ? String(inserted.id) : null;
-        result.created += 1;
       }
 
-      if (!(preserveStatus && existing)) {
+      // Do not upsert qualification when DB already has a non-null status under
+      // protect mode — the DB trigger would sync and overwrite tender status.
+      const skipQualUpsert =
+        protectExistingScreeningFields && statusAlreadyInDb;
+      if (!skipQualUpsert) {
         const qual = qualificationPayloadForStatus(
           effectiveStatus,
           effectiveReason || "",
@@ -771,19 +921,15 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
             !isPhase1Duplicate(effectiveStatus) &&
             effectiveStatus !== "GO" &&
             effectiveStatus !== "NO_GO",
-          evidenceFiles: [
-            options.screeningSource || "CHATGPT_RUN_EXCEL",
-            RUN_SCREENED_FILE,
-          ],
+          evidenceFiles: [screeningSource, RUN_SCREENED_FILE],
           rawResponse: effectiveReason,
           rawResult: rawMetadata,
           chatUrl: null,
           promptVersion: PHASE1_SCREENING_POLICY_VERSION,
           modelName:
             options.modelName ||
-            (options.screeningSource &&
-            options.screeningSource !== "CHATGPT_RUN_EXCEL"
-              ? options.screeningSource
+            (screeningSource !== "CHATGPT_RUN_EXCEL"
+              ? screeningSource
               : "chatgpt-project-run-screening"),
         });
         if (!upserted.ok) {

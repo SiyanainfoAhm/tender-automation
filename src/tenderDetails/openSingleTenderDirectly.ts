@@ -157,47 +157,72 @@ async function ensureListMailDateForDetailOpen(
   await dismissTender247Interruptions(page, logger, config).catch(() => undefined);
   await dismissTender247AdvanceSearchModal(page, logger).catch(() => undefined);
 
+  const dashboardUrl =
+    config.tender247Url?.trim() || "https://www.tender247.com/auth/tender";
+
+  const gotoDashboard = async (reason: string): Promise<void> => {
+    logger.warn(
+      `TENDER247_UI_HARD_RESET reason=${reason} url=${dashboardUrl}`,
+    );
+    await page.goto(dashboardUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: config.pageTimeoutMs,
+    });
+    await page.waitForTimeout(800);
+    await dismissTender247Interruptions(page, logger, config).catch(
+      () => undefined,
+    );
+    await dismissTender247AdvanceSearchModal(page, logger).catch(
+      () => undefined,
+    );
+  };
+
+  const readIsoSafe = async (): Promise<string | null> => {
+    try {
+      return (await readCurrentSelectMailDate(page)).iso;
+    } catch {
+      return null;
+    }
+  };
+
   const tryRestore = async (hardReset: boolean): Promise<string> => {
     if (hardReset) {
-      const dashboardUrl =
-        config.tender247Url?.trim() || "https://www.tender247.com/auth/tender";
-      logger.warn(
-        `TENDER247_UI_HARD_RESET reason=mail-date-restore url=${dashboardUrl}`,
-      );
-      await page.goto(dashboardUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: config.pageTimeoutMs,
-      });
-      await page.waitForTimeout(800);
-      await dismissTender247Interruptions(page, logger, config).catch(
-        () => undefined,
-      );
-      await dismissTender247AdvanceSearchModal(page, logger).catch(
-        () => undefined,
-      );
+      await gotoDashboard("mail-date-restore");
+    } else {
+      // After detail open, Select Mail Date is often gone — return to dashboard
+      // without forcing a calendar click when the date is already correct.
+      const early = await readIsoSafe();
+      if (early === null) {
+        logger.info(
+          "TENDER247_DETAIL_RETURN_DASHBOARD reason=mail-date-card-missing",
+        );
+        await gotoDashboard("mail-date-card-missing");
+      }
     }
 
-    const current = await readCurrentSelectMailDate(page);
-    if (current.iso === requestedDate && !hardReset) {
+    const currentIso = await readIsoSafe();
+    if (currentIso === requestedDate) {
       logger.info(`TENDER247_DETAIL_MAIL_DATE_OK=${requestedDate}`);
       return requestedDate;
     }
 
-    if (current.iso !== requestedDate) {
+    if (currentIso && currentIso !== requestedDate) {
       logger.warn(
-        `TENDER247_MAIL_DATE_DRIFT detected=${current.iso || current.inputValue || "unknown"} requested=${requestedDate}`,
+        `TENDER247_MAIL_DATE_DRIFT detected=${currentIso} requested=${requestedDate}`,
       );
       console.log(
-        `TENDER247_MAIL_DATE_DRIFT detected=${current.iso || current.inputValue || "unknown"} requested=${requestedDate}`,
+        `TENDER247_MAIL_DATE_DRIFT detected=${currentIso} requested=${requestedDate}`,
       );
     }
 
+    // Mismatch alone opens the calendar (!alreadyMatches). Do not force-click
+    // when the visible date already matches after dashboard return.
     await ensureTender247FreshListForDate(
       page,
       requestedDate,
       logger,
       config.pageTimeoutMs,
-      hardReset ? { forceCalendarClick: true } : undefined,
+      currentIso ? undefined : { forceCalendarClick: true },
     );
     const after = await readCurrentSelectMailDate(page);
     if (after.iso !== requestedDate) {
@@ -272,18 +297,38 @@ async function restoreListAndMailDate(
   } catch {
     beforeIso = null;
   }
+  if (beforeIso === requestedDate) {
+    logger.info(`TENDER247_DETAIL_MAIL_DATE_OK=${requestedDate}`);
+    return;
+  }
   if (!beforeIso) {
     await hardResetDashboard("mail-date-unknown");
+    try {
+      beforeIso = (await readCurrentSelectMailDate(page)).iso;
+    } catch {
+      beforeIso = null;
+    }
+    if (beforeIso === requestedDate) {
+      logger.info(`TENDER247_DETAIL_MAIL_DATE_OK=${requestedDate}`);
+      return;
+    }
   }
 
   const applyMailDate = async (): Promise<void> => {
     if (requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) {
+      const currentIso = await readCurrentSelectMailDate(page)
+        .then((v) => v.iso)
+        .catch(() => null);
+      if (currentIso === requestedDate) {
+        logger.info(`TENDER247_DETAIL_MAIL_DATE_OK=${requestedDate}`);
+        return;
+      }
       await ensureTender247FreshListForDate(
         page,
         requestedDate,
         logger,
         config.pageTimeoutMs,
-        { forceCalendarClick: true },
+        currentIso ? undefined : { forceCalendarClick: true },
       );
       return;
     }
@@ -451,6 +496,26 @@ export async function openSingleTenderDirectly(
     };
   };
 
+  // Prefer security_code detail URL (reliable Tender247 crawl path) before
+  // flaky title expand on tall search-result cards.
+  if (securityCodeFromSearch) {
+    try {
+      logger.info(
+        `EXPAND_PREFER_API_DETAIL_URL id=${id} (security_code from search)`,
+      );
+      console.log(`EXPAND_PREFER_API_DETAIL_URL id=${id}`);
+      return await openViaSecurityCode(securityCodeFromSearch);
+    } catch (apiOpenError) {
+      const msg =
+        apiOpenError instanceof Error
+          ? apiOpenError.message
+          : String(apiOpenError);
+      logger.warn(
+        `EXPAND_API_DETAIL_URL_FAILED id=${id} reason=${msg.slice(0, 160)} — falling back to UI expand`,
+      );
+    }
+  }
+
   let expansion: Awaited<ReturnType<typeof expandTender247Row>>;
   try {
     expansion = await expandTender247Row({
@@ -551,6 +616,43 @@ export async function openSingleTenderDirectly(
         logger,
       );
     }
+  }
+
+  // Title/view expand can report success while still on the list dashboard
+  // (false-positive row height). Prefer security-code detail URL like the
+  // main Tender247 crawl path.
+  const stillOnList =
+    /\/auth\/tender\/?(\?|#|$)/i.test(detailPage.url()) &&
+    !/security_code=|\/tender\/\d+/i.test(detailPage.url());
+  if (stillOnList) {
+    logger.warn(
+      `EXPAND_STILL_ON_LIST id=${id} url=${detailPage.url()} — trying security-code detail URL`,
+    );
+    console.log(`EXPAND_STILL_ON_LIST id=${id}`);
+    if (securityCodeFromSearch) {
+      return openViaSecurityCode(securityCodeFromSearch);
+    }
+    const requestedDate =
+      getActiveTender247RunContext()?.requestedDate ??
+      (screening?.dateFolder
+        ? requestedDateFromDateFolderSafe(screening.dateFolder)
+        : null);
+    if (requestedDate) {
+      const securityCode = await lookupSecurityCodeViaSearchApi({
+        page: detailPage,
+        context,
+        mailDate: requestedDate,
+        t247Id: id,
+        logger,
+      });
+      if (securityCode) {
+        return openViaSecurityCode(securityCode);
+      }
+    }
+    throw new AutomationError(
+      "TENDER247_EXPANSION_NOT_VERIFIED",
+      `Expand left list page for ${id} and no security_code was available`,
+    );
   }
 
   await detailPage

@@ -9,6 +9,7 @@ import {
   dismissTender247AdvanceSearchModal,
   dismissTender247Interruptions,
 } from "../tenderDetails/dismissTender247Interruptions.js";
+import { readCurrentSelectMailDate } from "../tenderDetails/selectTender247MailDate.js";
 import { ensureTender247FreshListForDate } from "./ensureTender247FreshListForDate.js";
 import { getActiveTender247RunContext } from "./tender247RunContext.js";
 import {
@@ -22,7 +23,25 @@ import {
 import { runSequentialArtifactAcquisition } from "./runSequentialArtifactAcquisition.js";
 import type { ProcessTenderResult } from "./types.js";
 
-/** Soft-recover list UI so a failed tender does not poison the next one. */
+function tender247DashboardUrl(config: AppConfig): string {
+  return config.tender247Url?.trim() || "https://www.tender247.com/auth/tender";
+}
+
+async function readMailDateIsoSafe(page: Page): Promise<string | null> {
+  try {
+    return (await readCurrentSelectMailDate(page)).iso;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Soft-recover list UI so a failed/detail-open tender does not poison the next one.
+ *
+ * After AI-summary / search-by-ID opens, the list page is often still on the
+ * detail URL — Select Mail Date is missing. Return to the dashboard and only
+ * open the calendar when the visible mail date is wrong (not on every tender).
+ */
 async function recoverListPageBetweenTenders(
   listPage: Page,
   config: AppConfig,
@@ -48,20 +67,54 @@ async function recoverListPageBetweenTenders(
       return;
     }
 
-    // Soft attempt only — never abort the batch here.
+    let iso = await readMailDateIsoSafe(listPage);
+    if (iso === requestedDate) {
+      logger.info(`T247_LIST_RECOVER_MAIL_DATE_OK=${requestedDate}`);
+      return;
+    }
+
+    const dashboardUrl = tender247DashboardUrl(config);
+    logger.warn(
+      `T247_LIST_RECOVER_RETURN_DASHBOARD reason=${
+        iso ? `mail-date=${iso}` : "mail-date-card-missing"
+      } url=${dashboardUrl}`,
+    );
+    await listPage
+      .goto(dashboardUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: config.pageTimeoutMs,
+      })
+      .catch(() => undefined);
+    await listPage.waitForTimeout(600);
+    await dismissTender247Interruptions(listPage, logger, config).catch(
+      () => undefined,
+    );
+    await dismissTender247AdvanceSearchModal(listPage, logger).catch(
+      () => undefined,
+    );
+
+    iso = await readMailDateIsoSafe(listPage);
+    if (iso === requestedDate) {
+      logger.info(`T247_LIST_RECOVER_MAIL_DATE_OK=${requestedDate}`);
+      return;
+    }
+
+    // Date wrong or still unreadable — select. Mismatch alone opens the calendar;
+    // force only when the card/value is still missing after dashboard return.
     await ensureTender247FreshListForDate(
       listPage,
       requestedDate,
       logger,
       config.pageTimeoutMs,
+      iso ? undefined : { forceCalendarClick: true },
     ).catch(async (error) => {
       const msg = error instanceof Error ? error.message : String(error);
       logger.warn(
         `T247_LIST_RECOVER_MAIL_DATE_SOFT_FAIL=${msg.slice(0, 160)}`,
       );
-      const dashboardUrl =
-        config.tender247Url?.trim() || "https://www.tender247.com/auth/tender";
-      logger.warn(`TENDER247_UI_HARD_RESET reason=between-tenders url=${dashboardUrl}`);
+      logger.warn(
+        `TENDER247_UI_HARD_RESET reason=between-tenders url=${dashboardUrl}`,
+      );
       await listPage
         .goto(dashboardUrl, {
           waitUntil: "domcontentloaded",
@@ -75,12 +128,19 @@ async function recoverListPageBetweenTenders(
       await dismissTender247AdvanceSearchModal(listPage, logger).catch(
         () => undefined,
       );
+
+      const afterReset = await readMailDateIsoSafe(listPage);
+      if (afterReset === requestedDate) {
+        logger.info(`T247_LIST_RECOVER_MAIL_DATE_OK=${requestedDate}`);
+        return;
+      }
+
       await ensureTender247FreshListForDate(
         listPage,
         requestedDate,
         logger,
         config.pageTimeoutMs,
-        { forceCalendarClick: true },
+        afterReset ? undefined : { forceCalendarClick: true },
       ).catch((retryError) => {
         const retryMsg =
           retryError instanceof Error

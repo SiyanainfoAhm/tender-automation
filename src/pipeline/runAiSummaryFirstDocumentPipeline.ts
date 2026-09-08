@@ -63,6 +63,10 @@ import { getSupabaseAdminClient, isSupabaseConfigured } from "../supabase/client
 import { ensureTender247FreshListForDate } from "../tender247Batch/ensureTender247FreshListForDate.js";
 import { processSurvivorsInParallel } from "../tender247Batch/processSurvivorsInParallel.js";
 import {
+  inspectTenderArtifactState,
+  listT247TenderDirs,
+} from "../tender247Batch/tenderArtifactState.js";
+import {
   createTender247RunContext,
   ensureTender247DateScopedDir,
   logTender247RunContext,
@@ -109,6 +113,7 @@ export type AiSummaryPipelineSummary = {
   upsertUpdated: number;
   selected: number;
   skippedExistingAi: number;
+  skippedLocalArtifacts: number;
   attempted: number;
   fullSuccess: number;
   partialSuccess: number;
@@ -288,6 +293,7 @@ export async function upsertScreenedTendersForDate(options: {
     logger: options.logger,
     screeningSource: "AI_SUMMARY_DAILY_EXCEL",
     modelName: "ai-summary-daily-excel",
+    // Never overwrite ChatGPT qualification_status / category on re-ingest.
     preserveExistingQualificationStatus: true,
   });
   // Tender rows are what the AI crawl needs. Qual verify can fail for
@@ -501,6 +507,7 @@ export async function runAiSummaryFirstDocumentPipeline(
     upsertUpdated: 0,
     selected: 0,
     skippedExistingAi: 0,
+    skippedLocalArtifacts: 0,
     attempted: 0,
     fullSuccess: 0,
     partialSuccess: 0,
@@ -577,6 +584,36 @@ export async function runAiSummaryFirstDocumentPipeline(
       );
     }
   }
+
+  // Skip tenders that already have local AI_Summary.pdf or documents zip —
+  // do not search/expand them again (unless --force).
+  const localDoneIds = new Set<string>();
+  if (!args.force) {
+    for (const { t247Id, tenderDir } of listT247TenderDirs(dateFolder)) {
+      const state = inspectTenderArtifactState(tenderDir, t247Id);
+      if (!state.aiSummaryValid && !state.documentsZipValid) continue;
+      localDoneIds.add(t247Id);
+      // Only count queue members toward this run's success totals.
+      const inPending = pending.some((row) => row.sourceTenderId === t247Id);
+      const inFilter = !idFilter?.length || idFilter.includes(t247Id);
+      if (inPending && inFilter) {
+        if (state.aiSummaryValid) summary.fullSuccess += 1;
+        else summary.partialSuccess += 1;
+      }
+    }
+    if (localDoneIds.size) {
+      const beforeLocal = queue.length;
+      queue = queue.filter((row) => !localDoneIds.has(row.sourceTenderId));
+      summary.skippedLocalArtifacts = Math.max(0, beforeLocal - queue.length);
+      logger.info(
+        `AI_SUMMARY_PIPELINE_SKIP_LOCAL count=${summary.skippedLocalArtifacts} (ai_or_docs already on disk)`,
+      );
+      console.log(
+        `AI_SUMMARY_PIPELINE_SKIP_LOCAL=${summary.skippedLocalArtifacts}`,
+      );
+    }
+  }
+
   if (args.limit != null) {
     queue = queue.slice(0, args.limit);
   }
@@ -594,6 +631,7 @@ export async function runAiSummaryFirstDocumentPipeline(
     onlyFailed: args.onlyFailed,
     totalMatching: allCandidates.length,
     skippedExistingAi: summary.skippedExistingAi,
+    skippedLocalArtifacts: summary.skippedLocalArtifacts,
     queued: queue.length,
     ids: queue.map((r) => r.sourceTenderId),
     rows: queue,
@@ -602,10 +640,10 @@ export async function runAiSummaryFirstDocumentPipeline(
 
   logger.info(`AI_SUMMARY_PIPELINE_QUEUE_FILE=${queuePath}`);
   logger.info(
-    `AI_SUMMARY_PIPELINE_SELECTED total=${allCandidates.length} queued=${queue.length} skippedAiUrls=${summary.skippedExistingAi}`,
+    `AI_SUMMARY_PIPELINE_SELECTED total=${allCandidates.length} queued=${queue.length} skippedAiUrls=${summary.skippedExistingAi} skippedLocal=${summary.skippedLocalArtifacts}`,
   );
   console.log(
-    `AI_SUMMARY_PIPELINE_QUEUE queued=${queue.length} skippedExistingAi=${summary.skippedExistingAi}`,
+    `AI_SUMMARY_PIPELINE_QUEUE queued=${queue.length} skippedExistingAi=${summary.skippedExistingAi} skippedLocal=${summary.skippedLocalArtifacts}`,
   );
 
   if (args.dryRun) {
@@ -711,7 +749,7 @@ export async function runAiSummaryFirstDocumentPipeline(
           dateFolder,
           config,
           logger,
-          alreadyCompleted: new Set(),
+          alreadyCompleted: localDoneIds,
           force: args.force,
           documentsOnlyIfAiMissing: true,
           allowNoBidDetailOpen: true,
@@ -786,6 +824,9 @@ export async function runAiSummaryFirstDocumentPipeline(
   );
   console.log(`Selected (DB): ${summary.selected}`);
   console.log(`Skipped (AI URL already set): ${summary.skippedExistingAi}`);
+  console.log(
+    `Skipped (local AI or docs already present): ${summary.skippedLocalArtifacts}`,
+  );
   console.log(`Attempted: ${summary.attempted}`);
   console.log(`AI Summary success: ${summary.fullSuccess}`);
   console.log(`Docs fallback / partial: ${summary.partialSuccess}`);

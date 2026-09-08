@@ -18,10 +18,15 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const filters = tenderFiltersSchema.parse(
-    flattenSearchParams(new URL(request.url)),
-  );
-  const result = await listTenders(filters);
+  const url = new URL(request.url);
+  const filters = tenderFiltersSchema.parse(flattenSearchParams(url));
+  const includeCountParam = url.searchParams.get("includeCount");
+  const includeCount =
+    includeCountParam === "0" || includeCountParam === "false"
+      ? false
+      : true;
+
+  const result = await listTenders(filters, { includeCount });
   return NextResponse.json(result, {
     headers: {
       "Cache-Control": "private, no-store",
