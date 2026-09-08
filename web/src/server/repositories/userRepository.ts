@@ -267,40 +267,15 @@ export async function updateUser(
 export async function updateOwnProfile(options: {
   userId: string;
   fullName: string;
-  email: string;
-  currentPassword?: string;
 }): Promise<{ ok: true; user: SafeAgentTenderUser } | { ok: false; message: string }> {
   const supabase = getServerSupabase();
   const fullName = options.fullName.trim();
-  const email = options.email.trim().toLowerCase();
 
   if (!fullName) return { ok: false, message: "Full name is required" };
-  if (!email.includes("@")) return { ok: false, message: "Invalid email" };
-
-  const existing = await getUserByEmail(email);
-  if (existing && existing.id !== options.userId) {
-    return { ok: false, message: "Email is already in use" };
-  }
-
-  if (options.currentPassword) {
-    const { data: row } = await supabase
-      .from("agenttender_users")
-      .select("password_hash")
-      .eq("id", options.userId)
-      .maybeSingle();
-    if (!row) return { ok: false, message: "User not found" };
-    const { data: verified } = await supabase.rpc("agenttender_verify_password", {
-      plain_password: options.currentPassword,
-      stored_hash: row.password_hash,
-    });
-    if (verified !== true) {
-      return { ok: false, message: "Current password is incorrect" };
-    }
-  }
 
   const { data, error } = await supabase
     .from("agenttender_users")
-    .update({ full_name: fullName, email })
+    .update({ full_name: fullName })
     .eq("id", options.userId)
     .select(SAFE_USER_SELECT)
     .single();

@@ -38,6 +38,27 @@ export const initialAdminPasswordSchema = passwordSchema;
 export const loginSchema = z.object({
   email: z.string().email().transform((v) => v.trim().toLowerCase()),
   password: z.string().min(1),
+  rememberMe: z.boolean().optional().default(false),
+  next: z.string().optional(),
+});
+
+export const forgotPasswordSchema = z.object({
+  email: z.string().email().transform((v) => v.trim().toLowerCase()),
+});
+
+export const completePasswordResetSchema = z
+  .object({
+    token: z.string().min(1),
+    newPassword: passwordSchema,
+    confirmPassword: z.string().min(1),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    message: "Passwords do not match",
+    path: ["confirmPassword"],
+  });
+
+export const profileUpdateSchema = z.object({
+  fullName: z.string().trim().min(1).max(120),
 });
 
 export const createUserSchema = z.object({
@@ -65,12 +86,6 @@ export const changePasswordSchema = z
     message: "Passwords do not match",
     path: ["confirmPassword"],
   });
-
-export const profileUpdateSchema = z.object({
-  fullName: z.string().trim().min(1).max(120),
-  email: z.string().email().transform((v) => v.trim().toLowerCase()),
-  currentPassword: z.string().optional(),
-});
 
 /** Public self-registration — creates company + ADMIN for the creator. */
 export const signupSchema = z

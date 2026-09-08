@@ -1,3 +1,5 @@
+import { Suspense } from "react";
+
 import { AuthCard } from "@/components/auth/auth-card";
 import { AuthPageShell } from "@/components/auth/auth-page-shell";
 import { LoginForm } from "./login-form";
@@ -9,7 +11,9 @@ export default function LoginPage() {
         title="Welcome back"
         description="Sign in to your account to continue"
       >
-        <LoginForm />
+        <Suspense fallback={<div className="h-64 animate-pulse rounded-md bg-background-100" />}>
+          <LoginForm />
+        </Suspense>
       </AuthCard>
     </AuthPageShell>
   );

@@ -33,6 +33,15 @@ function sessionHours(): number {
   return Number.isFinite(n) && n > 0 ? n : 8;
 }
 
+/** Longer cookie/DB TTL when Remember Me is checked (TF-11). */
+function rememberMeHours(): number {
+  const n = Number.parseInt(
+    process.env.AGENTTENDER_REMEMBER_ME_HOURS || "720",
+    10,
+  );
+  return Number.isFinite(n) && n > 0 ? n : 720;
+}
+
 function maxAttempts(): number {
   const n = Number.parseInt(
     process.env.AGENTTENDER_LOGIN_MAX_ATTEMPTS || "5",
@@ -113,10 +122,12 @@ export type LoginResult =
 export async function loginWithPassword(
   email: string,
   password: string,
+  options?: { rememberMe?: boolean },
 ): Promise<LoginResult> {
   const supabase = getServerSupabase();
   const normalized = email.trim().toLowerCase();
   const meta = await requestMeta();
+  const rememberMe = Boolean(options?.rememberMe);
 
   const { data: user, error } = await supabase
     .from("agenttender_users")
@@ -216,9 +227,8 @@ export async function loginWithPassword(
 
   const token = generateSessionToken();
   const tokenHash = hashSessionToken(token);
-  const expiresAt = new Date(
-    Date.now() + sessionHours() * 60 * 60_000,
-  ).toISOString();
+  const ttlHours = rememberMe ? rememberMeHours() : sessionHours();
+  const expiresAt = new Date(Date.now() + ttlHours * 60 * 60_000).toISOString();
 
   const { error: sessionError } = await supabase
     .from("agenttender_user_sessions")
@@ -248,16 +258,25 @@ export async function loginWithPassword(
     attemptedEmail: normalized,
     eventType: "LOGIN_SUCCESS",
     success: true,
+    metadata: { rememberMe },
   });
 
   const cookieStore = await cookies();
-  cookieStore.set(COOKIE_NAME, token, {
+  const cookieOptions = {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    sameSite: "lax" as const,
     path: "/",
-    expires: new Date(expiresAt),
-  });
+  };
+  if (rememberMe) {
+    cookieStore.set(COOKIE_NAME, token, {
+      ...cookieOptions,
+      expires: new Date(expiresAt),
+    });
+  } else {
+    // Session cookie — cleared when the browser session ends (TF-11).
+    cookieStore.set(COOKIE_NAME, token, cookieOptions);
+  }
 
   const sessionUser: SessionUser = {
     id: row.id,

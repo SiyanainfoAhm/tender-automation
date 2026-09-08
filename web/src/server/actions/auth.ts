@@ -19,8 +19,11 @@ import {
   resetPasswordSchema,
   profileUpdateSchema,
   signupSchema,
+  forgotPasswordSchema,
+  completePasswordResetSchema,
 } from "@/lib/validations";
 import { sendTenderFlowUserInvite } from "@/lib/email/tenderflow-user-invite";
+import { sendTenderFlowPasswordResetEmail } from "@/lib/email/tenderflow-password-reset";
 import {
   createUser,
   updateUser,
@@ -32,6 +35,10 @@ import {
   updateOwnProfile,
   registerPublicUser,
 } from "@/server/repositories/userRepository";
+import {
+  createPasswordResetTokenForEmail,
+  consumePasswordResetToken,
+} from "@/server/repositories/passwordResetRepository";
 import {
   createSavedView,
   deleteSavedView,
@@ -49,13 +56,26 @@ function isRedirectError(error: unknown): boolean {
   );
 }
 
+function safeInternalPath(next: string | undefined): string | null {
+  if (!next) return null;
+  if (!next.startsWith("/") || next.startsWith("//")) return null;
+  if (next.includes("://")) return null;
+  return next;
+}
+
 export async function loginAction(
   _prev: unknown,
   formData: FormData,
 ): Promise<{ error?: string; locked?: boolean }> {
+  const rememberRaw = formData.get("rememberMe");
   const parsed = loginSchema.safeParse({
     email: formData.get("email"),
     password: formData.get("password"),
+    rememberMe:
+      rememberRaw === "on" ||
+      rememberRaw === "true" ||
+      rememberRaw === "1",
+    next: formData.get("next") || undefined,
   });
   if (!parsed.success) {
     return { error: "Unable to sign in with those credentials." };
@@ -65,6 +85,7 @@ export async function loginAction(
     const result = await loginWithPassword(
       parsed.data.email,
       parsed.data.password,
+      { rememberMe: parsed.data.rememberMe },
     );
     if (!result.ok) {
       return {
@@ -75,7 +96,7 @@ export async function loginAction(
     if (result.mustChangePassword) {
       redirect("/change-password");
     }
-    redirect("/dashboard");
+    redirect(safeInternalPath(parsed.data.next) || "/dashboard");
   } catch (error) {
     if (isRedirectError(error)) throw error;
     return { error: "Unable to sign in with those credentials." };
@@ -134,7 +155,7 @@ export async function signupAction(
           "Account created, but automatic sign-in failed. Please sign in manually.",
       };
     }
-    redirect("/dashboard");
+    redirect("/company-profile");
   } catch (error) {
     if (isRedirectError(error)) throw error;
     return {
@@ -142,6 +163,80 @@ export async function signupAction(
         error instanceof Error ? error.message : "Unable to create account",
     };
   }
+}
+
+const FORGOT_PASSWORD_OK_MESSAGE =
+  "If an account exists for that email, a reset link has been sent.";
+
+export async function requestPasswordResetAction(
+  _prev: unknown,
+  formData: FormData,
+): Promise<{ error?: string; ok?: boolean; message?: string }> {
+  const parsed = forgotPasswordSchema.safeParse({
+    email: formData.get("email"),
+  });
+  if (!parsed.success) {
+    return { error: "Enter a valid email address." };
+  }
+
+  try {
+    const created = await createPasswordResetTokenForEmail(parsed.data.email);
+    if (created.found) {
+      const emailResult = await sendTenderFlowPasswordResetEmail({
+        name: created.fullName,
+        email: created.email,
+        rawToken: created.rawToken,
+        expiresAt: created.expiresAt,
+      });
+      if (!emailResult.ok) {
+        console.error("[TenderFlow reset] password reset email failed", {
+          userId: created.userId,
+          error: emailResult.error,
+        });
+        return {
+          error:
+            "Unable to send the reset email right now. Please try again later.",
+        };
+      }
+      console.info("[TenderFlow reset] password reset email sent", {
+        userId: created.userId,
+      });
+    }
+  } catch (error) {
+    console.error(
+      "[TenderFlow reset] request failed",
+      error instanceof Error ? error.message : "unknown",
+    );
+    return {
+      error: "Unable to process the reset request. Please try again later.",
+    };
+  }
+
+  return { ok: true, message: FORGOT_PASSWORD_OK_MESSAGE };
+}
+
+export async function completePasswordResetAction(
+  _prev: unknown,
+  formData: FormData,
+): Promise<{ error?: string; ok?: boolean }> {
+  const parsed = completePasswordResetSchema.safeParse({
+    token: formData.get("token"),
+    newPassword: formData.get("newPassword"),
+    confirmPassword: formData.get("confirmPassword"),
+  });
+  if (!parsed.success) {
+    return {
+      error: parsed.error.issues[0]?.message || "Unable to reset password",
+    };
+  }
+
+  const result = await consumePasswordResetToken({
+    rawToken: parsed.data.token,
+    newPassword: parsed.data.newPassword,
+  });
+  if (!result.ok) return { error: result.message };
+
+  redirect("/login?reset=1");
 }
 
 export async function createUserAction(formData: FormData): Promise<{
@@ -327,8 +422,6 @@ export async function updateProfileAction(formData: FormData): Promise<{
   const session = await requireSession();
   const parsed = profileUpdateSchema.safeParse({
     fullName: formData.get("fullName"),
-    email: formData.get("email"),
-    currentPassword: formData.get("currentPassword") || undefined,
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message || "Invalid profile data" };
@@ -337,8 +430,6 @@ export async function updateProfileAction(formData: FormData): Promise<{
   const result = await updateOwnProfile({
     userId: session.user.id,
     fullName: parsed.data.fullName,
-    email: parsed.data.email,
-    currentPassword: parsed.data.currentPassword,
   });
   if (!result.ok) return { error: result.message };
 
@@ -348,6 +439,9 @@ export async function updateProfileAction(formData: FormData): Promise<{
 
 export async function revokeOtherSessionsAction(): Promise<void> {
   const session = await requireSession();
+  if (session.user.role !== "ADMIN") {
+    return;
+  }
   await revokeOtherSessions(session.user.id, session.sessionId);
   revalidatePath("/profile");
 }
@@ -426,6 +520,9 @@ export async function updatePreferencesAction(formData: FormData): Promise<{
 
 export async function revokeOwnSessionAction(sessionId: string): Promise<void> {
   const session = await requireSession();
+  if (session.user.role !== "ADMIN") {
+    return;
+  }
   await revokeSession(sessionId, session.user.id);
   revalidatePath("/profile");
 }

@@ -38,12 +38,26 @@ function applySecurityHeaders(response: NextResponse): NextResponse {
   return response;
 }
 
+function applyNoStore(response: NextResponse): NextResponse {
+  response.headers.set(
+    "Cache-Control",
+    "no-store, no-cache, must-revalidate, private",
+  );
+  response.headers.set("Pragma", "no-cache");
+  return response;
+}
+
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const hasSession = Boolean(request.cookies.get(COOKIE_NAME)?.value);
 
-  if (pathname === "/login" || pathname === "/signup") {
-    if (hasSession) {
+  if (
+    pathname === "/login" ||
+    pathname === "/signup" ||
+    pathname === "/forgot-password" ||
+    pathname === "/reset-password"
+  ) {
+    if (hasSession && (pathname === "/login" || pathname === "/signup")) {
       const url = request.nextUrl.clone();
       url.pathname = "/dashboard";
       return applySecurityHeaders(NextResponse.redirect(url));
@@ -57,7 +71,7 @@ export function middleware(request: NextRequest) {
       url.pathname = "/login";
       return applySecurityHeaders(NextResponse.redirect(url));
     }
-    return applySecurityHeaders(NextResponse.next());
+    return applySecurityHeaders(applyNoStore(NextResponse.next()));
   }
 
   if (pathname === "/") {
@@ -71,6 +85,10 @@ export function middleware(request: NextRequest) {
     url.pathname = "/login";
     url.searchParams.set("next", pathname);
     return applySecurityHeaders(NextResponse.redirect(url));
+  }
+
+  if (isProtectedPath(pathname)) {
+    return applySecurityHeaders(applyNoStore(NextResponse.next()));
   }
 
   return applySecurityHeaders(NextResponse.next());

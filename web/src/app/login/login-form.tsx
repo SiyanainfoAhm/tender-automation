@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useActionState, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { ArrowRight, Eye, EyeOff, Loader2, Mail, Lock } from "lucide-react";
 
 import { loginAction } from "@/server/actions/auth";
@@ -13,13 +14,16 @@ import { getEmailValidationStatus } from "@/lib/validations/email-rules";
 import { cn } from "@/lib/utils";
 
 const REMEMBER_EMAIL_KEY = "agenttender_remember_email";
-const REMEMBER_FLAG_KEY = "agenttender_remember_login";
+const REMEMBER_FLAG_KEY = "agenttender_remember_me";
 
 export function LoginForm() {
+  const searchParams = useSearchParams();
+  const nextPath = searchParams.get("next") || "";
+  const resetSuccess = searchParams.get("reset") === "1";
   const [state, formAction, pending] = useActionState(loginAction, {});
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState("");
-  const [rememberLogin, setRememberLogin] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [emailTouched, setEmailTouched] = useState(false);
 
@@ -36,7 +40,7 @@ export function LoginForm() {
     try {
       const savedFlag = localStorage.getItem(REMEMBER_FLAG_KEY) === "true";
       const savedEmail = localStorage.getItem(REMEMBER_EMAIL_KEY) || "";
-      setRememberLogin(savedFlag);
+      setRememberMe(savedFlag);
       if (savedFlag && savedEmail) {
         setEmail(savedEmail);
       }
@@ -52,7 +56,7 @@ export function LoginForm() {
       .toLowerCase();
 
     try {
-      if (rememberLogin && nextEmail) {
+      if (rememberMe && nextEmail) {
         localStorage.setItem(REMEMBER_FLAG_KEY, "true");
         localStorage.setItem(REMEMBER_EMAIL_KEY, nextEmail);
       } else {
@@ -69,6 +73,17 @@ export function LoginForm() {
 
   return (
     <form action={handleSubmit} className="space-y-4">
+      {nextPath ? <input type="hidden" name="next" value={nextPath} /> : null}
+
+      {resetSuccess ? (
+        <div
+          role="status"
+          className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-800"
+        >
+          Your password was updated. Sign in with your new password.
+        </div>
+      ) : null}
+
       <div className="space-y-1.5">
         <Label htmlFor="email">Email address</Label>
         <div className="relative">
@@ -98,7 +113,12 @@ export function LoginForm() {
       <div className="space-y-1.5">
         <div className="flex items-center justify-between gap-2">
           <Label htmlFor="password">Password</Label>
-          <span className="text-xs text-text-muted">Forgot password?</span>
+          <Link
+            href="/forgot-password"
+            className="text-xs font-medium text-primary hover:text-primary-hover"
+          >
+            Forgot password?
+          </Link>
         </div>
         <div className="relative">
           <Lock className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-subtle" />
@@ -132,13 +152,14 @@ export function LoginForm() {
       <label className="flex cursor-pointer items-center gap-2 text-sm text-text-secondary">
         <input
           type="checkbox"
-          name="rememberLogin"
-          checked={rememberLogin}
-          onChange={(event) => setRememberLogin(event.target.checked)}
+          name="rememberMe"
+          value="true"
+          checked={rememberMe}
+          onChange={(event) => setRememberMe(event.target.checked)}
           disabled={pending}
           className="size-3.5 rounded border-border accent-primary"
         />
-        Remember email
+        Remember me
       </label>
 
       {state?.error ? (

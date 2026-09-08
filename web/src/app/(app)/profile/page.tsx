@@ -24,6 +24,7 @@ export default async function ProfilePage() {
 
   const sessions = await listUserSessions(session.user.id);
   const preferences = await getUserPreferences(session.user.id);
+  const canManageSessions = session.user.role === "ADMIN";
 
   return (
     <div className="space-y-8">
@@ -84,6 +85,7 @@ export default async function ProfilePage() {
         </CardContent>
       </Card>
 
+      {canManageSessions ? (
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle className="text-base">Active sessions</CardTitle>
@@ -139,6 +141,7 @@ export default async function ProfilePage() {
           )}
         </CardContent>
       </Card>
+      ) : null}
 
       <Card>
         <CardHeader>

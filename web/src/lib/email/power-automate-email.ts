@@ -16,8 +16,9 @@ function getWebhookUrl(): string | undefined {
 
 export async function sendPowerAutomateEmail(
   payload: PowerAutomateEmailPayload,
+  options?: { webhookUrl?: string },
 ): Promise<SendEmailResult> {
-  const hookUrl = getWebhookUrl();
+  const hookUrl = options?.webhookUrl?.trim() || getWebhookUrl();
 
   if (!hookUrl) {
     return {
