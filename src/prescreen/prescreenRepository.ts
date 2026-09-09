@@ -53,6 +53,19 @@ export async function persistPrescreenResult(
     return { ok: false, error: upsertError.message };
   }
 
+  const { data: existingTender } = await client
+    .from("agenttender_tenders")
+    .select("qualification_status, decision_source")
+    .eq("id", tenderId)
+    .maybeSingle();
+
+  const hasQualification = Boolean(
+    String(existingTender?.qualification_status || "").trim(),
+  );
+  const hasDecisionSource = Boolean(
+    String(existingTender?.decision_source || "").trim(),
+  );
+
   const tenderPatch: Record<string, unknown> = {
     prescreen_status: decision.status,
     prescreen_reason_code: decision.reasonCode,
@@ -62,15 +75,23 @@ export async function persistPrescreenResult(
     prescreen_rules_version: decision.rulesVersion,
   };
 
-  if (decision.status === "REJECTED") {
-    tenderPatch.qualification_status = "NO_GO";
-    tenderPatch.decision_source = "PRESCREEN" satisfies DecisionSource;
-  } else if (decision.status === "MANUAL_REVIEW" || decision.status === "ERROR") {
-    tenderPatch.qualification_status = "VERIFY";
-    tenderPatch.decision_source = "PRESCREEN" satisfies DecisionSource;
-  } else if (decision.status === "PASSED") {
-    // Do not manufacture a qualification status for PASSED
-    tenderPatch.decision_source = null;
+  // Never overwrite scheduler / screening qualification or decisions on an
+  // existing tender. Only fill qualification when the column is blank.
+  if (!hasQualification) {
+    if (decision.status === "REJECTED") {
+      tenderPatch.qualification_status = "NO_GO";
+      if (!hasDecisionSource) {
+        tenderPatch.decision_source = "PRESCREEN" satisfies DecisionSource;
+      }
+    } else if (
+      decision.status === "MANUAL_REVIEW" ||
+      decision.status === "ERROR"
+    ) {
+      tenderPatch.qualification_status = "VERIFY";
+      if (!hasDecisionSource) {
+        tenderPatch.decision_source = "PRESCREEN" satisfies DecisionSource;
+      }
+    }
   }
 
   const { error: tenderError } = await client

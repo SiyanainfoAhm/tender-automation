@@ -2,7 +2,9 @@
  * AI-summary Tender247 pipeline (AI Summary + all documents).
  *
  * 1. Download Tender247 daily Excel for --date (unless --skip-upsert)
- * 2. Upsert Excel rows into Supabase (scraped_date = date); new rows default VERIFY
+ * 2. Upsert Excel rows into Supabase (scraped_date = date); new rows default VERIFY.
+ *    Existing same-day rows keep qualification_status / category / decisions
+ *    (scheduler-owned); only metadata and other null-fill fields are patched.
  * 3. Queue tenders for that date still missing AI Summary URL and/or documents zip URL
  * 4. Open each tender via Tender Filters → Search By T247 ID
  * 5. Download AI Summary and always download all documents
@@ -293,7 +295,8 @@ export async function upsertScreenedTendersForDate(options: {
     logger: options.logger,
     screeningSource: "AI_SUMMARY_DAILY_EXCEL",
     modelName: "ai-summary-daily-excel",
-    // Never overwrite ChatGPT qualification_status / category on re-ingest.
+    // Never overwrite scheduler/ChatGPT qualification_status / category on re-ingest.
+    // Only brand-new same-day rows get VERIFY (or Excel status).
     preserveExistingQualificationStatus: true,
   });
   // Tender rows are what the AI crawl needs. Qual verify can fail for

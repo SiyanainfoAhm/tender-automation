@@ -38,6 +38,29 @@ test("ai-summary pipeline always downloads documents and uploads Azure artifacts
   );
 });
 
+test("processTender skips prescreen on existing Supabase rows", () => {
+  const src = fs.readFileSync(
+    path.join(root, "src/tender247Batch/processTender.ts"),
+    "utf8",
+  );
+  assert.match(src, /PRESCREEN_SKIPPED_EXISTING_ROW/);
+  assert.match(src, /result\.created/);
+  assert.match(src, /runAndPersistPrescreen/);
+});
+
+test("ai-summary protect mode only sets status on insert", () => {
+  const src = fs.readFileSync(
+    path.join(root, "src/runScreening/persistPhase1Results.ts"),
+    "utf8",
+  );
+  assert.match(src, /insertedNewRow/);
+  assert.match(src, /protectExistingScreeningFields && !insertedNewRow/);
+  assert.match(
+    src,
+    /Status left unchanged \(existing same-day row\)/,
+  );
+});
+
 test("processTender uploads Azure artifacts even when docs zip is incomplete", () => {
   const src = fs.readFileSync(
     path.join(root, "src/tender247Batch/processTender.ts"),

@@ -36,6 +36,8 @@ export interface UpsertTender247MetadataResult {
   id: string | null;
   contentHash: string | null;
   error: string | null;
+  /** True only when a new agenttender_tenders row was inserted. */
+  created: boolean;
 }
 
 export interface VerifiedTender247MetadataRow {
@@ -74,7 +76,7 @@ export async function upsertTender247Metadata(options: {
   if (!resolvedId) {
     const error = `INVALID_T247_ID metadata.t247Id=${String(options.metadata?.t247Id)} folder=${localFolderPath}`;
     logger?.error?.(`SUPABASE_METADATA_UPSERT_SKIPPED=${error}`);
-    return { ok: false, id: null, contentHash: null, error };
+    return { ok: false, id: null, contentHash: null, error, created: false };
   }
   const metadata: CompleteTenderMetadata = {
     ...options.metadata,
@@ -85,7 +87,7 @@ export async function upsertTender247Metadata(options: {
     const error =
       "SUPABASE_URL / SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY) missing — metadata not synced";
     logger?.error?.(`SUPABASE_METADATA_UPSERT_SKIPPED=${error}`);
-    return { ok: false, id: null, contentHash: null, error };
+    return { ok: false, id: null, contentHash: null, error, created: false };
   }
 
   let row: AgenttenderTenderRow;
@@ -100,7 +102,7 @@ export async function upsertTender247Metadata(options: {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger?.error?.(`SUPABASE_METADATA_UPSERT_SKIPPED=${message}`);
-    return { ok: false, id: null, contentHash: null, error: message };
+    return { ok: false, id: null, contentHash: null, error: message, created: false };
   }
 
   try {
@@ -147,23 +149,11 @@ export async function upsertTender247Metadata(options: {
         row as unknown as Record<string, unknown>,
         alwaysUpdate as string[],
       );
-      // Preserve GPT Excel / qualification status unless empty.
-      if (
-        existing.qualification_status &&
-        String(existing.qualification_status).trim()
-      ) {
-        delete next.qualification_status;
-      }
-      // Preserve ChatGPT tender category / project category when already set.
-      if (existing.category && String(existing.category).trim()) {
-        delete next.category;
-      }
-      if (
-        existing.project_category &&
-        String(existing.project_category).trim()
-      ) {
-        delete next.project_category;
-      }
+      // Existing same-day row: never touch qualification / category / decisions.
+      // Scheduler owns those; this path only refreshes metadata + artifact flags.
+      delete next.qualification_status;
+      delete next.category;
+      delete next.project_category;
       // Never clear or overwrite Azure artifact URLs via metadata sync.
       delete next.ai_summary_url;
       delete next.documents_zip_url;
@@ -193,13 +183,14 @@ export async function upsertTender247Metadata(options: {
           id: null,
           contentHash: row.content_hash,
           error: error.message,
+          created: false,
         };
       }
       const id = data && typeof data.id === "string" ? data.id : String(existing.id);
       logger?.info(
         `SUPABASE_METADATA_UPSERTED=T247-${resolvedId} hash=${row.content_hash.slice(0, 12)}`,
       );
-      return { ok: true, id, contentHash: row.content_hash, error: null };
+      return { ok: true, id, contentHash: row.content_hash, error: null, created: false };
     }
 
     const { data, error } = await client
@@ -234,6 +225,7 @@ export async function upsertTender247Metadata(options: {
         id: null,
         contentHash: row.content_hash,
         error: error.message,
+        created: false,
       };
     }
 
@@ -241,7 +233,7 @@ export async function upsertTender247Metadata(options: {
     logger?.info(
       `SUPABASE_METADATA_UPSERTED=T247-${resolvedId} hash=${row.content_hash.slice(0, 12)}`,
     );
-    return { ok: true, id, contentHash: row.content_hash, error: null };
+    return { ok: true, id, contentHash: row.content_hash, error: null, created: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger?.error?.(`SUPABASE_METADATA_UPSERT_FAILED=${message}`);
@@ -250,6 +242,7 @@ export async function upsertTender247Metadata(options: {
       id: null,
       contentHash: row.content_hash,
       error: message,
+      created: false,
     };
   }
 }
@@ -334,7 +327,7 @@ export async function upsertBidassistMetadata(options: {
     const error =
       "SUPABASE_URL / SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY) missing — metadata not synced";
     logger?.error?.(`SUPABASE_METADATA_UPSERT_SKIPPED=${error}`);
-    return { ok: false, id: null, contentHash: null, error };
+    return { ok: false, id: null, contentHash: null, error, created: false };
   }
 
   const row = buildBidassistSupabaseRow({
@@ -354,6 +347,7 @@ export async function upsertBidassistMetadata(options: {
       id: null,
       contentHash: row.content_hash,
       error: validation.error,
+      created: false,
     };
   }
 
@@ -380,6 +374,7 @@ export async function upsertBidassistMetadata(options: {
         id: null,
         contentHash: row.content_hash,
         error: error.message,
+        created: false,
       };
     }
 
@@ -388,7 +383,8 @@ export async function upsertBidassistMetadata(options: {
     if (id) {
       logger?.info(`SUPABASE_TENDER_DATABASE_ID=${id}`);
     }
-    return { ok: true, id, contentHash: row.content_hash, error: null };
+    // BidAssist upsert does not distinguish insert vs update here.
+    return { ok: true, id, contentHash: row.content_hash, error: null, created: false };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger?.error?.(`SUPABASE_METADATA_UPSERT_FAILED=${message}`);
@@ -397,6 +393,7 @@ export async function upsertBidassistMetadata(options: {
       id: null,
       contentHash: row.content_hash,
       error: message,
+      created: false,
     };
   }
 }

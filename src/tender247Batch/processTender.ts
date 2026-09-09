@@ -1750,7 +1750,10 @@ async function persistTender247Metadata(options: {
   });
   writeJsonAtomic(legacyPath, metadata);
   if (result.ok) {
-    if (result.id) {
+    // Prescreen may set VERIFY / NO_GO. Only run it for brand-new rows —
+    // existing same-day records are owned by the scheduler for status,
+    // category, and decisions; this crawl only refreshes metadata/docs.
+    if (result.id && result.created) {
       await runAndPersistPrescreen({
         tenderId: result.id,
         sourcePortal: "TENDER247",
@@ -1759,6 +1762,10 @@ async function persistTender247Metadata(options: {
         metadataHash: result.contentHash,
         logger,
       });
+    } else if (result.id && !result.created) {
+      logger.info(
+        `PRESCREEN_SKIPPED_EXISTING_ROW=T247-${metadata.t247Id} (preserve qualification/category/decisions)`,
+      );
     }
   }
   logger.info(result.ok ? "METADATA_SAVED" : "METADATA_DB_SYNC_FAILED");

@@ -366,8 +366,9 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
   modelName?: string;
   /**
    * When true (or when screeningSource is AI_SUMMARY_DAILY_EXCEL /
-   * REUPSERT_DAILY_EXCEL), same-day updates never overwrite a non-null
-   * qualification_status or category already in the database.
+   * REUPSERT_DAILY_EXCEL), same-day updates never touch qualification_status,
+   * category, project_category, or qualification_results — only new inserts
+   * may set status. Scheduler owns decisions on existing rows.
    */
   preserveExistingQualificationStatus?: boolean;
 }): Promise<Phase1PersistResult> {
@@ -379,7 +380,7 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
 
   const screeningSource =
     options.screeningSource || "CHATGPT_RUN_EXCEL";
-  /** Non-ChatGPT ingest must not wipe statuses ChatGPT already wrote. */
+  /** Non-ChatGPT ingest must not wipe statuses ChatGPT / scheduler already wrote. */
   const protectExistingScreeningFields =
     options.preserveExistingQualificationStatus === true ||
     screeningSource === "AI_SUMMARY_DAILY_EXCEL" ||
@@ -389,7 +390,7 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
   options.logger?.info(`GPT_ROWS_FOUND=${options.rows.length}`);
   if (protectExistingScreeningFields) {
     options.logger?.info(
-      "GPT_EXCEL_PROTECT_EXISTING_STATUS=true (skip non-null qualification_status/category)",
+      "GPT_EXCEL_PROTECT_EXISTING_STATUS=true (existing rows: never set qualification_status/category; inserts only)",
     );
   }
 
@@ -528,11 +529,10 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
       const existingCategoryNonNull = Boolean(
         String(existing?.category || "").trim(),
       );
-      const preserveStatus =
-        protectExistingScreeningFields && existingStatusNonNull;
-      const preserveCategory =
-        protectExistingScreeningFields && existingCategoryNonNull;
-      if (preserveStatus) {
+      // Protect mode: any existing same-day row keeps status/category (scheduler).
+      const preserveStatus = Boolean(protectExistingScreeningFields && existing);
+      const preserveCategory = Boolean(protectExistingScreeningFields && existing);
+      if (preserveStatus && existingStatusNonNull) {
         const priorStatus = normalizePhase1ScreeningStatus(
           existing?.qualification_status || null,
         );
@@ -547,8 +547,12 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
             `[${label}] PRESERVE_EXISTING_STATUS=${priorStatus}`,
           );
         }
+      } else if (preserveStatus) {
+        options.logger?.info(
+          `[${label}] PRESERVE_EXISTING_STATUS=unchanged (existing row; leave blank/scheduler value)`,
+        );
       }
-      if (preserveCategory) {
+      if (preserveCategory && existingCategoryNonNull) {
         options.logger?.info(
           `[${label}] PRESERVE_EXISTING_CATEGORY=${String(existing?.category).trim()}`,
         );
@@ -717,33 +721,26 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
       );
 
       // ChatGPT Phase-1 may overwrite status. AI-summary / protect mode:
-      // only fill status/category when the DB value is currently null/blank.
+      // only set status/category on INSERT. Existing same-day rows keep
+      // whatever the scheduler (or prior screening) already wrote.
       if (!protectExistingScreeningFields) {
         next.qualification_status = qualificationStatus;
         if (!updatedKeys.includes("qualification_status")) {
           updatedKeys.push("qualification_status");
         }
+      } else if (!existing) {
+        next.qualification_status = qualificationStatus;
       } else {
-        if (existingStatusNonNull) {
-          delete next.qualification_status;
-        } else if (!existing) {
-          next.qualification_status = qualificationStatus;
-        } else if (!String(next.qualification_status || "").trim()) {
-          next.qualification_status = qualificationStatus;
-        }
-        if (existingCategoryNonNull) {
-          delete next.category;
-          delete next.project_category;
-        }
+        delete next.qualification_status;
+        delete next.category;
+        delete next.project_category;
       }
 
-      // Final hard guard: never send non-null→overwrite for protected fields.
+      // Final hard guard: never send status/category on protected updates.
       if (protectExistingScreeningFields && existing) {
-        if (existingStatusNonNull) delete next.qualification_status;
-        if (existingCategoryNonNull) {
-          delete next.category;
-          delete next.project_category;
-        }
+        delete next.qualification_status;
+        delete next.category;
+        delete next.project_category;
       }
 
       next.raw_metadata = rawMetadata;
@@ -774,28 +771,21 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
       }
       options.logger?.info(
         preserveStatus
-          ? `[${label}] Status preserved (non-null):\n${existing?.qualification_status}`
+          ? `[${label}] Status left unchanged (existing same-day row):\n${existing?.qualification_status ?? "(blank)"}`
           : `[${label}] Status updated:\n${qualificationStatus}`,
       );
 
       let persistedTenderId: string | null = existing?.id ?? null;
       let statusAlreadyInDb = existingStatusNonNull;
+      let insertedNewRow = false;
 
       if (existing) {
         const updatePayload: Record<string, unknown> = {
           ...next,
           updated_at: now,
         };
-        if (
-          protectExistingScreeningFields &&
-          String(existing.qualification_status || "").trim()
-        ) {
+        if (protectExistingScreeningFields) {
           delete updatePayload.qualification_status;
-        }
-        if (
-          protectExistingScreeningFields &&
-          String(existing.category || "").trim()
-        ) {
           delete updatePayload.category;
           delete updatePayload.project_category;
         }
@@ -827,10 +817,13 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
             scraped_date: raced.scraped_date || options.runDate,
             updated_at: now,
           };
-          if (statusAlreadyInDb) {
+          if (protectExistingScreeningFields || statusAlreadyInDb) {
             delete racedPayload.qualification_status;
           }
-          if (String(raced.category || "").trim()) {
+          if (
+            protectExistingScreeningFields ||
+            String(raced.category || "").trim()
+          ) {
             delete racedPayload.category;
             delete racedPayload.project_category;
           }
@@ -919,15 +912,17 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
             }
           } else {
             persistedTenderId = inserted?.id ? String(inserted.id) : null;
+            insertedNewRow = true;
             result.created += 1;
           }
         }
       }
 
-      // Do not upsert qualification when DB already has a non-null status under
-      // protect mode — the DB trigger would sync and overwrite tender status.
-      const skipQualUpsert =
-        protectExistingScreeningFields && statusAlreadyInDb;
+      // Do not upsert qualification for existing same-day rows under protect
+      // mode — scheduler owns status/decisions; DB triggers would sync back.
+      const skipQualUpsert = Boolean(
+        protectExistingScreeningFields && !insertedNewRow,
+      );
       if (!skipQualUpsert) {
         const qual = qualificationPayloadForStatus(
           effectiveStatus,
