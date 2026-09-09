@@ -5,11 +5,25 @@ import {
   getTenderExplorerFacets,
   countVisibleTenders,
 } from "@/server/repositories/tenderRepository";
+import { tenderFiltersSchema } from "@/lib/validations";
+import {
+  searchParamsForStatusCounts,
+  tenderStatusCountQueryKey,
+} from "@/lib/tender-status-count-params";
 
 import { TenderExplorer, TenderExplorerSkeleton } from "./tender-explorer";
 
-export default async function TendersPage() {
+type TendersPageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function TendersPage({ searchParams }: TendersPageProps) {
   const session = await requireSession();
+  const rawParams = searchParams ? await searchParams : {};
+  const statusCountFilters = tenderFiltersSchema.parse(
+    searchParamsForStatusCounts(rawParams),
+  );
+  const statusCountsFilterKey = tenderStatusCountQueryKey(rawParams);
 
   const [facets, allCount, counts] = await Promise.all([
     getTenderExplorerFacets().catch(() => ({
@@ -20,7 +34,7 @@ export default async function TendersPage() {
       cities: [],
     })),
     countVisibleTenders().catch(() => 0),
-    getTenderListStatusCounts().catch((error) => {
+    getTenderListStatusCounts(statusCountFilters).catch((error) => {
       console.error("[tenders] failed to load status card counts", error);
       return null;
     }),
@@ -35,6 +49,7 @@ export default async function TendersPage() {
       canImport={sessionHasPermission(session, "tenders.import")}
       canCreate={sessionHasPermission(session, "tenders.edit")}
       statusCounts={counts}
+      statusCountsFilterKey={statusCountsFilterKey}
     />
   );
 }

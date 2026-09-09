@@ -306,7 +306,9 @@ function scoreTenderSheet(sheetName: string, headerMap: Map<string, string>): nu
 function digitsT247(raw: string): string {
   const id = raw.replace(/^T247[-\s]*/i, "");
   const digits = id.replace(/\D/g, "");
-  return digits || id.trim();
+  // Never fall back to non-digit junk (e.g. "undefined") — that created bad DB rows.
+  if (!digits || /^0+$/.test(digits)) return "";
+  return digits;
 }
 
 /**

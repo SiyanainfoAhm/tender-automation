@@ -116,7 +116,8 @@ export function digitsT247(raw: unknown): string {
   if (!text) return "";
   const id = text.replace(/^T247[-\s]*/i, "");
   const digits = id.replace(/\D/g, "");
-  return digits || id.trim();
+  if (!digits || /^0+$/.test(digits)) return "";
+  return digits;
 }
 
 export function cleanText(raw: unknown): string {

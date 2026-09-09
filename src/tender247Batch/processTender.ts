@@ -262,14 +262,26 @@ export async function processLiveTender(
   // -------- LEVEL A: skip reopen when local artifacts already satisfy the run --------
   let resume = inspectTenderResumeState(dateFolder, t247Id);
   const localArtifacts = inspectTenderArtifactState(resume.tenderFolder, t247Id);
-  // AI-summary-first: skip search/expand when AI PDF or docs zip already exists.
+  // Legacy AI-only mode: skip when AI PDF or docs zip already exists.
   const aiSummaryPipelineLocalDone =
     options.documentsOnlyIfAiMissing === true &&
     (localArtifacts.aiSummaryValid || localArtifacts.documentsZipValid);
+  // AI+docs pipeline: skip reopen only when metadata + AI + docs are complete.
+  const aiSummaryPipelineFullLocalDone =
+    options.documentsOnlyIfAiMissing !== true &&
+    options.allowNoBidDetailOpen === true &&
+    localArtifacts.complete;
+  // Document pipeline: skip when core docs+metadata are ready (AI optional).
   const classicCoreDone =
     options.documentsOnlyIfAiMissing !== true &&
+    options.allowNoBidDetailOpen !== true &&
     isTenderSafeToSkipReopen(resume.tenderFolder, t247Id);
-  if (!options.force && (aiSummaryPipelineLocalDone || classicCoreDone)) {
+  if (
+    !options.force &&
+    (aiSummaryPipelineLocalDone ||
+      aiSummaryPipelineFullLocalDone ||
+      classicCoreDone)
+  ) {
     const artifacts = localArtifacts;
     const aiStage = resolveAiSummaryStage({
       tenderDir: resume.tenderFolder,
@@ -278,7 +290,9 @@ export async function processLiveTender(
     logger.info(
       aiSummaryPipelineLocalDone
         ? `TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id} reason=local_ai_or_docs ai=${artifacts.aiSummaryValid} docs=${artifacts.documentsZipValid}`
-        : `TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id}`,
+        : aiSummaryPipelineFullLocalDone
+          ? `TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id} reason=local_ai_and_docs_complete`
+          : `TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id}`,
     );
     if (!artifacts.aiSummaryValid && isAiSummaryTerminalFailure(aiStage)) {
       t247Event(logger, t247Id, "AI_SUMMARY_DOWNLOAD_FAILED");
@@ -1083,6 +1097,10 @@ export async function processLiveTender(
   const artifactsAfterGate =
     lastGate?.state ?? inspectTenderArtifactState(resume.tenderFolder, t247Id);
   try {
+    const hasUploadableArtifacts =
+      artifactsAfterGate.aiSummaryValid ||
+      artifactsAfterGate.documentsZipValid ||
+      artifactsAfterGate.coreReady;
     if (artifactsAfterGate.coreReady) {
       if (
         fs.existsSync(resume.zipPath) &&
@@ -1107,8 +1125,11 @@ export async function processLiveTender(
       zipPath = zipResult.zipPath;
       zipSize = zipResult.sizeBytes;
       lastCompletedStep = "zip";
+    }
 
-      // GPT Excel already created/updated the tender row; upload local artifacts to Azure.
+    // Upload any available local artifacts (AI PDF and/or docs zip). Do not
+    // require coreReady — previously AI-only folders never reached Azure.
+    if (hasUploadableArtifacts && fs.existsSync(resume.tenderFolder)) {
       try {
         const runDate =
           getActiveTender247RunContext()?.requestedDate ??
@@ -1131,7 +1152,9 @@ export async function processLiveTender(
           }`,
         );
       }
+    }
 
+    if (artifactsAfterGate.coreReady) {
       const aiStageAfterZip = resolveAiSummaryStage({
         tenderDir: resume.tenderFolder,
         aiSummaryValid: artifactsAfterGate.aiSummaryValid,
@@ -1640,18 +1663,27 @@ function loadOrCreateMinimumMetadata(options: {
   logger: Logger;
 }): Promise<CompleteTenderMetadata> {
   return (async () => {
+    const withForcedId = (
+      metadata: CompleteTenderMetadata,
+    ): CompleteTenderMetadata => ({
+      ...metadata,
+      t247Id: options.t247Id,
+    });
+
     const fromSupabase = await fetchTender247Metadata(options.t247Id);
     if (fromSupabase) {
       options.logger.info("METADATA_LOADED_FROM_SUPABASE");
-      return fromSupabase;
+      return withForcedId(fromSupabase);
     }
 
     if (isValidArtifact(options.metadataPath)) {
       try {
         options.logger.info("METADATA_LOADED_FROM_LEGACY_FILE");
-        return JSON.parse(
-          fs.readFileSync(options.metadataPath, "utf8"),
-        ) as CompleteTenderMetadata;
+        return withForcedId(
+          JSON.parse(
+            fs.readFileSync(options.metadataPath, "utf8"),
+          ) as CompleteTenderMetadata,
+        );
       } catch {
         options.logger.warn("Existing metadata.json unreadable; using minimum");
       }
@@ -1687,7 +1719,14 @@ async function persistTender247Metadata(options: {
   tenderFolder: string;
   logger: Logger;
 }): Promise<void> {
-  const { metadata, tenderFolder, logger } = options;
+  const { tenderFolder, logger } = options;
+  const folderId =
+    path.basename(tenderFolder).replace(/^T247-/i, "").replace(/\D/g, "") ||
+    String(options.metadata.t247Id || "").replace(/\D/g, "");
+  const metadata: CompleteTenderMetadata = {
+    ...options.metadata,
+    t247Id: folderId || options.metadata.t247Id,
+  };
   logger.info("METADATA_WRITE_START");
   const legacyPath = path.join(tenderFolder, "metadata.json");
   writeJsonAtomic(legacyPath, metadata);

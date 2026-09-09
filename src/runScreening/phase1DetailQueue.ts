@@ -53,7 +53,9 @@ export function runCorrelationIdForDate(runDate: string): string {
 }
 
 export function digitsTender247Id(raw: string): string {
-  return raw.replace(/^T247[-\s]*/i, "").replace(/\D/g, "") || raw.trim();
+  const digits = raw.replace(/^T247[-\s]*/i, "").replace(/\D/g, "");
+  if (!digits || /^0+$/.test(digits)) return "";
+  return digits;
 }
 
 export function emptyCrawlCounts(): Record<Phase1CrawlStatus, number> {

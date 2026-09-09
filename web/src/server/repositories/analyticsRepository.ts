@@ -21,8 +21,9 @@ import { AppError } from "@/lib/errors/app-error";
 import { assertSupabaseOk, runQuery, type QueryResult } from "@/lib/errors/db-query";
 import {
   calendarDateInAppTz,
-  resolveScrapedDateFilter,
 } from "@/lib/tender-date-filter";
+import { tenderFiltersSchema, type TenderFilters } from "@/lib/validations";
+import { applyTenderListNonStatusFilters, resolveTenderListCityFilter } from "@/server/repositories/tenderRepository";
 import { startOfDay, subDays, formatISO, addDays } from "date-fns";
 
 export type DashboardMetrics = {
@@ -198,17 +199,54 @@ export type TenderListStatusCounts = {
   cancelled: number;
 };
 
-export type TenderListStatusCountFilters = {
-  /** Scraped-date preset (`today`, `this_month`, …). */
-  date?: string | null;
-  selectedDate?: string | null;
-  createdFrom?: string | null;
-  createdTo?: string | null;
-  source?: string | null;
-};
+export type TenderListStatusCountFilters = Partial<
+  Pick<
+    TenderFilters,
+    | "q"
+    | "source"
+    | "downloadStatus"
+    | "dateType"
+    | "from"
+    | "to"
+    | "quickDate"
+    | "closingPreset"
+    | "valueBand"
+    | "emdBand"
+    | "state"
+    | "city"
+    | "category"
+    | "organization"
+    | "authority"
+    | "tenderValueMin"
+    | "tenderValueMax"
+    | "emdMin"
+    | "emdMax"
+    | "manualReview"
+    | "qualified"
+    | "date"
+    | "selectedDate"
+    | "createdFrom"
+    | "createdTo"
+    | "closingDate"
+    | "closingFrom"
+    | "closingTo"
+  >
+>;
+
+function normalizeStatusCountFilters(
+  filters?: TenderListStatusCountFilters | TenderFilters | null,
+): TenderFilters {
+  // Status is never part of the facet population — cards show distribution
+  // across all statuses for the current non-status filters.
+  return tenderFiltersSchema.parse({
+    ...(filters ?? {}),
+    status: "ALL",
+    page: 1,
+  });
+}
 
 export async function getTenderListStatusCounts(
-  filters?: TenderListStatusCountFilters | null,
+  filters?: TenderListStatusCountFilters | TenderFilters | null,
 ): Promise<TenderListStatusCounts> {
   const supabase = getServerSupabase();
   const todayDate = calendarDateInAppTz();
@@ -218,25 +256,16 @@ export async function getTenderListStatusCounts(
     return calendarDateInAppTz(d);
   })();
 
-  const scraped = resolveScrapedDateFilter({
-    preset: filters?.date,
-    selectedDate: filters?.selectedDate,
-    from: filters?.createdFrom,
-    to: filters?.createdTo,
-  });
+  const scoped = normalizeStatusCountFilters(filters);
+  const cityFilter = await resolveTenderListCityFilter(scoped.city);
 
-  const base = () => {
-    let q = supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const base = async (): Promise<any> => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let q: any = supabase
       .from("agenttender_web_tender_list")
       .select("id", { count: "exact", head: true });
-    if (filters?.source && filters.source !== "ALL") {
-      q = q.eq("source_portal", filters.source);
-    }
-    if (scraped?.mode === "eq") {
-      q = q.eq("scraped_date", scraped.value);
-    } else if (scraped?.mode === "range") {
-      q = q.gte("scraped_date", scraped.gte).lte("scraped_date", scraped.lte);
-    }
+    q = await applyTenderListNonStatusFilters(q, scoped, { cityFilter });
     return q;
   };
 
@@ -260,19 +289,21 @@ export async function getTenderListStatusCounts(
     cancelledRes,
   ] = await Promise.all([
     base(),
-    base().eq("qualification_status", "VERIFY"),
-    base().is("qualification_status", null),
-    base().eq("qualification_status", "GO"),
-    base().eq("qualification_status", "CONDITIONAL_GO"),
-    base().eq("qualification_status", "NO_GO"),
-    base().eq("qualification_status", "DUPLICATE"),
-    base().eq("qualification_status", "PARTNER_BID"),
-    base().eq("qualification_status", "WON"),
-    base().eq("qualification_status", "LOST"),
-    base().eq("qualification_status", "DISQUALIFIED"),
-    base().gte("closing_date", todayDate).lte("closing_date", in3),
-    base().eq("qualification_status", "SUBMITTED"),
-    base().eq("qualification_status", "CANCELLED"),
+    base().then((q) => q.eq("qualification_status", "VERIFY")),
+    base().then((q) => q.is("qualification_status", null)),
+    base().then((q) => q.eq("qualification_status", "GO")),
+    base().then((q) => q.eq("qualification_status", "CONDITIONAL_GO")),
+    base().then((q) => q.eq("qualification_status", "NO_GO")),
+    base().then((q) => q.eq("qualification_status", "DUPLICATE")),
+    base().then((q) => q.eq("qualification_status", "PARTNER_BID")),
+    base().then((q) => q.eq("qualification_status", "WON")),
+    base().then((q) => q.eq("qualification_status", "LOST")),
+    base().then((q) => q.eq("qualification_status", "DISQUALIFIED")),
+    base().then((q) =>
+      q.gte("closing_date", todayDate).lte("closing_date", in3),
+    ),
+    base().then((q) => q.eq("qualification_status", "SUBMITTED")),
+    base().then((q) => q.eq("qualification_status", "CANCELLED")),
   ]);
 
   const results = [

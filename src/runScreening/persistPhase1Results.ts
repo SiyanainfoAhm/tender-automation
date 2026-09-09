@@ -32,6 +32,10 @@ import { parsePhase1Amount } from "./phase1DecisionGuard.js";
 import { parsePortalDate } from "../supabase/tenderMetadataMap.js";
 import { referenceNoForWorkbookRow } from "../excel/referenceNumber.js";
 import { parseDuplicateReferenceFromReason } from "./parseDuplicateReference.js";
+import {
+  isValidTender247NumericId,
+  normalizeTender247Id,
+} from "./duplicateScreening.js";
 
 export type Phase1PersistResult = {
   attempted: number;
@@ -59,7 +63,8 @@ export function assertPhase1PersistComplete(
   result: Phase1PersistResult,
   expectedRows: number,
 ): void {
-  if (result.stored === expectedRows && result.errors.length === 0) return;
+  const accounted = result.stored + result.skipped;
+  if (accounted === expectedRows && result.errors.length === 0) return;
   throw new AutomationError(
     "PHASE1_SUPABASE_UPSERT_INCOMPLETE",
     `PHASE1_SUPABASE_UPSERT_INCOMPLETE: expected ${expectedRows} rows, stored ${result.stored}, skipped ${result.skipped}, errors ${result.errors.length}${result.errors.length ? ` — ${result.errors.slice(0, 3).join("; ")}` : ""}`,
@@ -72,7 +77,10 @@ function portalForRow(row: RunWorkbookRow): "TENDER247" | "BIDASSIST" {
 }
 
 function sourceTenderId(row: RunWorkbookRow): string {
-  return row.tender247Id || row.bidAssistId || row.canonicalId;
+  if (row.tender247Id) {
+    return normalizeTender247Id(row.tender247Id) || row.tender247Id;
+  }
+  return row.bidAssistId || row.canonicalId;
 }
 
 function referenceCandidates(row: RunWorkbookRow): string[] {
@@ -216,10 +224,12 @@ type ExistingTenderRow = {
   project_category: string | null;
   scraped_date: string | null;
   raw_metadata: Record<string, unknown> | null;
+  ai_summary_url?: string | null;
+  documents_zip_url?: string | null;
 };
 
 const EXISTING_TENDER_SELECT =
-  "id, source_portal, source_tender_id, folder_id, title, organization, location_text, closing_date, tender_value_text, emd_text, qualification_status, category, project_category, scraped_date, raw_metadata";
+  "id, source_portal, source_tender_id, folder_id, title, organization, location_text, closing_date, tender_value_text, emd_text, qualification_status, category, project_category, scraped_date, raw_metadata, ai_summary_url, documents_zip_url";
 
 /**
  * Same-day snapshot lookup only.
@@ -449,6 +459,17 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
     const label = sourcePortal === "TENDER247" ? `T247-${id}` : id;
     const references = referenceCandidates(row);
 
+    if (sourcePortal === "TENDER247" && !isValidTender247NumericId(id)) {
+      result.skipped += 1;
+      result.errors.push(
+        `${label || row.canonicalId || "(blank)"}: invalid Tender247 id`,
+      );
+      options.logger?.warn?.(
+        `GPT_EXCEL_SKIP_INVALID_T247_ID=${label || row.canonicalId || "(blank)"}`,
+      );
+      continue;
+    }
+
     try {
       // STEP 1 — same-day snapshot only
       const existing = await findSameDayTender({
@@ -458,6 +479,20 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         scrapedDate: options.runDate,
         references,
       });
+
+      // AI-summary ingest: skip rewrite only when BOTH artifact URLs exist.
+      if (
+        protectExistingScreeningFields &&
+        existing &&
+        String(existing.ai_summary_url || "").trim() &&
+        String(existing.documents_zip_url || "").trim()
+      ) {
+        result.skipped += 1;
+        options.logger?.info(
+          `[${label}] SKIP_EXISTING_ARTIFACT_URLS ai=true zip=true`,
+        );
+        continue;
+      }
 
       options.logger?.info(
         `[${label}] Same-day snapshot found=${Boolean(existing)} scraped_date=${options.runDate}`,

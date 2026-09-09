@@ -1,15 +1,15 @@
 /**
- * AI-summary-first Tender247 pipeline.
+ * AI-summary Tender247 pipeline (AI Summary + all documents).
  *
  * 1. Download Tender247 daily Excel for --date (unless --skip-upsert)
  * 2. Upsert Excel rows into Supabase (scraped_date = date); new rows default VERIFY
- * 3. Queue ALL tenders for that date missing AI Summary URL (including NO_GO)
+ * 3. Queue tenders for that date still missing AI Summary URL and/or documents zip URL
  * 4. Open each tender via Tender Filters → Search By T247 ID
- * 5. Download AI Summary; if AI Summary is not available, download all documents
+ * 5. Download AI Summary and always download all documents
  * 6. Upload artifacts to Azure and persist public URLs
  *
  * Same-day scheduled re-runs re-download Excel so newly listed tenders are
- * inserted, then only process rows still missing ai_summary_url.
+ * inserted, then only process rows still missing either artifact URL.
  *
  * Usage:
  *   npm run pipeline:tender247:ai-summary
@@ -300,14 +300,15 @@ export async function upsertScreenedTendersForDate(options: {
   // historical re-listings (same T247 ID across scraped_dates) — do not abort
   // the whole pipeline when any tenders were written.
   const tenderWrites = result.created + result.updated;
-  if (result.stored !== rows.length || result.errors.length > 0) {
+  const accounted = result.stored + result.skipped;
+  if (accounted !== rows.length || result.errors.length > 0) {
     options.logger.warn?.(
-      `AI_SUMMARY_PIPELINE_UPSERT_PARTIAL expected=${rows.length} stored=${result.stored} created=${result.created} updated=${result.updated} errors=${result.errors.length}`,
+      `AI_SUMMARY_PIPELINE_UPSERT_PARTIAL expected=${rows.length} stored=${result.stored} skipped=${result.skipped} created=${result.created} updated=${result.updated} errors=${result.errors.length}`,
     );
     console.log(
-      `AI_SUMMARY_PIPELINE_UPSERT_PARTIAL expected=${rows.length} stored=${result.stored} created=${result.created} updated=${result.updated} errors=${result.errors.length}`,
+      `AI_SUMMARY_PIPELINE_UPSERT_PARTIAL expected=${rows.length} stored=${result.stored} skipped=${result.skipped} created=${result.created} updated=${result.updated} errors=${result.errors.length}`,
     );
-    if (tenderWrites === 0 && result.stored === 0) {
+    if (tenderWrites === 0 && result.stored === 0 && result.skipped === 0) {
       assertPhase1PersistComplete(result, rows.length);
     }
   } else {
@@ -429,9 +430,9 @@ export async function listAiSummaryQueueForDate(options: {
       ? String(row.ai_summary_url)
       : null;
 
-    // Primary goal is AI Summary. Skip only when AI URL already exists (unless --force).
-    // NO_GO / No Bid remain eligible — every tender gets an AI Summary attempt.
-    if (!options.force && aiSummaryUrl) {
+    // Finished only when BOTH Azure artifact URLs exist (unless --force).
+    // Missing docs URL must still crawl even if AI Summary URL is already set.
+    if (!options.force && aiSummaryUrl && documentsZipUrl) {
       continue;
     }
 
@@ -585,20 +586,31 @@ export async function runAiSummaryFirstDocumentPipeline(
     }
   }
 
-  // Skip tenders that already have local AI_Summary.pdf or documents zip —
-  // do not search/expand them again (unless --force).
+  // Skip browser reopen when local AI + docs are both present AND Azure URLs
+  // already exist. If URLs are missing, keep the id in the crawl queue so
+  // processTender early-skip can upload without reopening the portal.
   const localDoneIds = new Set<string>();
   if (!args.force) {
     for (const { t247Id, tenderDir } of listT247TenderDirs(dateFolder)) {
       const state = inspectTenderArtifactState(tenderDir, t247Id);
-      if (!state.aiSummaryValid && !state.documentsZipValid) continue;
+      if (!state.aiSummaryValid || !state.documentsZipValid) continue;
+      const pendingRow = pending.find((row) => row.sourceTenderId === t247Id);
+      const urlsComplete = Boolean(
+        pendingRow?.aiSummaryUrl && pendingRow?.documentsZipUrl,
+      );
+      // Not in today's pending queue (already finished in DB) — safe to ignore.
+      if (!pendingRow) {
+        localDoneIds.add(t247Id);
+        continue;
+      }
+      if (!urlsComplete) {
+        // Local files exist; leave in queue for Azure upload via early-skip.
+        continue;
+      }
       localDoneIds.add(t247Id);
-      // Only count queue members toward this run's success totals.
-      const inPending = pending.some((row) => row.sourceTenderId === t247Id);
       const inFilter = !idFilter?.length || idFilter.includes(t247Id);
-      if (inPending && inFilter) {
-        if (state.aiSummaryValid) summary.fullSuccess += 1;
-        else summary.partialSuccess += 1;
+      if (inFilter) {
+        summary.fullSuccess += 1;
       }
     }
     if (localDoneIds.size) {
@@ -606,7 +618,7 @@ export async function runAiSummaryFirstDocumentPipeline(
       queue = queue.filter((row) => !localDoneIds.has(row.sourceTenderId));
       summary.skippedLocalArtifacts = Math.max(0, beforeLocal - queue.length);
       logger.info(
-        `AI_SUMMARY_PIPELINE_SKIP_LOCAL count=${summary.skippedLocalArtifacts} (ai_or_docs already on disk)`,
+        `AI_SUMMARY_PIPELINE_SKIP_LOCAL count=${summary.skippedLocalArtifacts} (ai_and_docs_and_urls already present)`,
       );
       console.log(
         `AI_SUMMARY_PIPELINE_SKIP_LOCAL=${summary.skippedLocalArtifacts}`,
@@ -625,7 +637,7 @@ export async function runAiSummaryFirstDocumentPipeline(
     statuses: [...QUEUE_STATUSES, "*"],
     force: args.force,
     dryRun: args.dryRun,
-    documentsOnlyIfAiMissing: true,
+    documentsOnlyIfAiMissing: false,
     allowNoBidDetailOpen: true,
     idFilter: idFilter || null,
     onlyFailed: args.onlyFailed,
@@ -739,7 +751,7 @@ export async function runAiSummaryFirstDocumentPipeline(
         const survivorIds = queue.map((r) => r.sourceTenderId);
         console.log(`AI_SUMMARY_PIPELINE_CRAWL_START count=${survivorIds.length}`);
         logger.info(
-          `AI_SUMMARY_PIPELINE_CRAWL_START count=${survivorIds.length} documentsOnlyIfAiMissing=true`,
+          `AI_SUMMARY_PIPELINE_CRAWL_START count=${survivorIds.length} documentsOnlyIfAiMissing=false`,
         );
 
         const parallel = await processSurvivorsInParallel({
@@ -751,7 +763,7 @@ export async function runAiSummaryFirstDocumentPipeline(
           logger,
           alreadyCompleted: localDoneIds,
           force: args.force,
-          documentsOnlyIfAiMissing: true,
+          documentsOnlyIfAiMissing: false,
           allowNoBidDetailOpen: true,
           phase1ScreeningAuthoritative: true,
           screeningStatusById,
@@ -823,7 +835,7 @@ export async function runAiSummaryFirstDocumentPipeline(
     `Upsert: attempted=${summary.upsertAttempted} stored=${summary.upsertStored} created=${summary.upsertCreated} updated=${summary.upsertUpdated}`,
   );
   console.log(`Selected (DB): ${summary.selected}`);
-  console.log(`Skipped (AI URL already set): ${summary.skippedExistingAi}`);
+  console.log(`Skipped (AI or zip URL already set): ${summary.skippedExistingAi}`);
   console.log(
     `Skipped (local AI or docs already present): ${summary.skippedLocalArtifacts}`,
   );

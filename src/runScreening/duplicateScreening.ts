@@ -69,6 +69,23 @@ export function normalizeTender247Id(
   return digits;
 }
 
+/** Tender247 portal IDs are long numeric strings (never "undefined"/junk). */
+export function isValidTender247NumericId(
+  value: string | null | undefined,
+): boolean {
+  const digits = normalizeTender247Id(value);
+  return digits.length >= 6;
+}
+
+/** Recover T247 id from a local folder path like .../T247-104125804. */
+export function resolveTender247IdFromFolderPath(
+  localFolderPath: string | null | undefined,
+): string {
+  const text = String(localFolderPath ?? "").replace(/\\/g, "/");
+  const match = text.match(/(?:^|\/)T247-(\d{6,})(?:\/|$)/i);
+  return match?.[1] ?? "";
+}
+
 export function isValidReferenceNumber(
   value: string | null | undefined,
 ): boolean {

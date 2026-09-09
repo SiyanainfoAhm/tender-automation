@@ -223,75 +223,48 @@ function applyQuickDate(
   }
 }
 
-export async function listTenders(
+type CityFilterResolved =
+  | { kind: "empty" }
+  | {
+      kind: "in";
+      cities: string[];
+      locationTexts: string[];
+      states: string[];
+    };
+
+type CityFilterContext = CityFilterResolved | null | undefined;
+
+/**
+ * Shared non-status WHERE clauses for list + status-card counts.
+ * Status / pagination / sort are applied by the caller.
+ */
+export async function applyTenderListNonStatusFilters(
+  // Supabase filter builders are not conveniently generic across call sites.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  query: any,
   filters: TenderFilters,
-  overrides?: { page?: number; pageSize?: number; includeCount?: boolean },
-): Promise<{
-  rows: WebTenderListRow[];
-  total: number;
-  page: number;
-  pageSize: number;
-}> {
-  const supabase = getServerSupabase();
-  const page = overrides?.page ?? filters.page;
-  const pageSize = overrides?.pageSize ?? filters.pageSize;
-  const from = (page - 1) * pageSize;
-  const to = from + pageSize - 1;
-  // Exact counts are relatively expensive; callers may set includeCount=false
-  // when paginating with a cached total (UI page>1). Export always counts.
-  const includeCount = overrides?.includeCount ?? true;
-
-  const sortCol =
-    SORTABLE[filters.sortBy] || resolveTenderSortColumn(filters.sortBy);
-  const ascending = filters.sortDir === "asc";
-  const dateBounds = applyQuickDate(filters);
-
-  let query = includeCount
-    ? supabase
-        .from("agenttender_web_tender_list")
-        .select(WEB_TENDER_LIST_SELECT, { count: "exact" })
-    : supabase.from("agenttender_web_tender_list").select(WEB_TENDER_LIST_SELECT);
+  options?: { cityFilter?: CityFilterContext },
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Promise<any> {
+  let q = query;
 
   if (filters.source && filters.source !== "ALL") {
-    query = query.eq("source_portal", filters.source);
-  }
-
-  if (filters.status && filters.status !== "ALL") {
-    const statusKey = String(filters.status).toLowerCase().replace(/[\s-]+/g, "_");
-    // Status cards + list filters use tender.qualification_status so counts
-    // match the Supabase column (not coalesce'd qualification_results status).
-    if (statusKey === "submitted") {
-      // Include qualification_status=SUBMITTED and bid-workspace submissions.
-      const submittedIds = await listSubmittedTenderIds();
-      if (submittedIds.length > 0) {
-        const idList = submittedIds.join(",");
-        query = query.or(
-          `qualification_status.eq.SUBMITTED,id.in.(${idList})`,
-        );
-      } else {
-        query = query.eq("qualification_status", "SUBMITTED");
-      }
-    } else {
-      const statusFilter = qualificationStatusesForFilter(filters.status);
-      if (statusFilter.kind === "null") {
-        query = query.is("qualification_status", null);
-      } else if (statusFilter.kind === "in") {
-        query = query.in("qualification_status", statusFilter.values);
-      }
-    }
+    q = q.eq("source_portal", filters.source);
   }
 
   if (filters.downloadStatus) {
-    query = query.eq("download_status", filters.downloadStatus);
+    q = q.eq("download_status", filters.downloadStatus);
   }
 
-  if (filters.state) query = query.ilike("state", filters.state);
+  if (filters.state) q = q.ilike("state", filters.state);
   if (filters.city) {
-    const cityFilter = await resolveCityFilterValues(filters.city);
-    if (cityFilter.kind === "empty") {
-      // Selected city has no matching normalized rows — return empty page.
-      query = query.eq("id", "00000000-0000-0000-0000-000000000000");
-    } else if (cityFilter.kind === "in") {
+    const cityFilter =
+      options?.cityFilter !== undefined
+        ? options.cityFilter
+        : await resolveCityFilterValues(filters.city);
+    if (cityFilter?.kind === "empty") {
+      q = q.eq("id", "00000000-0000-0000-0000-000000000000");
+    } else if (cityFilter?.kind === "in") {
       const parts: string[] = [];
       if (cityFilter.cities.length > 0) {
         parts.push(
@@ -310,28 +283,27 @@ export async function listTenders(
       }
       if (parts.length === 1) {
         if (cityFilter.cities.length > 0) {
-          query = query.in("city", cityFilter.cities);
+          q = q.in("city", cityFilter.cities);
         } else if (cityFilter.locationTexts.length > 0) {
-          query = query.in("location_text", cityFilter.locationTexts);
+          q = q.in("location_text", cityFilter.locationTexts);
         } else {
-          query = query.in("state", cityFilter.states);
+          q = q.in("state", cityFilter.states);
         }
       } else if (parts.length > 1) {
-        query = query.or(parts.join(","));
+        q = q.or(parts.join(","));
       }
     }
   }
   if (filters.category && isProjectCategory(filters.category)) {
-    query = query.eq("project_category", filters.category);
+    q = q.eq("project_category", filters.category);
   }
   if (filters.organization) {
-    query = query.ilike("organization", `%${filters.organization}%`);
+    q = q.ilike("organization", `%${filters.organization}%`);
   }
   if (filters.authority) {
-    query = query.ilike("authority", `%${filters.authority}%`);
+    q = q.ilike("authority", `%${filters.authority}%`);
   }
 
-  // Explicit min/max still supported; valueBand shortcuts override when set.
   let tenderValueMin = filters.tenderValueMin;
   let tenderValueMax = filters.tenderValueMax;
   let tenderValueNullOnly = false;
@@ -362,13 +334,13 @@ export async function listTenders(
   }
 
   if (tenderValueNullOnly) {
-    query = query.is("tender_value", null);
+    q = q.is("tender_value", null);
   } else {
     if (tenderValueMin != null) {
-      query = query.gte("tender_value", tenderValueMin);
+      q = q.gte("tender_value", tenderValueMin);
     }
     if (tenderValueMax != null) {
-      query = query.lte("tender_value", tenderValueMax);
+      q = q.lte("tender_value", tenderValueMax);
     }
   }
 
@@ -404,7 +376,7 @@ export async function listTenders(
   }
 
   if (emdNotRequired) {
-    query = query.or(
+    q = q.or(
       [
         "emd_amount.eq.0",
         "emd_text.ilike.%not required%",
@@ -413,34 +385,35 @@ export async function listTenders(
       ].join(","),
     );
   } else if (emdNullOnly) {
-    query = query.is("emd_amount", null);
+    q = q.is("emd_amount", null);
   } else {
     if (emdMin != null) {
-      query = query.gte("emd_amount", emdMin);
+      q = q.gte("emd_amount", emdMin);
     }
     if (emdMax != null) {
-      query = query.lte("emd_amount", emdMax);
+      q = q.lte("emd_amount", emdMax);
     }
   }
 
   if (filters.manualReview === "true") {
-    query = query.eq("manual_review_required", true);
+    q = q.eq("manual_review_required", true);
   } else if (filters.manualReview === "false") {
-    query = query.eq("manual_review_required", false);
+    q = q.eq("manual_review_required", false);
   }
 
   if (filters.qualified === "true") {
-    query = query.not("qualification_status", "is", null);
+    q = q.not("qualification_status", "is", null);
   } else if (filters.qualified === "false") {
-    query = query.is("qualification_status", null);
+    q = q.is("qualification_status", null);
   }
 
+  const dateBounds = applyQuickDate(filters);
   const dateCol = dateBounds.dateType;
   if (dateBounds.from) {
-    query = query.gte(dateCol, dateBounds.from);
+    q = q.gte(dateCol, dateBounds.from);
   }
   if (dateBounds.to) {
-    query = query.lte(dateCol, dateBounds.to);
+    q = q.lte(dateCol, dateBounds.to);
   }
 
   const scrapedFilter = resolveScrapedDateFilter({
@@ -450,10 +423,10 @@ export async function listTenders(
     to: filters.createdTo,
   });
   if (scrapedFilter?.mode === "eq") {
-    query = query.eq("scraped_date", scrapedFilter.value);
+    q = q.eq("scraped_date", scrapedFilter.value);
   } else if (scrapedFilter?.mode === "range") {
-    query = query.gte("scraped_date", scrapedFilter.gte);
-    query = query.lte("scraped_date", scrapedFilter.lte);
+    q = q.gte("scraped_date", scrapedFilter.gte);
+    q = q.lte("scraped_date", scrapedFilter.lte);
   }
 
   const closingFilter = resolveClosingDateFilter({
@@ -462,18 +435,76 @@ export async function listTenders(
     to: filters.closingTo,
   });
   if (closingFilter?.mode === "eq") {
-    query = query.eq("closing_date", closingFilter.value);
+    q = q.eq("closing_date", closingFilter.value);
   } else if (closingFilter?.mode === "range") {
-    query = query.gte("closing_date", closingFilter.gte);
-    query = query.lte("closing_date", closingFilter.lte);
+    q = q.gte("closing_date", closingFilter.gte);
+    q = q.lte("closing_date", closingFilter.lte);
   }
 
   if (shouldRunTenderSearch(filters.q)) {
-    const q = escapePostgrestSearchTerm(filters.q!);
-    if (q) {
-      query = query.or(buildTenderSearchOrFilter(q));
+    const term = escapePostgrestSearchTerm(filters.q!);
+    if (term) {
+      q = q.or(buildTenderSearchOrFilter(term));
     }
   }
+
+  return q;
+}
+
+export async function listTenders(
+  filters: TenderFilters,
+  overrides?: { page?: number; pageSize?: number; includeCount?: boolean },
+): Promise<{
+  rows: WebTenderListRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+}> {
+  const supabase = getServerSupabase();
+  const page = overrides?.page ?? filters.page;
+  const pageSize = overrides?.pageSize ?? filters.pageSize;
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+  // Exact counts are relatively expensive; callers may set includeCount=false
+  // when paginating with a cached total (UI page>1). Export always counts.
+  const includeCount = overrides?.includeCount ?? true;
+
+  const sortCol =
+    SORTABLE[filters.sortBy] || resolveTenderSortColumn(filters.sortBy);
+  const ascending = filters.sortDir === "asc";
+
+  let query = includeCount
+    ? supabase
+        .from("agenttender_web_tender_list")
+        .select(WEB_TENDER_LIST_SELECT, { count: "exact" })
+    : supabase.from("agenttender_web_tender_list").select(WEB_TENDER_LIST_SELECT);
+
+  if (filters.status && filters.status !== "ALL") {
+    const statusKey = String(filters.status).toLowerCase().replace(/[\s-]+/g, "_");
+    // Status cards + list filters use tender.qualification_status so counts
+    // match the Supabase column (not coalesce'd qualification_results status).
+    if (statusKey === "submitted") {
+      // Include qualification_status=SUBMITTED and bid-workspace submissions.
+      const submittedIds = await listSubmittedTenderIds();
+      if (submittedIds.length > 0) {
+        const idList = submittedIds.join(",");
+        query = query.or(
+          `qualification_status.eq.SUBMITTED,id.in.(${idList})`,
+        );
+      } else {
+        query = query.eq("qualification_status", "SUBMITTED");
+      }
+    } else {
+      const statusFilter = qualificationStatusesForFilter(filters.status);
+      if (statusFilter.kind === "null") {
+        query = query.is("qualification_status", null);
+      } else if (statusFilter.kind === "in") {
+        query = query.in("qualification_status", statusFilter.values);
+      }
+    }
+  }
+
+  query = await applyTenderListNonStatusFilters(query, filters);
 
   // Sort entire filtered set, then paginate (nulls last for ASC/DESC).
   // Status uses DB lexical order on effective_qualification_status (stable,
@@ -658,19 +689,20 @@ export async function getTenderExplorerFacets(): Promise<{
   };
 }
 
+/**
+ * Prefetch city filter values once for batch status-count queries.
+ */
+export async function resolveTenderListCityFilter(
+  city: string | undefined | null,
+): Promise<CityFilterResolved | null> {
+  if (!city) return null;
+  return resolveCityFilterValues(city);
+}
+
 function quoteOrFilterValue(value: string): string {
   // PostgREST list value: wrap and escape double quotes.
   return `"${value.replace(/"/g, '\\"')}"`;
 }
-
-type CityFilterResolved =
-  | { kind: "empty" }
-  | {
-      kind: "in";
-      cities: string[];
-      locationTexts: string[];
-      states: string[];
-    };
 
 const cityFilterCache = new Map<string, CityFilterResolved>();
 

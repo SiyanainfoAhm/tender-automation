@@ -69,6 +69,7 @@ import {
   tenderSearchHint,
   TENDER_SEARCH_DEBOUNCE_MS,
 } from "@/lib/tender-search";
+import { tenderStatusCountQueryKey } from "@/lib/tender-status-count-params";
 import {
   nextSortState,
   normalizeSortKeyForUi,
@@ -95,6 +96,8 @@ type TenderExplorerProps = {
   canImport: boolean;
   canCreate: boolean;
   statusCounts: TenderListStatusCounts | null;
+  /** Non-status filter key used when SSR loaded `statusCounts`. */
+  statusCountsFilterKey?: string;
 };
 
 type ListResponse = {
@@ -296,6 +299,7 @@ export function TenderExplorer({
   canImport,
   canCreate,
   statusCounts,
+  statusCountsFilterKey = "",
 }: TenderExplorerProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -321,21 +325,29 @@ export function TenderExplorer({
   const [filtersOpen, setFiltersOpen] = React.useState(activePanelCount > 0);
   const hasResolvedDataRef = React.useRef(false);
   const listRequestSerial = React.useRef(createRequestSerial());
+  const statusCountsRequestSerial = React.useRef(createRequestSerial());
+
+  const statusCountQueryKey = React.useMemo(
+    () => tenderStatusCountQueryKey(searchParams),
+    [searchParams],
+  );
+
   const skipFirstStatusCountsFetch = React.useRef(
-    !searchParams.get("date") &&
-      !searchParams.get("selectedDate") &&
-      !searchParams.get("createdFrom") &&
-      !searchParams.get("createdTo") &&
-      (!searchParams.get("source") || searchParams.get("source") === "ALL") &&
-      !!statusCounts,
+    statusCounts != null && statusCountsFilterKey === statusCountQueryKey,
   );
 
   const [statusCountsState, setStatusCountsState] =
     React.useState<TenderListStatusCounts | null>(statusCounts);
 
+  // Adopt SSR counts only when they match the current non-status filter scope.
+  // Prevents a soft-nav RSC refresh from overwriting Today-scoped counts with
+  // unrelated props after a status-only URL change (status is excluded from
+  // the key, so the key stays stable while RSC still re-renders).
   React.useEffect(() => {
+    if (statusCounts == null) return;
+    if (statusCountsFilterKey !== statusCountQueryKey) return;
     setStatusCountsState(statusCounts);
-  }, [statusCounts]);
+  }, [statusCounts, statusCountsFilterKey, statusCountQueryKey]);
 
   const queryKey = searchParams.toString();
   const listFilterKey = React.useMemo(
@@ -343,27 +355,13 @@ export function TenderExplorer({
     [queryKey],
   );
 
-  const statusCountQueryKey = React.useMemo(() => {
-    const params = new URLSearchParams();
-    const date = searchParams.get("date");
-    const selectedDate = searchParams.get("selectedDate");
-    const createdFrom = searchParams.get("createdFrom");
-    const createdTo = searchParams.get("createdTo");
-    const source = searchParams.get("source");
-    if (date) params.set("date", date);
-    if (selectedDate) params.set("selectedDate", selectedDate);
-    if (createdFrom) params.set("createdFrom", createdFrom);
-    if (createdTo) params.set("createdTo", createdTo);
-    if (source && source !== "ALL") params.set("source", source);
-    return params.toString();
-  }, [searchParams]);
-
   React.useEffect(() => {
     if (skipFirstStatusCountsFetch.current) {
       skipFirstStatusCountsFetch.current = false;
       return;
     }
     const controller = new AbortController();
+    const requestId = statusCountsRequestSerial.current.next();
     void (async () => {
       try {
         const response = await fetch(
@@ -372,7 +370,9 @@ export function TenderExplorer({
         );
         if (!response.ok) return;
         const data = (await response.json()) as TenderListStatusCounts;
-        if (!controller.signal.aborted) setStatusCountsState(data);
+        if (controller.signal.aborted) return;
+        if (!statusCountsRequestSerial.current.isLatest(requestId)) return;
+        setStatusCountsState(data);
       } catch {
         /* keep prior counts */
       }

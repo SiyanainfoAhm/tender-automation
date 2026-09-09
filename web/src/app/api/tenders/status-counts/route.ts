@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { tenderFiltersSchema } from "@/lib/validations";
+import { searchParamsForStatusCounts } from "@/lib/tender-status-count-params";
 import { getSession } from "@/server/auth/session";
 import { getTenderListStatusCounts } from "@/server/repositories/analyticsRepository";
 
@@ -10,13 +12,13 @@ export async function GET(request: Request) {
   }
 
   const url = new URL(request.url);
-  const counts = await getTenderListStatusCounts({
-    date: url.searchParams.get("date"),
-    selectedDate: url.searchParams.get("selectedDate"),
-    createdFrom: url.searchParams.get("createdFrom"),
-    createdTo: url.searchParams.get("createdTo"),
-    source: url.searchParams.get("source"),
+  const raw: Record<string, string> = {};
+  url.searchParams.forEach((value, key) => {
+    raw[key] = value;
   });
+  // Drop status/page/sort — cards are a facet over the non-status population.
+  const filters = tenderFiltersSchema.parse(searchParamsForStatusCounts(raw));
+  const counts = await getTenderListStatusCounts(filters);
 
   return NextResponse.json(counts, {
     headers: {

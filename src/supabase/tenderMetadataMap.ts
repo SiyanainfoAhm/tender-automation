@@ -9,6 +9,11 @@ import {
   normalizeTenderCity,
   stripLocationDecorators,
 } from "../location/normalizeTenderCity.js";
+import {
+  isValidTender247NumericId,
+  normalizeTender247Id,
+  resolveTender247IdFromFolderPath,
+} from "../runScreening/duplicateScreening.js";
 import type { CompleteTenderMetadata } from "../tender247Batch/extractCompleteMetadata.js";
 
 export type AgenttenderSourcePortal = "TENDER247" | "BIDASSIST";
@@ -86,6 +91,21 @@ function asNumber(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+/**
+ * Prefer metadata.t247Id; fall back to T247-##### in localFolderPath.
+ * Returns "" when neither yields a valid portal id (never "undefined").
+ */
+export function resolveTender247SourceId(options: {
+  metadata: { t247Id?: unknown };
+  localFolderPath?: string | null;
+}): string {
+  const fromMeta = normalizeTender247Id(String(options.metadata?.t247Id ?? ""));
+  if (isValidTender247NumericId(fromMeta)) return fromMeta;
+  const fromFolder = resolveTender247IdFromFolderPath(options.localFolderPath);
+  if (isValidTender247NumericId(fromFolder)) return fromFolder;
+  return "";
 }
 
 export function parsePortalDate(value: unknown): string | null {
@@ -240,14 +260,28 @@ export function buildTender247SupabaseRow(options: {
   aiSummaryAvailable?: boolean;
   documentArchiveAvailable?: boolean;
 }): AgenttenderTenderRow {
-  const { metadata, localFolderPath } = options;
+  const { localFolderPath } = options;
+  const t247Id = resolveTender247SourceId({
+    metadata: options.metadata,
+    localFolderPath,
+  });
+  if (!t247Id) {
+    throw new Error(
+      `Invalid Tender247 id for metadata upsert (got ${String(options.metadata?.t247Id)} folder=${localFolderPath})`,
+    );
+  }
+  // Excel screening raw_metadata often lacks t247Id — always re-attach before write.
+  const metadata: CompleteTenderMetadata = {
+    ...options.metadata,
+    t247Id,
+  };
   const normalized = metadata.normalized || {};
   const overview = metadata.tenderOverview || {};
   const title =
     asText(normalized.tenderName) ||
     asText(overview["Tender Name -"]) ||
     asText(overview["Tender Name"]) ||
-    `T247-${metadata.t247Id}`;
+    `T247-${t247Id}`;
   const organization =
     asText(normalized.organisation) ||
     asText(overview["Organisation -"]) ||
@@ -291,8 +325,8 @@ export function buildTender247SupabaseRow(options: {
 
   return {
     source_portal: "TENDER247",
-    source_tender_id: String(metadata.t247Id),
-    folder_id: `T247-${metadata.t247Id}`,
+    source_tender_id: t247Id,
+    folder_id: `T247-${t247Id}`,
     title,
     organization,
     department,

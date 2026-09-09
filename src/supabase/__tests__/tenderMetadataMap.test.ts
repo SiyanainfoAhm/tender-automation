@@ -83,6 +83,31 @@ test("buildTender247SupabaseRow maps CompleteTenderMetadata fields", () => {
   assert.equal(row.scraped_date, "2026-08-05");
 });
 
+test("buildTender247SupabaseRow recovers t247Id from folder when metadata omits it", () => {
+  const meta = sample();
+  delete (meta as { t247Id?: string }).t247Id;
+  const row = buildTender247SupabaseRow({
+    metadata: meta,
+    localFolderPath: "downloads/2026-08-05/T247-102667034",
+  });
+  assert.equal(row.source_tender_id, "102667034");
+  assert.equal(row.folder_id, "T247-102667034");
+  assert.equal((row.raw_metadata as { t247Id?: string }).t247Id, "102667034");
+});
+
+test("buildTender247SupabaseRow rejects undefined-like ids without folder fallback", () => {
+  const meta = sample();
+  meta.t247Id = "undefined" as unknown as string;
+  assert.throws(
+    () =>
+      buildTender247SupabaseRow({
+        metadata: meta,
+        localFolderPath: "downloads/2026-08-05/orphan",
+      }),
+    /Invalid Tender247 id/,
+  );
+});
+
 test("mapDownloadStatus marks sync failures", () => {
   assert.equal(
     mapDownloadStatus({ metadata: sample(), syncFailed: true }),

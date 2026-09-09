@@ -233,9 +233,13 @@ export function mapTenderDetail(options: {
       : portal === "MANUAL"
         ? "MANUAL"
         : "TENDER247";
+  // Prefer the tender row status (same SoT as Tender Management list/cards).
+  // qualification_results can lag or hold AI-summary-pipeline VERIFY defaults
+  // that disagree with Excel/GPT screening on agenttender_tenders.
   const qualStatus =
-    (asString(qualification?.status) as TenderStatus | null) ??
-    (asString(tender.qualification_status) as TenderStatus | null);
+    (asString(tender.qualification_status) as TenderStatus | null) ??
+    (asString(tender.effective_qualification_status) as TenderStatus | null) ??
+    (asString(qualification?.status) as TenderStatus | null);
   const qualificationStatus = isTenderStatus(qualStatus) ? qualStatus : null;
   const city = normalizeTenderCity({
     city: asString(tender.city),

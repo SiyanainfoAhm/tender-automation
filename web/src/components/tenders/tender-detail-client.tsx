@@ -1174,6 +1174,19 @@ const statusStyle =
                     <SourceBadge source={tender.sourcePortal} size="sm" />
                   )}
                 </InfoRow>
+                <InfoRow label="Qualification Status" icon={ShieldCheck}>
+                  {statusBadge ? (
+                    <StatusBadge status={statusBadge} size="sm" />
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 rounded-md bg-background-200 px-2 py-0.5 text-[11px] font-medium text-foreground-600">
+                      <span
+                        className="size-1.5 shrink-0 rounded-full bg-foreground-400"
+                        aria-hidden
+                      />
+                      Under Evaluation
+                    </span>
+                  )}
+                </InfoRow>
                 <InfoRow label="Tender Type" icon={ClipboardList}>
                   {editing ? (
                     <Input
@@ -1421,7 +1434,11 @@ const statusStyle =
                     {statusBadge ? (
                       <StatusBadge status={statusBadge} size="sm" />
                     ) : (
-                      <span className="font-normal text-muted-foreground">
+                      <span className="inline-flex items-center gap-1.5 rounded-md bg-background-200 px-2 py-0.5 text-[11px] font-medium text-foreground-600">
+                        <span
+                          className="size-1.5 shrink-0 rounded-full bg-foreground-400"
+                          aria-hidden
+                        />
                         Under Evaluation
                       </span>
                     )}

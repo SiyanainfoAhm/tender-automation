@@ -7,6 +7,7 @@ import { getSupabaseAdminClient, isSupabaseConfigured } from "./client.js";
 import {
   buildBidassistSupabaseRow,
   buildTender247SupabaseRow,
+  resolveTender247SourceId,
   type AgenttenderTenderRow,
 } from "./tenderMetadataMap.js";
 import { mergeNullOnlyRecord } from "./mergeTenderNullOnly.js";
@@ -65,7 +66,21 @@ export async function upsertTender247Metadata(options: {
     warn?: (msg: string) => void;
   };
 }): Promise<UpsertTender247MetadataResult> {
-  const { metadata, localFolderPath, logger } = options;
+  const { localFolderPath, logger } = options;
+  const resolvedId = resolveTender247SourceId({
+    metadata: options.metadata,
+    localFolderPath,
+  });
+  if (!resolvedId) {
+    const error = `INVALID_T247_ID metadata.t247Id=${String(options.metadata?.t247Id)} folder=${localFolderPath}`;
+    logger?.error?.(`SUPABASE_METADATA_UPSERT_SKIPPED=${error}`);
+    return { ok: false, id: null, contentHash: null, error };
+  }
+  const metadata: CompleteTenderMetadata = {
+    ...options.metadata,
+    t247Id: resolvedId,
+  };
+
   if (!isSupabaseConfigured()) {
     const error =
       "SUPABASE_URL / SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY) missing — metadata not synced";
@@ -73,13 +88,20 @@ export async function upsertTender247Metadata(options: {
     return { ok: false, id: null, contentHash: null, error };
   }
 
-  const row = buildTender247SupabaseRow({
-    metadata,
-    localFolderPath,
-    scrapedDate: options.scrapedDate,
-    aiSummaryAvailable: options.aiSummaryAvailable,
-    documentArchiveAvailable: options.documentArchiveAvailable,
-  });
+  let row: AgenttenderTenderRow;
+  try {
+    row = buildTender247SupabaseRow({
+      metadata,
+      localFolderPath,
+      scrapedDate: options.scrapedDate,
+      aiSummaryAvailable: options.aiSummaryAvailable,
+      documentArchiveAvailable: options.documentArchiveAvailable,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger?.error?.(`SUPABASE_METADATA_UPSERT_SKIPPED=${message}`);
+    return { ok: false, id: null, contentHash: null, error: message };
+  }
 
   try {
     const client = getSupabaseAdminClient();
@@ -93,7 +115,7 @@ export async function upsertTender247Metadata(options: {
       .from(TABLE)
       .select("*")
       .eq("source_portal", SOURCE)
-      .eq("source_tender_id", String(metadata.t247Id));
+      .eq("source_tender_id", resolvedId);
     if (scrapedDate && /^\d{4}-\d{2}-\d{2}$/.test(scrapedDate)) {
       existingQuery = existingQuery.eq("scraped_date", scrapedDate);
     } else {
@@ -142,16 +164,19 @@ export async function upsertTender247Metadata(options: {
       ) {
         delete next.project_category;
       }
+      // Never clear or overwrite Azure artifact URLs via metadata sync.
+      delete next.ai_summary_url;
+      delete next.documents_zip_url;
       // Never move scraped_date across days via metadata sync.
       delete next.scraped_date;
       payload = {
         ...next,
         source_portal: SOURCE,
-        source_tender_id: String(metadata.t247Id),
+        source_tender_id: resolvedId,
         updated_at: new Date().toISOString(),
       };
       logger?.info?.(
-        `SUPABASE_METADATA_NULL_ONLY_MERGE=T247-${metadata.t247Id} keys=${updatedKeys.join(",") || "none"}`,
+        `SUPABASE_METADATA_NULL_ONLY_MERGE=T247-${resolvedId} keys=${updatedKeys.join(",") || "none"}`,
       );
 
       const { data, error } = await client
@@ -172,7 +197,7 @@ export async function upsertTender247Metadata(options: {
       }
       const id = data && typeof data.id === "string" ? data.id : String(existing.id);
       logger?.info(
-        `SUPABASE_METADATA_UPSERTED=T247-${metadata.t247Id} hash=${row.content_hash.slice(0, 12)}`,
+        `SUPABASE_METADATA_UPSERTED=T247-${resolvedId} hash=${row.content_hash.slice(0, 12)}`,
       );
       return { ok: true, id, contentHash: row.content_hash, error: null };
     }
@@ -214,7 +239,7 @@ export async function upsertTender247Metadata(options: {
 
     const id = data && typeof data.id === "string" ? data.id : null;
     logger?.info(
-      `SUPABASE_METADATA_UPSERTED=T247-${metadata.t247Id} hash=${row.content_hash.slice(0, 12)}`,
+      `SUPABASE_METADATA_UPSERTED=T247-${resolvedId} hash=${row.content_hash.slice(0, 12)}`,
     );
     return { ok: true, id, contentHash: row.content_hash, error: null };
   } catch (error) {
@@ -510,7 +535,12 @@ export async function fetchTender247Metadata(
   if (error || !data?.raw_metadata) {
     return null;
   }
-  return data.raw_metadata as CompleteTenderMetadata;
+  const raw = data.raw_metadata as CompleteTenderMetadata;
+  // Excel screening blobs often omit t247Id — never hand that to the crawler.
+  return {
+    ...raw,
+    t247Id: String(t247Id),
+  };
 }
 
 export async function tender247MetadataExistsInSupabase(

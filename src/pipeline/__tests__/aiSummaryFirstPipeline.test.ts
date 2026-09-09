@@ -10,12 +10,12 @@ const root = path.resolve(
   "../../..",
 );
 
-test("ai-summary pipeline uses search-by-ID and documentsOnlyIfAiMissing", () => {
+test("ai-summary pipeline always downloads documents and uploads Azure artifacts", () => {
   const src = fs.readFileSync(
     path.join(root, "src/pipeline/runAiSummaryFirstDocumentPipeline.ts"),
     "utf8",
   );
-  assert.match(src, /documentsOnlyIfAiMissing:\s*true/);
+  assert.match(src, /documentsOnlyIfAiMissing:\s*false/);
   assert.match(src, /allowNoBidDetailOpen:\s*true/);
   assert.match(src, /NO_GO/);
   assert.match(src, /upsertScreenedTendersForDate/);
@@ -26,31 +26,38 @@ test("ai-summary pipeline uses search-by-ID and documentsOnlyIfAiMissing", () =>
   assert.match(src, /persistGptScreenedWorkbookToDatabase/);
   assert.match(src, /listAiSummaryQueueForDate/);
   assert.match(src, /ai_summary_url/);
+  assert.match(src, /documents_zip_url/);
   assert.match(src, /skippedLocalArtifacts/);
   assert.match(src, /AI_SUMMARY_PIPELINE_SKIP_LOCAL/);
-  assert.match(src, /hasAiSummaryOrDocumentsLocally|inspectTenderArtifactState/);
+  assert.match(src, /inspectTenderArtifactState/);
   assert.match(src, /INVALID_ACCOUNT_FLAG/);
+  assert.match(src, /aiSummaryUrl && documentsZipUrl/);
   assert.doesNotMatch(
     src,
     /crawl !== "VERIFY" && crawl !== "MAY_BID" && crawl !== "WILL_BID"/,
   );
 });
 
-test("processTender skips AI-summary reopen when local AI or docs exist", () => {
+test("processTender uploads Azure artifacts even when docs zip is incomplete", () => {
   const src = fs.readFileSync(
     path.join(root, "src/tender247Batch/processTender.ts"),
     "utf8",
   );
-  assert.match(src, /aiSummaryPipelineLocalDone/);
-  assert.match(src, /local_ai_or_docs/);
+  assert.match(src, /hasUploadableArtifacts/);
+  assert.match(src, /aiSummaryPipelineFullLocalDone/);
+  assert.match(src, /uploadTenderArtifactsAndPersistUrls/);
+  assert.match(src, /local_ai_and_docs_complete/);
   assert.doesNotMatch(src, /TENDER247_SKIP_BYPASS_AI_SUMMARY_MISSING/);
-  assert.match(
-    fs.readFileSync(
-      path.join(root, "src/tender247Batch/tenderArtifactState.ts"),
-      "utf8",
-    ),
-    /hasAiSummaryOrDocumentsLocally/,
+});
+
+test("downloadRequiredTenderFiles supports documentsOnlyIfAiMissing", () => {
+  const src = fs.readFileSync(
+    path.join(root, "src/tender247Batch/downloadRequiredTenderFiles.ts"),
+    "utf8",
   );
+  assert.match(src, /documentsOnlyIfAiMissing/);
+  assert.match(src, /DOCUMENTS_SKIPPED_AI_SUMMARY_PRESENT/);
+  assert.match(src, /DOCUMENTS_DOWNLOAD_BECAUSE_AI_SUMMARY_MISSING/);
 });
 
 test("withDefaultVerifyStatus fills empty Screening Status", async () => {
@@ -95,16 +102,6 @@ test("withDefaultVerifyStatus fills empty Screening Status", async () => {
   assert.equal(rows[1]?.screeningReason, "keep");
 });
 
-test("downloadRequiredTenderFiles supports documentsOnlyIfAiMissing", () => {
-  const src = fs.readFileSync(
-    path.join(root, "src/tender247Batch/downloadRequiredTenderFiles.ts"),
-    "utf8",
-  );
-  assert.match(src, /documentsOnlyIfAiMissing/);
-  assert.match(src, /DOCUMENTS_SKIPPED_AI_SUMMARY_PRESENT/);
-  assert.match(src, /DOCUMENTS_DOWNLOAD_BECAUSE_AI_SUMMARY_MISSING/);
-});
-
 test("ai-summary pipeline rejects mistyped --accountid", async () => {
   const mod = await import("../runAiSummaryFirstDocumentPipeline.js");
   await assert.rejects(
@@ -126,9 +123,9 @@ test("ai-summary pipeline rejects mistyped --accountid", async () => {
 test("package.json exposes pipeline:tender247:ai-summary", () => {
   const pkg = JSON.parse(
     fs.readFileSync(path.join(root, "package.json"), "utf8"),
-  ) as { scripts: Record<string, string> };
+  ) as { scripts?: Record<string, string> };
   assert.match(
-    pkg.scripts["pipeline:tender247:ai-summary"] || "",
+    pkg.scripts?.["pipeline:tender247:ai-summary"] || "",
     /runAiSummaryFirstDocumentPipeline/,
   );
 });
