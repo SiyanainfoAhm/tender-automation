@@ -304,10 +304,7 @@ async function findHistoricalPriorTender(options: {
   };
 }
 
-function historicalDuplicateReason(
-  sourceTenderId: string,
-  priorScrapedDate: string,
-): string {
+function historicalDuplicateReason(priorScrapedDate: string): string {
   return `Duplicate Tender247 ID – previously seen on ${priorScrapedDate}`;
 }
 
@@ -515,7 +512,6 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
       if (!existing && historicalPrior && !isPhase1Duplicate(status)) {
         effectiveStatus = "DUPLICATE";
         effectiveReason = historicalDuplicateReason(
-          id,
           historicalPrior.scraped_date,
         );
         options.logger?.info(

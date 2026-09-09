@@ -151,9 +151,9 @@ export function TenderAnalyzerPanels({
           </p>
         )}
 
-        {qualification?.reason ? (
-          <p className="mt-4 text-sm leading-relaxed text-foreground-700">
-            {qualification.reason}
+        {qualification?.reason || tender.prescreenReason ? (
+          <p className="mt-4 text-sm leading-relaxed text-foreground-700 whitespace-pre-wrap">
+            {tender.prescreenReason || qualification?.reason}
           </p>
         ) : null}
         {qualification?.chatUrl ? (
@@ -241,9 +241,14 @@ export function TenderAnalyzerPanels({
             </div>
           </dl>
           {tender.prescreenReason ? (
-            <p className="mt-3 text-sm text-foreground-600">
-              {tender.prescreenReason}
-            </p>
+            <div className="mt-3 space-y-1">
+              <p className="text-xs font-semibold uppercase tracking-wide text-foreground-400">
+                ChatGPT response
+              </p>
+              <p className="whitespace-pre-wrap text-sm text-foreground-600">
+                {tender.prescreenReason}
+              </p>
+            </div>
           ) : null}
         </section>
         <CriteriaList
@@ -304,7 +309,11 @@ export function AnalyzeRfpExtract({ tender }: { tender: TenderDetailDTO }) {
   const sections = [
     {
       title: "Summary",
-      body: qualification?.reason || qualification?.verdict || tender.description,
+      body:
+        tender.prescreenReason ||
+        qualification?.reason ||
+        qualification?.verdict ||
+        tender.description,
     },
     {
       title: "Key dates",

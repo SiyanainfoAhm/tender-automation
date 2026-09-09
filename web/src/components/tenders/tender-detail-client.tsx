@@ -747,7 +747,7 @@ export function TenderDetailClient({
             mobile: c.mobile.trim(),
             email: c.email.trim() || null,
           })),
-        decisionReason: draft.decisionReason.trim() || null,
+        decisionReason: tender.decisionReason || null,
         lostReason: draft.lostReason.trim() || null,
         disqualificationReason: draft.disqualificationReason.trim() || null,
       });
@@ -1444,23 +1444,13 @@ const statusStyle =
                     )}
                   </div>
                 </DecisionRow>
-                <DecisionRow label="Decision Reason">
-                  {editing ? (
-                    <Textarea
-                      value={draft.decisionReason}
-                      onChange={(e) =>
-                        patchDraft({ decisionReason: e.target.value })
-                      }
-                      rows={3}
-                    />
-                  ) : (
+                {tender.prescreenReason ? (
+                  <DecisionRow label="ChatGPT Response">
                     <p className="whitespace-pre-wrap font-normal leading-relaxed text-foreground-700">
-                      {tender.decisionReason ||
-                        tender.qualification?.reason ||
-                        "—"}
+                      {tender.prescreenReason}
                     </p>
-                  )}
-                </DecisionRow>
+                  </DecisionRow>
+                ) : null}
                 {displayStatus === "DUPLICATE" && duplicateReference ? (
                   <DecisionRow label="Duplicate of">
                     <div className="space-y-1 font-normal leading-relaxed text-foreground-700">

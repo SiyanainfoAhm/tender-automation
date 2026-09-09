@@ -284,6 +284,7 @@ export function mapTenderDetail(options: {
   const screeningReason =
     asString(rawMeta.screeningReason) || asString(qualification?.reason);
   const parsedDuplicate = parseDuplicateReferenceFromReason(screeningReason);
+  const chatgptResponse = asString(tender.prescreen_reason);
 
   return {
     id: String(tender.id),
@@ -322,7 +323,7 @@ export function mapTenderDetail(options: {
     createdAt: asString(tender.created_at),
     updatedAt: asString(tender.updated_at),
     prescreenStatus: asString(tender.prescreen_status),
-    prescreenReason: asString(tender.prescreen_reason),
+    prescreenReason: chatgptResponse,
     prescreenReasonCode: asString(tender.prescreen_reason_code),
     chatgptEligible: asBoolean(tender.chatgpt_eligible),
     decisionSource: asString(tender.decision_source),
