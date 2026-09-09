@@ -95,7 +95,7 @@ describe("document storage provider", () => {
       fileName: "ISO-27001-Certificate.pdf",
     });
     expect(path).toBe(
-      `siyana-info-solutions-pvt-ltd_${SIYANA_COMPANY_ID}/companydocs/Certificate/iso-27001-certificate_26b4f7fa-xxxx/iso-27001-certificate.pdf`,
+      `siyana-info-solutions-pvt-ltd_${SIYANA_COMPANY_ID}/companydocs/Certificate/iso-27001-certificate-26b4f7fa.pdf`,
     );
   });
 
@@ -108,7 +108,9 @@ describe("document storage provider", () => {
       category: "Financial",
       fileName: "FY-2025-26.pdf",
     });
-    expect(path).toContain("/companydocs/Other/");
+    expect(path).toBe(
+      `siyana-info-solutions-pvt-ltd_${SIYANA_COMPANY_ID}/companydocs/Other/fy-2025-26-docfin1.pdf`,
+    );
   });
 
   it("slugifies and sanitizes path segments", () => {

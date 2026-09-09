@@ -209,6 +209,19 @@ function azureCompanyDocsFolder(category: string) {
   return "Other";
 }
 
+function companyDocumentFileName(fileName: string, documentId: string) {
+  const safeFileName = sanitizeFileName(fileName);
+  const id = String(documentId || "").trim();
+  if (!id || id.includes("/") || id.includes("..")) {
+    return safeFileName;
+  }
+  const lastDot = safeFileName.lastIndexOf(".");
+  const base = lastDot > 0 ? safeFileName.slice(0, lastDot) : safeFileName;
+  const ext = lastDot > 0 ? safeFileName.slice(lastDot) : "";
+  const shortId = id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "doc";
+  return `${base}-${shortId}${ext}`;
+}
+
 function buildCompanyDocumentBlobName(options: {
   companyName: string;
   companyId: string;
@@ -217,16 +230,18 @@ function buildCompanyDocumentBlobName(options: {
   category: string;
   fileName: string;
 }) {
+  void options.documentName;
   const documentId = String(options.documentId || "").trim();
   if (!documentId || documentId.includes("/") || documentId.includes("..")) {
     throw new HttpError(400, "Invalid document id for blob path");
   }
+  // {companyName_id}/companydocs/{General|Certificate|Other}/{file}
+  // No per-document name folder.
   return (
     `${buildCompanyRootFolder(options.companyName, options.companyId)}/` +
     `companydocs/` +
     `${azureCompanyDocsFolder(options.category)}/` +
-    `${slugify(options.documentName)}_${documentId}/` +
-    sanitizeFileName(options.fileName)
+    companyDocumentFileName(options.fileName, documentId)
   );
 }
 

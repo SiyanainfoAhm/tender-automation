@@ -5,8 +5,7 @@
  * Layout:
  *   {companyName}_{companyId}/
  *     companydocs/
- *       General|Certificate|Other/
- *         {documentName}_{documentId}/{file}
+ *       General|Certificate|Other/{file}
  *     tender-artifacts/
  *       {portal}/{date}/{tenderId}/{file}
  *     templates/
@@ -63,6 +62,26 @@ export function azureCompanyDocsFolder(
   return "Other";
 }
 
+/**
+ * Prefer unique blob names when two uploads share a filename.
+ * `{safeFile}-{shortDocId}.ext` when documentId is present.
+ */
+export function companyDocumentFileName(options: {
+  fileName: string;
+  documentId?: string | null;
+}): string {
+  const safeFileName = sanitizeBlobFileName(options.fileName);
+  const documentId = String(options.documentId || "").trim();
+  if (!documentId || documentId.includes("/") || documentId.includes("..")) {
+    return safeFileName;
+  }
+  const lastDot = safeFileName.lastIndexOf(".");
+  const base = lastDot > 0 ? safeFileName.slice(0, lastDot) : safeFileName;
+  const ext = lastDot > 0 ? safeFileName.slice(lastDot) : "";
+  const shortId = documentId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "doc";
+  return `${base}-${shortId}${ext}`;
+}
+
 export function buildCompanyDocumentBlobName(options: {
   companyId: string;
   companyName: string;
@@ -71,20 +90,18 @@ export function buildCompanyDocumentBlobName(options: {
   category: AzureDocumentCategory | string;
   fileName: string;
 }): string {
-  const documentId = options.documentId.trim();
-  if (!documentId || documentId.includes("/") || documentId.includes("..")) {
-    throw new Error("Invalid document id for blob path");
-  }
-
+  void options.documentName;
   const companyRoot = buildCompanyRootFolder(
     options.companyName,
     options.companyId,
   );
   const categoryFolder = azureCompanyDocsFolder(options.category);
-  const documentFolder = `${slugifyBlobSegment(options.documentName)}_${documentId}`;
-  const safeFileName = sanitizeBlobFileName(options.fileName);
+  const safeFileName = companyDocumentFileName({
+    fileName: options.fileName,
+    documentId: options.documentId,
+  });
 
-  return `${companyRoot}/companydocs/${categoryFolder}/${documentFolder}/${safeFileName}`;
+  return `${companyRoot}/companydocs/${categoryFolder}/${safeFileName}`;
 }
 
 export function buildTenderArtifactBlobName(options: {
