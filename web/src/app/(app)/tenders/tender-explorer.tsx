@@ -132,6 +132,11 @@ function buildSearchParams(
 ): string {
   const params = new URLSearchParams(current.toString());
   for (const [key, value] of Object.entries(updates)) {
+    // `date=all` is intentional (override default scraped-date=today).
+    if (key === "date" && value === "all") {
+      params.set("date", "all");
+      continue;
+    }
     if (
       value === undefined ||
       value === "" ||
@@ -789,7 +794,7 @@ export function TenderExplorer({
                 aria-label="Clear created date filter"
                 onClick={() =>
                   navigate({
-                    date: undefined,
+                    date: "all",
                     selectedDate: undefined,
                     createdFrom: undefined,
                     createdTo: undefined,
@@ -930,7 +935,7 @@ export function TenderExplorer({
                 onValueChange={(value) => {
                   if (value === "all") {
                     navigate({
-                      date: undefined,
+                      date: "all",
                       selectedDate: undefined,
                       createdFrom: undefined,
                       createdTo: undefined,

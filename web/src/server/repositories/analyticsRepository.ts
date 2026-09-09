@@ -259,14 +259,19 @@ export async function getTenderListStatusCounts(
   const scoped = normalizeStatusCountFilters(filters);
   const cityFilter = await resolveTenderListCityFilter(scoped.city);
 
+  // Build a filtered count query, optionally narrow further, then return the
+  // PostgREST builder. Returning a thenable from this async fn intentionally
+  // executes the count — do not return the bare builder to a `.then(q => q.eq)`.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const base = async (): Promise<any> => {
+  const runCount = async (apply?: (q: any) => any): Promise<any> => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let q: any = supabase
+    const initial: any = supabase
       .from("agenttender_web_tender_list")
       .select("id", { count: "exact", head: true });
-    q = await applyTenderListNonStatusFilters(q, scoped, { cityFilter });
-    return q;
+    const { query } = await applyTenderListNonStatusFilters(initial, scoped, {
+      cityFilter,
+    });
+    return apply ? apply(query) : query;
   };
 
   // Count from agenttender_tenders.qualification_status (exposed on the web
@@ -288,22 +293,22 @@ export async function getTenderListStatusCounts(
     submittedRes,
     cancelledRes,
   ] = await Promise.all([
-    base(),
-    base().then((q) => q.eq("qualification_status", "VERIFY")),
-    base().then((q) => q.is("qualification_status", null)),
-    base().then((q) => q.eq("qualification_status", "GO")),
-    base().then((q) => q.eq("qualification_status", "CONDITIONAL_GO")),
-    base().then((q) => q.eq("qualification_status", "NO_GO")),
-    base().then((q) => q.eq("qualification_status", "DUPLICATE")),
-    base().then((q) => q.eq("qualification_status", "PARTNER_BID")),
-    base().then((q) => q.eq("qualification_status", "WON")),
-    base().then((q) => q.eq("qualification_status", "LOST")),
-    base().then((q) => q.eq("qualification_status", "DISQUALIFIED")),
-    base().then((q) =>
+    runCount(),
+    runCount((q) => q.eq("qualification_status", "VERIFY")),
+    runCount((q) => q.is("qualification_status", null)),
+    runCount((q) => q.eq("qualification_status", "GO")),
+    runCount((q) => q.eq("qualification_status", "CONDITIONAL_GO")),
+    runCount((q) => q.eq("qualification_status", "NO_GO")),
+    runCount((q) => q.eq("qualification_status", "DUPLICATE")),
+    runCount((q) => q.eq("qualification_status", "PARTNER_BID")),
+    runCount((q) => q.eq("qualification_status", "WON")),
+    runCount((q) => q.eq("qualification_status", "LOST")),
+    runCount((q) => q.eq("qualification_status", "DISQUALIFIED")),
+    runCount((q) =>
       q.gte("closing_date", todayDate).lte("closing_date", in3),
     ),
-    base().then((q) => q.eq("qualification_status", "SUBMITTED")),
-    base().then((q) => q.eq("qualification_status", "CANCELLED")),
+    runCount((q) => q.eq("qualification_status", "SUBMITTED")),
+    runCount((q) => q.eq("qualification_status", "CANCELLED")),
   ]);
 
   const results = [

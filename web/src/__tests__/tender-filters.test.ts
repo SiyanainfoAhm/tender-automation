@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { tenderFiltersSchema } from "@/lib/validations";
 
 describe("tender repository filter contracts", () => {
+  it("defaults scraped date to today and allows explicit all", () => {
+    expect(tenderFiltersSchema.parse({}).date).toBe("today");
+    expect(tenderFiltersSchema.parse({ date: "all" }).date).toBeUndefined();
+    expect(tenderFiltersSchema.parse({ date: "yesterday" }).date).toBe(
+      "yesterday",
+    );
+  });
+
   it("supports source filtering", () => {
     expect(tenderFiltersSchema.parse({ source: "BIDASSIST" }).source).toBe(
       "BIDASSIST",

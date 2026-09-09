@@ -244,8 +244,10 @@ export async function applyTenderListNonStatusFilters(
   query: any,
   filters: TenderFilters,
   options?: { cityFilter?: CityFilterContext },
+  // Box the builder: async functions unwrap thenables, and PostgREST builders
+  // are thenable — returning them bare would execute the query early.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): Promise<any> {
+): Promise<{ query: any }> {
   let q = query;
 
   if (filters.source && filters.source !== "ALL") {
@@ -448,7 +450,7 @@ export async function applyTenderListNonStatusFilters(
     }
   }
 
-  return q;
+  return { query: q };
 }
 
 export async function listTenders(
@@ -504,7 +506,8 @@ export async function listTenders(
     }
   }
 
-  query = await applyTenderListNonStatusFilters(query, filters);
+  const applied = await applyTenderListNonStatusFilters(query, filters);
+  query = applied.query;
 
   // Sort entire filtered set, then paginate (nulls last for ASC/DESC).
   // Status uses DB lexical order on effective_qualification_status (stable,
