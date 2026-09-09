@@ -85,7 +85,7 @@ describe("document storage provider", () => {
     ).rejects.toBeInstanceOf(StorageNotConfiguredError);
   });
 
-  it("builds tenant-scoped blob paths with category folders", () => {
+  it("builds tenant-scoped blob paths with companydocs category folders", () => {
     const path = buildCompanyBlobPath({
       companyId: SIYANA_COMPANY_ID,
       companyName: "Siyana Info Solutions Pvt. Ltd.",
@@ -95,8 +95,20 @@ describe("document storage provider", () => {
       fileName: "ISO-27001-Certificate.pdf",
     });
     expect(path).toBe(
-      `siyana-info-solutions-pvt-ltd_${SIYANA_COMPANY_ID}/iso-27001-certificate_26b4f7fa-xxxx/Certificate/iso-27001-certificate.pdf`,
+      `siyana-info-solutions-pvt-ltd_${SIYANA_COMPANY_ID}/companydocs/Certificate/iso-27001-certificate_26b4f7fa-xxxx/iso-27001-certificate.pdf`,
     );
+  });
+
+  it("maps Financial uploads into the Other companydocs folder", () => {
+    const path = buildCompanyBlobPath({
+      companyId: SIYANA_COMPANY_ID,
+      companyName: "Siyana Info Solutions Pvt. Ltd.",
+      documentId: "doc-fin-1",
+      documentName: "Balance Sheet",
+      category: "Financial",
+      fileName: "FY-2025-26.pdf",
+    });
+    expect(path).toContain("/companydocs/Other/");
   });
 
   it("slugifies and sanitizes path segments", () => {

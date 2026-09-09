@@ -59,15 +59,17 @@ describe("mergeNullOnlyRecord", () => {
 });
 
 describe("buildTenderArtifactBlobName", () => {
-  it("builds a stable tender artifact path", () => {
+  it("builds a stable tender artifact path under companyName_id", () => {
     assert.equal(
       buildTenderArtifactBlobName({
         sourcePortal: "TENDER247",
         sourceTenderId: "103389190",
         runDate: "2026-08-18",
         fileName: "Tender_All_Documents.zip",
+        companyName: "Siyana Info Solutions Pvt. Ltd.",
+        companyId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       }),
-      "companies/siyana/tender-artifacts/tender247/2026-08-18/103389190/tender-all-documents.zip",
+      "siyana-info-solutions-pvt-ltd_a1b2c3d4-e5f6-7890-abcd-ef1234567890/tender-artifacts/tender247/2026-08-18/103389190/tender-all-documents.zip",
     );
   });
 
@@ -78,8 +80,10 @@ describe("buildTenderArtifactBlobName", () => {
         sourceTenderId: "MAN-55AF81E6E54B",
         runDate: "2026-08-25",
         fileName: "scope.pdf",
+        companyName: "Siyana Info Solutions Pvt. Ltd.",
+        companyId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       }),
-      "companies/siyana/tender-artifacts/manual/2026-08-25/MAN-55AF81E6E54B/scope.pdf",
+      "siyana-info-solutions-pvt-ltd_a1b2c3d4-e5f6-7890-abcd-ef1234567890/tender-artifacts/manual/2026-08-25/MAN-55AF81E6E54B/scope.pdf",
     );
   });
 });

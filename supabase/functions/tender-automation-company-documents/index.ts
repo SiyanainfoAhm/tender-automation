@@ -194,6 +194,42 @@ function sanitizeFileName(fileName: string) {
   return `${slugify(base) || "file"}${ext.toLowerCase().replace(/[^a-z0-9.]/g, "")}`;
 }
 
+function buildCompanyRootFolder(companyName: string, companyId: string) {
+  const id = String(companyId || "").trim();
+  if (!id || id.includes("/") || id.includes("..")) {
+    throw new HttpError(400, "Invalid company id for blob path");
+  }
+  return `${slugify(companyName)}_${id}`;
+}
+
+/** Azure companydocs folders: General, Certificate, Other (Financial → Other). */
+function azureCompanyDocsFolder(category: string) {
+  if (category === "Certificate") return "Certificate";
+  if (category === "General") return "General";
+  return "Other";
+}
+
+function buildCompanyDocumentBlobName(options: {
+  companyName: string;
+  companyId: string;
+  documentName: string;
+  documentId: string;
+  category: string;
+  fileName: string;
+}) {
+  const documentId = String(options.documentId || "").trim();
+  if (!documentId || documentId.includes("/") || documentId.includes("..")) {
+    throw new HttpError(400, "Invalid document id for blob path");
+  }
+  return (
+    `${buildCompanyRootFolder(options.companyName, options.companyId)}/` +
+    `companydocs/` +
+    `${azureCompanyDocsFolder(options.category)}/` +
+    `${slugify(options.documentName)}_${documentId}/` +
+    sanitizeFileName(options.fileName)
+  );
+}
+
 function encodeBlobPath(blobName: string) {
   return blobName.split("/").map(encodeURIComponent).join("/");
 }
@@ -744,11 +780,14 @@ async function handleCreateUploadSession(
   const documentId = crypto.randomUUID();
   const uploadId = crypto.randomUUID();
   const totalChunks = Math.max(1, Math.ceil(fileSizeBytes / CHUNK_SIZE));
-  const blobName =
-    `${slugify(user.companyName)}_${user.companyId}/` +
-    `${slugify(documentName)}_${documentId}/` +
-    `${category}/` +
-    sanitizeFileName(fileName);
+  const blobName = buildCompanyDocumentBlobName({
+    companyName: user.companyName,
+    companyId: user.companyId,
+    documentName,
+    documentId,
+    category,
+    fileName,
+  });
   const expiresAt = new Date(Date.now() + UPLOAD_SESSION_TTL_MS).toISOString();
   const supabase = serviceSupabase();
 
@@ -1184,20 +1223,25 @@ async function handleUpload(req: Request, form: FormData) {
   const useManualArtifactPath =
     artifactPortal === "MANUAL" && Boolean(artifactId);
 
-  // Manual tenders → companies/{key}/tender-artifacts/manual/{created-date}/{tender-id}/…
-  // (same layout as tender247 date folders; portal segment is "manual")
+  // Manual tenders → {companyName_id}/tender-artifacts/manual/{created-date}/{tender-id}/…
+  // Company docs → {companyName_id}/companydocs/{General|Certificate|Other}/…
   const blobName = useManualArtifactPath
     ? buildTenderArtifactBlobName({
         sourcePortal: "MANUAL",
         sourceTenderId: artifactId,
         runDate: artifactDate,
         fileName: `${documentId.slice(0, 8)}_${file.name}`,
-        companyKey: resolveCompanyArtifactKey(user.companyName),
+        companyName: user.companyName,
+        companyId: user.companyId,
       })
-    : `${slugify(user.companyName)}_${user.companyId}/` +
-      `${slugify(documentName)}_${documentId}/` +
-      `${category}/` +
-      sanitizeFileName(file.name);
+    : buildCompanyDocumentBlobName({
+        companyName: user.companyName,
+        companyId: user.companyId,
+        documentName,
+        documentId,
+        category,
+        fileName: file.name,
+      });
 
   console.info("[tender-automation-documents] upload started", {
     companyId: user.companyId,
@@ -2335,16 +2379,21 @@ async function handleCreateDirectUpload(
 
   const blobName = useManualArtifactPath
     ? buildTenderArtifactBlobName({
-      sourcePortal: "MANUAL",
-      sourceTenderId: artifactId,
-      runDate: artifactDate,
-      fileName: `${documentId.slice(0, 8)}_${fileName}`,
-      companyKey: resolveCompanyArtifactKey(user.companyName),
-    })
-    : `${slugify(user.companyName)}_${user.companyId}/` +
-      `${slugify(documentName)}_${documentId}/` +
-      `${category}/` +
-      sanitizeFileName(fileName);
+        sourcePortal: "MANUAL",
+        sourceTenderId: artifactId,
+        runDate: artifactDate,
+        fileName: `${documentId.slice(0, 8)}_${fileName}`,
+        companyName: user.companyName,
+        companyId: user.companyId,
+      })
+    : buildCompanyDocumentBlobName({
+        companyName: user.companyName,
+        companyId: user.companyId,
+        documentName,
+        documentId,
+        category,
+        fileName,
+      });
 
   let sas;
   try {
@@ -2617,37 +2666,56 @@ function buildTenderArtifactBlobName(options: {
   sourceTenderId: string;
   runDate: string;
   fileName: string;
-  companyKey?: string | null;
+  companyName: string;
+  companyId: string;
 }) {
   const portal = options.sourcePortal.toLowerCase().replace(/[^a-z0-9_-]/g, "");
   const id = options.sourceTenderId.replace(/[^a-zA-Z0-9_-]/g, "");
   const date = /^\d{4}-\d{2}-\d{2}$/.test(options.runDate)
     ? options.runDate
     : "undated";
-  const company =
-    String(options.companyKey || "siyana")
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "siyana";
-  // Company-scoped; never include Tender247 account. metadata.json is not uploaded.
-  // MANUAL → companies/{key}/tender-artifacts/manual/{date}/{tenderId}/…
-  return `companies/${company}/tender-artifacts/${portal}/${date}/${id}/${sanitizeTenderArtifactFileName(options.fileName)}`;
+  // {companyName_id}/tender-artifacts/{portal}/{date}/{tenderId}/…
+  // alongside companydocs/ under the same company root.
+  return (
+    `${buildCompanyRootFolder(options.companyName, options.companyId)}/` +
+    `tender-artifacts/${portal || "unknown"}/${date}/${id || "unknown"}/` +
+    sanitizeTenderArtifactFileName(options.fileName)
+  );
 }
 
-/** Short company key matching Azure layout: companies/siyana/tender-artifacts/… */
-function resolveCompanyArtifactKey(companyName: string): string {
-  const fromEnv = (Deno.env.get("COMPANY_BLOB_KEY") || "").trim();
-  if (fromEnv) {
-    return (
-      fromEnv
-        .toLowerCase()
-        .replace(/[^a-z0-9_-]+/g, "-")
-        .replace(/^-+|-+$/g, "") || "siyana"
-    );
+function resolvePipelineCompanyFolder(options: {
+  companyName?: string | null;
+  companyId?: string | null;
+  companyFolder?: string | null;
+}): string {
+  const explicit = String(options.companyFolder || "").trim();
+  if (explicit && !explicit.includes("..") && !explicit.includes("/")) {
+    return explicit;
   }
-  const slug = slugify(companyName);
-  const first = slug.split("-").filter(Boolean)[0];
-  return first || "siyana";
+  const fromEnvFolder = (Deno.env.get("COMPANY_BLOB_FOLDER") || "").trim();
+  if (fromEnvFolder && !fromEnvFolder.includes("..") && !fromEnvFolder.includes("/")) {
+    return fromEnvFolder;
+  }
+  const companyId =
+    String(options.companyId || "").trim() ||
+    (Deno.env.get("COMPANY_ID") || "").trim() ||
+    (Deno.env.get("SIYANA_COMPANY_ID") || "").trim() ||
+    "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+  const companyName =
+    String(options.companyName || "").trim() ||
+    (Deno.env.get("COMPANY_NAME") || "").trim() ||
+    "Siyana Info Solutions Pvt. Ltd.";
+  return buildCompanyRootFolder(companyName, companyId);
+}
+
+function isAllowedProvidedArtifactBlobName(blobName: string): boolean {
+  if (!blobName || blobName.includes("..")) return false;
+  return (
+    blobName.startsWith("companies/") ||
+    blobName.startsWith("tender-artifacts/") ||
+    blobName.includes("/tender-artifacts/") ||
+    blobName.includes("/companydocs/")
+  );
 }
 
 /** Pipeline upload for Tender_All_Documents.zip / AI_Summary.pdf (metadata stays in DB). */
@@ -2682,20 +2750,19 @@ async function handleUploadTenderArtifact(req: Request, formData: FormData) {
     throw new HttpError(400, "Invalid artifactKind.");
   }
 
-  const companyKey = String(formData.get("companyKey") ?? "").trim() || "siyana";
+  const companyFolder = resolvePipelineCompanyFolder({
+    companyFolder: String(formData.get("companyFolder") ?? "").trim(),
+    companyName: String(formData.get("companyName") ?? "").trim(),
+    companyId: String(formData.get("companyId") ?? "").trim(),
+  });
   const blobName =
-    providedBlobName &&
-    (providedBlobName.startsWith("companies/") ||
-      providedBlobName.startsWith("tender-artifacts/")) &&
-    !providedBlobName.includes("..")
+    providedBlobName && isAllowedProvidedArtifactBlobName(providedBlobName)
       ? providedBlobName
-      : buildTenderArtifactBlobName({
-          sourcePortal,
-          sourceTenderId,
-          runDate,
-          fileName: file.name || `${artifactKind}.bin`,
-          companyKey,
-        });
+      : `${companyFolder}/tender-artifacts/${sourcePortal.toLowerCase()}/${
+          /^\d{4}-\d{2}-\d{2}$/.test(runDate) ? runDate : "undated"
+        }/${sourceTenderId.replace(/[^a-zA-Z0-9_-]/g, "") || "unknown"}/${
+          sanitizeTenderArtifactFileName(file.name || `${artifactKind}.bin`)
+        }`;
 
   const uploaded = await uploadAzureBlob(azure, blobName, file, {
     contentType: file.type || "application/octet-stream",

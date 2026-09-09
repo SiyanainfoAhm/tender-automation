@@ -6,6 +6,10 @@
  *   T247-{id}/documents/Tender_All_Documents.zip
  *   T247-{id}/AI_Summary.pdf
  * metadata.json stays in DB only (never uploaded to Azure).
+ *
+ * Azure layout:
+ *   {companyName}_{companyId}/tender-artifacts/{portal}/{date}/{id}/…
+ *   (sibling of companydocs/General|Certificate|Other under the same root)
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -14,6 +18,8 @@ import { CANONICAL_ARCHIVE_NAME } from "../tender247Batch/canonicalTenderArchive
 
 const FUNCTION_NAME = "tender-automation-company-documents";
 const ARTIFACT_MARKER = "artifact-upload.json";
+const DEFAULT_COMPANY_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+const DEFAULT_COMPANY_NAME = "Siyana Info Solutions Pvt. Ltd.";
 
 export type TenderArtifactKind = "documents_zip" | "ai_summary";
 
@@ -37,18 +43,46 @@ function resolveServiceKey(): string {
   );
 }
 
+function slugifyBlobSegment(value: string): string {
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/['’]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "") || "item"
+  );
+}
+
 function sanitizeBlobFileName(fileName: string): string {
   const trimmed = fileName.trim().replace(/[/\\]/g, "");
   const lastDot = trimmed.lastIndexOf(".");
   const base = lastDot > 0 ? trimmed.slice(0, lastDot) : trimmed;
   const ext = lastDot > 0 ? trimmed.slice(lastDot) : "";
-  const safeBase =
-    base
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "file";
+  const safeBase = slugifyBlobSegment(base) || "file";
   const safeExt = ext.toLowerCase().replace(/[^a-z0-9.]/g, "");
   return `${safeBase}${safeExt}`;
+}
+
+export function resolveCompanyBlobRoot(options?: {
+  companyName?: string | null;
+  companyId?: string | null;
+}): string {
+  const explicit = process.env.COMPANY_BLOB_FOLDER?.trim();
+  if (explicit && !explicit.includes("..") && !explicit.includes("/")) {
+    return explicit;
+  }
+  const companyId =
+    options?.companyId?.trim() ||
+    process.env.COMPANY_ID?.trim() ||
+    process.env.SIYANA_COMPANY_ID?.trim() ||
+    DEFAULT_COMPANY_ID;
+  const companyName =
+    options?.companyName?.trim() ||
+    process.env.COMPANY_NAME?.trim() ||
+    DEFAULT_COMPANY_NAME;
+  return `${slugifyBlobSegment(companyName)}_${companyId}`;
 }
 
 export function buildTenderArtifactBlobName(options: {
@@ -56,8 +90,8 @@ export function buildTenderArtifactBlobName(options: {
   sourceTenderId: string;
   runDate: string;
   fileName: string;
-  /** Company slug/id for company-scoped Azure layout (no account segment). */
-  companyKey?: string | null;
+  companyName?: string | null;
+  companyId?: string | null;
 }): string {
   const portal = options.sourcePortal.toLowerCase();
   const id = String(options.sourceTenderId)
@@ -66,15 +100,13 @@ export function buildTenderArtifactBlobName(options: {
   const date = options.runDate.match(/^\d{4}-\d{2}-\d{2}$/)
     ? options.runDate
     : "undated";
-  const company =
-    String(options.companyKey || process.env.COMPANY_BLOB_KEY || "siyana")
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "siyana";
+  const companyRoot = resolveCompanyBlobRoot({
+    companyName: options.companyName,
+    companyId: options.companyId,
+  });
   // Company-based path — never include Tender247 account id.
-  // MANUAL → tender-artifacts/manual/{date}/{id}/… (alongside tender247).
-  // metadata.json is intentionally not uploaded (raw_metadata in DB).
-  return `companies/${company}/tender-artifacts/${portal}/${date}/${id}/${sanitizeBlobFileName(options.fileName)}`;
+  // Sibling of companydocs/ under {companyName_id}/.
+  return `${companyRoot}/tender-artifacts/${portal}/${date}/${id}/${sanitizeBlobFileName(options.fileName)}`;
 }
 
 /** Resolve local file path for an artifact kind (canonical Tender247 layout). */
@@ -154,6 +186,17 @@ async function invokeUploadTenderArtifact(options: {
   form.set("runDate", options.runDate);
   form.set("artifactKind", options.kind);
   form.set("blobName", blobName);
+  form.set("companyFolder", resolveCompanyBlobRoot());
+  form.set(
+    "companyId",
+    process.env.COMPANY_ID?.trim() ||
+      process.env.SIYANA_COMPANY_ID?.trim() ||
+      DEFAULT_COMPANY_ID,
+  );
+  form.set(
+    "companyName",
+    process.env.COMPANY_NAME?.trim() || DEFAULT_COMPANY_NAME,
+  );
   form.set(
     "file",
     new Blob([new Uint8Array(bytes)], { type: mimeForFile(options.fileName) }),
