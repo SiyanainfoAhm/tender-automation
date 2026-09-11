@@ -3,14 +3,14 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ChevronRight, Loader2, Sparkles } from "lucide-react";
+import { ChevronRight, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { BoqEditor } from "@/components/bid-workspace/boq-editor";
 import { RequirementListPanel } from "@/components/bid-workspace/checklist-creation-panel";
-import { EditAiPromptDialog } from "@/components/bid-workspace/edit-ai-prompt-dialog";
 import { WorkspaceDocuments } from "@/components/bid-workspace/workspace-documents";
 import { CategoryCapsule } from "@/components/tenders/category-capsule";
+import { TendersBackLink } from "@/components/tenders/tenders-back-link";
 import { SourceBadge } from "@/components/status/source-badge";
 import { StatusBadge } from "@/components/status/qualification-badge";
 import { Button } from "@/components/ui/button";
@@ -31,9 +31,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import {
-  type BidAiPromptKey,
-} from "@/lib/bid-ai-prompts";
 import {
   calculateSectionProgress,
   itemMatchesWorkspaceSection,
@@ -113,9 +110,6 @@ export function BidWorkspaceClient({
   >(null);
   const [generationPhase, setGenerationPhase] = useState<string | null>(null);
   const [togglingItemId, setTogglingItemId] = useState<string | null>(null);
-  const [promptOpen, setPromptOpen] = useState(false);
-  const [promptKey, setPromptKey] =
-    useState<BidAiPromptKey>("CHECKLIST_CREATION");
   const [items, setItems] = useState(checklistItems);
   const [progress, setProgress] = useState(checklistProgress);
   const [prepStatus, setPrepStatus] = useState(
@@ -222,11 +216,6 @@ export function BidWorkspaceClient({
     }, 2200);
     return () => window.clearInterval(timer);
   }, [showPrepLoader]);
-
-  function openPromptEditor(key: BidAiPromptKey) {
-    setPromptKey(key);
-    setPromptOpen(true);
-  }
 
   async function runDocumentIngestion() {
     if (readOnly || ingesting || generatingRequirementId) return;
@@ -460,21 +449,21 @@ export function BidWorkspaceClient({
   const pqItems = useMemo(
     () =>
       items.filter((item) =>
-        itemMatchesWorkspaceSection(item.category, "prequalification"),
+        itemMatchesWorkspaceSection(item, "prequalification"),
       ),
     [items],
   );
   const technicalItems = useMemo(
     () =>
       items.filter((item) =>
-        itemMatchesWorkspaceSection(item.category, "technical"),
+        itemMatchesWorkspaceSection(item, "technical"),
       ),
     [items],
   );
   const annexureItems = useMemo(
     () =>
       items.filter((item) =>
-        itemMatchesWorkspaceSection(item.category, "annexures"),
+        itemMatchesWorkspaceSection(item, "annexures"),
       ),
     [items],
   );
@@ -570,27 +559,21 @@ export function BidWorkspaceClient({
   const sharedPanelProps = {
     tenderId: tender.id,
     readOnly,
-    ingesting,
+    allItems: items,
     generatingRequirementId,
     generationPhase,
     togglingItemId,
-    onIngestAi: runDocumentIngestion,
     onUpload: uploadForChecklistItem,
     onGenerateAi: runChecklistDocumentGeneration,
     onToggleComplete: toggleChecklistComplete,
+    onRequirementsChanged: () => router.refresh(),
   };
 
   return (
     <TooltipProvider>
       <div className="space-y-6">
         <div className="flex min-w-0 items-center gap-2 text-sm">
-          <Link
-            href="/tenders"
-            className="inline-flex shrink-0 items-center gap-1 text-foreground-500 hover:text-foreground-900"
-          >
-            <ArrowLeft className="size-4" />
-            Tenders
-          </Link>
+          <TendersBackLink />
           <ChevronRight className="size-3.5 shrink-0 text-foreground-400" />
           <Link
             href={`/tenders/${tender.id}`}
@@ -795,7 +778,7 @@ export function BidWorkspaceClient({
                 title="Checklist Creation"
                 items={items}
                 progress={progress}
-                onEditPrompt={() => openPromptEditor("CHECKLIST_CREATION")}
+                addSection={null}
               />
             ) : null}
 
@@ -806,7 +789,7 @@ export function BidWorkspaceClient({
                 subtitle="Mandatory credentials and compliance certificates"
                 items={pqItems}
                 progress={pqStats}
-                onEditPrompt={() => openPromptEditor("PREQUAL_DOCUMENT")}
+                addSection="prequalification"
               />
             ) : null}
 
@@ -817,7 +800,7 @@ export function BidWorkspaceClient({
                 subtitle="Technical proposals, certifications and approach documents"
                 items={technicalItems}
                 progress={technicalStats}
-                onEditPrompt={() => openPromptEditor("TECHNICAL_DOCUMENT")}
+                addSection="technical"
               />
             ) : null}
 
@@ -828,43 +811,20 @@ export function BidWorkspaceClient({
                 subtitle="Standard templates, declarations and format documents"
                 items={annexureItems}
                 progress={annexureStats}
-                onEditPrompt={() => openPromptEditor("ANNEXURE_DOCUMENT")}
+                addSection="annexures"
               />
             ) : null}
 
             {tab === "cost" ? (
               <div className="space-y-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground-900">
-                      Cost Estimator
-                    </h2>
-                    <p className="mt-1 text-sm text-foreground-500">
-                      {workspace.boqItems.length} line items · Total:{" "}
-                      {formatIndianCurrency(boqTotal)}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      disabled={readOnly}
-                      onClick={() => openPromptEditor("COST_ESTIMATOR")}
-                    >
-                      Edit Prompt
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="gap-1.5"
-                      disabled={readOnly || ingesting}
-                      onClick={runDocumentIngestion}
-                    >
-                      <Sparkles className="size-3.5" />
-                      {ingesting ? "Ingesting…" : "Use AI"}
-                    </Button>
-                  </div>
+                <div>
+                  <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground-900">
+                    Cost Estimator
+                  </h2>
+                  <p className="mt-1 text-sm text-foreground-500">
+                    {workspace.boqItems.length} line items · Total:{" "}
+                    {formatIndianCurrency(boqTotal)}
+                  </p>
                 </div>
                 <BoqEditor
                   tenderId={tender.id}
@@ -875,21 +835,6 @@ export function BidWorkspaceClient({
             ) : null}
           </>
         ) : null}
-
-        <EditAiPromptDialog
-          open={promptOpen}
-          onOpenChange={setPromptOpen}
-          tenderId={tender.id}
-          promptKey={promptKey}
-          readOnly={readOnly}
-          onSaveAndUseAi={
-            promptKey === "CHECKLIST_CREATION" || promptKey === "COST_ESTIMATOR"
-              ? async () => {
-                  await runDocumentIngestion();
-                }
-              : undefined
-          }
-        />
 
         <Dialog open={docsOpen} onOpenChange={setDocsOpen}>
           <DialogContent className="max-w-3xl">

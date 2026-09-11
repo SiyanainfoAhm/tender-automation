@@ -1,8 +1,10 @@
 import "server-only";
 
 import {
+  areRequirementTitlesSimilar,
   normalizeRequirementIdentityKey,
   resolveRequirementPattern,
+  sectionForChecklistCategory,
   type RequirementPattern,
 } from "@/lib/bid-checklist";
 import type { WorkspaceDocumentRow } from "@/lib/bid-workspace";
@@ -113,26 +115,56 @@ export async function persistStructuredIngestion(options: {
   if (options.replaceChecklist !== false) {
     const { data: existingRows, error: existingError } = await supabase
       .from("agenttender_bid_checklist_items")
-      .select("id, requirement_key, normalized_requirement_key, manual_completed")
+      .select(
+        "id, requirement_key, requirement_name, normalized_requirement_key, manual_completed, requirement_origin",
+      )
       .eq("workspace_id", options.workspaceId)
       .eq("company_id", options.companyId)
       .eq("is_archived", false);
     if (existingError) throw new Error(existingError.message);
 
-    const existingByKey = new Map<string, { id: string; manualCompleted: boolean }>();
+    type ExistingReq = {
+      id: string;
+      manualCompleted: boolean;
+      origin: string;
+      requirementName: string;
+    };
+    const existingByKey = new Map<string, ExistingReq>();
+    const existingList: ExistingReq[] = [];
     for (const row of existingRows || []) {
+      const entry: ExistingReq = {
+        id: String(row.id),
+        manualCompleted: row.manual_completed === true,
+        origin: String(row.requirement_origin || "AI").toUpperCase(),
+        requirementName: String(row.requirement_name || ""),
+      };
+      existingList.push(entry);
       const key = String(
         row.normalized_requirement_key || row.requirement_key || "",
       );
-      if (key) {
-        existingByKey.set(key, {
-          id: String(row.id),
-          manualCompleted: row.manual_completed === true,
-        });
-      }
+      if (key) existingByKey.set(key, entry);
     }
 
+    const findManualSimilar = (
+      identity: string,
+      name: string,
+    ): ExistingReq | null => {
+      const exact = existingByKey.get(identity);
+      if (exact?.origin === "MANUAL") return exact;
+      for (const entry of existingList) {
+        if (entry.origin !== "MANUAL") continue;
+        if (
+          areRequirementTitlesSimilar(entry.requirementName, name) ||
+          areRequirementTitlesSimilar(entry.requirementName, identity)
+        ) {
+          return entry;
+        }
+      }
+      return null;
+    };
+
     const seenKeys = new Set<string>();
+    const preservedManualIds = new Set<string>();
     let order = 0;
     for (const item of options.structured.checklist) {
       const identity = normalizeRequirementIdentityKey(
@@ -142,6 +174,24 @@ export async function persistStructuredIngestion(options: {
       if (seenKeys.has(identity)) continue;
       seenKeys.add(identity);
       order += 1;
+
+      const manualMatch = findManualSimilar(identity, item.requirement_name);
+      if (manualMatch) {
+        preservedManualIds.add(manualMatch.id);
+        seenKeys.add(
+          normalizeRequirementIdentityKey("", manualMatch.requirementName),
+        );
+        const { error } = await supabase
+          .from("agenttender_bid_checklist_items")
+          .update({
+            ai_detected: true,
+            is_archived: false,
+          })
+          .eq("id", manualMatch.id)
+          .eq("workspace_id", options.workspaceId);
+        if (error) throw new Error(error.message);
+        continue;
+      }
 
       const existing = existingByKey.get(identity);
       const payload = {
@@ -161,6 +211,10 @@ export async function persistStructuredIngestion(options: {
         normalized_requirement_key: identity,
         display_order: order,
         is_archived: false,
+        requirement_origin: "AI" as const,
+        workspace_section: sectionForChecklistCategory(
+          item.category || "COMPLIANCE",
+        ),
       };
 
       if (existing) {
@@ -171,20 +225,60 @@ export async function persistStructuredIngestion(options: {
           .eq("workspace_id", options.workspaceId);
         if (error) throw new Error(error.message);
       } else {
-        const { error } = await supabase
+        const requirementKey = item.requirement_key || identity;
+        const { data: archived } = await supabase
           .from("agenttender_bid_checklist_items")
-          .insert({
-            ...payload,
-            completion_status: "MISSING",
-          });
-        if (error) throw new Error(error.message);
+          .select("id, requirement_origin")
+          .eq("workspace_id", options.workspaceId)
+          .eq("company_id", options.companyId)
+          .eq("requirement_key", requirementKey)
+          .eq("is_archived", true)
+          .maybeSingle();
+
+        if (archived?.id) {
+          // Never revive a soft-deleted MANUAL as AI.
+          if (String(archived.requirement_origin || "").toUpperCase() === "MANUAL") {
+            preservedManualIds.add(String(archived.id));
+            await supabase
+              .from("agenttender_bid_checklist_items")
+              .update({
+                ai_detected: true,
+                // Leave archived MANUAL archived — user deleted it intentionally.
+              })
+              .eq("id", archived.id);
+          } else {
+            const { error } = await supabase
+              .from("agenttender_bid_checklist_items")
+              .update({
+                ...payload,
+                completion_status: "MISSING",
+                ai_detected: false,
+                archived_at: null,
+                archived_by: null,
+              })
+              .eq("id", archived.id)
+              .eq("workspace_id", options.workspaceId);
+            if (error) throw new Error(error.message);
+          }
+        } else {
+          const { error } = await supabase
+            .from("agenttender_bid_checklist_items")
+            .insert({
+              ...payload,
+              completion_status: "MISSING",
+              ai_detected: false,
+            });
+          if (error) throw new Error(error.message);
+        }
       }
     }
 
-    // Archive obsolete requirements that still have no manual completion
-    // and no linked documents — preserve user work otherwise.
+    // Archive obsolete AI requirements that still have no manual completion
+    // and no linked documents — never archive MANUAL requirements.
     for (const [key, existing] of existingByKey) {
       if (seenKeys.has(key)) continue;
+      if (preservedManualIds.has(existing.id)) continue;
+      if (existing.origin === "MANUAL") continue;
       if (existing.manualCompleted) continue;
 
       const { data: linkedDocs } = await supabase

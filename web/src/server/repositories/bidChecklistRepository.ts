@@ -8,10 +8,14 @@ import {
   isRequirementCompleted,
   matchRequirementToDocuments,
   normalizeRequirementIdentityKey,
+  resolveWorkspaceSection,
   type ChecklistCompletionStatus,
+  type ChecklistCategory,
   type MatchableCompanyDoc,
   type MatchableWorkspaceDoc,
   type RequirementCompletionSource,
+  type RequirementDestinationSection,
+  type RequirementOrigin,
 } from "@/lib/bid-checklist";
 import type { BidWorkspaceDTO, WorkspaceDocumentRow } from "@/lib/bid-workspace";
 import { getServerSupabase } from "@/lib/db/server";
@@ -55,6 +59,14 @@ export type ChecklistItemRow = {
   matchConfidence: number | null;
   matchReason: string | null;
   displayOrder: number;
+  requirementOrigin: RequirementOrigin;
+  aiDetected: boolean;
+  workspaceSection: RequirementDestinationSection;
+  createdBy: string | null;
+  createdByName: string | null;
+  createdAt: string | null;
+  updatedBy: string | null;
+  updatedAt: string | null;
   documents: ChecklistLinkedDocument[];
   matchedCompanyDocument: {
     id: string;
@@ -109,12 +121,22 @@ function mapChecklistRow(
     (row.matched_document_source as "COMPANY" | "TENDER" | null) || null;
   const hasWorkspaceDocument = linkedDocs.some((d) => d.source === "TENDER");
   const hasCompanyDocument = linkedDocs.some((d) => d.source === "COMPANY");
+  const originRaw = String(row.requirement_origin || "AI").toUpperCase();
+  const requirementOrigin: RequirementOrigin =
+    originRaw === "MANUAL" || originRaw === "SEED" ? originRaw : "AI";
+  const category = String(row.category || "COMPLIANCE");
+  const workspaceSection = resolveWorkspaceSection({
+    category,
+    workspaceSection: row.workspace_section
+      ? String(row.workspace_section)
+      : null,
+  });
 
   return {
     id: String(row.id),
     requirementKey: String(row.requirement_key),
     requirementName: String(row.requirement_name),
-    category: String(row.category || "COMPLIANCE"),
+    category,
     description: row.description ? String(row.description) : null,
     mandatory: row.mandatory !== false,
     documentType: row.document_type ? String(row.document_type) : null,
@@ -149,6 +171,14 @@ function mapChecklistRow(
       row.match_confidence == null ? null : Number(row.match_confidence),
     matchReason: row.match_reason ? String(row.match_reason) : null,
     displayOrder: Number(row.display_order || 0),
+    requirementOrigin,
+    aiDetected: row.ai_detected === true,
+    workspaceSection,
+    createdBy: row.created_by ? String(row.created_by) : null,
+    createdByName: null,
+    createdAt: row.created_at ? String(row.created_at) : null,
+    updatedBy: row.updated_by ? String(row.updated_by) : null,
+    updatedAt: row.updated_at ? String(row.updated_at) : null,
     documents: linkedDocs,
     matchedCompanyDocument: company
       ? {
@@ -295,6 +325,10 @@ export async function seedChecklistItemsIfEmpty(options: {
         seed.requirementName,
       ),
       display_order: index + 1,
+      requirement_origin: "SEED",
+      workspace_section: resolveWorkspaceSection({
+        category: seed.category,
+      }),
     })),
   );
   if (error) throw new Error(error.message);
@@ -502,7 +536,7 @@ export async function listChecklistItems(options: {
     options.workspaceDocuments.map((d) => [d.id, d]),
   );
 
-  return (data || []).map((row) => {
+  const mapped = (data || []).map((row) => {
     const record = row as Record<string, unknown>;
     const matchedBy =
       (record.matched_by as "AI" | "USER" | "SYSTEM" | null) || null;
@@ -520,6 +554,29 @@ export async function listChecklistItems(options: {
     });
     return mapChecklistRow(record, companyById, workspaceById, linkedDocs);
   });
+
+  const creatorIds = [
+    ...new Set(
+      mapped
+        .map((item) => item.createdBy)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  if (creatorIds.length === 0) return mapped;
+
+  const { data: users } = await supabase
+    .from("agenttender_users")
+    .select("id, full_name")
+    .in("id", creatorIds);
+  const nameById = new Map(
+    (users || []).map((u) => [String(u.id), String(u.full_name || "").trim()]),
+  );
+  return mapped.map((item) => ({
+    ...item,
+    createdByName: item.createdBy
+      ? nameById.get(item.createdBy) || null
+      : null,
+  }));
 }
 
 export async function loadChecklistForWorkspace(options: {
@@ -767,4 +824,315 @@ export async function clearChecklistLinksForDeletedDocument(options: {
 
   // Also clear FK on any remaining rows that pointed via checklist_item_id
   // (document row is already deleted; rematch will pick up remaining docs).
+}
+
+export type ManualRequirementInput = {
+  workspaceId: string;
+  companyId: string;
+  tenderId: string;
+  userId: string;
+  title: string;
+  section: RequirementDestinationSection;
+  category?: string | null;
+  description?: string | null;
+  sourceReference?: string | null;
+};
+
+function assertDestinationSection(
+  value: string,
+): RequirementDestinationSection {
+  if (
+    value === "prequalification" ||
+    value === "technical" ||
+    value === "annexures"
+  ) {
+    return value;
+  }
+  throw new Error("Choose a valid destination section.");
+}
+
+function normalizeManualCategory(
+  category: string | null | undefined,
+  section: RequirementDestinationSection,
+): ChecklistCategory {
+  const raw = String(category || "").trim().toUpperCase();
+  const allowed = new Set([
+    "COMPLIANCE",
+    "TECHNICAL",
+    "FINANCIAL",
+    "LEGAL",
+    "EXPERIENCE",
+    "ANNEXURE",
+    "DECLARATION",
+    "AUTHORIZATION",
+    "CERTIFICATE",
+    "EMD",
+    "BOQ",
+    "SERVICE",
+    "OTHER",
+  ]);
+  if (raw && allowed.has(raw)) return raw as ChecklistCategory;
+  if (section === "technical") return "TECHNICAL";
+  if (section === "annexures") return "ANNEXURE";
+  return "COMPLIANCE";
+}
+
+/** Create a first-class MANUAL checklist requirement. */
+export async function createManualChecklistItem(
+  options: ManualRequirementInput,
+): Promise<{ id: string; identityKey: string }> {
+  const title = options.title.trim();
+  if (!title) throw new Error("Requirement title is required.");
+  const section = assertDestinationSection(options.section);
+  const category = normalizeManualCategory(options.category, section);
+  const identity = normalizeRequirementIdentityKey("", title);
+  const supabase = getServerSupabase();
+
+  const { data: existingExact, error: exactError } = await supabase
+    .from("agenttender_bid_checklist_items")
+    .select("id, requirement_name")
+    .eq("workspace_id", options.workspaceId)
+    .eq("company_id", options.companyId)
+    .eq("is_archived", false)
+    .eq("normalized_requirement_key", identity)
+    .maybeSingle();
+  if (exactError) throw new Error(exactError.message);
+  if (existingExact?.id) {
+    throw new Error(
+      `A requirement with this title already exists: ${existingExact.requirement_name}`,
+    );
+  }
+
+  const { data: archivedExact } = await supabase
+    .from("agenttender_bid_checklist_items")
+    .select("id")
+    .eq("workspace_id", options.workspaceId)
+    .eq("company_id", options.companyId)
+    .eq("is_archived", true)
+    .eq("requirement_key", identity)
+    .maybeSingle();
+
+  const { data: maxOrderRow } = await supabase
+    .from("agenttender_bid_checklist_items")
+    .select("display_order")
+    .eq("workspace_id", options.workspaceId)
+    .eq("is_archived", false)
+    .order("display_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const nextOrder = Number(maxOrderRow?.display_order || 0) + 1;
+  const now = new Date().toISOString();
+  const sourceRef = options.sourceReference?.trim() || null;
+
+  const payload = {
+    workspace_id: options.workspaceId,
+    company_id: options.companyId,
+    tender_id: options.tenderId,
+    requirement_key: identity,
+    requirement_name: title,
+    category,
+    description: options.description?.trim() || null,
+    mandatory: true,
+    document_type: category,
+    generation_allowed: isFromScratchGeneratable({
+      requirementKey: identity,
+      requirementName: title,
+      generationAllowed: false,
+    }),
+    source_clause: sourceRef,
+    source_text: sourceRef,
+    normalized_requirement_key: identity,
+    display_order: nextOrder,
+    completion_status: "MISSING",
+    requirement_origin: "MANUAL",
+    ai_detected: false,
+    workspace_section: section,
+    created_by: options.userId,
+    updated_by: options.userId,
+    updated_at: now,
+    is_archived: false,
+    archived_at: null,
+    archived_by: null,
+    manual_completed: false,
+    manual_completed_at: null,
+    manual_completed_by: null,
+    matched_workspace_document_id: null,
+    matched_company_document_id: null,
+    matched_document_source: null,
+    matched_by: null,
+  };
+
+  if (archivedExact?.id) {
+    const { error } = await supabase
+      .from("agenttender_bid_checklist_items")
+      .update(payload)
+      .eq("id", archivedExact.id)
+      .eq("workspace_id", options.workspaceId);
+    if (error) throw new Error(error.message);
+    return { id: String(archivedExact.id), identityKey: identity };
+  }
+
+  const { data: inserted, error } = await supabase
+    .from("agenttender_bid_checklist_items")
+    .insert({
+      ...payload,
+      created_at: now,
+    })
+    .select("id")
+    .single();
+  if (error) throw new Error(error.message);
+  return { id: String(inserted.id), identityKey: identity };
+}
+
+export async function updateManualChecklistItem(options: {
+  itemId: string;
+  workspaceId: string;
+  companyId: string;
+  userId: string;
+  title: string;
+  section: RequirementDestinationSection;
+  category?: string | null;
+  description?: string | null;
+  sourceReference?: string | null;
+}): Promise<void> {
+  const supabase = getServerSupabase();
+  const { data: row, error: loadError } = await supabase
+    .from("agenttender_bid_checklist_items")
+    .select("id, requirement_origin")
+    .eq("id", options.itemId)
+    .eq("workspace_id", options.workspaceId)
+    .eq("company_id", options.companyId)
+    .eq("is_archived", false)
+    .maybeSingle();
+  if (loadError) throw new Error(loadError.message);
+  if (!row) throw new Error("Requirement not found.");
+  if (String(row.requirement_origin) !== "MANUAL") {
+    throw new Error("Only manually added requirements can be edited.");
+  }
+
+  const title = options.title.trim();
+  if (!title) throw new Error("Requirement title is required.");
+  const section = assertDestinationSection(options.section);
+  const category = normalizeManualCategory(options.category, section);
+  const identity = normalizeRequirementIdentityKey("", title);
+  const sourceRef = options.sourceReference?.trim() || null;
+
+  const { data: clash } = await supabase
+    .from("agenttender_bid_checklist_items")
+    .select("id, requirement_name")
+    .eq("workspace_id", options.workspaceId)
+    .eq("company_id", options.companyId)
+    .eq("is_archived", false)
+    .eq("normalized_requirement_key", identity)
+    .neq("id", options.itemId)
+    .maybeSingle();
+  if (clash?.id) {
+    throw new Error(
+      `A requirement with this title already exists: ${clash.requirement_name}`,
+    );
+  }
+
+  const { error } = await supabase
+    .from("agenttender_bid_checklist_items")
+    .update({
+      requirement_key: identity,
+      requirement_name: title,
+      category,
+      description: options.description?.trim() || null,
+      document_type: category,
+      source_clause: sourceRef,
+      source_text: sourceRef,
+      normalized_requirement_key: identity,
+      workspace_section: section,
+      updated_by: options.userId,
+      updated_at: new Date().toISOString(),
+      generation_allowed: isFromScratchGeneratable({
+        requirementKey: identity,
+        requirementName: title,
+        generationAllowed: false,
+      }),
+    })
+    .eq("id", options.itemId)
+    .eq("workspace_id", options.workspaceId)
+    .eq("company_id", options.companyId);
+  if (error) throw new Error(error.message);
+}
+
+/**
+ * Soft-delete a MANUAL requirement. Linked workspace documents are unlinked
+ * (kept in the document library) — Azure blobs are never deleted here.
+ */
+export async function archiveManualChecklistItem(options: {
+  itemId: string;
+  workspaceId: string;
+  companyId: string;
+  userId: string;
+}): Promise<{ linkedDocumentCount: number }> {
+  const supabase = getServerSupabase();
+  const { data: row, error: loadError } = await supabase
+    .from("agenttender_bid_checklist_items")
+    .select("id, requirement_origin")
+    .eq("id", options.itemId)
+    .eq("workspace_id", options.workspaceId)
+    .eq("company_id", options.companyId)
+    .eq("is_archived", false)
+    .maybeSingle();
+  if (loadError) throw new Error(loadError.message);
+  if (!row) throw new Error("Requirement not found.");
+  if (String(row.requirement_origin) !== "MANUAL") {
+    throw new Error("Only manually added requirements can be deleted.");
+  }
+
+  const { data: linkedDocs, error: docsError } = await supabase
+    .from("agenttender_bid_workspace_documents")
+    .select("id")
+    .eq("workspace_id", options.workspaceId)
+    .eq("checklist_item_id", options.itemId);
+  if (docsError) throw new Error(docsError.message);
+  const linkedDocumentCount = (linkedDocs || []).length;
+
+  // Keep documents in the workspace library; only clear the requirement FK.
+  if (linkedDocumentCount > 0) {
+    const { error: unlinkError } = await supabase
+      .from("agenttender_bid_workspace_documents")
+      .update({ checklist_item_id: null })
+      .eq("workspace_id", options.workspaceId)
+      .eq("checklist_item_id", options.itemId);
+    if (unlinkError) throw new Error(unlinkError.message);
+  }
+
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from("agenttender_bid_checklist_items")
+    .update({
+      is_archived: true,
+      archived_at: now,
+      archived_by: options.userId,
+      updated_by: options.userId,
+      updated_at: now,
+      matched_workspace_document_id: null,
+      matched_company_document_id: null,
+      matched_document_source: null,
+      matched_by: null,
+    })
+    .eq("id", options.itemId)
+    .eq("workspace_id", options.workspaceId)
+    .eq("company_id", options.companyId);
+  if (error) throw new Error(error.message);
+
+  return { linkedDocumentCount };
+}
+
+export async function countLinkedDocumentsForChecklistItem(options: {
+  itemId: string;
+  workspaceId: string;
+}): Promise<number> {
+  const supabase = getServerSupabase();
+  const { count, error } = await supabase
+    .from("agenttender_bid_workspace_documents")
+    .select("id", { count: "exact", head: true })
+    .eq("workspace_id", options.workspaceId)
+    .eq("checklist_item_id", options.itemId);
+  if (error) throw new Error(error.message);
+  return count ?? 0;
 }

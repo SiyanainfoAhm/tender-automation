@@ -1,7 +1,8 @@
 /**
- * Preserve Tender Management URL + scroll when opening Tender Detail.
- * URL search params remain the source of truth for filters; this only
- * stores the return path so Detail Back does not wipe them.
+ * Preserve Tender Management URL + scroll when leaving the list.
+ * URL search params remain the source of truth for filters; this stores the
+ * return path so Detail / Bid Workspace / sidebar Back do not wipe them
+ * for the lifetime of the browser tab (sessionStorage).
  */
 
 const RETURN_URL_KEY = "tenderflow:tenders-list-return";
@@ -28,6 +29,17 @@ export function rememberTendersListReturn(
     if (typeof scrollY === "number" && Number.isFinite(scrollY)) {
       sessionStorage.setItem(SCROLL_KEY, String(Math.max(0, Math.round(scrollY))));
     }
+  } catch {
+    /* private mode / quota */
+  }
+}
+
+/** Persist current list filters without touching scroll (filter changes). */
+export function rememberTendersListFilters(href: string): void {
+  if (typeof window === "undefined") return;
+  if (!isSafeTendersListReturnPath(href)) return;
+  try {
+    sessionStorage.setItem(RETURN_URL_KEY, href);
   } catch {
     /* private mode / quota */
   }

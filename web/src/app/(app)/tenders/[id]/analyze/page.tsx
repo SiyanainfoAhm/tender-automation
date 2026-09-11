@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, ChevronRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 
 import {
   AnalyzeRfpExtract,
   TenderAnalyzerPanels,
 } from "@/components/tenders/tender-analysis-panels";
 import { CategoryCapsule } from "@/components/tenders/category-capsule";
+import { TendersBackLink } from "@/components/tenders/tenders-back-link";
 import { SourceBadge } from "@/components/status/source-badge";
 import { StatusBadge } from "@/components/status/qualification-badge";
 import { ErrorState } from "@/components/ui/error-state";
@@ -44,13 +45,7 @@ export default async function TenderAnalyzePage({ params }: AnalyzePageProps) {
   return (
     <div className="space-y-6">
       <div className="flex min-w-0 items-center gap-2 text-sm">
-        <Link
-          href="/tenders"
-          className="inline-flex shrink-0 items-center gap-1 text-foreground-500 hover:text-foreground-900"
-        >
-          <ArrowLeft className="size-4" />
-          Tenders
-        </Link>
+        <TendersBackLink />
         <ChevronRight className="size-3.5 shrink-0 text-foreground-400" />
         <Link
           href={`/tenders/${tender.id}`}

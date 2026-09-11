@@ -15,6 +15,8 @@ export const CHECKLIST_CATEGORIES = [
   "CERTIFICATE",
   "EMD",
   "BOQ",
+  "SERVICE",
+  "OTHER",
 ] as const;
 
 export type ChecklistCategory = (typeof CHECKLIST_CATEGORIES)[number];
@@ -638,10 +640,17 @@ export type WorkspaceSectionKey =
   | "technical"
   | "annexures";
 
+export type RequirementDestinationSection = Exclude<
+  WorkspaceSectionKey,
+  "checklist"
+>;
+
+export type RequirementOrigin = "AI" | "MANUAL" | "SEED";
+
 /** Map checklist category → Bid Workspace section tab. */
 export function sectionForChecklistCategory(
   category: string,
-): Exclude<WorkspaceSectionKey, "checklist"> {
+): RequirementDestinationSection {
   const c = category.toUpperCase();
   if (c === "TECHNICAL" || c === "BOQ") return "technical";
   if (
@@ -655,11 +664,32 @@ export function sectionForChecklistCategory(
   return "prequalification";
 }
 
+/** Prefer explicit workspace_section when set (manual add / section moves). */
+export function resolveWorkspaceSection(item: {
+  category: string;
+  workspaceSection?: string | null;
+}): RequirementDestinationSection {
+  const section = item.workspaceSection;
+  if (
+    section === "prequalification" ||
+    section === "technical" ||
+    section === "annexures"
+  ) {
+    return section;
+  }
+  return sectionForChecklistCategory(item.category);
+}
+
 export function itemMatchesWorkspaceSection(
-  category: string,
-  section: Exclude<WorkspaceSectionKey, "checklist">,
+  itemOrCategory:
+    | string
+    | { category: string; workspaceSection?: string | null },
+  section: RequirementDestinationSection,
 ): boolean {
-  return sectionForChecklistCategory(category) === section;
+  if (typeof itemOrCategory === "string") {
+    return sectionForChecklistCategory(itemOrCategory) === section;
+  }
+  return resolveWorkspaceSection(itemOrCategory) === section;
 }
 
 /**
@@ -669,16 +699,17 @@ export function itemMatchesWorkspaceSection(
 export function calculateSectionProgress<T extends {
   mandatory: boolean;
   category: string;
+  workspaceSection?: string | null;
   manualCompleted?: boolean | null;
   completionStatus: ChecklistCompletionStatus;
 }>(
   items: T[],
-  section?: Exclude<WorkspaceSectionKey, "checklist">,
+  section?: RequirementDestinationSection,
 ): { completed: number; total: number; percent: number } {
   const scoped = items.filter((item) => {
     if (!item.mandatory) return false;
     if (!section) return true;
-    return itemMatchesWorkspaceSection(item.category, section);
+    return itemMatchesWorkspaceSection(item, section);
   });
   const total = scoped.length;
   const completed = scoped.filter((item) =>
@@ -702,6 +733,76 @@ export function normalizeRequirementIdentityKey(
   const fromKey = slugRequirementKey(requirementKey || "");
   if (fromKey && fromKey !== "REQUIREMENT") return fromKey;
   return slugRequirementKey(requirementName);
+}
+
+/** Exact duplicate after identity normalization (safe to block). */
+export function isExactRequirementDuplicate(
+  a: { requirementKey?: string | null; requirementName: string },
+  b: { requirementKey?: string | null; requirementName: string },
+): boolean {
+  return (
+    normalizeRequirementIdentityKey(
+      a.requirementKey || "",
+      a.requirementName,
+    ) ===
+    normalizeRequirementIdentityKey(
+      b.requirementKey || "",
+      b.requirementName,
+    )
+  );
+}
+
+/**
+ * Cautious fuzzy similarity for duplicate warnings / AI↔manual merge.
+ * Prefer preserving both when unsure.
+ */
+export function areRequirementTitlesSimilar(
+  titleA: string,
+  titleB: string,
+): boolean {
+  const a = normalizeMatchText(titleA);
+  const b = normalizeMatchText(titleB);
+  if (!a || !b) return false;
+  if (a === b) return true;
+
+  const stripNoise = (value: string) =>
+    value
+      .replace(
+        /\b(letter|certificate|document|form|undertaking|affidavit|copy|of|the|a|an|and|or|for|required|submission)\b/g,
+        " ",
+      )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const sa = stripNoise(a);
+  const sb = stripNoise(b);
+  if (!sa || !sb) return false;
+  if (sa === sb) return true;
+
+  const shorter = sa.length <= sb.length ? sa : sb;
+  const longer = sa.length > sb.length ? sa : sb;
+  // Require meaningful stem overlap — avoid merging short generic titles.
+  if (shorter.length < 10) return false;
+  if (longer.includes(shorter) || shorter.includes(longer)) return true;
+
+  const tokensA = new Set(sa.split(" ").filter((t) => t.length > 2));
+  const tokensB = new Set(sb.split(" ").filter((t) => t.length > 2));
+  if (tokensA.size === 0 || tokensB.size === 0) return false;
+  let overlap = 0;
+  for (const token of tokensA) {
+    if (tokensB.has(token)) overlap += 1;
+  }
+  const union = new Set([...tokensA, ...tokensB]).size;
+  return union > 0 && overlap / union >= 0.75 && overlap >= 2;
+}
+
+/** Default category when user picks a destination section without a type. */
+export function defaultCategoryForSection(
+  section: RequirementDestinationSection,
+): ChecklistCategory {
+  if (section === "technical") return "TECHNICAL";
+  if (section === "annexures") return "ANNEXURE";
+  return "COMPLIANCE";
 }
 
 export function completionSourceLabel(
@@ -736,8 +837,18 @@ export function categoryLabel(category: string): string {
     CERTIFICATE: "Certificate",
     EMD: "EMD",
     BOQ: "BOQ",
+    SERVICE: "Service",
+    OTHER: "Other",
   };
   return map[category] || category;
+}
+
+export function workspaceSectionLabel(
+  section: RequirementDestinationSection,
+): string {
+  if (section === "prequalification") return "Pre-Qualification";
+  if (section === "technical") return "Technical";
+  return "Annexure";
 }
 
 export function buildChecklistSeedFromMissingDocuments(

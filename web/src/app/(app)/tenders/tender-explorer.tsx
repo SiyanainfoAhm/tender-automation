@@ -17,9 +17,12 @@ import {
   Loader2,
   MapPin,
   Search,
+  Sparkles,
   X,
 } from "lucide-react";
 
+import { AiSummaryDialog, preloadAiSummaryUrl } from "@/components/tenders/ai-summary-dialog";
+import type { AiSummaryTenderMeta } from "@/components/tenders/ai-summary-dialog";
 import { CategoryCapsule } from "@/components/tenders/category-capsule";
 import { TenderLoadingOverlay } from "@/components/tenders/tender-loading-overlay";
 import { TenderStatsCards } from "@/components/tenders/tender-stats-cards";
@@ -106,6 +109,7 @@ import {
 } from "@/lib/tenders/list-cache";
 import {
   consumeTendersListScroll,
+  rememberTendersListFilters,
   rememberTendersListReturn,
   tendersListHrefFromParts,
 } from "@/lib/tenders/list-return";
@@ -357,6 +361,10 @@ export function TenderExplorer({
   const [isTableRefreshing, setIsTableRefreshing] = React.useState(false);
   const [isBackgroundRefreshing, setIsBackgroundRefreshing] =
     React.useState(false);
+  const [aiSummaryOpen, setAiSummaryOpen] = React.useState(false);
+  const [aiSummaryTender, setAiSummaryTender] =
+    React.useState<AiSummaryTenderMeta | null>(null);
+  const aiSummaryHoverTimer = React.useRef<number | null>(null);
   const [listError, setListError] = React.useState<string | null>(null);
   const [isExporting, setIsExporting] = React.useState(false);
   const [refreshToken, setRefreshToken] = React.useState(0);
@@ -555,6 +563,11 @@ export function TenderExplorer({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stable filter key + page drive fetches
   }, [queryKey, refreshToken, listFilterKey, filters.page]);
 
+  // Keep list filters in sessionStorage for Bid Workspace / sidebar return.
+  React.useEffect(() => {
+    rememberTendersListFilters(tendersListHrefFromParts(pathname, queryKey));
+  }, [pathname, queryKey]);
+
   // Restore scroll after returning from Tender Detail (sessionStorage).
   React.useEffect(() => {
     if (scrollRestoreDone.current) return;
@@ -569,6 +582,53 @@ export function TenderExplorer({
       window.scrollTo({ top: y, behavior: "auto" });
     });
   }, [hasResolvedData, queryKey]);
+
+  const openAiSummary = React.useCallback((row: WebTenderListRow) => {
+    if (aiSummaryHoverTimer.current != null) {
+      window.clearTimeout(aiSummaryHoverTimer.current);
+      aiSummaryHoverTimer.current = null;
+    }
+    setAiSummaryTender({
+      id: row.id,
+      title: listTitle(row),
+      sourcePortal: row.source_portal,
+      sourceTenderId: row.source_tender_id,
+      referenceNo: row.reference_no,
+      organisationName: row.organization || row.authority,
+      closingDate: row.closing_date,
+      aiSummaryUrl: row.ai_summary_url || null,
+    });
+    setAiSummaryOpen(true);
+  }, []);
+
+  const scheduleAiSummaryOpen = React.useCallback(
+    (row: WebTenderListRow) => {
+      if (aiSummaryHoverTimer.current != null) {
+        window.clearTimeout(aiSummaryHoverTimer.current);
+      }
+      preloadAiSummaryUrl(row.ai_summary_url);
+      aiSummaryHoverTimer.current = window.setTimeout(() => {
+        aiSummaryHoverTimer.current = null;
+        openAiSummary(row);
+      }, 300);
+    },
+    [openAiSummary],
+  );
+
+  const cancelAiSummaryOpen = React.useCallback(() => {
+    if (aiSummaryHoverTimer.current != null) {
+      window.clearTimeout(aiSummaryHoverTimer.current);
+      aiSummaryHoverTimer.current = null;
+    }
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (aiSummaryHoverTimer.current != null) {
+        window.clearTimeout(aiSummaryHoverTimer.current);
+      }
+    };
+  }, []);
 
   const openTenderDetail = React.useCallback(
     (
@@ -1590,26 +1650,40 @@ export function TenderExplorer({
                                     </span>
                                   ) : null}
                                   {hasAi ? (
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <button
-                                          type="button"
-                                          className="shrink-0 font-medium text-sky-700 hover:underline"
-                                          aria-label={`View AI summary for ${listTitle(row)}`}
-                                          onClick={() =>
-                                            openTenderDetail(row.id, {
-                                              tab: "documents",
-                                              focus: "ai-summary",
-                                            })
-                                          }
-                                        >
-                                          AI Summary
-                                        </button>
-                                      </TooltipTrigger>
-                                      <TooltipContent>
-                                        View AI-generated tender summary
-                                      </TooltipContent>
-                                    </Tooltip>
+                                    <button
+                                      type="button"
+                                      className={cn(
+                                        "inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-medium text-emerald-700",
+                                        "hover:bg-emerald-50 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30",
+                                      )}
+                                      aria-label={`View AI summary for ${listTitle(row)}`}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        openAiSummary(row);
+                                      }}
+                                      onMouseEnter={() =>
+                                        scheduleAiSummaryOpen(row)
+                                      }
+                                      onMouseLeave={cancelAiSummaryOpen}
+                                      onFocus={() =>
+                                        preloadAiSummaryUrl(row.ai_summary_url)
+                                      }
+                                      onKeyDown={(event) => {
+                                        if (
+                                          event.key === "Enter" ||
+                                          event.key === " "
+                                        ) {
+                                          event.preventDefault();
+                                          openAiSummary(row);
+                                        }
+                                      }}
+                                    >
+                                      <Sparkles
+                                        className="size-3.5 shrink-0"
+                                        aria-hidden
+                                      />
+                                      AI Summary
+                                    </button>
                                   ) : null}
                                 </div>
                               );
@@ -1774,6 +1848,14 @@ export function TenderExplorer({
           description={`Preparing ${total.toLocaleString("en-IN")} matching tenders for download…`}
         />
       ) : null}
+      <AiSummaryDialog
+        open={aiSummaryOpen}
+        onOpenChange={(open) => {
+          setAiSummaryOpen(open);
+          if (!open) setAiSummaryTender(null);
+        }}
+        tender={aiSummaryTender}
+      />
     </div>
     </TooltipProvider>
   );

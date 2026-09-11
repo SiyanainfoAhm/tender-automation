@@ -17,6 +17,7 @@ import {
 import { APP_BOTTOM_NAV, APP_MAIN_NAV } from "@/components/layout/nav-items";
 import { companyRoleLabel } from "@/lib/company/types";
 import { roleHasPermission, type PermissionKey } from "@/lib/rbac/permissions";
+import { peekTendersListReturn } from "@/lib/tenders/list-return";
 
 export type SidebarUser = {
   fullName: string;
@@ -99,6 +100,10 @@ export function AppSidebar({
   tenderCount = null,
 }: AppSidebarProps) {
   const pathname = usePathname();
+  // Intentionally re-read sessionStorage on every route change so list filters
+  // survive Bid Workspace / detail navigation for the tab lifetime.
+  void pathname;
+  const tendersHref = peekTendersListReturn() || "/tenders";
   const mainItems = APP_MAIN_NAV.filter((item) => {
     if (item.permission) {
       return roleHasPermission(user.role, item.permission as PermissionKey);
@@ -145,12 +150,18 @@ export function AppSidebar({
               </p>
             ) : null}
             {mainItems.map((item) => {
+              const href =
+                item.href === "/tenders" ? tendersHref : item.href;
               const active =
-                pathname === item.href || pathname.startsWith(`${item.href}/`);
+                item.href === "/tenders"
+                  ? pathname === "/tenders" ||
+                    pathname.startsWith("/tenders/")
+                  : pathname === item.href ||
+                    pathname.startsWith(`${item.href}/`);
               return (
                 <NavLink
                   key={item.href}
-                  href={item.href}
+                  href={href}
                   label={item.label}
                   icon={item.icon}
                   collapsed={collapsed}

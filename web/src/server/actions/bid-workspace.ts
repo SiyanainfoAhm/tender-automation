@@ -26,9 +26,13 @@ import {
 } from "@/server/repositories/bidAiPromptRepository";
 import {
   clearChecklistLinksForDeletedDocument,
+  archiveManualChecklistItem,
+  countLinkedDocumentsForChecklistItem,
+  createManualChecklistItem,
   rematchChecklistItems,
   setChecklistCompletionState,
   setChecklistManualMatch,
+  updateManualChecklistItem,
 } from "@/server/repositories/bidChecklistRepository";
 import {
   deleteBoqItem,
@@ -1066,6 +1070,265 @@ export async function toggleChecklistItemCompleteAction(input: {
         error instanceof Error
           ? error.message
           : "Unable to update checklist item.",
+    };
+  }
+}
+
+export type AddChecklistRequirementResult =
+  | {
+      ok: true;
+      itemId: string;
+      uploadFailed?: boolean;
+      uploadError?: string;
+    }
+  | { ok: false; error: string };
+
+const DESTINATION_SECTIONS = new Set([
+  "prequalification",
+  "technical",
+  "annexures",
+]);
+
+export async function addChecklistRequirementAction(
+  formData: FormData,
+): Promise<AddChecklistRequirementResult> {
+  try {
+    const tenderId = String(formData.get("tenderId") || "").trim();
+    const { session, detail, workspaceId } = await requireEditableWorkspace(
+      tenderId,
+      "bids.edit",
+    );
+
+    const title = String(formData.get("title") || "").trim();
+    const sectionRaw = String(formData.get("section") || "").trim();
+    const category = String(formData.get("category") || "").trim() || null;
+    const description =
+      String(formData.get("description") || "").trim() || null;
+    const sourceReference =
+      String(formData.get("sourceReference") || "").trim() || null;
+    const file = formData.get("file");
+
+    if (!title) return { ok: false, error: "Requirement title is required." };
+    if (!DESTINATION_SECTIONS.has(sectionRaw)) {
+      return {
+        ok: false,
+        error: "Choose Pre-Qualification, Technical, or Annexure.",
+      };
+    }
+
+    const created = await createManualChecklistItem({
+      workspaceId,
+      companyId: session.companyId,
+      tenderId: detail.id,
+      userId: session.user.id,
+      title,
+      section: sectionRaw as "prequalification" | "technical" | "annexures",
+      category,
+      description,
+      sourceReference,
+    });
+
+    let uploadFailed = false;
+    let uploadError: string | undefined;
+
+    if (file instanceof File && file.size > 0) {
+      if (file.size > MAX_SINGLE_SHOT_UPLOAD_BYTES) {
+        uploadFailed = true;
+        uploadError = "File exceeds the 25 MB limit.";
+      } else {
+        try {
+          const result = await invokeWorkspaceDocumentSave({
+            workspaceId,
+            tenderId: detail.id,
+            tenderReference: detail.sourceTenderId,
+            documentType: category || "Other",
+            title: title || file.name,
+            file,
+          });
+          if (!result.success) {
+            uploadFailed = true;
+            uploadError = result.error || "Document upload failed.";
+          } else {
+            const savedDocumentId = String(
+              result.workspaceDocumentId || result.documentId || "",
+            );
+            if (!savedDocumentId) {
+              uploadFailed = true;
+              uploadError = "Document uploaded but could not be linked.";
+            } else {
+              await setChecklistManualMatch({
+                itemId: created.id,
+                workspaceId,
+                companyId: session.companyId,
+                workspaceDocumentId: savedDocumentId,
+              });
+            }
+          }
+        } catch (error) {
+          uploadFailed = true;
+          uploadError =
+            error instanceof Error ? error.message : "Document upload failed.";
+        }
+      }
+    }
+
+    await insertTenderActivity({
+      tenderId: detail.id,
+      companyId: session.companyId,
+      eventType: "checklist_requirement_added",
+      summary: `Manual requirement added: ${title}`,
+      payload: {
+        itemId: created.id,
+        section: sectionRaw,
+        category,
+        uploadFailed,
+      },
+      actorUserId: session.user.id,
+    });
+
+    revalidateWorkspace(tenderId);
+    return {
+      ok: true,
+      itemId: created.id,
+      uploadFailed: uploadFailed || undefined,
+      uploadError,
+    };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message };
+    }
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to add requirement.",
+    };
+  }
+}
+
+export async function updateChecklistRequirementAction(input: {
+  tenderId: string;
+  itemId: string;
+  title: string;
+  section: string;
+  category?: string | null;
+  description?: string | null;
+  sourceReference?: string | null;
+}): Promise<ActionResult> {
+  try {
+    const { session, workspaceId } = await requireEditableWorkspace(
+      input.tenderId,
+      "bids.edit",
+    );
+    if (!DESTINATION_SECTIONS.has(input.section)) {
+      return { ok: false, error: "Choose a valid destination section." };
+    }
+    await updateManualChecklistItem({
+      itemId: input.itemId,
+      workspaceId,
+      companyId: session.companyId,
+      userId: session.user.id,
+      title: input.title,
+      section: input.section as "prequalification" | "technical" | "annexures",
+      category: input.category,
+      description: input.description,
+      sourceReference: input.sourceReference,
+    });
+    await insertTenderActivity({
+      tenderId: input.tenderId,
+      companyId: session.companyId,
+      eventType: "checklist_requirement_updated",
+      summary: `Manual requirement updated: ${input.title.trim()}`,
+      payload: { itemId: input.itemId, section: input.section },
+      actorUserId: session.user.id,
+    });
+    revalidateWorkspace(input.tenderId);
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message };
+    }
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to update requirement.",
+    };
+  }
+}
+
+export type DeleteChecklistRequirementResult =
+  | { ok: true; linkedDocumentCount: number }
+  | { ok: false; error: string; linkedDocumentCount?: number };
+
+export async function previewDeleteChecklistRequirementAction(input: {
+  tenderId: string;
+  itemId: string;
+}): Promise<DeleteChecklistRequirementResult> {
+  try {
+    const { workspaceId } = await requireEditableWorkspace(
+      input.tenderId,
+      "bids.edit",
+    );
+    const linkedDocumentCount = await countLinkedDocumentsForChecklistItem({
+      itemId: input.itemId,
+      workspaceId,
+    });
+    return { ok: true, linkedDocumentCount };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message };
+    }
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to check linked documents.",
+    };
+  }
+}
+
+export async function deleteChecklistRequirementAction(input: {
+  tenderId: string;
+  itemId: string;
+}): Promise<DeleteChecklistRequirementResult> {
+  try {
+    const { session, workspaceId } = await requireEditableWorkspace(
+      input.tenderId,
+      "bids.edit",
+    );
+    const result = await archiveManualChecklistItem({
+      itemId: input.itemId,
+      workspaceId,
+      companyId: session.companyId,
+      userId: session.user.id,
+    });
+    await insertTenderActivity({
+      tenderId: input.tenderId,
+      companyId: session.companyId,
+      eventType: "checklist_requirement_deleted",
+      summary: "Manual requirement removed",
+      payload: {
+        itemId: input.itemId,
+        linkedDocumentCount: result.linkedDocumentCount,
+      },
+      actorUserId: session.user.id,
+    });
+    revalidateWorkspace(input.tenderId);
+    return { ok: true, linkedDocumentCount: result.linkedDocumentCount };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message };
+    }
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to delete requirement.",
     };
   }
 }
