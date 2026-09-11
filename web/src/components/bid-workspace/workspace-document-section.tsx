@@ -26,6 +26,7 @@ export type WorkspaceDocCardModel = {
   updatedAt: string | null;
   source: "COMPANY" | "TENDER";
   downloadHref: string | null;
+  checklistLinked?: boolean;
 };
 
 function statusToneClasses(tone: WorkspaceDocCardModel["statusTone"]) {
@@ -46,6 +47,7 @@ function statusToneClasses(tone: WorkspaceDocCardModel["statusTone"]) {
 
 export function mapWorkspaceDocumentCard(
   doc: WorkspaceDocumentRow,
+  options?: { checklistLinked?: boolean },
 ): WorkspaceDocCardModel {
   const tone =
     doc.status === "approved"
@@ -69,6 +71,7 @@ export function mapWorkspaceDocumentCard(
     downloadHref: doc.hasFile
       ? `/api/bid-workspace/documents/${doc.id}`
       : null,
+    checklistLinked: options?.checklistLinked === true,
   };
 }
 
@@ -115,6 +118,7 @@ type WorkspaceDocumentSectionProps = {
   readOnly: boolean;
   ingesting?: boolean;
   onIngestAi?: () => void;
+  onEditPrompt?: () => void;
   onUpload?: () => void;
 };
 
@@ -127,6 +131,7 @@ export function WorkspaceDocumentSection({
   readOnly,
   ingesting = false,
   onIngestAi,
+  onEditPrompt,
   onUpload,
 }: WorkspaceDocumentSectionProps) {
   return (
@@ -142,7 +147,13 @@ export function WorkspaceDocumentSection({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" size="sm" disabled>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={readOnly || !onEditPrompt}
+            onClick={onEditPrompt}
+          >
             Edit Prompt
           </Button>
           <Button
@@ -195,6 +206,7 @@ export function WorkspaceDocumentSection({
                       ? ` · ${formatBytes(card.fileSizeBytes)}`
                       : ""}
                     {card.source === "COMPANY" ? " · Company Document" : ""}
+                    {card.checklistLinked ? " · Checklist item linked" : ""}
                   </p>
                 </div>
               </div>

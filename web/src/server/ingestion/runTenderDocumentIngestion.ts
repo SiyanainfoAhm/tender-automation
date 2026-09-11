@@ -238,6 +238,8 @@ export async function runTenderDocumentIngestion(options: {
   userId: string;
   documentUrls: Array<{ fileName: string; url: string }>;
   workspaceDocuments: WorkspaceDocumentRow[];
+  checklistPromptTemplate?: string | null;
+  costPromptTemplate?: string | null;
 }): Promise<TenderIngestionResult> {
   if (!options.documentUrls.length) {
     throw new Error(
@@ -255,7 +257,13 @@ export async function runTenderDocumentIngestion(options: {
     leafFiles.push(...expanded);
   }
 
-  const { structured, engine, warning } = await buildStructuredAiResult(leafFiles);
+  const { structured, engine, warning } = await buildStructuredAiResult(
+    leafFiles,
+    {
+      checklistPromptTemplate: options.checklistPromptTemplate,
+      costPromptTemplate: options.costPromptTemplate,
+    },
+  );
 
   await persistStructuredIngestion({
     workspaceId: options.workspaceId,

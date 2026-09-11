@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ChevronRight, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 import { BoqEditor } from "@/components/bid-workspace/boq-editor";
 import { ChecklistCreationPanel } from "@/components/bid-workspace/checklist-creation-panel";
+import { EditAiPromptDialog } from "@/components/bid-workspace/edit-ai-prompt-dialog";
 import { WorkspaceDocuments } from "@/components/bid-workspace/workspace-documents";
 import {
   mapCompanyReferenceCard,
@@ -35,6 +36,9 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  type BidAiPromptKey,
+} from "@/lib/bid-ai-prompts";
 import { isChecklistItemComplete } from "@/lib/bid-checklist";
 import type { BidWorkspaceDTO } from "@/lib/bid-workspace";
 import {
@@ -47,7 +51,13 @@ import {
 import { getCalendarDaysUntilDeadline } from "@/lib/tender-deadline";
 import type { TenderDetailDTO } from "@/lib/tender-detail";
 import { cn } from "@/lib/utils";
-import { markBidSubmittedAction, ingestTenderDocumentsAction, generateChecklistDocumentAction } from "@/server/actions/bid-workspace";
+import {
+  generateChecklistDocumentAction,
+  ingestTenderDocumentsAction,
+  markBidSubmittedAction,
+  toggleChecklistItemCompleteAction,
+  uploadWorkspaceDocumentAction,
+} from "@/server/actions/bid-workspace";
 import type {
   ChecklistItemRow,
   ChecklistProgress,
@@ -73,7 +83,66 @@ type BidWorkspaceClientProps = {
 };
 
 function isReadyCardStatus(status: string): boolean {
-  return status === "ready" || status === "approved" || status === "Approved" || status === "Ready";
+  return (
+    status === "ready" ||
+    status === "approved" ||
+    status === "Approved" ||
+    status === "Ready" ||
+    status === "Drafting" ||
+    status === "drafting"
+  );
+}
+
+function itemMatchesSection(
+  item: ChecklistItemRow,
+  section: "prequalification" | "technical" | "annexures",
+): boolean {
+  const c = item.category.toUpperCase();
+  if (section === "technical") return c === "TECHNICAL" || c === "BOQ";
+  if (section === "annexures") {
+    return (
+      c === "ANNEXURE" ||
+      c === "DECLARATION" ||
+      c === "AUTHORIZATION" ||
+      c === "LEGAL"
+    );
+  }
+  return (
+    c === "COMPLIANCE" ||
+    c === "FINANCIAL" ||
+    c === "EXPERIENCE" ||
+    c === "CERTIFICATE" ||
+    c === "EMD" ||
+    c === "PRE_QUALIFICATION"
+  );
+}
+
+function sectionChecklistStats(
+  items: ChecklistItemRow[],
+  section: "prequalification" | "technical" | "annexures",
+): { completed: number; total: number } {
+  const scoped = items.filter(
+    (item) => item.mandatory && itemMatchesSection(item, section),
+  );
+  return {
+    total: scoped.length,
+    completed: scoped.filter((item) =>
+      isChecklistItemComplete(item.completionStatus),
+    ).length,
+  };
+}
+
+function computeProgress(items: ChecklistItemRow[]): ChecklistProgress {
+  const mandatory = items.filter((item) => item.mandatory);
+  const total = mandatory.length;
+  const completed = mandatory.filter((item) =>
+    isChecklistItemComplete(item.completionStatus),
+  ).length;
+  return {
+    completed,
+    total,
+    percent: total === 0 ? 0 : Math.round((completed / total) * 100),
+  };
 }
 
 export function BidWorkspaceClient({
@@ -95,17 +164,41 @@ export function BidWorkspaceClient({
     string | null
   >(null);
   const [generationPhase, setGenerationPhase] = useState<string | null>(null);
+  const [togglingItemId, setTogglingItemId] = useState<string | null>(null);
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [promptKey, setPromptKey] =
+    useState<BidAiPromptKey>("CHECKLIST_CREATION");
+  const [items, setItems] = useState(checklistItems);
+  const [progress, setProgress] = useState(checklistProgress);
   const [reference, setReference] = useState("");
   const [submittedAt, setSubmittedAt] = useState(
     new Date().toISOString().slice(0, 10),
   );
   const [notes, setNotes] = useState("");
 
+  useEffect(() => {
+    setItems(checklistItems);
+    setProgress(checklistProgress);
+  }, [checklistItems, checklistProgress]);
+
   const days = getCalendarDaysUntilDeadline(tender.closingDate);
   const readOnly =
     !canEdit ||
     workspace.submissionStatus === "submitted" ||
     tender.qualificationStatus === "NO_GO";
+
+  const linkedWorkspaceDocIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const item of items) {
+      if (item.matchedWorkspaceDocumentId) ids.add(item.matchedWorkspaceDocumentId);
+    }
+    return ids;
+  }, [items]);
+
+  function openPromptEditor(key: BidAiPromptKey) {
+    setPromptKey(key);
+    setPromptOpen(true);
+  }
 
   async function runDocumentIngestion() {
     if (readOnly || ingesting || generatingRequirementId) return;
@@ -171,7 +264,28 @@ export function BidWorkspaceClient({
         return;
       }
       setGenerationPhase("Saving document");
-      toast.success("AI draft generated successfully.");
+      toast.success("AI document generated and checklist item completed.");
+      setItems((prev) => {
+        const next = prev.map((row) =>
+          row.id === item.id
+            ? {
+                ...row,
+                completionStatus: "COMPLETED_TENDER_DOCUMENT" as const,
+                matchedDocumentSource: "TENDER" as const,
+                matchedWorkspaceDocumentId: result.documentId,
+                matchedBy: "AI" as const,
+                matchedWorkspaceDocument: {
+                  id: result.documentId,
+                  title: result.title,
+                  fileName: result.fileName,
+                  status: "drafting",
+                },
+              }
+            : row,
+        );
+        setProgress(computeProgress(next));
+        return next;
+      });
       if (result.documentType === "Technical" || result.documentType === "Technical Proposal") {
         setTab("technical");
       } else if (result.documentType === "Annexure") {
@@ -192,6 +306,92 @@ export function BidWorkspaceClient({
     }
   }
 
+  async function toggleChecklistComplete(
+    item: ChecklistItemRow,
+    completed: boolean,
+  ) {
+    if (readOnly || togglingItemId) return;
+    setTogglingItemId(item.id);
+    const previous = items;
+    const optimistic = items.map((row) =>
+      row.id === item.id
+        ? {
+            ...row,
+            completionStatus: completed
+              ? row.matchedDocumentSource === "COMPANY"
+                ? ("COMPLETED_COMPANY_DOCUMENT" as const)
+                : ("COMPLETED_TENDER_DOCUMENT" as const)
+              : row.matchedWorkspaceDocumentId || row.matchedCompanyDocumentId
+                ? ("PENDING_DOCUMENT" as const)
+                : ("MISSING" as const),
+            matchedBy: "USER" as const,
+          }
+        : row,
+    );
+    setItems(optimistic);
+    setProgress(computeProgress(optimistic));
+    try {
+      const result = await toggleChecklistItemCompleteAction({
+        tenderId: tender.id,
+        itemId: item.id,
+        completed,
+      });
+      if (!result.ok) {
+        setItems(previous);
+        setProgress(computeProgress(previous));
+        toast.error(result.error);
+        return;
+      }
+      router.refresh();
+    } catch (error) {
+      setItems(previous);
+      setProgress(computeProgress(previous));
+      toast.error(
+        error instanceof Error ? error.message : "Unable to update checklist.",
+      );
+    } finally {
+      setTogglingItemId(null);
+    }
+  }
+
+  async function uploadForChecklistItem(item: ChecklistItemRow, file: File) {
+    const formData = new FormData();
+    formData.set("tenderId", tender.id);
+    formData.set("file", file);
+    formData.set("title", item.requirementName);
+    formData.set("checklistItemId", item.id);
+    const docType =
+      item.category === "TECHNICAL"
+        ? "Technical"
+        : item.category === "ANNEXURE" ||
+            item.category === "DECLARATION" ||
+            item.category === "AUTHORIZATION"
+          ? "Annexure"
+          : "Pre-Qualification";
+    formData.set("documentType", docType);
+    const result = await uploadWorkspaceDocumentAction(formData);
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    toast.success("Document uploaded and checklist item completed.");
+    setItems((prev) => {
+      const next = prev.map((row) =>
+        row.id === item.id
+          ? {
+              ...row,
+              completionStatus: "COMPLETED_TENDER_DOCUMENT" as const,
+              matchedDocumentSource: "TENDER" as const,
+              matchedBy: "USER" as const,
+            }
+          : row,
+      );
+      setProgress(computeProgress(next));
+      return next;
+    });
+    router.refresh();
+  }
+
   const companyById = useMemo(
     () => new Map(companyDocuments.map((doc) => [doc.id, doc])),
     [companyDocuments],
@@ -204,8 +404,12 @@ export function BidWorkspaceClient({
           doc.documentType,
         ),
       )
-      .map(mapWorkspaceDocumentCard);
-    const companyRefs = checklistItems
+      .map((doc) =>
+        mapWorkspaceDocumentCard(doc, {
+          checklistLinked: linkedWorkspaceDocIds.has(doc.id),
+        }),
+      );
+    const companyRefs = items
       .filter(
         (item) =>
           item.matchedDocumentSource === "COMPANY" &&
@@ -228,15 +432,19 @@ export function BidWorkspaceClient({
       seen.add(card.id);
       return true;
     });
-  }, [checklistItems, companyById, workspace.documents]);
+  }, [items, companyById, workspace.documents, linkedWorkspaceDocIds]);
 
   const technicalCards = useMemo(() => {
     const tenderCards = workspace.documents
       .filter((doc) =>
         ["Technical", "Technical Proposal"].includes(doc.documentType),
       )
-      .map(mapWorkspaceDocumentCard);
-    const companyRefs = checklistItems
+      .map((doc) =>
+        mapWorkspaceDocumentCard(doc, {
+          checklistLinked: linkedWorkspaceDocIds.has(doc.id),
+        }),
+      );
+    const companyRefs = items
       .filter(
         (item) =>
           item.matchedDocumentSource === "COMPANY" &&
@@ -256,18 +464,24 @@ export function BidWorkspaceClient({
       seen.add(card.id);
       return true;
     });
-  }, [checklistItems, companyById, workspace.documents]);
+  }, [items, companyById, workspace.documents, linkedWorkspaceDocIds]);
 
   const annexureCards = useMemo(() => {
     const tenderCards = workspace.documents
       .filter((doc) => doc.documentType === "Annexure")
-      .map(mapWorkspaceDocumentCard);
-    const companyRefs = checklistItems
+      .map((doc) =>
+        mapWorkspaceDocumentCard(doc, {
+          checklistLinked: linkedWorkspaceDocIds.has(doc.id),
+        }),
+      );
+    const companyRefs = items
       .filter(
         (item) =>
           item.matchedDocumentSource === "COMPANY" &&
           item.matchedCompanyDocumentId &&
-          (item.category === "ANNEXURE" || item.category === "DECLARATION"),
+          (item.category === "ANNEXURE" ||
+            item.category === "DECLARATION" ||
+            item.category === "AUTHORIZATION"),
       )
       .map((item) => {
         const doc = companyById.get(item.matchedCompanyDocumentId!);
@@ -282,7 +496,20 @@ export function BidWorkspaceClient({
       seen.add(card.id);
       return true;
     });
-  }, [checklistItems, companyById, workspace.documents]);
+  }, [items, companyById, workspace.documents, linkedWorkspaceDocIds]);
+
+  const pqStats = useMemo(
+    () => sectionChecklistStats(items, "prequalification"),
+    [items],
+  );
+  const technicalStats = useMemo(
+    () => sectionChecklistStats(items, "technical"),
+    [items],
+  );
+  const annexureStats = useMemo(
+    () => sectionChecklistStats(items, "annexures"),
+    [items],
+  );
 
   const boqTotal = useMemo(
     () =>
@@ -299,22 +526,22 @@ export function BidWorkspaceClient({
       {
         id: "checklist" as const,
         label: "Checklist Creation",
-        count: `${checklistProgress.completed}/${checklistProgress.total}`,
+        count: `${progress.completed}/${progress.total}`,
       },
       {
         id: "prequalification" as const,
         label: "Pre-Qualification Documents",
-        count: `${pqCards.filter((c) => isReadyCardStatus(c.statusLabel)).length}/${pqCards.length}`,
+        count: `${pqStats.completed}/${pqStats.total || pqCards.length}`,
       },
       {
         id: "technical" as const,
         label: "Technical Documents",
-        count: `${technicalCards.filter((c) => isReadyCardStatus(c.statusLabel)).length}/${technicalCards.length}`,
+        count: `${technicalStats.completed}/${technicalStats.total || technicalCards.length}`,
       },
       {
         id: "annexures" as const,
         label: "Annexures & Undertakings",
-        count: `${annexureCards.filter((c) => isReadyCardStatus(c.statusLabel)).length}/${annexureCards.length}`,
+        count: `${annexureStats.completed}/${annexureStats.total || annexureCards.length}`,
       },
       {
         id: "cost" as const,
@@ -323,11 +550,17 @@ export function BidWorkspaceClient({
       },
     ],
     [
-      annexureCards,
-      checklistProgress.completed,
-      checklistProgress.total,
-      pqCards,
-      technicalCards,
+      annexureCards.length,
+      annexureStats.completed,
+      annexureStats.total,
+      pqCards.length,
+      pqStats.completed,
+      pqStats.total,
+      progress.completed,
+      progress.total,
+      technicalCards.length,
+      technicalStats.completed,
+      technicalStats.total,
       workspace.boqItems.length,
     ],
   );
@@ -354,7 +587,7 @@ export function BidWorkspaceClient({
   }
 
   const incomplete = workspace.readiness.incompleteRequired;
-  const completedChecklist = checklistItems.filter((item) =>
+  const completedChecklist = items.filter((item) =>
     isChecklistItemComplete(item.completionStatus),
   ).length;
 
@@ -420,8 +653,8 @@ export function BidWorkspaceClient({
                       Submission Readiness
                     </p>
                     <p className="mt-1 text-lg font-semibold">
-                      {checklistProgress.total > 0
-                        ? checklistProgress.percent
+                      {progress.total > 0
+                        ? progress.percent
                         : workspace.readiness.percent}
                       %
                     </p>
@@ -430,15 +663,15 @@ export function BidWorkspaceClient({
                         className="h-full rounded-full bg-emerald-500"
                         style={{
                           width: `${
-                            checklistProgress.total > 0
-                              ? checklistProgress.percent
+                            progress.total > 0
+                              ? progress.percent
                               : workspace.readiness.percent
                           }%`,
                         }}
                       />
                     </div>
                     <p className="mt-2 text-[11px] text-foreground-400">
-                      Checklist {completedChecklist}/{checklistItems.length} ·
+                      Checklist {completedChecklist}/{items.length} ·
                       Saved {formatRelativeTime(workspace.updatedAt)}
                     </p>
                   </div>
@@ -521,18 +754,19 @@ export function BidWorkspaceClient({
 
         {tab === "checklist" ? (
           <ChecklistCreationPanel
-            items={checklistItems}
-            progress={checklistProgress}
+            tenderId={tender.id}
+            items={items}
+            progress={progress}
             readOnly={readOnly}
             ingesting={ingesting}
             generatingRequirementId={generatingRequirementId}
             generationPhase={generationPhase}
+            togglingItemId={togglingItemId}
             onIngestAi={runDocumentIngestion}
-            onUpload={() => {
-              setDocsOpen(true);
-              toast.message("Upload a tender document from the Documents panel.");
-            }}
+            onEditPrompt={() => openPromptEditor("CHECKLIST_CREATION")}
+            onUpload={uploadForChecklistItem}
             onGenerateAi={runChecklistDocumentGeneration}
+            onToggleComplete={toggleChecklistComplete}
           />
         ) : null}
 
@@ -541,11 +775,12 @@ export function BidWorkspaceClient({
             title="Pre-Qualification Documents"
             subtitle="Mandatory credentials and compliance certificates"
             cards={pqCards}
-            readyCount={pqCards.filter((c) => isReadyCardStatus(c.statusLabel)).length}
-            totalCount={pqCards.length}
+            readyCount={pqStats.completed || pqCards.filter((c) => isReadyCardStatus(c.statusLabel)).length}
+            totalCount={pqStats.total || pqCards.length}
             readOnly={readOnly}
             ingesting={ingesting}
             onIngestAi={runDocumentIngestion}
+            onEditPrompt={() => openPromptEditor("PREQUAL_DOCUMENT")}
             onUpload={() => setDocsOpen(true)}
           />
         ) : null}
@@ -556,12 +791,14 @@ export function BidWorkspaceClient({
             subtitle="Technical proposals, certifications and approach documents"
             cards={technicalCards}
             readyCount={
+              technicalStats.completed ||
               technicalCards.filter((c) => isReadyCardStatus(c.statusLabel)).length
             }
-            totalCount={technicalCards.length}
+            totalCount={technicalStats.total || technicalCards.length}
             readOnly={readOnly}
             ingesting={ingesting}
             onIngestAi={runDocumentIngestion}
+            onEditPrompt={() => openPromptEditor("TECHNICAL_DOCUMENT")}
             onUpload={() => setDocsOpen(true)}
           />
         ) : null}
@@ -572,12 +809,14 @@ export function BidWorkspaceClient({
             subtitle="Standard templates, declarations and format documents"
             cards={annexureCards}
             readyCount={
+              annexureStats.completed ||
               annexureCards.filter((c) => isReadyCardStatus(c.statusLabel)).length
             }
-            totalCount={annexureCards.length}
+            totalCount={annexureStats.total || annexureCards.length}
             readOnly={readOnly}
             ingesting={ingesting}
             onIngestAi={runDocumentIngestion}
+            onEditPrompt={() => openPromptEditor("ANNEXURE_DOCUMENT")}
             onUpload={() => setDocsOpen(true)}
           />
         ) : null}
@@ -595,7 +834,13 @@ export function BidWorkspaceClient({
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button type="button" variant="outline" size="sm" disabled>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={readOnly}
+                  onClick={() => openPromptEditor("COST_ESTIMATOR")}
+                >
                   Edit Prompt
                 </Button>
                 <Button
@@ -617,6 +862,21 @@ export function BidWorkspaceClient({
             />
           </div>
         ) : null}
+
+        <EditAiPromptDialog
+          open={promptOpen}
+          onOpenChange={setPromptOpen}
+          tenderId={tender.id}
+          promptKey={promptKey}
+          readOnly={readOnly}
+          onSaveAndUseAi={
+            promptKey === "CHECKLIST_CREATION" || promptKey === "COST_ESTIMATOR"
+              ? async () => {
+                  await runDocumentIngestion();
+                }
+              : undefined
+          }
+        />
 
         <Dialog open={docsOpen} onOpenChange={setDocsOpen}>
           <DialogContent className="max-w-3xl">

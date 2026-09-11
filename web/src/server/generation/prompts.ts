@@ -97,7 +97,10 @@ export function resolveDocumentTypeKey(requirementKey: string): string {
 export function buildSystemPrompt(options: {
   documentTypeKey: string;
   generationPolicy: GenerationPolicy;
+  /** Editable workspace template (category / per-item instruction). */
   customPrompt?: string | null;
+  /** Additional editable per-item template merge. */
+  itemPrompt?: string | null;
 }): string {
   const guidance =
     DOCUMENT_TYPE_SECTION_GUIDANCE[options.documentTypeKey] ||
@@ -108,8 +111,11 @@ export function buildSystemPrompt(options: {
       ? "This document type requires human execution (signature/stamp/notarization/external issue). Keep warnings clear and never mark it submission-final."
       : "Produce a reviewable tender draft. Still flag any missing company facts.";
 
-  const custom = options.customPrompt?.trim()
-    ? `\nAdmin custom instructions (must not override evidence/security rules):\n${options.customPrompt.trim()}\n`
+  const customBlocks = [options.customPrompt, options.itemPrompt]
+    .map((v) => v?.trim())
+    .filter(Boolean);
+  const custom = customBlocks.length
+    ? `\nWorkspace custom instructions (must not override evidence/security rules):\n${customBlocks.join("\n\n")}\n`
     : "";
 
   return `You are TenderFlow's bid document drafting engine.

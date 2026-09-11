@@ -533,22 +533,38 @@ export function matchRequirementToDocuments(options: {
     }
   }
 
-  // Draft tender docs
+  // Persisted tender workspace docs (AI-generated or uploaded) that clearly match.
   for (const doc of options.workspaceDocuments) {
-    if (!doc.hasFile || (doc.status !== "drafting" && doc.status !== "pending")) {
-      continue;
-    }
+    if (!doc.hasFile) continue;
     const hay = normalizeMatchText(`${doc.title} ${doc.fileName || ""}`);
+    const requirementHay = normalizeMatchText(
+      `${options.requirementName} ${options.requirementKey || ""}`,
+    );
     const hit = needles.some((n) => n && hay.includes(n));
-    if (!hit) continue;
+    // High-confidence: requirement title tokens appear in doc title/filename,
+    // or the full normalized requirement name is contained in the doc name.
+    const strongTitle =
+      Boolean(requirementHay) &&
+      (hay.includes(requirementHay) ||
+        requirementHay
+          .split(" ")
+          .filter((t) => t.length > 4)
+          .every((t) => hay.includes(t)));
+    if (!hit && !strongTitle) continue;
+    const ready =
+      doc.status === "ready" ||
+      doc.status === "approved" ||
+      doc.status === "drafting" ||
+      doc.status === "pending";
+    if (!ready) continue;
     return {
       matched: true,
       source: "TENDER",
       companyDocumentId: null,
       workspaceDocumentId: doc.id,
-      completionStatus: "DRAFT_AVAILABLE",
-      confidence: 0.7,
-      reason: `Draft tender document “${doc.title}” available.`,
+      completionStatus: "COMPLETED_TENDER_DOCUMENT",
+      confidence: strongTitle ? 0.9 : 0.8,
+      reason: `Linked tender document “${doc.title}” satisfies this requirement.`,
       matchedBy: "SYSTEM",
     };
   }

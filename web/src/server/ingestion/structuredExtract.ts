@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import { createHash } from "node:crypto";
 
+import { BID_AI_PROMPT_CATALOG } from "@/lib/bid-ai-prompts";
 import { REQUIREMENT_PATTERNS } from "@/lib/bid-checklist";
 import {
   isOpaqueSourceFileName,
@@ -196,32 +197,28 @@ function aiFailedResult(reason: string): StructuredAiResult {
   });
 }
 
-const SYSTEM_PROMPT = `You extract tender bid submission requirements from a COMPLETE tender package (RFP/NIT/BOQ/HTML/annexures).
+function buildChecklistIngestionSystemPrompt(options?: {
+  checklistTemplate?: string | null;
+  costTemplate?: string | null;
+}): string {
+  const checklist =
+    options?.checklistTemplate?.trim() ||
+    BID_AI_PROMPT_CATALOG.CHECKLIST_CREATION.defaultTemplate;
+  const cost =
+    options?.costTemplate?.trim() ||
+    BID_AI_PROMPT_CATALOG.COST_ESTIMATOR.defaultTemplate;
+  return `${checklist}
 
-Return ONLY JSON matching:
-{
-  "checklist": [{ "requirement_key", "requirement_name", "category", "description", "mandatory", "document_type", "generation_allowed", "source_page", "source_clause", "source_text", "source_document" }],
-  "annexures": [{ "title", "description", "format_hint", "mandatory" }],
-  "cost_items": [{ "description", "detail", "uom", "quantity", "unit_rate", "category" }],
-  "summary": "string",
-  "analysis_status": "OK"
+Additional cost-extraction guidance:
+${cost}`;
 }
-
-Rules:
-- Extract REAL submission requirements (GST, PAN, experience, EMD, technical approach, integrity pact, etc.).
-- NEVER create checklist items from opaque numeric filenames like 210636747 / 210636748 / 210636750.
-- Source filenames are documents, not requirements.
-- Reconcile across ALL attached files into one package checklist.
-- Categories: COMPLIANCE, TECHNICAL, FINANCIAL, LEGAL, EXPERIENCE, ANNEXURE, DECLARATION, AUTHORIZATION, CERTIFICATE, EMD, BOQ, PRE_QUALIFICATION.
-- generation_allowed=true only for narrative drafts (approach, plan, cover letter, declarations). Never for GST/PAN/ISO/CMMI certificates.
-- Prefer requirement_key values like GST_REGISTRATION, TECHNICAL_APPROACH, INTEGRITY_PACT.
-- Set source_document to the real source file name when known.`;
 
 async function callOpenAiStructured(options: {
   client: OpenAI;
   model: string;
   corpus: string;
   pdfs: IngestedFile[];
+  systemPrompt: string;
 }): Promise<StructuredAiResult> {
   const promptText =
     (options.corpus.trim()
@@ -241,7 +238,7 @@ async function callOpenAiStructured(options: {
       model: options.model,
       text: { format: { type: "json_object" } },
       input: [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: options.systemPrompt },
         {
           role: "user",
           content: [
@@ -293,7 +290,7 @@ async function callOpenAiStructured(options: {
       model: options.model,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: options.systemPrompt },
         {
           role: "user",
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -344,11 +341,19 @@ function filterInventedFilenameRequirements(
 
 export async function buildStructuredAiResult(
   files: IngestedFile[],
+  options?: {
+    checklistPromptTemplate?: string | null;
+    costPromptTemplate?: string | null;
+  },
 ): Promise<{
   structured: StructuredAiResult;
   engine: "openai" | "heuristic" | "needs_ai";
   warning?: string;
 }> {
+  const systemPrompt = buildChecklistIngestionSystemPrompt({
+    checklistTemplate: options?.checklistPromptTemplate,
+    costTemplate: options?.costPromptTemplate,
+  });
   const client = getOpenAiClient();
   const model = getIngestionModel();
   const corpus = buildCorpus(files);
@@ -405,7 +410,13 @@ export async function buildStructuredAiResult(
 
   try {
     const structured = filterInventedFilenameRequirements(
-      await callOpenAiStructured({ client, model, corpus, pdfs }),
+      await callOpenAiStructured({
+        client,
+        model,
+        corpus,
+        pdfs,
+        systemPrompt,
+      }),
       sourceNames,
     );
     if (!structured.checklist.length && !structured.cost_items.length) {

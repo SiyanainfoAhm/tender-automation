@@ -8,11 +8,26 @@ import {
   WORKSPACE_DOCUMENT_STATUSES,
   type WorkspaceDocumentStatus,
 } from "@/lib/bid-workspace";
+import {
+  BID_AI_PROMPT_CATALOG,
+  isBidAiPromptKey,
+  promptKeyForChecklistCategory,
+  type BidAiPromptKey,
+} from "@/lib/bid-ai-prompts";
 import { MAX_SINGLE_SHOT_UPLOAD_BYTES } from "@/lib/company/types";
 import { getServerSupabase } from "@/lib/db/server";
 import { CompanyAccessError } from "@/server/auth/company-access";
 import { requirePermissionStrict } from "@/server/auth/permissions";
 import { insertTenderActivity } from "@/server/repositories/tenderActivityRepository";
+import {
+  resetWorkspaceAiPromptOverride,
+  resolveEffectivePromptTemplate,
+  saveWorkspaceAiPromptOverride,
+} from "@/server/repositories/bidAiPromptRepository";
+import {
+  setChecklistCompletionState,
+  setChecklistManualMatch,
+} from "@/server/repositories/bidChecklistRepository";
 import {
   deleteBoqItem,
   getOrCreateWorkspace,
@@ -279,6 +294,8 @@ export async function uploadWorkspaceDocumentAction(formData: FormData): Promise
     const title = String(formData.get("title") || file.name).trim();
     const documentType = String(formData.get("documentType") || "Other").trim();
     const documentId = String(formData.get("documentId") || "").trim() || undefined;
+    const checklistItemId =
+      String(formData.get("checklistItemId") || "").trim() || undefined;
 
     const result = await invokeWorkspaceDocumentSave({
       workspaceId,
@@ -292,12 +309,25 @@ export async function uploadWorkspaceDocumentAction(formData: FormData): Promise
     if (!result.success) {
       return { ok: false, error: result.error || "Document upload failed." };
     }
+
+    const savedDocumentId = String(
+      result.workspaceDocumentId || result.documentId || "",
+    );
+    if (checklistItemId && savedDocumentId) {
+      await setChecklistManualMatch({
+        itemId: checklistItemId,
+        workspaceId,
+        companyId: session.companyId,
+        workspaceDocumentId: savedDocumentId,
+      });
+    }
+
     await insertTenderActivity({
       tenderId,
       companyId: session.companyId,
       eventType: "workspace_document_uploaded",
       summary: "Workspace document uploaded",
-      payload: { title },
+      payload: { title, checklistItemId: checklistItemId || null },
       actorUserId: session.user.id,
     });
     revalidateWorkspace(tenderId);
@@ -485,9 +515,18 @@ export async function ingestTenderDocumentsAction(
       };
     }
 
-    const { resolveTenderSourceDocuments } = await import(
-      "@/server/ingestion/resolveTenderSourceDocuments"
-    );
+    const [{ resolveTenderSourceDocuments }, checklistPrompt, costPrompt] =
+      await Promise.all([
+        import("@/server/ingestion/resolveTenderSourceDocuments"),
+        resolveEffectivePromptTemplate({
+          workspaceId: workspace.id,
+          promptKey: "CHECKLIST_CREATION",
+        }),
+        resolveEffectivePromptTemplate({
+          workspaceId: workspace.id,
+          promptKey: "COST_ESTIMATOR",
+        }),
+      ]);
     const sources = await resolveTenderSourceDocuments({
       tenderId,
       companyId: session.companyId,
@@ -519,6 +558,8 @@ export async function ingestTenderDocumentsAction(
         url: s.url,
       })),
       workspaceDocuments: workspace.documents,
+      checklistPromptTemplate: checklistPrompt.template,
+      costPromptTemplate: costPrompt.template,
     });
 
     await insertTenderActivity({
@@ -534,6 +575,7 @@ export async function ingestTenderDocumentsAction(
         })),
         sourceFiles: result.sourceFiles,
         warning: result.warning || null,
+        promptKeys: ["CHECKLIST_CREATION", "COST_ESTIMATOR"],
       },
       actorUserId: session.user.id,
     });
@@ -593,6 +635,33 @@ export async function generateChecklistDocumentAction(input: {
       "bids.edit",
     );
 
+    const supabase = getServerSupabase();
+    const { data: requirement, error: reqError } = await supabase
+      .from("agenttender_bid_checklist_items")
+      .select("id, category")
+      .eq("id", input.requirementId)
+      .eq("workspace_id", workspaceId)
+      .eq("company_id", session.companyId)
+      .maybeSingle();
+    if (reqError) throw new Error(reqError.message);
+    if (!requirement) {
+      return { ok: false, error: "Checklist requirement not found." };
+    }
+
+    const categoryPromptKey = promptKeyForChecklistCategory(
+      String(requirement.category || "TECHNICAL"),
+    );
+    const [categoryPrompt, itemPrompt] = await Promise.all([
+      resolveEffectivePromptTemplate({
+        workspaceId,
+        promptKey: categoryPromptKey,
+      }),
+      resolveEffectivePromptTemplate({
+        workspaceId,
+        promptKey: "CHECKLIST_ITEM_DOCUMENT",
+      }),
+    ]);
+
     const { generateChecklistDocument } = await import(
       "@/server/generation/generateChecklistDocument"
     );
@@ -605,6 +674,8 @@ export async function generateChecklistDocumentAction(input: {
       tenderReference: detail.sourceTenderId || detail.referenceNo || detail.id,
       requirementId: input.requirementId,
       customInstructions: input.customInstructions || null,
+      adminCustomPrompt: categoryPrompt.template,
+      itemPromptTemplate: itemPrompt.template,
     });
 
     await insertTenderActivity({
@@ -620,6 +691,7 @@ export async function generateChecklistDocumentAction(input: {
         model: result.model,
         generationPolicy: result.generationPolicy,
         fileSizeBytes: result.fileSizeBytes,
+        promptKeys: [categoryPromptKey, "CHECKLIST_ITEM_DOCUMENT"],
       },
       actorUserId: session.user.id,
     });
@@ -647,6 +719,170 @@ export async function generateChecklistDocumentAction(input: {
         error instanceof Error
           ? error.message
           : "Document generation failed.",
+    };
+  }
+}
+
+export type BidAiPromptActionResult =
+  | {
+      ok: true;
+      promptKey: BidAiPromptKey;
+      template: string;
+      defaultTemplate: string;
+      isCustom: boolean;
+      updatedAt: string | null;
+      label: string;
+    }
+  | { ok: false; error: string };
+
+export async function getBidAiPromptAction(input: {
+  tenderId: string;
+  promptKey: string;
+}): Promise<BidAiPromptActionResult> {
+  try {
+    if (!isBidAiPromptKey(input.promptKey)) {
+      return { ok: false, error: "Unknown prompt key." };
+    }
+    const session = await requirePermissionStrict("bids.view");
+    const workspace = await loadBidWorkspaceForTender(
+      input.tenderId,
+      session.companyId,
+    );
+    if (!workspace) return { ok: false, error: "Bid workspace not found." };
+
+    const resolved = await resolveEffectivePromptTemplate({
+      workspaceId: workspace.id,
+      promptKey: input.promptKey,
+    });
+    return {
+      ok: true,
+      promptKey: input.promptKey,
+      template: resolved.template,
+      defaultTemplate: resolved.defaultTemplate,
+      isCustom: resolved.isCustom,
+      updatedAt: resolved.updatedAt,
+      label: BID_AI_PROMPT_CATALOG[input.promptKey].label,
+    };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message };
+    }
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to load prompt.",
+    };
+  }
+}
+
+export async function saveBidAiPromptAction(input: {
+  tenderId: string;
+  promptKey: string;
+  template: string;
+}): Promise<BidAiPromptActionResult> {
+  try {
+    if (!isBidAiPromptKey(input.promptKey)) {
+      return { ok: false, error: "Unknown prompt key." };
+    }
+    const { session, workspaceId } = await requireEditableWorkspace(
+      input.tenderId,
+      "bids.edit",
+    );
+    const saved = await saveWorkspaceAiPromptOverride({
+      workspaceId,
+      companyId: session.companyId,
+      userId: session.user.id,
+      promptKey: input.promptKey,
+      template: input.template,
+    });
+    revalidateWorkspace(input.tenderId);
+    return {
+      ok: true,
+      promptKey: input.promptKey,
+      template: saved.template,
+      defaultTemplate: BID_AI_PROMPT_CATALOG[input.promptKey].defaultTemplate,
+      isCustom: true,
+      updatedAt: new Date().toISOString(),
+      label: BID_AI_PROMPT_CATALOG[input.promptKey].label,
+    };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message };
+    }
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to save prompt.",
+    };
+  }
+}
+
+export async function resetBidAiPromptAction(input: {
+  tenderId: string;
+  promptKey: string;
+}): Promise<BidAiPromptActionResult> {
+  try {
+    if (!isBidAiPromptKey(input.promptKey)) {
+      return { ok: false, error: "Unknown prompt key." };
+    }
+    const { session, workspaceId } = await requireEditableWorkspace(
+      input.tenderId,
+      "bids.edit",
+    );
+    const reset = await resetWorkspaceAiPromptOverride({
+      workspaceId,
+      companyId: session.companyId,
+      userId: session.user.id,
+      promptKey: input.promptKey,
+    });
+    revalidateWorkspace(input.tenderId);
+    return {
+      ok: true,
+      promptKey: input.promptKey,
+      template: reset.template,
+      defaultTemplate: reset.template,
+      isCustom: false,
+      updatedAt: null,
+      label: BID_AI_PROMPT_CATALOG[input.promptKey].label,
+    };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message };
+    }
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Unable to reset prompt.",
+    };
+  }
+}
+
+export async function toggleChecklistItemCompleteAction(input: {
+  tenderId: string;
+  itemId: string;
+  completed: boolean;
+}): Promise<ActionResult> {
+  try {
+    const { session, workspaceId } = await requireEditableWorkspace(
+      input.tenderId,
+      "bids.edit",
+    );
+    await setChecklistCompletionState({
+      itemId: input.itemId,
+      workspaceId,
+      companyId: session.companyId,
+      completed: input.completed,
+      userId: session.user.id,
+    });
+    revalidateWorkspace(input.tenderId);
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message };
+    }
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to update checklist item.",
     };
   }
 }

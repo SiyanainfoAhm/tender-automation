@@ -236,15 +236,28 @@ export async function rematchChecklistItems(options: {
       if (stillCompany || stillWorkspace) continue;
     }
 
-    // Preserve AI-generated drafts (do not promote to completed / clear).
+    // Preserve explicit AI / USER links when the workspace document still exists.
+    // Promote legacy DRAFT_AVAILABLE AI links to completed (document already satisfies).
     if (
-      row.matched_by === "AI" &&
-      row.completion_status === "DRAFT_AVAILABLE" &&
+      (row.matched_by === "AI" || row.matched_by === "USER") &&
       row.matched_workspace_document_id &&
       options.workspaceDocuments.some(
-        (d) => d.id === row.matched_workspace_document_id,
+        (d) => d.id === row.matched_workspace_document_id && d.hasFile,
       )
     ) {
+      if (row.completion_status === "DRAFT_AVAILABLE") {
+        const { error: promoteError } = await supabase
+          .from("agenttender_bid_checklist_items")
+          .update({
+            completion_status: "COMPLETED_TENDER_DOCUMENT",
+            match_reason:
+              row.match_reason ||
+              "AI-generated document linked and marked complete.",
+          })
+          .eq("id", row.id)
+          .eq("workspace_id", options.workspaceId);
+        if (promoteError) throw new Error(promoteError.message);
+      }
       continue;
     }
 
@@ -377,7 +390,10 @@ export async function setChecklistManualMatch(options: {
   if (error) throw new Error(error.message);
 }
 
-/** Link an AI-generated tender draft without marking the requirement complete. */
+/**
+ * Link a successfully persisted AI-generated tender document and mark the
+ * checklist requirement complete (checked + strikethrough in UI).
+ */
 export async function setChecklistAiDraftMatch(options: {
   itemId: string;
   workspaceId: string;
@@ -397,9 +413,75 @@ export async function setChecklistAiDraftMatch(options: {
       matched_company_document_id: null,
       matched_workspace_document_id: options.workspaceDocumentId,
       matched_by: "AI",
-      completion_status: "DRAFT_AVAILABLE",
+      completion_status: "COMPLETED_TENDER_DOCUMENT",
       match_reason: reason,
-      match_confidence: 0.85,
+      match_confidence: 0.95,
+    })
+    .eq("id", options.itemId)
+    .eq("workspace_id", options.workspaceId)
+    .eq("company_id", options.companyId);
+  if (error) throw new Error(error.message);
+}
+
+/** Manually toggle checklist completion without deleting linked documents. */
+export async function setChecklistCompletionState(options: {
+  itemId: string;
+  workspaceId: string;
+  companyId: string;
+  completed: boolean;
+  userId: string;
+}): Promise<void> {
+  const supabase = getServerSupabase();
+  const { data: row, error: loadError } = await supabase
+    .from("agenttender_bid_checklist_items")
+    .select("*")
+    .eq("id", options.itemId)
+    .eq("workspace_id", options.workspaceId)
+    .eq("company_id", options.companyId)
+    .maybeSingle();
+  if (loadError) throw new Error(loadError.message);
+  if (!row) throw new Error("Checklist item not found.");
+
+  if (options.completed) {
+    const hasCompany = Boolean(row.matched_company_document_id);
+    const hasWorkspace = Boolean(row.matched_workspace_document_id);
+    const completionStatus = hasCompany
+      ? "COMPLETED_COMPANY_DOCUMENT"
+      : "COMPLETED_TENDER_DOCUMENT";
+    const { error } = await supabase
+      .from("agenttender_bid_checklist_items")
+      .update({
+        completion_status: completionStatus,
+        matched_document_source: hasCompany
+          ? "COMPANY"
+          : hasWorkspace
+            ? "TENDER"
+            : row.matched_document_source,
+        matched_by: "USER",
+        match_reason: hasCompany || hasWorkspace
+          ? "Manually marked complete by user."
+          : "Manually marked complete (no document linked yet).",
+        match_confidence: 1,
+      })
+      .eq("id", options.itemId)
+      .eq("workspace_id", options.workspaceId)
+      .eq("company_id", options.companyId);
+    if (error) throw new Error(error.message);
+    return;
+  }
+
+  // Uncheck: clear completion but keep document links.
+  const stillLinked =
+    Boolean(row.matched_company_document_id) ||
+    Boolean(row.matched_workspace_document_id);
+  const { error } = await supabase
+    .from("agenttender_bid_checklist_items")
+    .update({
+      completion_status: stillLinked ? "PENDING_DOCUMENT" : "MISSING",
+      matched_by: stillLinked ? "USER" : row.matched_by,
+      match_reason: stillLinked
+        ? "Completion cleared; linked document retained."
+        : "Completion cleared.",
     })
     .eq("id", options.itemId)
     .eq("workspace_id", options.workspaceId)

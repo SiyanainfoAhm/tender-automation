@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   CheckSquare,
   FileText,
@@ -11,15 +11,17 @@ import {
   Upload,
   X,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import {
   categoryLabel,
   isChecklistItemComplete,
   isFromScratchGeneratable,
 } from "@/lib/bid-checklist";
+import { promptKeyForChecklistCategory } from "@/lib/bid-ai-prompts";
 import { cn } from "@/lib/utils";
+import { EditAiPromptDialog } from "@/components/bid-workspace/edit-ai-prompt-dialog";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Sheet,
   SheetContent,
@@ -33,34 +35,60 @@ import type {
 } from "@/server/repositories/bidChecklistRepository";
 
 type ChecklistCreationPanelProps = {
+  tenderId: string;
   items: ChecklistItemRow[];
   progress: ChecklistProgress;
   readOnly: boolean;
   ingesting?: boolean;
   generatingRequirementId?: string | null;
   generationPhase?: string | null;
+  togglingItemId?: string | null;
   onIngestAi?: () => void;
-  onUpload?: (item: ChecklistItemRow) => void;
+  onEditPrompt?: () => void;
+  onUpload?: (item: ChecklistItemRow, file: File) => void | Promise<void>;
   onGenerateAi?: (
     item: ChecklistItemRow,
     options?: { customInstructions?: string },
-  ) => void;
+  ) => void | Promise<void>;
+  onToggleComplete?: (item: ChecklistItemRow, completed: boolean) => void;
 };
 
+function statusMeta(item: ChecklistItemRow): string {
+  if (isChecklistItemComplete(item.completionStatus)) {
+    if (item.matchedBy === "AI") return " · AI document generated";
+    if (item.matchedDocumentSource === "COMPANY") return " · Company document attached";
+    if (item.matchedDocumentSource === "TENDER") return " · Document uploaded";
+    return " · Completed";
+  }
+  if (item.completionStatus === "DRAFT_AVAILABLE") return " · Draft available";
+  if (item.matchedDocumentSource === "COMPANY") return " · Company Document";
+  if (item.matchedDocumentSource === "TENDER") return " · Tender Document";
+  if (item.completionStatus === "PENDING_DOCUMENT") return " · Document linked";
+  return "";
+}
+
 export function ChecklistCreationPanel({
+  tenderId,
   items,
   progress,
   readOnly,
   ingesting = false,
   generatingRequirementId = null,
   generationPhase = null,
+  togglingItemId = null,
   onIngestAi,
+  onEditPrompt,
   onUpload,
   onGenerateAi,
+  onToggleComplete,
 }: ChecklistCreationPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [regenOpen, setRegenOpen] = useState(false);
-  const [regenInstructions, setRegenInstructions] = useState("");
+  const [generatePromptOpen, setGeneratePromptOpen] = useState(false);
+  const [generateMode, setGenerateMode] = useState<"create" | "regenerate">(
+    "create",
+  );
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const selected = useMemo(
     () => items.find((item) => item.id === selectedId) || null,
     [items, selectedId],
@@ -75,6 +103,15 @@ export function ChecklistCreationPanel({
       })
     : false;
   const canGenerate = selectedFromScratch || selected?.generationAllowed === true;
+  const generatePromptKey = selected
+    ? promptKeyForChecklistCategory(selected.category)
+    : "TECHNICAL_DOCUMENT";
+
+  function openGeneratePrompt(mode: "create" | "regenerate") {
+    if (!selected || !onGenerateAi || readOnly) return;
+    setGenerateMode(mode);
+    setGeneratePromptOpen(true);
+  }
 
   return (
     <div className="space-y-4">
@@ -94,7 +131,13 @@ export function ChecklistCreationPanel({
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" size="sm" disabled>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={readOnly || !onEditPrompt}
+            onClick={onEditPrompt}
+          >
             Edit Prompt
           </Button>
           <Button
@@ -124,15 +167,10 @@ export function ChecklistCreationPanel({
               const expired =
                 item.completionStatus === "EXPIRED_DOCUMENT" ||
                 item.completionStatus === "INVALID_DOCUMENT";
+              const toggling = togglingItemId === item.id;
               return (
-                <button
+                <div
                   key={item.id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedId(item.id);
-                    setRegenOpen(false);
-                    setRegenInstructions("");
-                  }}
                   className={cn(
                     "flex min-h-[64px] items-start gap-2.5 rounded-md border px-3 py-2.5 text-left transition-colors",
                     complete &&
@@ -147,12 +185,30 @@ export function ChecklistCreationPanel({
                       "border-border bg-white hover:bg-background-50",
                   )}
                 >
-                  {complete ? (
-                    <CheckSquare className="mt-0.5 size-4 shrink-0 text-emerald-600" />
-                  ) : (
-                    <Square className="mt-0.5 size-4 shrink-0 text-foreground-300" />
-                  )}
-                  <span className="min-w-0">
+                  <button
+                    type="button"
+                    className="mt-0.5 shrink-0 rounded p-0.5 text-foreground-300 hover:bg-black/5 disabled:opacity-50"
+                    disabled={readOnly || toggling || !onToggleComplete}
+                    aria-label={complete ? "Mark incomplete" : "Mark complete"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleComplete?.(item, !complete);
+                    }}
+                  >
+                    {complete ? (
+                      <CheckSquare className="size-4 text-emerald-600" />
+                    ) : (
+                      <Square className="size-4" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 text-left"
+                  onClick={() => {
+                    setSelectedId(item.id);
+                    setGeneratePromptOpen(false);
+                  }}
+                  >
                     <span
                       className={cn(
                         "block text-sm font-medium text-foreground-900",
@@ -161,31 +217,68 @@ export function ChecklistCreationPanel({
                     >
                       {item.requirementName}
                     </span>
-                    <span className="mt-0.5 block text-[11px] text-foreground-500">
-                      {categoryLabel(item.category)}
-                      {draft
-                        ? " · Draft available"
-                        : item.matchedDocumentSource === "COMPANY"
-                          ? " · Company Document"
-                          : item.matchedDocumentSource === "TENDER"
-                            ? " · Tender Document"
-                            : ""}
+                    <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-foreground-500">
+                      <span>
+                        {categoryLabel(item.category)}
+                        {statusMeta(item)}
+                      </span>
+                      {item.matchedWorkspaceDocumentId ? (
+                        <a
+                          className="font-medium text-emerald-700 hover:underline"
+                          href={`/api/bid-workspace/documents/${item.matchedWorkspaceDocumentId}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          View Document
+                        </a>
+                      ) : item.matchedCompanyDocumentId ? (
+                        <a
+                          className="font-medium text-emerald-700 hover:underline"
+                          href={`/api/documents/${item.matchedCompanyDocumentId}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          View Document
+                        </a>
+                      ) : null}
                     </span>
-                  </span>
-                </button>
+                  </button>
+                </div>
               );
             })}
           </div>
         )}
       </div>
 
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (!file || !selected || !onUpload) return;
+          setUploading(true);
+          try {
+            await onUpload(selected, file);
+          } catch (error) {
+            toast.error(
+              error instanceof Error ? error.message : "Upload failed.",
+            );
+          } finally {
+            setUploading(false);
+          }
+        }}
+      />
+
       <Sheet
         open={Boolean(selected)}
         onOpenChange={(open) => {
           if (!open) {
             setSelectedId(null);
-            setRegenOpen(false);
-            setRegenInstructions("");
+            setGeneratePromptOpen(false);
           }
         }}
       >
@@ -193,7 +286,13 @@ export function ChecklistCreationPanel({
           {selected ? (
             <>
               <SheetHeader>
-                <SheetTitle className="pr-8 text-left text-base">
+                <SheetTitle
+                  className={cn(
+                    "pr-8 text-left text-base",
+                    isChecklistItemComplete(selected.completionStatus) &&
+                      "text-foreground-600 line-through",
+                  )}
+                >
                   {selected.requirementName}
                 </SheetTitle>
                 <SheetDescription className="text-left">
@@ -214,9 +313,11 @@ export function ChecklistCreationPanel({
                     Status
                   </p>
                   <p className="mt-1 text-foreground-800">
-                    {selected.completionStatus === "DRAFT_AVAILABLE"
-                      ? "Draft available"
-                      : selected.completionStatus.replace(/_/g, " ")}
+                    {isChecklistItemComplete(selected.completionStatus)
+                      ? "Completed"
+                      : selected.completionStatus === "DRAFT_AVAILABLE"
+                        ? "Draft available"
+                        : selected.completionStatus.replace(/_/g, " ")}
                   </p>
                   {selected.matchReason &&
                   !selected.matchReason.includes("meta=") ? (
@@ -255,10 +356,9 @@ export function ChecklistCreationPanel({
                 ) : null}
 
                 {selected.matchedWorkspaceDocument ? (
-                  <div className="rounded-md border border-amber-200 bg-amber-50/50 p-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-900">
-                      {selected.matchedBy === "AI" ||
-                      selected.completionStatus === "DRAFT_AVAILABLE"
+                  <div className="rounded-md border border-emerald-200 bg-emerald-50/60 p-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-800">
+                      {selected.matchedBy === "AI"
                         ? "Generated Document"
                         : "Matched Document"}
                     </p>
@@ -272,9 +372,10 @@ export function ChecklistCreationPanel({
                         ? "Draft"
                         : selected.matchedWorkspaceDocument.status}
                       {selected.matchedBy === "AI" ? " · Generated by AI" : ""}
+                      {" · Checklist item linked"}
                     </p>
                     <a
-                      className="mt-2 inline-flex text-xs font-medium text-amber-900 hover:underline"
+                      className="mt-2 inline-flex text-xs font-medium text-emerald-700 hover:underline"
                       href={`/api/bid-workspace/documents/${selected.matchedWorkspaceDocument.id}`}
                       target="_blank"
                       rel="noreferrer"
@@ -325,53 +426,34 @@ export function ChecklistCreationPanel({
                   </div>
                 ) : null}
 
-                {regenOpen && canGenerate ? (
-                  <div className="space-y-2 rounded-md border border-border p-3">
-                    <p className="text-xs font-medium text-foreground-700">
-                      Optional regeneration instructions
-                    </p>
-                    <Textarea
-                      value={regenInstructions}
-                      onChange={(e) => setRegenInstructions(e.target.value)}
-                      placeholder="e.g. Make implementation plan more detailed"
-                      rows={3}
-                      disabled={generating}
-                    />
-                    <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        disabled={generating || !onGenerateAi}
-                        onClick={() => {
-                          onGenerateAi?.(selected, {
-                            customInstructions: regenInstructions.trim() || undefined,
-                          });
-                          setRegenOpen(false);
-                        }}
-                      >
-                        Regenerate
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        disabled={generating}
-                        onClick={() => setRegenOpen(false)}
-                      >
-                        Cancel
-                      </Button>
-                    </div>
-                  </div>
-                ) : null}
-
                 {!readOnly ? (
                   <div className="flex flex-col gap-2 pt-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="justify-start gap-2"
+                      disabled={
+                        generating ||
+                        togglingItemId === selected.id ||
+                        !onToggleComplete
+                      }
+                      onClick={() =>
+                        onToggleComplete?.(
+                          selected,
+                          !isChecklistItemComplete(selected.completionStatus),
+                        )
+                      }
+                    >
+                      {isChecklistItemComplete(selected.completionStatus)
+                        ? "Mark incomplete"
+                        : "Mark complete"}
+                    </Button>
                     {canGenerate && !selected.matchedWorkspaceDocument ? (
                       <Button
                         type="button"
                         className="justify-start gap-2"
                         disabled={generating || !onGenerateAi}
-                        onClick={() => onGenerateAi?.(selected)}
+                        onClick={() => openGeneratePrompt("create")}
                       >
                         {generating ? (
                           <Loader2 className="size-4 animate-spin" />
@@ -381,14 +463,12 @@ export function ChecklistCreationPanel({
                         Generate with AI
                       </Button>
                     ) : null}
-                    {canGenerate &&
-                    selected.matchedWorkspaceDocument &&
-                    !regenOpen ? (
+                    {canGenerate && selected.matchedWorkspaceDocument ? (
                       <Button
                         type="button"
                         className="justify-start gap-2"
                         disabled={generating || !onGenerateAi}
-                        onClick={() => setRegenOpen(true)}
+                        onClick={() => openGeneratePrompt("regenerate")}
                       >
                         <RefreshCw className="size-4" />
                         Regenerate
@@ -398,10 +478,14 @@ export function ChecklistCreationPanel({
                       type="button"
                       className="justify-start gap-2"
                       variant="outline"
-                      disabled={generating}
-                      onClick={() => onUpload?.(selected)}
+                      disabled={generating || uploading || !onUpload}
+                      onClick={() => fileInputRef.current?.click()}
                     >
-                      <Upload className="size-4" />
+                      {uploading ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Upload className="size-4" />
+                      )}
                       {selected.matchedWorkspaceDocument
                         ? "Upload Replacement"
                         : canGenerate
@@ -425,6 +509,30 @@ export function ChecklistCreationPanel({
           ) : null}
         </SheetContent>
       </Sheet>
+
+      {selected && onGenerateAi ? (
+        <EditAiPromptDialog
+          open={generatePromptOpen}
+          onOpenChange={setGeneratePromptOpen}
+          tenderId={tenderId}
+          promptKey={generatePromptKey}
+          readOnly={readOnly}
+          dialogTitle={
+            generateMode === "regenerate"
+              ? "Edit Prompt & Regenerate"
+              : "Edit Prompt & Generate"
+          }
+          contextLabel={selected.requirementName}
+          useAiLabel="Generate with AI"
+          showExtraInstructions
+          extraInstructionsPlaceholder="Optional notes for this document only (e.g. emphasize onsite CV format)"
+          onSaveAndUseAi={async ({ extraInstructions }) => {
+            await onGenerateAi(selected, {
+              customInstructions: extraInstructions,
+            });
+          }}
+        />
+      ) : null}
     </div>
   );
 }

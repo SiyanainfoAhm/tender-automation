@@ -111,6 +111,33 @@ describe("bid checklist matching", () => {
     expect(result.source).toBe("COMPANY");
   });
 
+  it("completes checklist from linked AI/uploaded tender document", () => {
+    const result = matchRequirementToDocuments({
+      requirementName:
+        "Provide one dedicated onsite resource (CV and deployment details)",
+      requirementKey: "DEDICATED_ONSITE_RESOURCE",
+      companyDocuments: [],
+      workspaceDocuments: [
+        {
+          id: "ws-1",
+          title:
+            "Provide one dedicated onsite resource (CV and deployment details) (v1.0)",
+          fileName:
+            "Provide_one_dedicated_onsite_resource_CV_and_deployment_details_MAN_v1.docx",
+          documentType: "Technical",
+          status: "drafting",
+          hasFile: true,
+        },
+      ],
+      generationAllowed: true,
+    });
+    expect(result.matched).toBe(true);
+    expect(result.source).toBe("TENDER");
+    expect(result.workspaceDocumentId).toBe("ws-1");
+    expect(result.completionStatus).toBe("COMPLETED_TENDER_DOCUMENT");
+    expect(isChecklistItemComplete(result.completionStatus)).toBe(true);
+  });
+
   it("seeds checklist keys from missing documents", () => {
     const seeds = buildChecklistSeedFromMissingDocuments([
       "GST Registration Certificate",

@@ -140,7 +140,7 @@ function workspaceDocTypeFor(
 /**
  * Per-checklist-item AI document generation:
  * RFP + company context → OpenAI structured → DOCX → Azure tender workspace →
- * Supabase workspace document → checklist DRAFT_AVAILABLE link.
+ * Supabase workspace document → checklist COMPLETED_TENDER_DOCUMENT link.
  */
 export async function generateChecklistDocument(options: {
   companyId: string;
@@ -151,6 +151,7 @@ export async function generateChecklistDocument(options: {
   requirementId: string;
   customInstructions?: string | null;
   adminCustomPrompt?: string | null;
+  itemPromptTemplate?: string | null;
 }): Promise<GenerateChecklistDocumentResult> {
   const context = await buildGenerationContext({
     companyId: options.companyId,
@@ -173,6 +174,7 @@ export async function generateChecklistDocument(options: {
     documentTypeKey,
     generationPolicy: policy,
     customPrompt: options.adminCustomPrompt,
+    itemPrompt: options.itemPromptTemplate,
   });
 
   const userPrompt = [
