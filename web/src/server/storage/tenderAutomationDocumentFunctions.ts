@@ -8,6 +8,7 @@ const FUNCTION_NAME = "tender-automation-company-documents";
 type EdgeJson = {
   success?: boolean;
   error?: string;
+  code?: string;
   documentId?: string;
   document?: unknown;
   uploadId?: string;
@@ -27,6 +28,9 @@ type EdgeJson = {
   storageUrl?: string;
   blobName?: string;
   blobPath?: string;
+  containerName?: string;
+  exists?: boolean;
+  listedCount?: number;
   expiresAt?: string;
   startsAt?: string;
   sasSt?: string | null;
@@ -219,18 +223,51 @@ export async function invokeDocumentRead(
 }
 
 export async function invokeBlobRead(options: {
-  storageUrl: string;
+  storageUrl?: string;
+  blobName?: string;
   disposition?: "inline" | "attachment";
   fileName?: string | null;
+  tenderId?: string | null;
+  sourcePortal?: string | null;
+  prefix?: string | null;
 }): Promise<Response> {
   return invokeCompanyDocumentsRaw({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       action: "blob-read",
-      storageUrl: options.storageUrl,
+      storageUrl: options.storageUrl || undefined,
+      blobName: options.blobName || undefined,
       disposition: options.disposition || "inline",
       fileName: options.fileName || undefined,
+      tenderId: options.tenderId || undefined,
+      sourcePortal: options.sourcePortal || undefined,
+      prefix: options.prefix || undefined,
+    }),
+  });
+}
+
+export async function invokeBlobResolve(options: {
+  storageUrl?: string;
+  blobName?: string;
+  prefix?: string;
+  fileName?: string;
+  tenderId?: string;
+  sourcePortal?: string;
+  candidateBlobNames?: string[];
+}): Promise<EdgeResult> {
+  return invokeCompanyDocuments({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: "blob-resolve",
+      storageUrl: options.storageUrl || undefined,
+      blobName: options.blobName || undefined,
+      prefix: options.prefix || undefined,
+      fileName: options.fileName || undefined,
+      tenderId: options.tenderId || undefined,
+      sourcePortal: options.sourcePortal || undefined,
+      candidateBlobNames: options.candidateBlobNames || undefined,
     }),
   });
 }

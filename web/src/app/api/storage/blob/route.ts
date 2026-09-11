@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 
 import { isAzureBlobUrl } from "@/lib/storage/accessible-storage-url";
+import {
+  tryParseAzureBlobUrl,
+  unwrapStoredDocumentReference,
+} from "@/lib/storage/parseAzureBlobUrl";
 import { getSession } from "@/server/auth/session";
 import { invokeBlobRead } from "@/server/storage/tenderAutomationDocumentFunctions";
 
@@ -21,36 +25,75 @@ export async function GET(request: Request) {
   }
 
   const requestUrl = new URL(request.url);
-  const storageUrl = requestUrl.searchParams.get("url")?.trim() || "";
+  const rawUrl = requestUrl.searchParams.get("url")?.trim() || "";
   const download = requestUrl.searchParams.get("download") === "1";
   const fileName = requestUrl.searchParams.get("fileName")?.trim() || null;
+  const storageUrl = unwrapStoredDocumentReference(rawUrl);
 
-  if (!storageUrl || !isAzureBlobUrl(storageUrl)) {
+  if (!storageUrl) {
     return NextResponse.json(
-      { success: false, error: "A valid Azure blob url is required." },
+      {
+        success: false,
+        code: "DOCUMENT_URL_MISSING",
+        error: "A valid Azure blob url is required.",
+      },
       { status: 400 },
     );
   }
 
+  const defaultContainer =
+    process.env.TENDER_AUTOMATION_AZURE_STORAGE_CONTAINER_NAME?.trim() ||
+    "companydocuments";
+  const parsed = tryParseAzureBlobUrl(storageUrl, {
+    defaultContainer,
+  });
+
+  // Relative blob paths are allowed; full non-Azure URLs are rejected.
+  if (!parsed && !isAzureBlobUrl(storageUrl)) {
+    return NextResponse.json(
+      {
+        success: false,
+        code: "AZURE_PATH_RESOLUTION_FAILED",
+        error: "The stored document path could not be resolved in Azure.",
+      },
+      { status: 400 },
+    );
+  }
+
+  console.log("[Azure Document Resolve]", {
+    tenderId: null,
+    sourcePortal: null,
+    storedDocumentUrl: storageUrl,
+    containerName: parsed?.containerName || defaultContainer,
+    blobName: parsed?.blobName || null,
+  });
+
   try {
     const upstream = await invokeBlobRead({
-      storageUrl,
+      storageUrl: isAzureBlobUrl(storageUrl) ? storageUrl : undefined,
+      blobName: parsed?.blobName,
       disposition: download ? "attachment" : "inline",
       fileName,
     });
 
     if (!upstream.ok) {
       const contentType = upstream.headers.get("content-type") || "";
-      let message =
-        "File not found in Azure storage. Re-upload the document or re-run the crawler archive upload.";
+      let message = "Unable to load file from Azure storage.";
+      let code: string | undefined;
       if (contentType.includes("application/json")) {
         const body = (await upstream.json().catch(() => null)) as {
           error?: string;
+          code?: string;
         } | null;
         if (body?.error) message = body.error;
+        if (body?.code) code = body.code;
+      } else if (upstream.status === 404) {
+        code = "AZURE_BLOB_NOT_FOUND";
+        message =
+          "File not found in Azure storage at the resolved path. Re-upload the document only if this blob was never uploaded.";
       }
       return NextResponse.json(
-        { success: false, error: message },
+        { success: false, ...(code ? { code } : {}), error: message },
         { status: upstream.status === 404 ? 404 : 502 },
       );
     }
@@ -73,7 +116,11 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error("[storage/blob] proxy failed", error);
     return NextResponse.json(
-      { success: false, error: "Unable to load file." },
+      {
+        success: false,
+        code: "AZURE_DOWNLOAD_FAILED",
+        error: "Unable to load file.",
+      },
       { status: 500 },
     );
   }

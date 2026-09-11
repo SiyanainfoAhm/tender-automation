@@ -299,16 +299,130 @@ function getSafeSasInfo(value: string) {
   };
 }
 
+/** Unwrap legacy proxy / nested storage references to an Azure URL or blob path. */
+function unwrapStoredDocumentReference(value: string): string {
+  const raw = value.trim();
+  if (!raw) return raw;
+
+  if (raw.includes("/api/storage/blob")) {
+    try {
+      const asUrl =
+        raw.startsWith("http://") || raw.startsWith("https://")
+          ? new URL(raw)
+          : new URL(raw, "http://localhost");
+      const nested = asUrl.searchParams.get("url")?.trim();
+      if (nested) return unwrapStoredDocumentReference(nested);
+    } catch {
+      // fall through
+    }
+  }
+
+  if (raw.toLowerCase().startsWith("url=")) {
+    try {
+      return unwrapStoredDocumentReference(decodeURIComponent(raw.slice(4)));
+    } catch {
+      return unwrapStoredDocumentReference(raw.slice(4));
+    }
+  }
+
+  return raw;
+}
+
+/**
+ * Parse Azure blob URL or relative path.
+ * Container is never part of blobName.
+ */
+function parseAzureBlobUrl(
+  value: string,
+  defaultContainer?: string | null,
+): { containerName: string; blobName: string } {
+  const unwrapped = unwrapStoredDocumentReference(value);
+  if (!unwrapped) {
+    throw new HttpError(
+      400,
+      "The stored document path could not be resolved in Azure.",
+      "AZURE_PATH_RESOLUTION_FAILED",
+    );
+  }
+
+  const fallbackContainer = String(defaultContainer || "").trim();
+
+  if (unwrapped.includes("://")) {
+    let parsed: URL;
+    try {
+      parsed = new URL(unwrapped);
+    } catch {
+      throw new HttpError(
+        400,
+        "The stored document path could not be resolved in Azure.",
+        "AZURE_PATH_RESOLUTION_FAILED",
+      );
+    }
+    const parts = decodeURIComponent(parsed.pathname)
+      .split("/")
+      .filter(Boolean);
+    const containerName = parts.shift();
+    if (!containerName || parts.length === 0) {
+      throw new HttpError(
+        400,
+        "The stored document path could not be resolved in Azure.",
+        "AZURE_PATH_RESOLUTION_FAILED",
+      );
+    }
+    return { containerName, blobName: parts.join("/") };
+  }
+
+  const parts = decodeURIComponent(unwrapped.replace(/^\/+/, ""))
+    .split("/")
+    .filter(Boolean);
+  if (parts.length === 0) {
+    throw new HttpError(
+      400,
+      "The stored document path could not be resolved in Azure.",
+      "AZURE_PATH_RESOLUTION_FAILED",
+    );
+  }
+
+  if (
+    fallbackContainer &&
+    parts[0]?.toLowerCase() === fallbackContainer.toLowerCase() &&
+    parts.length > 1
+  ) {
+    return {
+      containerName: fallbackContainer,
+      blobName: parts.slice(1).join("/"),
+    };
+  }
+
+  if (!fallbackContainer) {
+    throw new HttpError(
+      400,
+      "The stored document path could not be resolved in Azure.",
+      "AZURE_PATH_RESOLUTION_FAILED",
+    );
+  }
+
+  return {
+    containerName: fallbackContainer,
+    blobName: parts.join("/"),
+  };
+}
+
 function blobNameFromUrl(azure: AzureConfig, storageUrl: string | null) {
   if (!storageUrl) return null;
-  const marker = `/${azure.containerName}/`;
-  const idx = storageUrl.indexOf(marker);
-  if (idx < 0) return null;
-  const path = storageUrl.slice(idx + marker.length).split("?")[0] || "";
   try {
-    return decodeURIComponent(path);
+    const parsed = parseAzureBlobUrl(storageUrl, azure.containerName);
+    if (
+      parsed.containerName.toLowerCase() !== azure.containerName.toLowerCase()
+    ) {
+      console.warn("[tender-automation-azure] container mismatch on stored URL", {
+        expected: azure.containerName,
+        actual: parsed.containerName,
+      });
+    }
+    return parsed.blobName;
   } catch {
-    return path;
+    return null;
   }
 }
 
@@ -572,7 +686,19 @@ async function readAzureBlob(azure: AzureConfig, blobName: string) {
   }
 
   if (response.status === 404) {
-    throw new HttpError(404, "File not found in Azure storage. Re-upload the document.");
+    throw new HttpError(
+      404,
+      "File not found in Azure storage at the resolved path. Re-upload the document only if this blob was never uploaded.",
+      "AZURE_BLOB_NOT_FOUND",
+    );
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    throw new HttpError(
+      502,
+      "Azure storage authentication failed while reading the document.",
+      "AZURE_AUTH_FAILED",
+    );
   }
 
   if (!response.ok) {
@@ -586,10 +712,185 @@ async function readAzureBlob(azure: AzureConfig, blobName: string) {
       responseBody: body.slice(0, 1500),
       sas: getSafeSasInfo(azure.sasToken),
     });
-    throw new HttpError(500, "Unable to read the file.");
+    throw new HttpError(
+      500,
+      "Unable to download the file from Azure storage.",
+      "AZURE_DOWNLOAD_FAILED",
+    );
   }
 
   return response;
+}
+
+async function azureBlobExists(
+  azure: AzureConfig,
+  blobName: string,
+): Promise<boolean> {
+  let head = await fetch(
+    `${azureBaseUrl(azure)}/${encodeBlobPath(blobName)}${normalizeSas(azure.sasToken)}`,
+    { method: "HEAD", headers: { "x-ms-version": "2020-10-02" } },
+  );
+  if (head.ok) return true;
+  try {
+    const keyedUrl = createReadOnlyBlobUrl({ azure, blobName });
+    head = await fetch(keyedUrl, {
+      method: "HEAD",
+      headers: { "x-ms-version": "2020-10-02" },
+    });
+    if (head.ok) return true;
+    // Some SAS setups reject HEAD; probe with a 1-byte ranged GET.
+    const ranged = await fetch(keyedUrl, {
+      method: "GET",
+      headers: {
+        "x-ms-version": "2020-10-02",
+        Range: "bytes=0-0",
+      },
+    });
+    return ranged.ok || ranged.status === 206;
+  } catch {
+    return false;
+  }
+}
+
+async function undeleteAzureBlob(
+  azure: AzureConfig,
+  blobName: string,
+): Promise<boolean> {
+  try {
+    const { BlobServiceClient, StorageSharedKeyCredential } = await import(
+      "npm:@azure/storage-blob@12.26.0"
+    );
+    const { requireAzureAccountKey } = await import("./directUploadSas.ts");
+    const accountKey = requireAzureAccountKey();
+    const credential = new StorageSharedKeyCredential(
+      azure.accountName,
+      accountKey,
+    );
+    const service = new BlobServiceClient(
+      `https://${azure.accountName}.blob.core.windows.net`,
+      credential,
+    );
+    const blob = service
+      .getContainerClient(azure.containerName)
+      .getBlobClient(blobName);
+    await blob.undelete();
+    console.info("[tender-automation-azure] undeleted soft-deleted blob", {
+      blobName,
+    });
+    return true;
+  } catch (error) {
+    console.error("[tender-automation-azure] undelete failed", {
+      blobName,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+type ListedBlob = { name: string; deleted: boolean };
+
+async function listAzureBlobsUnderPrefix(
+  azure: AzureConfig,
+  prefix: string,
+  options?: { includeDeleted?: boolean },
+): Promise<ListedBlob[]> {
+  const { BlobServiceClient, StorageSharedKeyCredential } = await import(
+    "npm:@azure/storage-blob@12.26.0"
+  );
+  const { requireAzureAccountKey } = await import("./directUploadSas.ts");
+  const accountKey = requireAzureAccountKey();
+  const credential = new StorageSharedKeyCredential(
+    azure.accountName,
+    accountKey,
+  );
+  const service = new BlobServiceClient(
+    `https://${azure.accountName}.blob.core.windows.net`,
+    credential,
+  );
+  const container = service.getContainerClient(azure.containerName);
+  const includeDeleted = options?.includeDeleted !== false;
+  const names: ListedBlob[] = [];
+  for await (const blob of container.listBlobsFlat({
+    prefix,
+    include: includeDeleted ? ["deleted"] : undefined,
+  })) {
+    if (!blob.name) continue;
+    names.push({
+      name: blob.name,
+      deleted: Boolean((blob as { deleted?: boolean }).deleted),
+    });
+  }
+  return names;
+}
+
+function pickBlobNameFromPrefixList(options: {
+  blobNames: string[];
+  fileNameHint?: string | null;
+  preferredBlobName?: string | null;
+}): string | null {
+  const names = options.blobNames
+    .map((n) => n.trim())
+    .filter((n) => n && !n.endsWith("/"));
+  if (names.length === 0) return null;
+
+  const preferred = String(options.preferredBlobName || "").trim();
+  if (preferred && names.includes(preferred)) return preferred;
+
+  const hint = String(options.fileNameHint || "").trim();
+  if (!hint) return names.length === 1 ? names[0] : null;
+
+  const safeHint = sanitizeTenderArtifactFileName(hint);
+  const exact = names.find((n) => n.split("/").pop() === safeHint);
+  if (exact) return exact;
+
+  const suffix = names.filter((n) => {
+    const leaf = n.split("/").pop() || "";
+    return leaf === safeHint || leaf.endsWith(`-${safeHint}`);
+  });
+  if (suffix.length >= 1) {
+    return suffix.sort(
+      (a, b) =>
+        (b.split("/").pop() || "").length - (a.split("/").pop() || "").length,
+    )[0];
+  }
+
+  const stem = safeHint.replace(/\.[^.]+$/, "").toLowerCase();
+  const stemHits = names.filter((n) =>
+    (n.split("/").pop() || "").toLowerCase().includes(stem),
+  );
+  if (stemHits.length >= 1) {
+    return stemHits.sort(
+      (a, b) =>
+        (b.split("/").pop() || "").length - (a.split("/").pop() || "").length,
+    )[0];
+  }
+
+  return names.length === 1 ? names[0] : null;
+}
+
+async function resolveBlobFromPrefix(
+  azure: AzureConfig,
+  prefix: string,
+  fileNameHint: string,
+  preferredBlobName?: string | null,
+): Promise<{ blobName: string; restored: boolean } | null> {
+  const listed = await listAzureBlobsUnderPrefix(azure, prefix, {
+    includeDeleted: true,
+  });
+  const picked = pickBlobNameFromPrefixList({
+    blobNames: listed.map((b) => b.name),
+    fileNameHint,
+    preferredBlobName,
+  });
+  if (!picked) return null;
+  const meta = listed.find((b) => b.name === picked);
+  if (meta?.deleted) {
+    const restored = await undeleteAzureBlob(azure, picked);
+    if (!restored) return null;
+    return { blobName: picked, restored: true };
+  }
+  // Prefer trusting the listing over a flaky HEAD exists check.
+  return { blobName: picked, restored: false };
 }
 
 /** Authenticated blob stream — Azure account disallows anonymous/public access. */
@@ -600,6 +901,9 @@ async function handleBlobRead(
     blobName?: string;
     disposition?: string;
     fileName?: string;
+    tenderId?: string;
+    sourcePortal?: string;
+    prefix?: string;
   },
 ) {
   const azure = requireAzureConfig();
@@ -607,13 +911,98 @@ async function handleBlobRead(
 
   const explicitBlob = String(body.blobName || "").trim();
   const storageUrl = String(body.storageUrl || "").trim();
+  const tenderId = String(body.tenderId || "").trim() || null;
+  const sourcePortal = String(body.sourcePortal || "").trim() || null;
+  const prefix = String(body.prefix || "").trim();
+  const fileNameHint = String(body.fileName || "").trim();
+
   let blobName = explicitBlob || blobNameFromUrl(azure, storageUrl || null);
+  if (!blobName && prefix) {
+    const resolved = await resolveBlobFromPrefix(
+      azure,
+      prefix,
+      fileNameHint,
+    );
+    blobName = resolved?.blobName || "";
+  }
+
+  console.log("[Azure Document Resolve]", {
+    tenderId,
+    sourcePortal,
+    storedDocumentUrl: storageUrl || null,
+    containerName: azure.containerName,
+    blobName: blobName || null,
+    prefix: prefix || null,
+  });
+
   if (!blobName) {
-    throw new HttpError(400, "storageUrl or blobName is required.");
+    throw new HttpError(
+      400,
+      storageUrl
+        ? "The stored document path could not be resolved in Azure."
+        : "No document URL or blob path is available for this file.",
+      storageUrl ? "AZURE_PATH_RESOLUTION_FAILED" : "DOCUMENT_URL_MISSING",
+    );
   }
   // Prevent path escape outside the configured container namespace space.
   if (blobName.includes("..")) {
-    throw new HttpError(400, "Invalid blob path.");
+    throw new HttpError(
+      400,
+      "The stored document path could not be resolved in Azure.",
+      "AZURE_PATH_RESOLUTION_FAILED",
+    );
+  }
+
+  let exists = await azureBlobExists(azure, blobName);
+  console.log("[Azure Blob Exists]", {
+    tenderId,
+    containerName: azure.containerName,
+    blobName,
+    exists,
+  });
+
+  // Soft-deleted blobs return 404 on HEAD/GET until undeleted.
+  if (!exists) {
+    const undeleted = await undeleteAzureBlob(azure, blobName);
+    if (undeleted) {
+      exists = await azureBlobExists(azure, blobName);
+      console.log("[Azure Blob Exists]", {
+        tenderId,
+        containerName: azure.containerName,
+        blobName,
+        exists,
+        restored: true,
+      });
+    }
+  }
+
+  // If the exact path is missing but we know the folder, list (incl. deleted) and rematch.
+  if (!exists && prefix) {
+    const rematched = await resolveBlobFromPrefix(
+      azure,
+      prefix,
+      fileNameHint,
+      blobName,
+    );
+    if (rematched) {
+      blobName = rematched.blobName;
+      exists = await azureBlobExists(azure, blobName);
+      console.log("[Azure Blob Exists]", {
+        tenderId,
+        containerName: azure.containerName,
+        blobName,
+        exists,
+        restored: rematched.restored,
+      });
+    }
+  }
+
+  if (!exists) {
+    throw new HttpError(
+      404,
+      "File not found in Azure storage at the resolved path. Re-upload the document only if this blob was never uploaded.",
+      "AZURE_BLOB_NOT_FOUND",
+    );
   }
 
   const dispositionMode =
@@ -621,9 +1010,7 @@ async function handleBlobRead(
       ? "attachment"
       : "inline";
   const fileName =
-    String(body.fileName || "").trim() ||
-    blobName.split("/").pop() ||
-    "document";
+    fileNameHint || blobName.split("/").pop() || "document";
 
   const azureResponse = await readAzureBlob(azure, blobName);
   const headers = new Headers({
@@ -637,6 +1024,187 @@ async function handleBlobRead(
   if (contentLength) headers.set("Content-Length", contentLength);
 
   return new Response(azureResponse.body, { status: 200, headers });
+}
+
+/** Resolve the exact Azure blob for a stored URL / relative path / folder prefix. */
+async function handleBlobResolve(
+  req: Request,
+  body: {
+    storageUrl?: string;
+    blobName?: string;
+    prefix?: string;
+    fileName?: string;
+    tenderId?: string;
+    sourcePortal?: string;
+    candidateBlobNames?: string[];
+  },
+) {
+  const azure = requireAzureConfig();
+  await authenticate(req);
+
+  const storageUrl = String(body.storageUrl || "").trim();
+  const explicitBlob = String(body.blobName || "").trim();
+  const prefix = String(body.prefix || "").trim();
+  const fileNameHint = String(body.fileName || "").trim();
+  const tenderId = String(body.tenderId || "").trim() || null;
+  const sourcePortal = String(body.sourcePortal || "").trim() || null;
+  const candidates = Array.isArray(body.candidateBlobNames)
+    ? body.candidateBlobNames.map((v) => String(v || "").trim()).filter(Boolean)
+    : [];
+
+  let blobName = explicitBlob || blobNameFromUrl(azure, storageUrl || null);
+
+  console.log("[Azure Document Resolve]", {
+    tenderId,
+    sourcePortal,
+    storedDocumentUrl: storageUrl || null,
+    containerName: azure.containerName,
+    blobName: blobName || null,
+    prefix: prefix || null,
+  });
+
+  if (blobName) {
+    let exists = await azureBlobExists(azure, blobName);
+    console.log("[Azure Blob Exists]", {
+      tenderId,
+      containerName: azure.containerName,
+      blobName,
+      exists,
+    });
+    if (!exists) {
+      const undeleted = await undeleteAzureBlob(azure, blobName);
+      if (undeleted) {
+        exists = await azureBlobExists(azure, blobName);
+        console.log("[Azure Blob Exists]", {
+          tenderId,
+          containerName: azure.containerName,
+          blobName,
+          exists,
+          restored: true,
+        });
+      }
+    }
+    if (exists) {
+      return json({
+        success: true,
+        containerName: azure.containerName,
+        blobName,
+        storageUrl: `${azureBaseUrl(azure)}/${encodeBlobPath(blobName)}`,
+        exists: true,
+      });
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (candidate.includes("..")) continue;
+    let exists = await azureBlobExists(azure, candidate);
+    console.log("[Azure Blob Exists]", {
+      tenderId,
+      containerName: azure.containerName,
+      blobName: candidate,
+      exists,
+    });
+    if (!exists) {
+      const undeleted = await undeleteAzureBlob(azure, candidate);
+      if (undeleted) exists = await azureBlobExists(azure, candidate);
+    }
+    if (exists) {
+      return json({
+        success: true,
+        containerName: azure.containerName,
+        blobName: candidate,
+        storageUrl: `${azureBaseUrl(azure)}/${encodeBlobPath(candidate)}`,
+        exists: true,
+      });
+    }
+  }
+
+  if (prefix) {
+    if (prefix.includes("..")) {
+      throw new HttpError(
+        400,
+        "The stored document path could not be resolved in Azure.",
+        "AZURE_PATH_RESOLUTION_FAILED",
+      );
+    }
+    const picked = await resolveBlobFromPrefix(
+      azure,
+      prefix,
+      fileNameHint,
+      blobName,
+    );
+    if (picked) {
+      const exists = await azureBlobExists(azure, picked.blobName);
+      console.log("[Azure Blob Exists]", {
+        tenderId,
+        containerName: azure.containerName,
+        blobName: picked.blobName,
+        exists,
+        restored: picked.restored,
+      });
+      if (exists) {
+        return json({
+          success: true,
+          containerName: azure.containerName,
+          blobName: picked.blobName,
+          storageUrl: `${azureBaseUrl(azure)}/${encodeBlobPath(picked.blobName)}`,
+          exists: true,
+          restored: picked.restored,
+        });
+      }
+    }
+
+    return json(
+      {
+        success: false,
+        code: "AZURE_BLOB_NOT_FOUND",
+        error:
+          "File not found in Azure storage at the resolved path. Re-upload the document only if this blob was never uploaded.",
+        containerName: azure.containerName,
+        blobName: blobName || null,
+        prefix,
+        exists: false,
+      },
+      404,
+    );
+  }
+
+  if (!storageUrl && !explicitBlob) {
+    return json(
+      {
+        success: false,
+        code: "DOCUMENT_URL_MISSING",
+        error: "No document URL or blob path is available for this file.",
+        exists: false,
+      },
+      404,
+    );
+  }
+
+  if (!blobName) {
+    return json(
+      {
+        success: false,
+        code: "AZURE_PATH_RESOLUTION_FAILED",
+        error: "The stored document path could not be resolved in Azure.",
+        exists: false,
+      },
+      400,
+    );
+  }
+
+  return json(
+    {
+      success: false,
+      code: "AZURE_BLOB_NOT_FOUND",
+      error:
+        "File not found in Azure storage at the resolved path. Re-upload the document only if this blob was never uploaded.",
+      containerName: azure.containerName,
+      blobName,
+      exists: false,
+    },
+    404,
+  );
 }
 
 function serviceSupabase() {
@@ -2856,9 +3424,11 @@ async function handleUploadTenderArtifact(req: Request, formData: FormData) {
 
 class HttpError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  code?: string;
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -2928,6 +3498,9 @@ Deno.serve(async (req) => {
     if (body?.action === "blob-read") {
       return await handleBlobRead(req, body);
     }
+    if (body?.action === "blob-resolve") {
+      return await handleBlobResolve(req, body);
+    }
     if (body?.action === "delete") return await handleDelete(req, body);
     if (body?.action === "template-assets-delete") {
       return await handleTemplateAssetsDelete(req, body);
@@ -2954,7 +3527,14 @@ Deno.serve(async (req) => {
       return json({ success: false, error: error.message }, 503);
     }
     if (error instanceof HttpError) {
-      return json({ success: false, error: error.message }, error.status);
+      return json(
+        {
+          success: false,
+          error: error.message,
+          ...(error.code ? { code: error.code } : {}),
+        },
+        error.status,
+      );
     }
     console.error(
       "[tender-automation-documents] failed",
