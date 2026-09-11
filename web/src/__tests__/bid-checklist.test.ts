@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildChecklistSeedFromMissingDocuments,
+  calculateSectionProgress,
   isChecklistItemComplete,
+  isRequirementCompleted,
   matchRequirementToDocuments,
+  normalizeRequirementIdentityKey,
   resolveRequirementPattern,
 } from "@/lib/bid-checklist";
 
@@ -146,5 +149,51 @@ describe("bid checklist matching", () => {
     expect(seeds).toHaveLength(2);
     expect(seeds[0]?.requirementKey).toBe("GST_REGISTRATION");
     expect(seeds[1]?.requirementKey).toBe("CMMI_LEVEL_3");
+  });
+
+  it("treats manual_completed as completed even without a document", () => {
+    expect(
+      isRequirementCompleted({
+        manualCompleted: true,
+        completionStatus: "MISSING",
+      }),
+    ).toBe(true);
+  });
+
+  it("calculates section progress from unique requirements only", () => {
+    const items = [
+      {
+        mandatory: true,
+        category: "TECHNICAL",
+        completionStatus: "COMPLETED_TENDER_DOCUMENT" as const,
+        manualCompleted: false,
+      },
+      {
+        mandatory: true,
+        category: "TECHNICAL",
+        completionStatus: "MISSING" as const,
+        manualCompleted: false,
+      },
+      {
+        mandatory: true,
+        category: "TECHNICAL",
+        completionStatus: "MISSING" as const,
+        manualCompleted: true,
+      },
+      {
+        mandatory: true,
+        category: "ANNEXURE",
+        completionStatus: "MISSING" as const,
+        manualCompleted: false,
+      },
+    ];
+    expect(calculateSectionProgress(items, "technical")).toEqual({
+      completed: 2,
+      total: 3,
+      percent: 67,
+    });
+    expect(normalizeRequirementIdentityKey("MOBILIZATION_PLAN", "Mobilization")).toBe(
+      "MOBILIZATION_PLAN",
+    );
   });
 });

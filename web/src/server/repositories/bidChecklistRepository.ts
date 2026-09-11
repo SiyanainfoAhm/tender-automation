@@ -2,12 +2,16 @@ import "server-only";
 
 import {
   buildChecklistSeedFromMissingDocuments,
-  isChecklistItemComplete,
+  calculateSectionProgress,
+  deriveCompletionSource,
   isFromScratchGeneratable,
+  isRequirementCompleted,
   matchRequirementToDocuments,
+  normalizeRequirementIdentityKey,
   type ChecklistCompletionStatus,
   type MatchableCompanyDoc,
   type MatchableWorkspaceDoc,
+  type RequirementCompletionSource,
 } from "@/lib/bid-checklist";
 import type { BidWorkspaceDTO, WorkspaceDocumentRow } from "@/lib/bid-workspace";
 import { getServerSupabase } from "@/lib/db/server";
@@ -15,6 +19,18 @@ import {
   listCompanyDocuments,
   type CompanyDocument,
 } from "@/server/repositories/documentRepository";
+
+export type ChecklistLinkedDocument = {
+  id: string;
+  title: string;
+  fileName: string | null;
+  status: string;
+  versionLabel: string | null;
+  source: "TENDER" | "COMPANY";
+  hasFile: boolean;
+  downloadHref: string | null;
+  matchedBy: "AI" | "USER" | "SYSTEM" | null;
+};
 
 export type ChecklistItemRow = {
   id: string;
@@ -29,6 +45,9 @@ export type ChecklistItemRow = {
   sourceClause: string | null;
   sourceText: string | null;
   completionStatus: ChecklistCompletionStatus;
+  manualCompleted: boolean;
+  isCompleted: boolean;
+  completionSource: RequirementCompletionSource;
   matchedDocumentSource: "COMPANY" | "TENDER" | null;
   matchedCompanyDocumentId: string | null;
   matchedWorkspaceDocumentId: string | null;
@@ -36,6 +55,7 @@ export type ChecklistItemRow = {
   matchConfidence: number | null;
   matchReason: string | null;
   displayOrder: number;
+  documents: ChecklistLinkedDocument[];
   matchedCompanyDocument: {
     id: string;
     name: string;
@@ -57,10 +77,19 @@ export type ChecklistProgress = {
   percent: number;
 };
 
+function isActiveWorkspaceDoc(doc: WorkspaceDocumentRow): boolean {
+  return (
+    !doc.isPlaceholder &&
+    doc.hasFile &&
+    doc.status !== "pending"
+  );
+}
+
 function mapChecklistRow(
   row: Record<string, unknown>,
   companyById: Map<string, CompanyDocument>,
   workspaceById: Map<string, WorkspaceDocumentRow>,
+  linkedDocs: ChecklistLinkedDocument[],
 ): ChecklistItemRow {
   const companyId = row.matched_company_document_id
     ? String(row.matched_company_document_id)
@@ -70,6 +99,17 @@ function mapChecklistRow(
     : null;
   const company = companyId ? companyById.get(companyId) : null;
   const workspace = workspaceId ? workspaceById.get(workspaceId) : null;
+  const manualCompleted = row.manual_completed === true;
+  const completionStatus = String(
+    row.completion_status || "MISSING",
+  ) as ChecklistCompletionStatus;
+  const matchedBy =
+    (row.matched_by as "AI" | "USER" | "SYSTEM" | null) || null;
+  const matchedDocumentSource =
+    (row.matched_document_source as "COMPANY" | "TENDER" | null) || null;
+  const hasWorkspaceDocument = linkedDocs.some((d) => d.source === "TENDER");
+  const hasCompanyDocument = linkedDocs.some((d) => d.source === "COMPANY");
+
   return {
     id: String(row.id),
     requirementKey: String(row.requirement_key),
@@ -88,20 +128,28 @@ function mapChecklistRow(
     sourcePage: row.source_page == null ? null : Number(row.source_page),
     sourceClause: row.source_clause ? String(row.source_clause) : null,
     sourceText: row.source_text ? String(row.source_text) : null,
-    completionStatus: String(
-      row.completion_status || "MISSING",
-    ) as ChecklistCompletionStatus,
-    matchedDocumentSource: (row.matched_document_source as
-      | "COMPANY"
-      | "TENDER"
-      | null) || null,
+    completionStatus,
+    manualCompleted,
+    isCompleted: isRequirementCompleted({
+      manualCompleted,
+      completionStatus,
+    }),
+    completionSource: deriveCompletionSource({
+      manualCompleted,
+      matchedBy,
+      matchedDocumentSource,
+      hasWorkspaceDocument,
+      hasCompanyDocument,
+    }),
+    matchedDocumentSource,
     matchedCompanyDocumentId: companyId,
     matchedWorkspaceDocumentId: workspaceId,
-    matchedBy: (row.matched_by as "AI" | "USER" | "SYSTEM" | null) || null,
+    matchedBy,
     matchConfidence:
       row.match_confidence == null ? null : Number(row.match_confidence),
     matchReason: row.match_reason ? String(row.match_reason) : null,
     displayOrder: Number(row.display_order || 0),
+    documents: linkedDocs,
     matchedCompanyDocument: company
       ? {
           id: company.id,
@@ -147,19 +195,67 @@ function toMatchableWorkspace(doc: WorkspaceDocumentRow): MatchableWorkspaceDoc 
   };
 }
 
+function collectLinkedDocuments(options: {
+  itemId: string;
+  matchedWorkspaceDocumentId: string | null;
+  matchedCompanyDocumentId: string | null;
+  matchedBy: "AI" | "USER" | "SYSTEM" | null;
+  workspaceDocuments: WorkspaceDocumentRow[];
+  companyById: Map<string, CompanyDocument>;
+}): ChecklistLinkedDocument[] {
+  const docs: ChecklistLinkedDocument[] = [];
+  const seen = new Set<string>();
+
+  for (const doc of options.workspaceDocuments) {
+    const linked =
+      doc.checklistItemId === options.itemId ||
+      doc.id === options.matchedWorkspaceDocumentId;
+    if (!linked) continue;
+    if (doc.isPlaceholder || !doc.hasFile) continue;
+    if (seen.has(doc.id)) continue;
+    seen.add(doc.id);
+    docs.push({
+      id: doc.id,
+      title: doc.title,
+      fileName: doc.fileName,
+      status: doc.status,
+      versionLabel: doc.versionLabel,
+      source: "TENDER",
+      hasFile: doc.hasFile,
+      downloadHref: `/api/bid-workspace/documents/${doc.id}`,
+      matchedBy: options.matchedBy,
+    });
+  }
+
+  if (options.matchedCompanyDocumentId) {
+    const company = options.companyById.get(options.matchedCompanyDocumentId);
+    if (company && !seen.has(`company:${company.id}`)) {
+      seen.add(`company:${company.id}`);
+      docs.push({
+        id: company.id,
+        title: company.name,
+        fileName: company.originalFileName,
+        status: company.verificationStatus,
+        versionLabel: null,
+        source: "COMPANY",
+        hasFile: true,
+        downloadHref: `/api/documents/${company.id}`,
+        matchedBy: options.matchedBy,
+      });
+    }
+  }
+
+  return docs.sort((a, b) => {
+    const av = a.versionLabel || "";
+    const bv = b.versionLabel || "";
+    return bv.localeCompare(av);
+  });
+}
+
 export function computeChecklistProgress(
   items: ChecklistItemRow[],
 ): ChecklistProgress {
-  const mandatory = items.filter((item) => item.mandatory);
-  const total = mandatory.length;
-  const completed = mandatory.filter((item) =>
-    isChecklistItemComplete(item.completionStatus),
-  ).length;
-  return {
-    completed,
-    total,
-    percent: total === 0 ? 0 : Math.round((completed / total) * 100),
-  };
+  return calculateSectionProgress(items);
 }
 
 export async function seedChecklistItemsIfEmpty(options: {
@@ -172,7 +268,8 @@ export async function seedChecklistItemsIfEmpty(options: {
   const { count, error: countError } = await supabase
     .from("agenttender_bid_checklist_items")
     .select("id", { count: "exact", head: true })
-    .eq("workspace_id", options.workspaceId);
+    .eq("workspace_id", options.workspaceId)
+    .eq("is_archived", false);
   if (countError) throw new Error(countError.message);
   if ((count ?? 0) > 0) return;
 
@@ -193,6 +290,10 @@ export async function seedChecklistItemsIfEmpty(options: {
       document_type: seed.documentType,
       generation_allowed: seed.generationAllowed,
       completion_status: "MISSING",
+      normalized_requirement_key: normalizeRequirementIdentityKey(
+        seed.requirementKey,
+        seed.requirementName,
+      ),
       display_order: index + 1,
     })),
   );
@@ -209,6 +310,7 @@ export async function rematchChecklistItems(options: {
     .from("agenttender_bid_checklist_items")
     .select("*")
     .eq("workspace_id", options.workspaceId)
+    .eq("is_archived", false)
     .order("display_order", { ascending: true });
   if (error) throw new Error(error.message);
   const rows = data || [];
@@ -218,12 +320,17 @@ export async function rematchChecklistItems(options: {
     companyId: options.companyId,
   });
   const matchableCompany = companyDocs.map(toMatchableCompany);
-  const matchableWorkspace = options.workspaceDocuments.map(
-    toMatchableWorkspace,
-  );
+  const matchableWorkspace = options.workspaceDocuments
+    .filter((doc) => !doc.isPlaceholder)
+    .map(toMatchableWorkspace);
 
   for (const row of rows) {
-    // Manual USER matches win unless the linked doc disappeared.
+    // Manual completion without docs stays completed.
+    if (row.manual_completed === true) {
+      continue;
+    }
+
+    // Explicit USER matches win unless the linked doc disappeared.
     if (row.matched_by === "USER") {
       const stillCompany =
         row.matched_company_document_id &&
@@ -231,21 +338,64 @@ export async function rematchChecklistItems(options: {
       const stillWorkspace =
         row.matched_workspace_document_id &&
         options.workspaceDocuments.some(
-          (d) => d.id === row.matched_workspace_document_id,
+          (d) =>
+            d.id === row.matched_workspace_document_id &&
+            isActiveWorkspaceDoc(d),
         );
-      if (stillCompany || stillWorkspace) continue;
+      const linkedByFk = options.workspaceDocuments.some(
+        (d) =>
+          d.checklistItemId === String(row.id) && isActiveWorkspaceDoc(d),
+      );
+      if (stillCompany || stillWorkspace || linkedByFk) {
+        if (
+          row.completion_status !== "COMPLETED_COMPANY_DOCUMENT" &&
+          row.completion_status !== "COMPLETED_TENDER_DOCUMENT"
+        ) {
+          const { error: promoteError } = await supabase
+            .from("agenttender_bid_checklist_items")
+            .update({
+              completion_status: stillCompany
+                ? "COMPLETED_COMPANY_DOCUMENT"
+                : "COMPLETED_TENDER_DOCUMENT",
+            })
+            .eq("id", row.id)
+            .eq("workspace_id", options.workspaceId);
+          if (promoteError) throw new Error(promoteError.message);
+        }
+        continue;
+      }
+      // Linked docs gone → reopen unless manual.
+      const { error: clearError } = await supabase
+        .from("agenttender_bid_checklist_items")
+        .update({
+          completion_status: "MISSING",
+          matched_document_source: null,
+          matched_company_document_id: null,
+          matched_workspace_document_id: null,
+          matched_by: null,
+          match_confidence: null,
+          match_reason: "Linked document removed.",
+        })
+        .eq("id", row.id)
+        .eq("workspace_id", options.workspaceId);
+      if (clearError) throw new Error(clearError.message);
+      continue;
     }
 
-    // Preserve explicit AI / USER links when the workspace document still exists.
-    // Promote legacy DRAFT_AVAILABLE AI links to completed (document already satisfies).
+    // Preserve explicit AI links when the workspace document still exists.
     if (
-      (row.matched_by === "AI" || row.matched_by === "USER") &&
+      row.matched_by === "AI" &&
       row.matched_workspace_document_id &&
       options.workspaceDocuments.some(
-        (d) => d.id === row.matched_workspace_document_id && d.hasFile,
+        (d) =>
+          d.id === row.matched_workspace_document_id && isActiveWorkspaceDoc(d),
       )
     ) {
-      if (row.completion_status === "DRAFT_AVAILABLE") {
+      if (
+        row.completion_status === "DRAFT_AVAILABLE" ||
+        row.completion_status === "MISSING" ||
+        row.completion_status === "PENDING_DOCUMENT"
+      ) {
         const { error: promoteError } = await supabase
           .from("agenttender_bid_checklist_items")
           .update({
@@ -258,6 +408,34 @@ export async function rematchChecklistItems(options: {
           .eq("workspace_id", options.workspaceId);
         if (promoteError) throw new Error(promoteError.message);
       }
+      continue;
+    }
+
+    // Prefer FK-linked active docs for this requirement.
+    const fkDocs = options.workspaceDocuments.filter(
+      (d) => d.checklistItemId === String(row.id) && isActiveWorkspaceDoc(d),
+    );
+    if (fkDocs.length > 0) {
+      const primary = fkDocs[0]!;
+      const { error: fkError } = await supabase
+        .from("agenttender_bid_checklist_items")
+        .update({
+          completion_status: "COMPLETED_TENDER_DOCUMENT",
+          matched_document_source: "TENDER",
+          matched_company_document_id: null,
+          matched_workspace_document_id: primary.id,
+          matched_by: row.matched_by === "AI" ? "AI" : row.matched_by || "SYSTEM",
+          match_confidence: 0.95,
+          match_reason: `Linked tender document “${primary.title}”.`,
+          generation_allowed: isFromScratchGeneratable({
+            requirementKey: String(row.requirement_key),
+            requirementName: String(row.requirement_name),
+            generationAllowed: row.generation_allowed === true,
+          }),
+        })
+        .eq("id", row.id)
+        .eq("workspace_id", options.workspaceId);
+      if (fkError) throw new Error(fkError.message);
       continue;
     }
 
@@ -285,12 +463,19 @@ export async function rematchChecklistItems(options: {
         matched_by: result.matched ? result.matchedBy : null,
         match_confidence: result.confidence || null,
         match_reason: result.reason,
-        // Keep UI Generate button in sync with from-scratch policy.
         generation_allowed: fromScratch,
       })
       .eq("id", row.id)
       .eq("workspace_id", options.workspaceId);
     if (updateError) throw new Error(updateError.message);
+
+    if (result.workspaceDocumentId) {
+      await supabase
+        .from("agenttender_bid_workspace_documents")
+        .update({ checklist_item_id: row.id, is_placeholder: false })
+        .eq("id", result.workspaceDocumentId)
+        .eq("workspace_id", options.workspaceId);
+    }
   }
 }
 
@@ -305,6 +490,7 @@ export async function listChecklistItems(options: {
     .select("*")
     .eq("workspace_id", options.workspaceId)
     .eq("company_id", options.companyId)
+    .eq("is_archived", false)
     .order("display_order", { ascending: true });
   if (error) throw new Error(error.message);
 
@@ -316,9 +502,24 @@ export async function listChecklistItems(options: {
     options.workspaceDocuments.map((d) => [d.id, d]),
   );
 
-  return (data || []).map((row) =>
-    mapChecklistRow(row as Record<string, unknown>, companyById, workspaceById),
-  );
+  return (data || []).map((row) => {
+    const record = row as Record<string, unknown>;
+    const matchedBy =
+      (record.matched_by as "AI" | "USER" | "SYSTEM" | null) || null;
+    const linkedDocs = collectLinkedDocuments({
+      itemId: String(record.id),
+      matchedWorkspaceDocumentId: record.matched_workspace_document_id
+        ? String(record.matched_workspace_document_id)
+        : null,
+      matchedCompanyDocumentId: record.matched_company_document_id
+        ? String(record.matched_company_document_id)
+        : null,
+      matchedBy,
+      workspaceDocuments: options.workspaceDocuments,
+      companyById,
+    });
+    return mapChecklistRow(record, companyById, workspaceById, linkedDocs);
+  });
 }
 
 export async function loadChecklistForWorkspace(options: {
@@ -388,6 +589,18 @@ export async function setChecklistManualMatch(options: {
     .eq("workspace_id", options.workspaceId)
     .eq("company_id", options.companyId);
   if (error) throw new Error(error.message);
+
+  if (options.workspaceDocumentId) {
+    await supabase
+      .from("agenttender_bid_workspace_documents")
+      .update({
+        checklist_item_id: options.itemId,
+        is_placeholder: false,
+      })
+      .eq("id", options.workspaceDocumentId)
+      .eq("workspace_id", options.workspaceId)
+      .eq("company_id", options.companyId);
+  }
 }
 
 /**
@@ -421,6 +634,16 @@ export async function setChecklistAiDraftMatch(options: {
     .eq("workspace_id", options.workspaceId)
     .eq("company_id", options.companyId);
   if (error) throw new Error(error.message);
+
+  await supabase
+    .from("agenttender_bid_workspace_documents")
+    .update({
+      checklist_item_id: options.itemId,
+      is_placeholder: false,
+    })
+    .eq("id", options.workspaceDocumentId)
+    .eq("workspace_id", options.workspaceId)
+    .eq("company_id", options.companyId);
 }
 
 /** Manually toggle checklist completion without deleting linked documents. */
@@ -451,6 +674,9 @@ export async function setChecklistCompletionState(options: {
     const { error } = await supabase
       .from("agenttender_bid_checklist_items")
       .update({
+        manual_completed: true,
+        manual_completed_at: new Date().toISOString(),
+        manual_completed_by: options.userId,
         completion_status: completionStatus,
         matched_document_source: hasCompany
           ? "COMPANY"
@@ -470,21 +696,75 @@ export async function setChecklistCompletionState(options: {
     return;
   }
 
-  // Uncheck: clear completion but keep document links.
+  // Reopen: clear manual completion; keep docs if present.
   const stillLinked =
     Boolean(row.matched_company_document_id) ||
     Boolean(row.matched_workspace_document_id);
   const { error } = await supabase
     .from("agenttender_bid_checklist_items")
     .update({
-      completion_status: stillLinked ? "PENDING_DOCUMENT" : "MISSING",
-      matched_by: stillLinked ? "USER" : row.matched_by,
+      manual_completed: false,
+      manual_completed_at: null,
+      manual_completed_by: null,
+      completion_status: stillLinked
+        ? row.matched_company_document_id
+          ? "COMPLETED_COMPANY_DOCUMENT"
+          : "COMPLETED_TENDER_DOCUMENT"
+        : "MISSING",
+      matched_by: stillLinked ? row.matched_by : null,
       match_reason: stillLinked
-        ? "Completion cleared; linked document retained."
-        : "Completion cleared.",
+        ? "Manual completion cleared; linked document retained."
+        : "Reopened — marked as pending.",
     })
     .eq("id", options.itemId)
     .eq("workspace_id", options.workspaceId)
     .eq("company_id", options.companyId);
   if (error) throw new Error(error.message);
+}
+
+/**
+ * After a workspace document is deleted, clear matches pointing at it and
+ * reopen requirements that are no longer satisfied (unless manually completed).
+ */
+export async function clearChecklistLinksForDeletedDocument(options: {
+  workspaceId: string;
+  companyId: string;
+  documentId: string;
+}): Promise<void> {
+  const supabase = getServerSupabase();
+  const { data: rows, error } = await supabase
+    .from("agenttender_bid_checklist_items")
+    .select("id, manual_completed, matched_company_document_id")
+    .eq("workspace_id", options.workspaceId)
+    .eq("company_id", options.companyId)
+    .eq("matched_workspace_document_id", options.documentId);
+  if (error) throw new Error(error.message);
+
+  for (const row of rows || []) {
+    const stillCompany = Boolean(row.matched_company_document_id);
+    const manual = row.manual_completed === true;
+    const { error: updateError } = await supabase
+      .from("agenttender_bid_checklist_items")
+      .update({
+        matched_workspace_document_id: null,
+        matched_document_source: stillCompany ? "COMPANY" : null,
+        matched_by: stillCompany || manual ? "USER" : null,
+        completion_status: manual
+          ? "COMPLETED_TENDER_DOCUMENT"
+          : stillCompany
+            ? "COMPLETED_COMPANY_DOCUMENT"
+            : "MISSING",
+        match_reason: manual
+          ? "Document removed; kept complete via manual mark."
+          : stillCompany
+            ? "Workspace document removed; company document retained."
+            : "Linked document removed.",
+      })
+      .eq("id", row.id)
+      .eq("workspace_id", options.workspaceId);
+    if (updateError) throw new Error(updateError.message);
+  }
+
+  // Also clear FK on any remaining rows that pointed via checklist_item_id
+  // (document row is already deleted; rematch will pick up remaining docs).
 }

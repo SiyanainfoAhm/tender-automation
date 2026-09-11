@@ -25,6 +25,8 @@ import {
   saveWorkspaceAiPromptOverride,
 } from "@/server/repositories/bidAiPromptRepository";
 import {
+  clearChecklistLinksForDeletedDocument,
+  rematchChecklistItems,
   setChecklistCompletionState,
   setChecklistManualMatch,
 } from "@/server/repositories/bidChecklistRepository";
@@ -34,6 +36,8 @@ import {
   insertBoqItem,
   loadBidWorkspace,
   markWorkspaceSubmitted,
+  setChecklistPreparationStatus,
+  tryClaimChecklistPreparation,
   updateBoqItem,
   updateProposalSection,
   updateWorkspaceDocumentStatus,
@@ -346,10 +350,29 @@ export async function deleteWorkspaceDocumentAction(input: {
   documentId: string;
 }): Promise<ActionResult> {
   try {
-    const { session } = await requireEditableWorkspace(input.tenderId, "bids.edit");
+    const { session, workspaceId } = await requireEditableWorkspace(
+      input.tenderId,
+      "bids.edit",
+    );
+    await clearChecklistLinksForDeletedDocument({
+      workspaceId,
+      companyId: session.companyId,
+      documentId: input.documentId,
+    });
     const result = await invokeWorkspaceDocumentDelete(input.documentId);
     if (!result.success) {
       return { ok: false, error: result.error || "Unable to delete document." };
+    }
+    const workspace = await loadBidWorkspace({
+      workspaceId,
+      companyId: session.companyId,
+    });
+    if (workspace) {
+      await rematchChecklistItems({
+        workspaceId,
+        companyId: session.companyId,
+        workspaceDocuments: workspace.documents,
+      });
     }
     await insertTenderActivity({
       tenderId: input.tenderId,
@@ -495,12 +518,19 @@ export type IngestTenderDocumentsResult =
  * Tender Source Documents → Ingestion → OpenAI/extraction →
  * Structured Results (Checklist / Annexures / Cost Items) →
  * Company Document Matching → Bid Workspace UI.
+ *
+ * Uses preparation-status locking so concurrent tabs cannot double-run AI.
  */
 export async function ingestTenderDocumentsAction(
   tenderId: string,
+  options?: { force?: boolean; alreadyClaimed?: boolean },
 ): Promise<IngestTenderDocumentsResult> {
+  let claimed = options?.alreadyClaimed === true;
+  let workspaceId: string | null = null;
+  let companyId: string | null = null;
   try {
     const session = await requirePermissionStrict("bids.edit");
+    companyId = session.companyId;
     const data = await getTenderById(tenderId);
     if (!data) return { ok: false, error: "Tender not found." };
 
@@ -513,6 +543,32 @@ export async function ingestTenderDocumentsAction(
         ok: false,
         error: "Open the bid workspace once before running document ingestion.",
       };
+    }
+    workspaceId = workspace.id;
+
+    if (!options?.alreadyClaimed) {
+      const claim = await tryClaimChecklistPreparation({
+        workspaceId: workspace.id,
+        companyId: session.companyId,
+      });
+      if (!claim.claimed) {
+        if (claim.status === "PROCESSING") {
+          return {
+            ok: false,
+            error:
+              "Bid Workspace preparation is already running. Please wait for it to finish.",
+          };
+        }
+        // Deliberate Use AI on READY/FAILED: take the lock.
+        await setChecklistPreparationStatus({
+          workspaceId: workspace.id,
+          companyId: session.companyId,
+          status: "PROCESSING",
+        });
+        claimed = true;
+      } else {
+        claimed = true;
+      }
     }
 
     const [{ resolveTenderSourceDocuments }, checklistPrompt, costPrompt] =
@@ -538,6 +594,13 @@ export async function ingestTenderDocumentsAction(
     });
 
     if (!sources.length) {
+      await setChecklistPreparationStatus({
+        workspaceId: workspace.id,
+        companyId: session.companyId,
+        status: "FAILED",
+        error:
+          "No tender source documents found. Download the portal archive or upload PDF/ZIP/DOCX/XLSX first.",
+      });
       return {
         ok: false,
         error:
@@ -560,6 +623,12 @@ export async function ingestTenderDocumentsAction(
       workspaceDocuments: workspace.documents,
       checklistPromptTemplate: checklistPrompt.template,
       costPromptTemplate: costPrompt.template,
+    });
+
+    await setChecklistPreparationStatus({
+      workspaceId: workspace.id,
+      companyId: session.companyId,
+      status: "READY",
     });
 
     await insertTenderActivity({
@@ -592,6 +661,17 @@ export async function ingestTenderDocumentsAction(
       summary: result.structured.summary,
     };
   } catch (error) {
+    if (claimed && workspaceId && companyId) {
+      await setChecklistPreparationStatus({
+        workspaceId,
+        companyId,
+        status: "FAILED",
+        error:
+          error instanceof Error
+            ? error.message
+            : "Unable to ingest tender documents.",
+      }).catch(() => undefined);
+    }
     if (error instanceof CompanyAccessError) {
       return { ok: false, error: error.message };
     }
@@ -602,6 +682,109 @@ export async function ingestTenderDocumentsAction(
         error instanceof Error
           ? error.message
           : "Unable to ingest tender documents.",
+    };
+  }
+}
+
+/**
+ * First-open WILL_BID (GO) initialization: claim lock and run AI once.
+ * Concurrent tabs that lose the claim should poll until READY/FAILED.
+ */
+export async function ensureWillBidWorkspacePreparedAction(
+  tenderId: string,
+): Promise<
+  | { ok: true; status: "READY" | "PROCESSING" | "ALREADY_READY"; skipped?: boolean }
+  | { ok: false; error: string; status?: "FAILED" }
+> {
+  try {
+    const session = await requirePermissionStrict("bids.edit");
+    const data = await getTenderById(tenderId);
+    if (!data) return { ok: false, error: "Tender not found." };
+    if (data.tender.qualification_status !== "GO") {
+      return { ok: true, status: "ALREADY_READY", skipped: true };
+    }
+
+    const workspace = await loadBidWorkspaceForTender(
+      tenderId,
+      session.companyId,
+    );
+    if (!workspace) {
+      return { ok: false, error: "Workspace not found." };
+    }
+
+    if (workspace.checklistPreparationStatus === "READY") {
+      return { ok: true, status: "ALREADY_READY", skipped: true };
+    }
+    if (workspace.checklistPreparationStatus === "PROCESSING") {
+      return { ok: true, status: "PROCESSING" };
+    }
+
+    const claim = await tryClaimChecklistPreparation({
+      workspaceId: workspace.id,
+      companyId: session.companyId,
+    });
+    if (!claim.claimed) {
+      if (claim.status === "READY") {
+        return { ok: true, status: "ALREADY_READY", skipped: true };
+      }
+      return { ok: true, status: "PROCESSING" };
+    }
+
+    const result = await ingestTenderDocumentsAction(tenderId, {
+      force: true,
+      alreadyClaimed: true,
+    });
+    if (!result.ok) {
+      return { ok: false, error: result.error, status: "FAILED" };
+    }
+    return { ok: true, status: "READY" };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message, status: "FAILED" };
+    }
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to prepare Bid Workspace.",
+      status: "FAILED",
+    };
+  }
+}
+
+export async function getChecklistPreparationStatusAction(
+  tenderId: string,
+): Promise<
+  | {
+      ok: true;
+      status: "NOT_STARTED" | "PROCESSING" | "READY" | "FAILED";
+      error: string | null;
+    }
+  | { ok: false; error: string }
+> {
+  try {
+    const session = await requirePermissionStrict("bids.view");
+    const workspace = await loadBidWorkspaceForTender(
+      tenderId,
+      session.companyId,
+    );
+    if (!workspace) return { ok: false, error: "Workspace not found." };
+    return {
+      ok: true,
+      status: workspace.checklistPreparationStatus,
+      error: workspace.checklistPreparationError,
+    };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message };
+    }
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to read preparation status.",
     };
   }
 }

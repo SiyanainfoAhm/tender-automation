@@ -7,14 +7,9 @@ import { ArrowLeft, ChevronRight, Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 import { BoqEditor } from "@/components/bid-workspace/boq-editor";
-import { ChecklistCreationPanel } from "@/components/bid-workspace/checklist-creation-panel";
+import { RequirementListPanel } from "@/components/bid-workspace/checklist-creation-panel";
 import { EditAiPromptDialog } from "@/components/bid-workspace/edit-ai-prompt-dialog";
 import { WorkspaceDocuments } from "@/components/bid-workspace/workspace-documents";
-import {
-  mapCompanyReferenceCard,
-  mapWorkspaceDocumentCard,
-  WorkspaceDocumentSection,
-} from "@/components/bid-workspace/workspace-document-section";
 import { CategoryCapsule } from "@/components/tenders/category-capsule";
 import { SourceBadge } from "@/components/status/source-badge";
 import { StatusBadge } from "@/components/status/qualification-badge";
@@ -39,7 +34,10 @@ import {
 import {
   type BidAiPromptKey,
 } from "@/lib/bid-ai-prompts";
-import { isChecklistItemComplete } from "@/lib/bid-checklist";
+import {
+  calculateSectionProgress,
+  itemMatchesWorkspaceSection,
+} from "@/lib/bid-checklist";
 import type { BidWorkspaceDTO } from "@/lib/bid-workspace";
 import {
   formatDate,
@@ -52,7 +50,9 @@ import { getCalendarDaysUntilDeadline } from "@/lib/tender-deadline";
 import type { TenderDetailDTO } from "@/lib/tender-detail";
 import { cn } from "@/lib/utils";
 import {
+  ensureWillBidWorkspacePreparedAction,
   generateChecklistDocumentAction,
+  getChecklistPreparationStatusAction,
   ingestTenderDocumentsAction,
   markBidSubmittedAction,
   toggleChecklistItemCompleteAction,
@@ -82,68 +82,15 @@ type BidWorkspaceClientProps = {
   canSubmit: boolean;
 };
 
-function isReadyCardStatus(status: string): boolean {
-  return (
-    status === "ready" ||
-    status === "approved" ||
-    status === "Approved" ||
-    status === "Ready" ||
-    status === "Drafting" ||
-    status === "drafting"
-  );
-}
-
-function itemMatchesSection(
-  item: ChecklistItemRow,
-  section: "prequalification" | "technical" | "annexures",
-): boolean {
-  const c = item.category.toUpperCase();
-  if (section === "technical") return c === "TECHNICAL" || c === "BOQ";
-  if (section === "annexures") {
-    return (
-      c === "ANNEXURE" ||
-      c === "DECLARATION" ||
-      c === "AUTHORIZATION" ||
-      c === "LEGAL"
-    );
-  }
-  return (
-    c === "COMPLIANCE" ||
-    c === "FINANCIAL" ||
-    c === "EXPERIENCE" ||
-    c === "CERTIFICATE" ||
-    c === "EMD" ||
-    c === "PRE_QUALIFICATION"
-  );
-}
-
-function sectionChecklistStats(
-  items: ChecklistItemRow[],
-  section: "prequalification" | "technical" | "annexures",
-): { completed: number; total: number } {
-  const scoped = items.filter(
-    (item) => item.mandatory && itemMatchesSection(item, section),
-  );
-  return {
-    total: scoped.length,
-    completed: scoped.filter((item) =>
-      isChecklistItemComplete(item.completionStatus),
-    ).length,
-  };
-}
-
-function computeProgress(items: ChecklistItemRow[]): ChecklistProgress {
-  const mandatory = items.filter((item) => item.mandatory);
-  const total = mandatory.length;
-  const completed = mandatory.filter((item) =>
-    isChecklistItemComplete(item.completionStatus),
-  ).length;
-  return {
-    completed,
-    total,
-    percent: total === 0 ? 0 : Math.round((completed / total) * 100),
-  };
-}
+const PREP_STEPS = [
+  "Reading tender documents...",
+  "Extracting submission requirements...",
+  "Identifying pre-qualification requirements...",
+  "Identifying technical requirements...",
+  "Identifying annexures and undertakings...",
+  "Preparing cost items...",
+  "Matching available company documents...",
+];
 
 export function BidWorkspaceClient({
   tender,
@@ -154,6 +101,7 @@ export function BidWorkspaceClient({
   canEdit,
   canSubmit,
 }: BidWorkspaceClientProps) {
+  void companyDocuments;
   const router = useRouter();
   const [tab, setTab] = useState<WorkspaceTab>("checklist");
   const [submitOpen, setSubmitOpen] = useState(false);
@@ -170,6 +118,14 @@ export function BidWorkspaceClient({
     useState<BidAiPromptKey>("CHECKLIST_CREATION");
   const [items, setItems] = useState(checklistItems);
   const [progress, setProgress] = useState(checklistProgress);
+  const [prepStatus, setPrepStatus] = useState(
+    workspace.checklistPreparationStatus,
+  );
+  const [prepError, setPrepError] = useState(
+    workspace.checklistPreparationError,
+  );
+  const [prepStepIndex, setPrepStepIndex] = useState(0);
+  const [autoInitStarted, setAutoInitStarted] = useState(false);
   const [reference, setReference] = useState("");
   const [submittedAt, setSubmittedAt] = useState(
     new Date().toISOString().slice(0, 10),
@@ -179,7 +135,14 @@ export function BidWorkspaceClient({
   useEffect(() => {
     setItems(checklistItems);
     setProgress(checklistProgress);
-  }, [checklistItems, checklistProgress]);
+    setPrepStatus(workspace.checklistPreparationStatus);
+    setPrepError(workspace.checklistPreparationError);
+  }, [
+    checklistItems,
+    checklistProgress,
+    workspace.checklistPreparationStatus,
+    workspace.checklistPreparationError,
+  ]);
 
   const days = getCalendarDaysUntilDeadline(tender.closingDate);
   const readOnly =
@@ -187,13 +150,78 @@ export function BidWorkspaceClient({
     workspace.submissionStatus === "submitted" ||
     tender.qualificationStatus === "NO_GO";
 
-  const linkedWorkspaceDocIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const item of items) {
-      if (item.matchedWorkspaceDocumentId) ids.add(item.matchedWorkspaceDocumentId);
+  const isWillBid = tender.qualificationStatus === "GO";
+  const showPrepLoader =
+    isWillBid &&
+    (prepStatus === "PROCESSING" ||
+      (prepStatus === "NOT_STARTED" && !readOnly));
+  const showPrepFailed = isWillBid && prepStatus === "FAILED";
+
+  // Auto-initialize WILL_BID workspaces that are not ready yet.
+  useEffect(() => {
+    if (!isWillBid || readOnly || autoInitStarted) return;
+    if (prepStatus === "READY") return;
+    if (prepStatus === "FAILED") return;
+
+    let cancelled = false;
+    setAutoInitStarted(true);
+
+    async function run() {
+      if (prepStatus === "NOT_STARTED") {
+        setPrepStatus("PROCESSING");
+        const result = await ensureWillBidWorkspacePreparedAction(tender.id);
+        if (cancelled) return;
+        if (!result.ok) {
+          setPrepStatus("FAILED");
+          setPrepError(result.error);
+          return;
+        }
+        if (result.status === "READY" || result.status === "ALREADY_READY") {
+          setPrepStatus("READY");
+          router.refresh();
+          return;
+        }
+        setPrepStatus("PROCESSING");
+      }
+
+      // Poll while another tab owns the lock (or this tab is mid-flight).
+      for (let i = 0; i < 90; i += 1) {
+        await new Promise((r) => setTimeout(r, 2000));
+        if (cancelled) return;
+        const status = await getChecklistPreparationStatusAction(tender.id);
+        if (!status.ok) continue;
+        setPrepStatus(status.status);
+        setPrepError(status.error);
+        if (status.status === "READY") {
+          router.refresh();
+          return;
+        }
+        if (status.status === "FAILED") return;
+      }
+      setPrepStatus("FAILED");
+      setPrepError("Preparation timed out. Please retry.");
     }
-    return ids;
-  }, [items]);
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    autoInitStarted,
+    isWillBid,
+    prepStatus,
+    readOnly,
+    router,
+    tender.id,
+  ]);
+
+  useEffect(() => {
+    if (!showPrepLoader) return;
+    const timer = window.setInterval(() => {
+      setPrepStepIndex((prev) => (prev + 1) % PREP_STEPS.length);
+    }, 2200);
+    return () => window.clearInterval(timer);
+  }, [showPrepLoader]);
 
   function openPromptEditor(key: BidAiPromptKey) {
     setPromptKey(key);
@@ -203,9 +231,14 @@ export function BidWorkspaceClient({
   async function runDocumentIngestion() {
     if (readOnly || ingesting || generatingRequirementId) return;
     setIngesting(true);
+    setPrepStatus("PROCESSING");
     try {
-      const result = await ingestTenderDocumentsAction(tender.id);
+      const result = await ingestTenderDocumentsAction(tender.id, {
+        force: true,
+      });
       if (!result.ok) {
+        setPrepStatus("FAILED");
+        setPrepError(result.error);
         toast.error(result.error);
         return;
       }
@@ -228,13 +261,17 @@ export function BidWorkspaceClient({
       if (result.warning && result.engine !== "needs_ai") {
         toast.message(result.warning);
       }
+      setPrepStatus("READY");
+      setPrepError(null);
       router.refresh();
     } catch (error) {
-      toast.error(
+      setPrepStatus("FAILED");
+      const message =
         error instanceof Error
           ? error.message
-          : "Document ingestion failed.",
-      );
+          : "Document ingestion failed.";
+      setPrepError(message);
+      toast.error(message);
     } finally {
       setIngesting(false);
     }
@@ -264,7 +301,7 @@ export function BidWorkspaceClient({
         return;
       }
       setGenerationPhase("Saving document");
-      toast.success("AI document generated and checklist item completed.");
+      toast.success("AI document generated and requirement completed.");
       setItems((prev) => {
         const next = prev.map((row) =>
           row.id === item.id
@@ -274,25 +311,34 @@ export function BidWorkspaceClient({
                 matchedDocumentSource: "TENDER" as const,
                 matchedWorkspaceDocumentId: result.documentId,
                 matchedBy: "AI" as const,
+                isCompleted: true,
+                completionSource: "AI_GENERATED" as const,
                 matchedWorkspaceDocument: {
                   id: result.documentId,
                   title: result.title,
                   fileName: result.fileName,
                   status: "drafting",
                 },
+                documents: [
+                  {
+                    id: result.documentId,
+                    title: result.title,
+                    fileName: result.fileName,
+                    status: "drafting",
+                    versionLabel: result.versionLabel,
+                    source: "TENDER" as const,
+                    hasFile: true,
+                    downloadHref: `/api/bid-workspace/documents/${result.documentId}`,
+                    matchedBy: "AI" as const,
+                  },
+                  ...row.documents.filter((d) => d.id !== result.documentId),
+                ],
               }
             : row,
         );
-        setProgress(computeProgress(next));
+        setProgress(calculateSectionProgress(next));
         return next;
       });
-      if (result.documentType === "Technical" || result.documentType === "Technical Proposal") {
-        setTab("technical");
-      } else if (result.documentType === "Annexure") {
-        setTab("annexures");
-      } else if (result.documentType === "Pre-Qualification") {
-        setTab("prequalification");
-      }
       router.refresh();
     } catch (error) {
       toast.error(
@@ -317,19 +363,36 @@ export function BidWorkspaceClient({
       row.id === item.id
         ? {
             ...row,
+            manualCompleted: completed,
+            isCompleted:
+              completed ||
+              row.documents.some((d) => d.hasFile) ||
+              Boolean(row.matchedWorkspaceDocumentId) ||
+              Boolean(row.matchedCompanyDocumentId),
             completionStatus: completed
               ? row.matchedDocumentSource === "COMPANY"
                 ? ("COMPLETED_COMPANY_DOCUMENT" as const)
                 : ("COMPLETED_TENDER_DOCUMENT" as const)
               : row.matchedWorkspaceDocumentId || row.matchedCompanyDocumentId
-                ? ("PENDING_DOCUMENT" as const)
+                ? row.matchedDocumentSource === "COMPANY"
+                  ? ("COMPLETED_COMPANY_DOCUMENT" as const)
+                  : ("COMPLETED_TENDER_DOCUMENT" as const)
                 : ("MISSING" as const),
+            completionSource: completed
+              ? ("MANUAL" as const)
+              : row.matchedBy === "AI"
+                ? ("AI_GENERATED" as const)
+                : row.matchedDocumentSource === "COMPANY"
+                  ? ("COMPANY_DOCUMENT" as const)
+                  : row.matchedDocumentSource === "TENDER"
+                    ? ("UPLOADED" as const)
+                    : null,
             matchedBy: "USER" as const,
           }
         : row,
     );
     setItems(optimistic);
-    setProgress(computeProgress(optimistic));
+    setProgress(calculateSectionProgress(optimistic));
     try {
       const result = await toggleChecklistItemCompleteAction({
         tenderId: tender.id,
@@ -338,14 +401,14 @@ export function BidWorkspaceClient({
       });
       if (!result.ok) {
         setItems(previous);
-        setProgress(computeProgress(previous));
+        setProgress(calculateSectionProgress(previous));
         toast.error(result.error);
         return;
       }
       router.refresh();
     } catch (error) {
       setItems(previous);
-      setProgress(computeProgress(previous));
+      setProgress(calculateSectionProgress(previous));
       toast.error(
         error instanceof Error ? error.message : "Unable to update checklist.",
       );
@@ -374,7 +437,7 @@ export function BidWorkspaceClient({
       toast.error(result.error);
       return;
     }
-    toast.success("Document uploaded and checklist item completed.");
+    toast.success("Document uploaded and requirement completed.");
     setItems((prev) => {
       const next = prev.map((row) =>
         row.id === item.id
@@ -383,131 +446,49 @@ export function BidWorkspaceClient({
               completionStatus: "COMPLETED_TENDER_DOCUMENT" as const,
               matchedDocumentSource: "TENDER" as const,
               matchedBy: "USER" as const,
+              isCompleted: true,
+              completionSource: "UPLOADED" as const,
             }
           : row,
       );
-      setProgress(computeProgress(next));
+      setProgress(calculateSectionProgress(next));
       return next;
     });
     router.refresh();
   }
 
-  const companyById = useMemo(
-    () => new Map(companyDocuments.map((doc) => [doc.id, doc])),
-    [companyDocuments],
+  const pqItems = useMemo(
+    () =>
+      items.filter((item) =>
+        itemMatchesWorkspaceSection(item.category, "prequalification"),
+      ),
+    [items],
+  );
+  const technicalItems = useMemo(
+    () =>
+      items.filter((item) =>
+        itemMatchesWorkspaceSection(item.category, "technical"),
+      ),
+    [items],
+  );
+  const annexureItems = useMemo(
+    () =>
+      items.filter((item) =>
+        itemMatchesWorkspaceSection(item.category, "annexures"),
+      ),
+    [items],
   );
 
-  const pqCards = useMemo(() => {
-    const tenderCards = workspace.documents
-      .filter((doc) =>
-        ["Pre-Qualification", "EMD", "Tender Fee", "Power of Attorney"].includes(
-          doc.documentType,
-        ),
-      )
-      .map((doc) =>
-        mapWorkspaceDocumentCard(doc, {
-          checklistLinked: linkedWorkspaceDocIds.has(doc.id),
-        }),
-      );
-    const companyRefs = items
-      .filter(
-        (item) =>
-          item.matchedDocumentSource === "COMPANY" &&
-          item.matchedCompanyDocumentId &&
-          (item.category === "COMPLIANCE" ||
-            item.category === "FINANCIAL" ||
-            item.category === "LEGAL" ||
-            item.category === "EXPERIENCE"),
-      )
-      .map((item) => {
-        const doc = companyById.get(item.matchedCompanyDocumentId!);
-        return doc
-          ? mapCompanyReferenceCard(doc, item.category)
-          : null;
-      })
-      .filter(Boolean) as ReturnType<typeof mapCompanyReferenceCard>[];
-    const seen = new Set<string>();
-    return [...companyRefs, ...tenderCards].filter((card) => {
-      if (seen.has(card.id)) return false;
-      seen.add(card.id);
-      return true;
-    });
-  }, [items, companyById, workspace.documents, linkedWorkspaceDocIds]);
-
-  const technicalCards = useMemo(() => {
-    const tenderCards = workspace.documents
-      .filter((doc) =>
-        ["Technical", "Technical Proposal"].includes(doc.documentType),
-      )
-      .map((doc) =>
-        mapWorkspaceDocumentCard(doc, {
-          checklistLinked: linkedWorkspaceDocIds.has(doc.id),
-        }),
-      );
-    const companyRefs = items
-      .filter(
-        (item) =>
-          item.matchedDocumentSource === "COMPANY" &&
-          item.matchedCompanyDocumentId &&
-          (item.category === "TECHNICAL" || item.category === "CERTIFICATE"),
-      )
-      .map((item) => {
-        const doc = companyById.get(item.matchedCompanyDocumentId!);
-        return doc
-          ? mapCompanyReferenceCard(doc, item.category)
-          : null;
-      })
-      .filter(Boolean) as ReturnType<typeof mapCompanyReferenceCard>[];
-    const seen = new Set<string>();
-    return [...companyRefs, ...tenderCards].filter((card) => {
-      if (seen.has(card.id)) return false;
-      seen.add(card.id);
-      return true;
-    });
-  }, [items, companyById, workspace.documents, linkedWorkspaceDocIds]);
-
-  const annexureCards = useMemo(() => {
-    const tenderCards = workspace.documents
-      .filter((doc) => doc.documentType === "Annexure")
-      .map((doc) =>
-        mapWorkspaceDocumentCard(doc, {
-          checklistLinked: linkedWorkspaceDocIds.has(doc.id),
-        }),
-      );
-    const companyRefs = items
-      .filter(
-        (item) =>
-          item.matchedDocumentSource === "COMPANY" &&
-          item.matchedCompanyDocumentId &&
-          (item.category === "ANNEXURE" ||
-            item.category === "DECLARATION" ||
-            item.category === "AUTHORIZATION"),
-      )
-      .map((item) => {
-        const doc = companyById.get(item.matchedCompanyDocumentId!);
-        return doc
-          ? mapCompanyReferenceCard(doc, item.category)
-          : null;
-      })
-      .filter(Boolean) as ReturnType<typeof mapCompanyReferenceCard>[];
-    const seen = new Set<string>();
-    return [...companyRefs, ...tenderCards].filter((card) => {
-      if (seen.has(card.id)) return false;
-      seen.add(card.id);
-      return true;
-    });
-  }, [items, companyById, workspace.documents, linkedWorkspaceDocIds]);
-
   const pqStats = useMemo(
-    () => sectionChecklistStats(items, "prequalification"),
+    () => calculateSectionProgress(items, "prequalification"),
     [items],
   );
   const technicalStats = useMemo(
-    () => sectionChecklistStats(items, "technical"),
+    () => calculateSectionProgress(items, "technical"),
     [items],
   );
   const annexureStats = useMemo(
-    () => sectionChecklistStats(items, "annexures"),
+    () => calculateSectionProgress(items, "annexures"),
     [items],
   );
 
@@ -531,17 +512,17 @@ export function BidWorkspaceClient({
       {
         id: "prequalification" as const,
         label: "Pre-Qualification Documents",
-        count: `${pqStats.completed}/${pqStats.total || pqCards.length}`,
+        count: `${pqStats.completed}/${pqStats.total}`,
       },
       {
         id: "technical" as const,
         label: "Technical Documents",
-        count: `${technicalStats.completed}/${technicalStats.total || technicalCards.length}`,
+        count: `${technicalStats.completed}/${technicalStats.total}`,
       },
       {
         id: "annexures" as const,
         label: "Annexures & Undertakings",
-        count: `${annexureStats.completed}/${annexureStats.total || annexureCards.length}`,
+        count: `${annexureStats.completed}/${annexureStats.total}`,
       },
       {
         id: "cost" as const,
@@ -550,15 +531,12 @@ export function BidWorkspaceClient({
       },
     ],
     [
-      annexureCards.length,
       annexureStats.completed,
       annexureStats.total,
-      pqCards.length,
       pqStats.completed,
       pqStats.total,
       progress.completed,
       progress.total,
-      technicalCards.length,
       technicalStats.completed,
       technicalStats.total,
       workspace.boqItems.length,
@@ -587,9 +565,20 @@ export function BidWorkspaceClient({
   }
 
   const incomplete = workspace.readiness.incompleteRequired;
-  const completedChecklist = items.filter((item) =>
-    isChecklistItemComplete(item.completionStatus),
-  ).length;
+  const completedChecklist = items.filter((item) => item.isCompleted).length;
+
+  const sharedPanelProps = {
+    tenderId: tender.id,
+    readOnly,
+    ingesting,
+    generatingRequirementId,
+    generationPhase,
+    togglingItemId,
+    onIngestAi: runDocumentIngestion,
+    onUpload: uploadForChecklistItem,
+    onGenerateAi: runChecklistDocumentGeneration,
+    onToggleComplete: toggleChecklistComplete,
+  };
 
   return (
     <TooltipProvider>
@@ -733,134 +722,158 @@ export function BidWorkspaceClient({
           </div>
         </div>
 
-        <div className="flex w-fit max-w-full items-center gap-1 overflow-x-auto rounded-lg bg-background-100 p-1">
-          {tabs.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => setTab(item.id)}
-              className={cn(
-                "rounded-md px-3 py-1.5 text-sm font-medium whitespace-nowrap",
-                tab === item.id
-                  ? "bg-white text-foreground-900 shadow-sm"
-                  : "text-foreground-500",
-              )}
-            >
-              {item.label}{" "}
-              <span className="text-foreground-400">{item.count}</span>
-            </button>
-          ))}
-        </div>
-
-        {tab === "checklist" ? (
-          <ChecklistCreationPanel
-            tenderId={tender.id}
-            items={items}
-            progress={progress}
-            readOnly={readOnly}
-            ingesting={ingesting}
-            generatingRequirementId={generatingRequirementId}
-            generationPhase={generationPhase}
-            togglingItemId={togglingItemId}
-            onIngestAi={runDocumentIngestion}
-            onEditPrompt={() => openPromptEditor("CHECKLIST_CREATION")}
-            onUpload={uploadForChecklistItem}
-            onGenerateAi={runChecklistDocumentGeneration}
-            onToggleComplete={toggleChecklistComplete}
-          />
-        ) : null}
-
-        {tab === "prequalification" ? (
-          <WorkspaceDocumentSection
-            title="Pre-Qualification Documents"
-            subtitle="Mandatory credentials and compliance certificates"
-            cards={pqCards}
-            readyCount={pqStats.completed || pqCards.filter((c) => isReadyCardStatus(c.statusLabel)).length}
-            totalCount={pqStats.total || pqCards.length}
-            readOnly={readOnly}
-            ingesting={ingesting}
-            onIngestAi={runDocumentIngestion}
-            onEditPrompt={() => openPromptEditor("PREQUAL_DOCUMENT")}
-            onUpload={() => setDocsOpen(true)}
-          />
-        ) : null}
-
-        {tab === "technical" ? (
-          <WorkspaceDocumentSection
-            title="Technical Documents"
-            subtitle="Technical proposals, certifications and approach documents"
-            cards={technicalCards}
-            readyCount={
-              technicalStats.completed ||
-              technicalCards.filter((c) => isReadyCardStatus(c.statusLabel)).length
-            }
-            totalCount={technicalStats.total || technicalCards.length}
-            readOnly={readOnly}
-            ingesting={ingesting}
-            onIngestAi={runDocumentIngestion}
-            onEditPrompt={() => openPromptEditor("TECHNICAL_DOCUMENT")}
-            onUpload={() => setDocsOpen(true)}
-          />
-        ) : null}
-
-        {tab === "annexures" ? (
-          <WorkspaceDocumentSection
-            title="Formats: Annexures & Undertakings"
-            subtitle="Standard templates, declarations and format documents"
-            cards={annexureCards}
-            readyCount={
-              annexureStats.completed ||
-              annexureCards.filter((c) => isReadyCardStatus(c.statusLabel)).length
-            }
-            totalCount={annexureStats.total || annexureCards.length}
-            readOnly={readOnly}
-            ingesting={ingesting}
-            onIngestAi={runDocumentIngestion}
-            onEditPrompt={() => openPromptEditor("ANNEXURE_DOCUMENT")}
-            onUpload={() => setDocsOpen(true)}
-          />
-        ) : null}
-
-        {tab === "cost" ? (
-          <div className="space-y-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground-900">
-                  Cost Estimator
-                </h2>
-                <p className="mt-1 text-sm text-foreground-500">
-                  {workspace.boqItems.length} line items · Total:{" "}
-                  {formatIndianCurrency(boqTotal)}
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={readOnly}
-                  onClick={() => openPromptEditor("COST_ESTIMATOR")}
+        {showPrepLoader ? (
+          <div className="rounded-lg border border-border bg-card px-6 py-16 text-center shadow-sm">
+            <Loader2 className="mx-auto size-8 animate-spin text-foreground-500" />
+            <h2 className="mt-4 text-lg font-semibold text-foreground-900">
+              Preparing Bid Workspace
+            </h2>
+            <p className="mt-2 text-sm text-foreground-500">
+              {PREP_STEPS[prepStepIndex]}
+            </p>
+            <ul className="mx-auto mt-6 max-w-md space-y-1.5 text-left text-sm text-foreground-500">
+              {PREP_STEPS.map((step, index) => (
+                <li
+                  key={step}
+                  className={cn(
+                    index === prepStepIndex && "font-medium text-foreground-800",
+                  )}
                 >
-                  Edit Prompt
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  className="gap-1.5"
-                  disabled={readOnly || ingesting}
-                  onClick={runDocumentIngestion}
-                >
-                  <Sparkles className="size-3.5" />
-                  {ingesting ? "Ingesting…" : "Use AI"}
-                </Button>
-              </div>
-            </div>
-            <BoqEditor
-              tenderId={tender.id}
-              items={workspace.boqItems}
-              readOnly={readOnly}
-            />
+                  {index <= prepStepIndex ? "•" : "○"} {step}
+                </li>
+              ))}
+            </ul>
           </div>
+        ) : null}
+
+        {showPrepFailed ? (
+          <div className="rounded-lg border border-rose-200 bg-rose-50/60 px-6 py-10 text-center">
+            <h2 className="text-lg font-semibold text-foreground-900">
+              We couldn&apos;t prepare the Bid Workspace.
+            </h2>
+            <p className="mt-2 text-sm text-foreground-600">
+              {prepError || "Automatic checklist extraction failed."}
+            </p>
+            <Button
+              className="mt-5"
+              disabled={readOnly || ingesting}
+              onClick={() => {
+                setPrepError(null);
+                setAutoInitStarted(false);
+                void runDocumentIngestion();
+              }}
+            >
+              Retry
+            </Button>
+          </div>
+        ) : null}
+
+        {!showPrepLoader && !showPrepFailed ? (
+          <>
+            <div className="flex w-fit max-w-full items-center gap-1 overflow-x-auto rounded-lg bg-background-100 p-1">
+              {tabs.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => setTab(item.id)}
+                  className={cn(
+                    "rounded-md px-3 py-1.5 text-sm font-medium whitespace-nowrap",
+                    tab === item.id
+                      ? "bg-white text-foreground-900 shadow-sm"
+                      : "text-foreground-500",
+                  )}
+                >
+                  {item.label}{" "}
+                  <span className="text-foreground-400">{item.count}</span>
+                </button>
+              ))}
+            </div>
+
+            {tab === "checklist" ? (
+              <RequirementListPanel
+                {...sharedPanelProps}
+                title="Checklist Creation"
+                items={items}
+                progress={progress}
+                onEditPrompt={() => openPromptEditor("CHECKLIST_CREATION")}
+              />
+            ) : null}
+
+            {tab === "prequalification" ? (
+              <RequirementListPanel
+                {...sharedPanelProps}
+                title="Pre-Qualification Documents"
+                subtitle="Mandatory credentials and compliance certificates"
+                items={pqItems}
+                progress={pqStats}
+                onEditPrompt={() => openPromptEditor("PREQUAL_DOCUMENT")}
+              />
+            ) : null}
+
+            {tab === "technical" ? (
+              <RequirementListPanel
+                {...sharedPanelProps}
+                title="Technical Documents"
+                subtitle="Technical proposals, certifications and approach documents"
+                items={technicalItems}
+                progress={technicalStats}
+                onEditPrompt={() => openPromptEditor("TECHNICAL_DOCUMENT")}
+              />
+            ) : null}
+
+            {tab === "annexures" ? (
+              <RequirementListPanel
+                {...sharedPanelProps}
+                title="Formats: Annexures & Undertakings"
+                subtitle="Standard templates, declarations and format documents"
+                items={annexureItems}
+                progress={annexureStats}
+                onEditPrompt={() => openPromptEditor("ANNEXURE_DOCUMENT")}
+              />
+            ) : null}
+
+            {tab === "cost" ? (
+              <div className="space-y-4">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground-900">
+                      Cost Estimator
+                    </h2>
+                    <p className="mt-1 text-sm text-foreground-500">
+                      {workspace.boqItems.length} line items · Total:{" "}
+                      {formatIndianCurrency(boqTotal)}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={readOnly}
+                      onClick={() => openPromptEditor("COST_ESTIMATOR")}
+                    >
+                      Edit Prompt
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="gap-1.5"
+                      disabled={readOnly || ingesting}
+                      onClick={runDocumentIngestion}
+                    >
+                      <Sparkles className="size-3.5" />
+                      {ingesting ? "Ingesting…" : "Use AI"}
+                    </Button>
+                  </div>
+                </div>
+                <BoqEditor
+                  tenderId={tender.id}
+                  items={workspace.boqItems}
+                  readOnly={readOnly}
+                />
+              </div>
+            ) : null}
+          </>
         ) : null}
 
         <EditAiPromptDialog

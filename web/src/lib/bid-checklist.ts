@@ -594,6 +594,135 @@ export function isChecklistItemComplete(
   );
 }
 
+/** Persisted completion: manual flag OR a valid linked document status. */
+export function isRequirementCompleted(options: {
+  manualCompleted?: boolean | null;
+  completionStatus: ChecklistCompletionStatus;
+}): boolean {
+  if (options.manualCompleted === true) return true;
+  return isChecklistItemComplete(options.completionStatus);
+}
+
+export type RequirementCompletionSource =
+  | "AI_GENERATED"
+  | "UPLOADED"
+  | "COMPANY_DOCUMENT"
+  | "MANUAL"
+  | "MULTIPLE"
+  | null;
+
+export function deriveCompletionSource(options: {
+  manualCompleted?: boolean | null;
+  matchedBy?: "AI" | "USER" | "SYSTEM" | null;
+  matchedDocumentSource?: "COMPANY" | "TENDER" | null;
+  hasWorkspaceDocument?: boolean;
+  hasCompanyDocument?: boolean;
+}): RequirementCompletionSource {
+  const sources: RequirementCompletionSource[] = [];
+  if (options.manualCompleted) sources.push("MANUAL");
+  if (options.matchedDocumentSource === "COMPANY" || options.hasCompanyDocument) {
+    sources.push("COMPANY_DOCUMENT");
+  }
+  if (options.matchedDocumentSource === "TENDER" || options.hasWorkspaceDocument) {
+    sources.push(options.matchedBy === "AI" ? "AI_GENERATED" : "UPLOADED");
+  }
+  const unique = [...new Set(sources.filter(Boolean))];
+  if (unique.length === 0) return null;
+  if (unique.length > 1) return "MULTIPLE";
+  return unique[0] ?? null;
+}
+
+export type WorkspaceSectionKey =
+  | "checklist"
+  | "prequalification"
+  | "technical"
+  | "annexures";
+
+/** Map checklist category → Bid Workspace section tab. */
+export function sectionForChecklistCategory(
+  category: string,
+): Exclude<WorkspaceSectionKey, "checklist"> {
+  const c = category.toUpperCase();
+  if (c === "TECHNICAL" || c === "BOQ") return "technical";
+  if (
+    c === "ANNEXURE" ||
+    c === "DECLARATION" ||
+    c === "AUTHORIZATION" ||
+    c === "LEGAL"
+  ) {
+    return "annexures";
+  }
+  return "prequalification";
+}
+
+export function itemMatchesWorkspaceSection(
+  category: string,
+  section: Exclude<WorkspaceSectionKey, "checklist">,
+): boolean {
+  return sectionForChecklistCategory(category) === section;
+}
+
+/**
+ * Canonical section progress from unique requirements.
+ * Documents nested under a requirement never increase total/completed.
+ */
+export function calculateSectionProgress<T extends {
+  mandatory: boolean;
+  category: string;
+  manualCompleted?: boolean | null;
+  completionStatus: ChecklistCompletionStatus;
+}>(
+  items: T[],
+  section?: Exclude<WorkspaceSectionKey, "checklist">,
+): { completed: number; total: number; percent: number } {
+  const scoped = items.filter((item) => {
+    if (!item.mandatory) return false;
+    if (!section) return true;
+    return itemMatchesWorkspaceSection(item.category, section);
+  });
+  const total = scoped.length;
+  const completed = scoped.filter((item) =>
+    isRequirementCompleted({
+      manualCompleted: item.manualCompleted,
+      completionStatus: item.completionStatus,
+    }),
+  ).length;
+  return {
+    completed,
+    total,
+    percent: total === 0 ? 0 : Math.round((completed / total) * 100),
+  };
+}
+
+/** Stable identity key used for upsert / duplicate prevention. */
+export function normalizeRequirementIdentityKey(
+  requirementKey: string,
+  requirementName: string,
+): string {
+  const fromKey = slugRequirementKey(requirementKey || "");
+  if (fromKey && fromKey !== "REQUIREMENT") return fromKey;
+  return slugRequirementKey(requirementName);
+}
+
+export function completionSourceLabel(
+  source: RequirementCompletionSource,
+): string {
+  switch (source) {
+    case "AI_GENERATED":
+      return "Generated with AI";
+    case "UPLOADED":
+      return "Uploaded document";
+    case "COMPANY_DOCUMENT":
+      return "Linked company document";
+    case "MANUAL":
+      return "Marked as complete manually";
+    case "MULTIPLE":
+      return "Completed";
+    default:
+      return "Pending";
+  }
+}
+
 export function categoryLabel(category: string): string {
   const map: Record<string, string> = {
     COMPLIANCE: "Compliance",

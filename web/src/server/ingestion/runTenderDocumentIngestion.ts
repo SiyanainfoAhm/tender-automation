@@ -1,6 +1,7 @@
 import "server-only";
 
 import {
+  normalizeRequirementIdentityKey,
   resolveRequirementPattern,
   type RequirementPattern,
 } from "@/lib/bid-checklist";
@@ -74,8 +75,12 @@ async function loadWorkspaceDocumentsForRematch(
     status: String(row.status || "pending") as WorkspaceDocumentRow["status"],
     isRequired: Boolean(row.is_required),
     versionLabel: row.version_label ? String(row.version_label) : null,
-    hasFile: Boolean(row.storage_url || row.file_name),
+    hasFile: Boolean(row.storage_url || row.file_name || row.blob_name),
     updatedAt: String(row.updated_at || new Date().toISOString()),
+    checklistItemId: row.checklist_item_id
+      ? String(row.checklist_item_id)
+      : null,
+    isPlaceholder: row.is_placeholder === true,
   }));
 }
 
@@ -106,37 +111,111 @@ export async function persistStructuredIngestion(options: {
   const supabase = getServerSupabase();
 
   if (options.replaceChecklist !== false) {
-    await supabase
+    const { data: existingRows, error: existingError } = await supabase
       .from("agenttender_bid_checklist_items")
-      .delete()
+      .select("id, requirement_key, normalized_requirement_key, manual_completed")
       .eq("workspace_id", options.workspaceId)
-      .eq("company_id", options.companyId);
+      .eq("company_id", options.companyId)
+      .eq("is_archived", false);
+    if (existingError) throw new Error(existingError.message);
 
-    if (options.structured.checklist.length) {
-      const { error } = await supabase.from("agenttender_bid_checklist_items").insert(
-        options.structured.checklist.map((item, index) => ({
-          workspace_id: options.workspaceId,
-          company_id: options.companyId,
-          tender_id: options.tenderId,
-          requirement_key: item.requirement_key,
-          requirement_name: item.requirement_name,
-          category: item.category || "COMPLIANCE",
-          description: item.description || null,
-          mandatory: item.mandatory !== false,
-          document_type: item.document_type || null,
-          generation_allowed: item.generation_allowed === true,
-          source_page: item.source_page ?? null,
-          source_clause: item.source_clause || null,
-          source_text: item.source_text || null,
-          completion_status: "MISSING",
-          display_order: index + 1,
-        })),
+    const existingByKey = new Map<string, { id: string; manualCompleted: boolean }>();
+    for (const row of existingRows || []) {
+      const key = String(
+        row.normalized_requirement_key || row.requirement_key || "",
       );
-      if (error) throw new Error(error.message);
+      if (key) {
+        existingByKey.set(key, {
+          id: String(row.id),
+          manualCompleted: row.manual_completed === true,
+        });
+      }
+    }
+
+    const seenKeys = new Set<string>();
+    let order = 0;
+    for (const item of options.structured.checklist) {
+      const identity = normalizeRequirementIdentityKey(
+        item.requirement_key,
+        item.requirement_name,
+      );
+      if (seenKeys.has(identity)) continue;
+      seenKeys.add(identity);
+      order += 1;
+
+      const existing = existingByKey.get(identity);
+      const payload = {
+        workspace_id: options.workspaceId,
+        company_id: options.companyId,
+        tender_id: options.tenderId,
+        requirement_key: item.requirement_key || identity,
+        requirement_name: item.requirement_name,
+        category: item.category || "COMPLIANCE",
+        description: item.description || null,
+        mandatory: item.mandatory !== false,
+        document_type: item.document_type || null,
+        generation_allowed: item.generation_allowed === true,
+        source_page: item.source_page ?? null,
+        source_clause: item.source_clause || null,
+        source_text: item.source_text || null,
+        normalized_requirement_key: identity,
+        display_order: order,
+        is_archived: false,
+      };
+
+      if (existing) {
+        const { error } = await supabase
+          .from("agenttender_bid_checklist_items")
+          .update(payload)
+          .eq("id", existing.id)
+          .eq("workspace_id", options.workspaceId);
+        if (error) throw new Error(error.message);
+      } else {
+        const { error } = await supabase
+          .from("agenttender_bid_checklist_items")
+          .insert({
+            ...payload,
+            completion_status: "MISSING",
+          });
+        if (error) throw new Error(error.message);
+      }
+    }
+
+    // Archive obsolete requirements that still have no manual completion
+    // and no linked documents — preserve user work otherwise.
+    for (const [key, existing] of existingByKey) {
+      if (seenKeys.has(key)) continue;
+      if (existing.manualCompleted) continue;
+
+      const { data: linkedDocs } = await supabase
+        .from("agenttender_bid_workspace_documents")
+        .select("id")
+        .eq("workspace_id", options.workspaceId)
+        .eq("checklist_item_id", existing.id)
+        .limit(1);
+      if (linkedDocs && linkedDocs.length > 0) continue;
+
+      const { data: matched } = await supabase
+        .from("agenttender_bid_checklist_items")
+        .select("matched_workspace_document_id, matched_company_document_id")
+        .eq("id", existing.id)
+        .maybeSingle();
+      if (
+        matched?.matched_workspace_document_id ||
+        matched?.matched_company_document_id
+      ) {
+        continue;
+      }
+
+      await supabase
+        .from("agenttender_bid_checklist_items")
+        .update({ is_archived: true })
+        .eq("id", existing.id)
+        .eq("workspace_id", options.workspaceId);
     }
   }
 
-  // Annexure placeholders as required tender workspace docs (no company library).
+  // Annexure placeholders stay as internal slots (hidden from requirement cards).
   for (const annex of options.structured.annexures.slice(0, 20)) {
     const { data: existing } = await supabase
       .from("agenttender_bid_workspace_documents")
@@ -153,13 +232,15 @@ export async function persistStructuredIngestion(options: {
       title: annex.title,
       status: "pending",
       is_required: annex.mandatory !== false,
+      is_placeholder: true,
       created_by: options.userId,
       updated_by: options.userId,
     });
     if (error) throw new Error(error.message);
   }
 
-  // Ensure checklist-driven tender doc slots exist for non-company-matchable items.
+  // Optional placeholder slots for generatable items — marked as placeholders
+  // so they never appear as top-level requirement cards.
   for (const item of options.structured.checklist) {
     if (!item.generation_allowed) continue;
     const title = item.requirement_name;
@@ -170,6 +251,17 @@ export async function persistStructuredIngestion(options: {
       .ilike("title", title)
       .maybeSingle();
     if (existing?.id) continue;
+    const identity = normalizeRequirementIdentityKey(
+      item.requirement_key,
+      item.requirement_name,
+    );
+    const { data: checklistRow } = await supabase
+      .from("agenttender_bid_checklist_items")
+      .select("id")
+      .eq("workspace_id", options.workspaceId)
+      .eq("normalized_requirement_key", identity)
+      .eq("is_archived", false)
+      .maybeSingle();
     const { error } = await supabase.from("agenttender_bid_workspace_documents").insert({
       workspace_id: options.workspaceId,
       company_id: options.companyId,
@@ -181,6 +273,8 @@ export async function persistStructuredIngestion(options: {
       title,
       status: "pending",
       is_required: item.mandatory !== false,
+      is_placeholder: true,
+      checklist_item_id: checklistRow?.id || null,
       created_by: options.userId,
       updated_by: options.userId,
     });

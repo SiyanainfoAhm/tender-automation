@@ -2,11 +2,10 @@
 
 import { useMemo, useRef, useState } from "react";
 import {
-  CheckSquare,
+  CheckCircle2,
   FileText,
   Loader2,
   RefreshCw,
-  Square,
   Sparkles,
   Upload,
   X,
@@ -15,10 +14,11 @@ import { toast } from "sonner";
 
 import {
   categoryLabel,
-  isChecklistItemComplete,
+  completionSourceLabel,
   isFromScratchGeneratable,
 } from "@/lib/bid-checklist";
 import { promptKeyForChecklistCategory } from "@/lib/bid-ai-prompts";
+import { DOCUMENT_STATUS_LABELS } from "@/lib/bid-workspace";
 import { cn } from "@/lib/utils";
 import { EditAiPromptDialog } from "@/components/bid-workspace/edit-ai-prompt-dialog";
 import { Button } from "@/components/ui/button";
@@ -34,8 +34,10 @@ import type {
   ChecklistProgress,
 } from "@/server/repositories/bidChecklistRepository";
 
-type ChecklistCreationPanelProps = {
+type RequirementListPanelProps = {
   tenderId: string;
+  title: string;
+  subtitle?: string;
   items: ChecklistItemRow[];
   progress: ChecklistProgress;
   readOnly: boolean;
@@ -43,6 +45,7 @@ type ChecklistCreationPanelProps = {
   generatingRequirementId?: string | null;
   generationPhase?: string | null;
   togglingItemId?: string | null;
+  emptyMessage?: string;
   onIngestAi?: () => void;
   onEditPrompt?: () => void;
   onUpload?: (item: ChecklistItemRow, file: File) => void | Promise<void>;
@@ -53,22 +56,20 @@ type ChecklistCreationPanelProps = {
   onToggleComplete?: (item: ChecklistItemRow, completed: boolean) => void;
 };
 
-function statusMeta(item: ChecklistItemRow): string {
-  if (isChecklistItemComplete(item.completionStatus)) {
-    if (item.matchedBy === "AI") return " · AI document generated";
-    if (item.matchedDocumentSource === "COMPANY") return " · Company document attached";
-    if (item.matchedDocumentSource === "TENDER") return " · Document uploaded";
-    return " · Completed";
+function statusLine(item: ChecklistItemRow): string {
+  if (item.isCompleted) {
+    return completionSourceLabel(item.completionSource);
   }
-  if (item.completionStatus === "DRAFT_AVAILABLE") return " · Draft available";
-  if (item.matchedDocumentSource === "COMPANY") return " · Company Document";
-  if (item.matchedDocumentSource === "TENDER") return " · Tender Document";
-  if (item.completionStatus === "PENDING_DOCUMENT") return " · Document linked";
-  return "";
+  if (item.completionStatus === "DRAFT_AVAILABLE") return "Draft available";
+  if (item.completionStatus === "PENDING_DOCUMENT") return "Document linked";
+  if (item.completionStatus === "ACTION_REQUIRED") return "Action required";
+  return "Pending";
 }
 
-export function ChecklistCreationPanel({
+export function RequirementListPanel({
   tenderId,
+  title,
+  subtitle,
   items,
   progress,
   readOnly,
@@ -76,12 +77,13 @@ export function ChecklistCreationPanel({
   generatingRequirementId = null,
   generationPhase = null,
   togglingItemId = null,
+  emptyMessage = "No requirements in this section yet. Run Use AI to extract submission requirements from the tender documents.",
   onIngestAi,
   onEditPrompt,
   onUpload,
   onGenerateAi,
   onToggleComplete,
-}: ChecklistCreationPanelProps) {
+}: RequirementListPanelProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [generatePromptOpen, setGeneratePromptOpen] = useState(false);
   const [generateMode, setGenerateMode] = useState<"create" | "regenerate">(
@@ -102,10 +104,12 @@ export function ChecklistCreationPanel({
         generationAllowed: selected.generationAllowed,
       })
     : false;
-  const canGenerate = selectedFromScratch || selected?.generationAllowed === true;
+  const canGenerate =
+    selectedFromScratch || selected?.generationAllowed === true;
   const generatePromptKey = selected
     ? promptKeyForChecklistCategory(selected.category)
     : "TECHNICAL_DOCUMENT";
+  const hasLinkedDocs = (selected?.documents.length || 0) > 0;
 
   function openGeneratePrompt(mode: "create" | "regenerate") {
     if (!selected || !onGenerateAi || readOnly) return;
@@ -118,10 +122,11 @@ export function ChecklistCreationPanel({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-wide text-foreground-900">
-            Checklist Creation
+            {title}
           </h2>
           <p className="mt-1 text-sm text-foreground-500">
-            {progress.completed} of {progress.total} items completed
+            {subtitle ||
+              `${progress.completed} of ${progress.total} requirements completed`}
           </p>
           <div className="mt-2 h-1.5 w-full max-w-md overflow-hidden rounded-full bg-emerald-50">
             <div
@@ -129,6 +134,9 @@ export function ChecklistCreationPanel({
               style={{ width: `${progress.percent}%` }}
             />
           </div>
+          <p className="mt-2 text-sm font-medium text-foreground-700">
+            {progress.completed} of {progress.total} ready
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -156,23 +164,23 @@ export function ChecklistCreationPanel({
       <div className="max-h-[min(62vh,640px)] overflow-y-auto rounded-lg border border-border bg-background-50/40 p-3">
         {items.length === 0 ? (
           <p className="px-2 py-8 text-center text-sm text-foreground-500">
-            No checklist requirements yet. Run Use AI to ingest the tender
-            document package (ZIP/RFP/BOQ) into checklist items.
+            {emptyMessage}
           </p>
         ) : (
           <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
             {items.map((item) => {
-              const complete = isChecklistItemComplete(item.completionStatus);
+              const complete = item.isCompleted;
               const draft = item.completionStatus === "DRAFT_AVAILABLE";
               const expired =
                 item.completionStatus === "EXPIRED_DOCUMENT" ||
                 item.completionStatus === "INVALID_DOCUMENT";
-              const toggling = togglingItemId === item.id;
+              const primaryDoc = item.documents[0] || null;
               return (
-                <div
+                <button
                   key={item.id}
+                  type="button"
                   className={cn(
-                    "flex min-h-[64px] items-start gap-2.5 rounded-md border px-3 py-2.5 text-left transition-colors",
+                    "flex min-h-[72px] w-full items-start gap-2.5 rounded-md border px-3 py-2.5 text-left transition-colors",
                     complete &&
                       "border-emerald-200 bg-emerald-50/80 hover:bg-emerald-50",
                     draft &&
@@ -184,31 +192,17 @@ export function ChecklistCreationPanel({
                       !expired &&
                       "border-border bg-white hover:bg-background-50",
                   )}
-                >
-                  <button
-                    type="button"
-                    className="mt-0.5 shrink-0 rounded p-0.5 text-foreground-300 hover:bg-black/5 disabled:opacity-50"
-                    disabled={readOnly || toggling || !onToggleComplete}
-                    aria-label={complete ? "Mark incomplete" : "Mark complete"}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onToggleComplete?.(item, !complete);
-                    }}
-                  >
-                    {complete ? (
-                      <CheckSquare className="size-4 text-emerald-600" />
-                    ) : (
-                      <Square className="size-4" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    className="min-w-0 flex-1 text-left"
                   onClick={() => {
                     setSelectedId(item.id);
                     setGeneratePromptOpen(false);
                   }}
-                  >
+                >
+                  {complete ? (
+                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" />
+                  ) : (
+                    <FileText className="mt-0.5 size-4 shrink-0 text-foreground-300" />
+                  )}
+                  <span className="min-w-0 flex-1">
                     <span
                       className={cn(
                         "block text-sm font-medium text-foreground-900",
@@ -219,23 +213,12 @@ export function ChecklistCreationPanel({
                     </span>
                     <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-foreground-500">
                       <span>
-                        {categoryLabel(item.category)}
-                        {statusMeta(item)}
+                        {categoryLabel(item.category)} · {statusLine(item)}
                       </span>
-                      {item.matchedWorkspaceDocumentId ? (
+                      {primaryDoc?.downloadHref ? (
                         <a
                           className="font-medium text-emerald-700 hover:underline"
-                          href={`/api/bid-workspace/documents/${item.matchedWorkspaceDocumentId}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          View Document
-                        </a>
-                      ) : item.matchedCompanyDocumentId ? (
-                        <a
-                          className="font-medium text-emerald-700 hover:underline"
-                          href={`/api/documents/${item.matchedCompanyDocumentId}`}
+                          href={primaryDoc.downloadHref}
                           target="_blank"
                           rel="noreferrer"
                           onClick={(e) => e.stopPropagation()}
@@ -244,8 +227,13 @@ export function ChecklistCreationPanel({
                         </a>
                       ) : null}
                     </span>
-                  </button>
-                </div>
+                    {item.documents.length > 1 ? (
+                      <span className="mt-1 block text-[11px] text-foreground-400">
+                        {item.documents.length} linked documents
+                      </span>
+                    ) : null}
+                  </span>
+                </button>
               );
             })}
           </div>
@@ -289,8 +277,7 @@ export function ChecklistCreationPanel({
                 <SheetTitle
                   className={cn(
                     "pr-8 text-left text-base",
-                    isChecklistItemComplete(selected.completionStatus) &&
-                      "text-foreground-600 line-through",
+                    selected.isCompleted && "text-foreground-600 line-through",
                   )}
                 >
                   {selected.requirementName}
@@ -313,80 +300,54 @@ export function ChecklistCreationPanel({
                     Status
                   </p>
                   <p className="mt-1 text-foreground-800">
-                    {isChecklistItemComplete(selected.completionStatus)
-                      ? "Completed"
-                      : selected.completionStatus === "DRAFT_AVAILABLE"
-                        ? "Draft available"
-                        : selected.completionStatus.replace(/_/g, " ")}
+                    {selected.isCompleted ? "Completed" : "Pending"}
                   </p>
-                  {selected.matchReason &&
-                  !selected.matchReason.includes("meta=") ? (
-                    <p className="mt-1 text-xs text-foreground-500">
-                      {selected.matchReason}
-                    </p>
-                  ) : selected.matchedBy === "AI" ? (
-                    <p className="mt-1 text-xs text-foreground-500">
-                      Generated by AI
-                    </p>
-                  ) : null}
+                  <p className="mt-1 text-xs text-foreground-500">
+                    {statusLine(selected)}
+                  </p>
                 </div>
 
-                {selected.matchedCompanyDocument ? (
-                  <div className="rounded-md border border-emerald-200 bg-emerald-50/60 p-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-800">
-                      Matched Document
+                {selected.documents.length > 0 ? (
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-foreground-500">
+                      Documents
                     </p>
-                    <p className="mt-1 font-medium text-foreground-900">
-                      {selected.matchedCompanyDocument.originalFileName ||
-                        selected.matchedCompanyDocument.name}
-                    </p>
-                    <p className="mt-0.5 text-xs text-foreground-500">
-                      Source: Company Library ·{" "}
-                      {selected.matchedCompanyDocument.verificationStatus}
-                    </p>
-                    <a
-                      className="mt-2 inline-flex text-xs font-medium text-emerald-700 hover:underline"
-                      href={`/api/documents/${selected.matchedCompanyDocument.id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      View Document
-                    </a>
+                    {selected.documents.map((doc) => (
+                      <div
+                        key={`${doc.source}:${doc.id}`}
+                        className="rounded-md border border-emerald-200 bg-emerald-50/60 p-3"
+                      >
+                        <p className="font-medium text-foreground-900">
+                          {doc.fileName || doc.title}
+                        </p>
+                        <p className="mt-0.5 text-xs text-foreground-500">
+                          {doc.source === "COMPANY"
+                            ? "Company document"
+                            : doc.matchedBy === "AI"
+                              ? "Generated with AI"
+                              : "Uploaded document"}
+                          {" · "}
+                          {doc.status === "drafting"
+                            ? "Draft"
+                            : DOCUMENT_STATUS_LABELS[
+                                doc.status as keyof typeof DOCUMENT_STATUS_LABELS
+                              ] || doc.status}
+                          {doc.versionLabel ? ` · ${doc.versionLabel}` : ""}
+                        </p>
+                        {doc.downloadHref ? (
+                          <a
+                            className="mt-2 inline-flex text-xs font-medium text-emerald-700 hover:underline"
+                            href={doc.downloadHref}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            View / Download
+                          </a>
+                        ) : null}
+                      </div>
+                    ))}
                   </div>
-                ) : null}
-
-                {selected.matchedWorkspaceDocument ? (
-                  <div className="rounded-md border border-emerald-200 bg-emerald-50/60 p-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-emerald-800">
-                      {selected.matchedBy === "AI"
-                        ? "Generated Document"
-                        : "Matched Document"}
-                    </p>
-                    <p className="mt-1 font-medium text-foreground-900">
-                      {selected.matchedWorkspaceDocument.fileName ||
-                        selected.matchedWorkspaceDocument.title}
-                    </p>
-                    <p className="mt-0.5 text-xs text-foreground-500">
-                      Status:{" "}
-                      {selected.matchedWorkspaceDocument.status === "drafting"
-                        ? "Draft"
-                        : selected.matchedWorkspaceDocument.status}
-                      {selected.matchedBy === "AI" ? " · Generated by AI" : ""}
-                      {" · Checklist item linked"}
-                    </p>
-                    <a
-                      className="mt-2 inline-flex text-xs font-medium text-emerald-700 hover:underline"
-                      href={`/api/bid-workspace/documents/${selected.matchedWorkspaceDocument.id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      View / Download
-                    </a>
-                  </div>
-                ) : null}
-
-                {!selected.matchedCompanyDocument &&
-                !selected.matchedWorkspaceDocument ? (
+                ) : (
                   <div className="rounded-md border border-dashed border-border p-3 text-foreground-600">
                     <div className="flex items-start gap-2">
                       <FileText className="mt-0.5 size-4 shrink-0 text-foreground-400" />
@@ -398,20 +359,19 @@ export function ChecklistCreationPanel({
                         </p>
                         {canGenerate ? (
                           <p className="mt-1 text-xs text-foreground-500">
-                            This is a tender-specific response (not a reusable
-                            company certificate). AI will draft it from the RFP
-                            and your company profile.
+                            This is a tender-specific response. AI will draft it
+                            from the RFP and your company profile.
                           </p>
                         ) : (
                           <p className="mt-1 text-xs text-foreground-500">
-                            Upload the required certificate or evidence from
-                            your files / company library.
+                            Upload the required certificate or evidence, or mark
+                            complete manually if already handled offline.
                           </p>
                         )}
                       </div>
                     </div>
                   </div>
-                ) : null}
+                )}
 
                 {generating ? (
                   <div className="rounded-md border border-border bg-background-50 p-3">
@@ -421,7 +381,7 @@ export function ChecklistCreationPanel({
                     </div>
                     <p className="mt-1 text-xs text-foreground-500">
                       {generationPhase ||
-                        "Reading tender requirement · Preparing RFP context · Applying company information · Generating draft · Saving document"}
+                        "Reading tender requirement · Preparing RFP context · Generating draft · Saving document"}
                     </p>
                   </div>
                 ) : null}
@@ -438,17 +398,14 @@ export function ChecklistCreationPanel({
                         !onToggleComplete
                       }
                       onClick={() =>
-                        onToggleComplete?.(
-                          selected,
-                          !isChecklistItemComplete(selected.completionStatus),
-                        )
+                        onToggleComplete?.(selected, !selected.isCompleted)
                       }
                     >
-                      {isChecklistItemComplete(selected.completionStatus)
-                        ? "Mark incomplete"
-                        : "Mark complete"}
+                      {selected.isCompleted
+                        ? "Mark as Pending / Reopen"
+                        : "Mark as Complete"}
                     </Button>
-                    {canGenerate && !selected.matchedWorkspaceDocument ? (
+                    {canGenerate && !hasLinkedDocs ? (
                       <Button
                         type="button"
                         className="justify-start gap-2"
@@ -463,7 +420,7 @@ export function ChecklistCreationPanel({
                         Generate with AI
                       </Button>
                     ) : null}
-                    {canGenerate && selected.matchedWorkspaceDocument ? (
+                    {canGenerate && hasLinkedDocs ? (
                       <Button
                         type="button"
                         className="justify-start gap-2"
@@ -486,10 +443,10 @@ export function ChecklistCreationPanel({
                       ) : (
                         <Upload className="size-4" />
                       )}
-                      {selected.matchedWorkspaceDocument
+                      {hasLinkedDocs
                         ? "Upload Replacement"
                         : canGenerate
-                          ? "Upload existing instead"
+                          ? "Upload Document"
                           : "Upload Document"}
                     </Button>
                     <Button
@@ -534,5 +491,17 @@ export function ChecklistCreationPanel({
         />
       ) : null}
     </div>
+  );
+}
+
+/** @deprecated Prefer RequirementListPanel — kept for import compatibility. */
+export function ChecklistCreationPanel(
+  props: Omit<RequirementListPanelProps, "title"> & { title?: string },
+) {
+  return (
+    <RequirementListPanel
+      {...props}
+      title={props.title || "Checklist Creation"}
+    />
   );
 }

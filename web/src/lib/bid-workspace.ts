@@ -76,7 +76,15 @@ export type WorkspaceDocumentRow = {
   versionLabel: string | null;
   hasFile: boolean;
   updatedAt: string;
+  checklistItemId: string | null;
+  isPlaceholder: boolean;
 };
+
+export type ChecklistPreparationStatus =
+  | "NOT_STARTED"
+  | "PROCESSING"
+  | "READY"
+  | "FAILED";
 
 export type BidWorkspaceDTO = {
   id: string;
@@ -87,6 +95,8 @@ export type BidWorkspaceDTO = {
   submissionReference: string | null;
   submissionNotes: string | null;
   updatedAt: string;
+  checklistPreparationStatus: ChecklistPreparationStatus;
+  checklistPreparationError: string | null;
   sections: ProposalSectionRow[];
   boqItems: BoqItemRow[];
   documents: WorkspaceDocumentRow[];

@@ -9,6 +9,7 @@ import {
   type BidSubmissionStatus,
   type BidWorkspaceDTO,
   type BoqItemRow,
+  type ChecklistPreparationStatus,
   type ProposalSectionRow,
   type ProposalSectionStatus,
   type WorkspaceDocumentRow,
@@ -22,6 +23,7 @@ export type WorkspaceSummary = {
   id: string;
   submissionStatus: BidSubmissionStatus;
   submittedAt: string | null;
+  checklistPreparationStatus: ChecklistPreparationStatus;
 };
 
 export type { BidWorkspaceDTO };
@@ -38,7 +40,9 @@ export async function getWorkspaceSummary(options: {
   const supabase = getServerSupabase();
   const { data, error } = await supabase
     .from("agenttender_bid_workspaces")
-    .select("id, submission_status, submitted_at")
+    .select(
+      "id, submission_status, submitted_at, checklist_preparation_status",
+    )
     .eq("tender_id", options.tenderId)
     .eq("company_id", options.companyId)
     .maybeSingle();
@@ -52,7 +56,22 @@ export async function getWorkspaceSummary(options: {
     submissionStatus:
       data.submission_status === "submitted" ? "submitted" : "not_submitted",
     submittedAt: data.submitted_at ? String(data.submitted_at) : null,
+    checklistPreparationStatus: parsePreparationStatus(
+      data.checklist_preparation_status,
+    ),
   };
+}
+
+function parsePreparationStatus(value: unknown): ChecklistPreparationStatus {
+  if (
+    value === "NOT_STARTED" ||
+    value === "PROCESSING" ||
+    value === "READY" ||
+    value === "FAILED"
+  ) {
+    return value;
+  }
+  return "NOT_STARTED";
 }
 
 async function seedProposalSections(options: {
@@ -107,6 +126,7 @@ async function seedRequiredDocuments(options: {
       title,
       status: "pending",
       is_required: true,
+      is_placeholder: true,
     })),
   );
   if (error) throw new Error(error.message);
@@ -204,8 +224,12 @@ function mapDocument(row: Record<string, unknown>): WorkspaceDocumentRow {
       : "pending",
     isRequired: Boolean(row.is_required),
     versionLabel: row.version_label ? String(row.version_label) : null,
-    hasFile: Boolean(row.blob_name || row.file_name),
+    hasFile: Boolean(row.blob_name || row.file_name || row.storage_url),
     updatedAt: String(row.updated_at),
+    checklistItemId: row.checklist_item_id
+      ? String(row.checklist_item_id)
+      : null,
+    isPlaceholder: row.is_placeholder === true,
   };
 }
 
@@ -286,6 +310,12 @@ export async function loadBidWorkspace(options: {
       ? String(workspace.submission_notes)
       : null,
     updatedAt: String(workspace.updated_at),
+    checklistPreparationStatus: parsePreparationStatus(
+      workspace.checklist_preparation_status,
+    ),
+    checklistPreparationError: workspace.checklist_preparation_error
+      ? String(workspace.checklist_preparation_error)
+      : null,
     sections,
     boqItems,
     documents,
@@ -512,4 +542,115 @@ async function touchWorkspace(
     .update({ updated_by: userId })
     .eq("id", workspaceId)
     .eq("company_id", companyId);
+}
+
+/**
+ * Atomically claim checklist preparation (PROCESSING) for concurrent-tab safety.
+ * Returns true only when this caller won the claim.
+ */
+export async function tryClaimChecklistPreparation(options: {
+  workspaceId: string;
+  companyId: string;
+  /** Seconds after which a stale PROCESSING lock may be reclaimed. */
+  staleAfterSeconds?: number;
+}): Promise<{ claimed: boolean; status: ChecklistPreparationStatus }> {
+  const supabase = getServerSupabase();
+  const staleAfter = options.staleAfterSeconds ?? 15 * 60;
+  const { data: row, error } = await supabase
+    .from("agenttender_bid_workspaces")
+    .select(
+      "checklist_preparation_status, checklist_preparation_started_at",
+    )
+    .eq("id", options.workspaceId)
+    .eq("company_id", options.companyId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!row) throw new Error("Workspace not found.");
+
+  const status = parsePreparationStatus(row.checklist_preparation_status);
+  if (status === "READY") return { claimed: false, status };
+  if (status === "PROCESSING") {
+    const startedAt = row.checklist_preparation_started_at
+      ? new Date(String(row.checklist_preparation_started_at)).getTime()
+      : 0;
+    const stale =
+      !startedAt || Date.now() - startedAt > staleAfter * 1000;
+    if (!stale) return { claimed: false, status: "PROCESSING" };
+  }
+
+  const { data: updated, error: updateError } = await supabase
+    .from("agenttender_bid_workspaces")
+    .update({
+      checklist_preparation_status: "PROCESSING",
+      checklist_preparation_error: null,
+      checklist_preparation_started_at: new Date().toISOString(),
+      checklist_preparation_finished_at: null,
+    })
+    .eq("id", options.workspaceId)
+    .eq("company_id", options.companyId)
+    .in("checklist_preparation_status", [
+      "NOT_STARTED",
+      "FAILED",
+      ...(status === "PROCESSING" ? (["PROCESSING"] as const) : []),
+    ])
+    .select("id")
+    .maybeSingle();
+  if (updateError) throw new Error(updateError.message);
+  if (!updated) {
+    const { data: again } = await supabase
+      .from("agenttender_bid_workspaces")
+      .select("checklist_preparation_status")
+      .eq("id", options.workspaceId)
+      .maybeSingle();
+    return {
+      claimed: false,
+      status: parsePreparationStatus(again?.checklist_preparation_status),
+    };
+  }
+  return { claimed: true, status: "PROCESSING" };
+}
+
+export async function setChecklistPreparationStatus(options: {
+  workspaceId: string;
+  companyId: string;
+  status: ChecklistPreparationStatus;
+  error?: string | null;
+}): Promise<void> {
+  const supabase = getServerSupabase();
+  const patch: Record<string, unknown> = {
+    checklist_preparation_status: options.status,
+    checklist_preparation_error: options.error ?? null,
+  };
+  if (options.status === "PROCESSING") {
+    patch.checklist_preparation_started_at = new Date().toISOString();
+    patch.checklist_preparation_finished_at = null;
+  }
+  if (options.status === "READY" || options.status === "FAILED") {
+    patch.checklist_preparation_finished_at = new Date().toISOString();
+  }
+  const { error } = await supabase
+    .from("agenttender_bid_workspaces")
+    .update(patch)
+    .eq("id", options.workspaceId)
+    .eq("company_id", options.companyId);
+  if (error) throw new Error(error.message);
+}
+
+export async function linkWorkspaceDocumentToChecklistItem(options: {
+  documentId: string;
+  workspaceId: string;
+  companyId: string;
+  checklistItemId: string;
+}): Promise<void> {
+  const supabase = getServerSupabase();
+  const { error } = await supabase
+    .from("agenttender_bid_workspace_documents")
+    .update({
+      checklist_item_id: options.checklistItemId,
+      is_placeholder: false,
+    })
+    .eq("id", options.documentId)
+    .eq("workspace_id", options.workspaceId)
+    .eq("company_id", options.companyId);
+  if (error) throw new Error(error.message);
 }
