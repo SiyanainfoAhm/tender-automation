@@ -80,6 +80,23 @@ import {
   TENDER_LIST_STATUS_FILTERS,
   TENDER_STATUSES,
 } from "@/lib/tender-status";
+import {
+  filterKeyWithoutPage,
+  getCachedListTotal,
+  getCachedTenderList,
+  getCachedTenderSummary,
+  invalidateTenderListCaches,
+  isCacheFresh,
+  setCachedListTotal,
+  setCachedTenderList,
+  setCachedTenderSummary,
+  type TenderListCachePayload,
+} from "@/lib/tenders/list-cache";
+import {
+  consumeTendersListScroll,
+  rememberTendersListReturn,
+  tendersListHrefFromParts,
+} from "@/lib/tenders/list-return";
 import { tenderFiltersSchema, type TenderFilters } from "@/lib/validations";
 import { cn } from "@/lib/utils";
 import type { TenderListStatusCounts } from "@/server/repositories/analyticsRepository";
@@ -105,17 +122,6 @@ type ListResponse = {
   page: number;
   pageSize: number;
 };
-
-const listCache = new Map<string, ListResponse>();
-const CACHE_LIMIT = 24;
-const totalsByFilterKey = new Map<string, number>();
-
-function filterKeyWithoutPage(queryKey: string): string {
-  const params = new URLSearchParams(queryKey);
-  params.delete("page");
-  params.delete("includeCount");
-  return params.toString();
-}
 
 function readFilters(searchParams: URLSearchParams): TenderFilters {
   const raw: Record<string, string> = {};
@@ -311,12 +317,34 @@ export function TenderExplorer({
     () => readFilters(searchParams),
     [searchParams],
   );
+  const queryKey = searchParams.toString();
+  const listFilterKey = React.useMemo(
+    () => filterKeyWithoutPage(queryKey),
+    [queryKey],
+  );
+  const initialListCache = React.useMemo(
+    () => getCachedTenderList(queryKey),
+    // Only seed from cache for this mount's first queryKey; effect handles later keys.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount hydrate
+    [],
+  );
 
-  const [rows, setRows] = React.useState<WebTenderListRow[]>([]);
-  const [total, setTotal] = React.useState(0);
-  const [hasResolvedData, setHasResolvedData] = React.useState(false);
-  const [isInitialLoading, setIsInitialLoading] = React.useState(true);
+  const [rows, setRows] = React.useState<WebTenderListRow[]>(
+    () =>
+      (initialListCache?.data.rows as WebTenderListRow[] | undefined) ?? [],
+  );
+  const [total, setTotal] = React.useState(
+    () => initialListCache?.data.total ?? 0,
+  );
+  const [hasResolvedData, setHasResolvedData] = React.useState(
+    () => Boolean(initialListCache),
+  );
+  const [isInitialLoading, setIsInitialLoading] = React.useState(
+    () => !initialListCache,
+  );
   const [isTableRefreshing, setIsTableRefreshing] = React.useState(false);
+  const [isBackgroundRefreshing, setIsBackgroundRefreshing] =
+    React.useState(false);
   const [listError, setListError] = React.useState<string | null>(null);
   const [isExporting, setIsExporting] = React.useState(false);
   const [refreshToken, setRefreshToken] = React.useState(0);
@@ -326,9 +354,10 @@ export function TenderExplorer({
   );
   const activePanelCount = panelFilterCount(filters);
   const [filtersOpen, setFiltersOpen] = React.useState(activePanelCount > 0);
-  const hasResolvedDataRef = React.useRef(false);
+  const hasResolvedDataRef = React.useRef(Boolean(initialListCache));
   const listRequestSerial = React.useRef(createRequestSerial());
   const statusCountsRequestSerial = React.useRef(createRequestSerial());
+  const scrollRestoreDone = React.useRef(false);
 
   const statusCountQueryKey = React.useMemo(
     () => tenderStatusCountQueryKey(searchParams),
@@ -340,7 +369,15 @@ export function TenderExplorer({
   );
 
   const [statusCountsState, setStatusCountsState] =
-    React.useState<TenderListStatusCounts | null>(statusCounts);
+    React.useState<TenderListStatusCounts | null>(() => {
+      if (statusCounts != null && statusCountsFilterKey === statusCountQueryKey) {
+        return statusCounts;
+      }
+      const cached = getCachedTenderSummary<TenderListStatusCounts>(
+        statusCountQueryKey,
+      );
+      return cached?.data ?? statusCounts;
+    });
 
   // Adopt SSR counts only when they match the current non-status filter scope.
   // Prevents a soft-nav RSC refresh from overwriting Today-scoped counts with
@@ -350,19 +387,29 @@ export function TenderExplorer({
     if (statusCounts == null) return;
     if (statusCountsFilterKey !== statusCountQueryKey) return;
     setStatusCountsState(statusCounts);
+    setCachedTenderSummary(statusCountQueryKey, statusCounts);
   }, [statusCounts, statusCountsFilterKey, statusCountQueryKey]);
 
-  const queryKey = searchParams.toString();
-  const listFilterKey = React.useMemo(
-    () => filterKeyWithoutPage(queryKey),
-    [queryKey],
-  );
-
   React.useEffect(() => {
-    if (skipFirstStatusCountsFetch.current) {
-      skipFirstStatusCountsFetch.current = false;
+    const cachedSummary = getCachedTenderSummary<TenderListStatusCounts>(
+      statusCountQueryKey,
+    );
+    if (cachedSummary && isCacheFresh(cachedSummary.fetchedAt)) {
+      setStatusCountsState(cachedSummary.data);
+      if (skipFirstStatusCountsFetch.current) {
+        skipFirstStatusCountsFetch.current = false;
+      }
       return;
     }
+
+    if (skipFirstStatusCountsFetch.current) {
+      skipFirstStatusCountsFetch.current = false;
+      if (statusCounts != null) {
+        setCachedTenderSummary(statusCountQueryKey, statusCounts);
+      }
+      return;
+    }
+
     const controller = new AbortController();
     const requestId = statusCountsRequestSerial.current.next();
     void (async () => {
@@ -376,12 +423,13 @@ export function TenderExplorer({
         if (controller.signal.aborted) return;
         if (!statusCountsRequestSerial.current.isLatest(requestId)) return;
         setStatusCountsState(data);
+        setCachedTenderSummary(statusCountQueryKey, data);
       } catch {
         /* keep prior counts */
       }
     })();
     return () => controller.abort();
-  }, [statusCountQueryKey, refreshToken]);
+  }, [statusCountQueryKey, refreshToken, statusCounts]);
 
   React.useEffect(() => {
     setLocalQ(filters.q ?? "");
@@ -390,16 +438,39 @@ export function TenderExplorer({
   React.useEffect(() => {
     const controller = new AbortController();
     const requestId = listRequestSerial.current.next();
-    const showTableRefresh = hasResolvedDataRef.current;
 
-    if (showTableRefresh) {
+    const cached = getCachedTenderList(queryKey);
+    if (cached) {
+      const payload = cached.data as TenderListCachePayload;
+      setRows(payload.rows as WebTenderListRow[]);
+      setTotal(payload.total);
+      hasResolvedDataRef.current = true;
+      setHasResolvedData(true);
+      setIsInitialLoading(false);
+      setListError(null);
+      if (isCacheFresh(cached.fetchedAt)) {
+        setIsTableRefreshing(false);
+        setIsBackgroundRefreshing(false);
+        if (process.env.NODE_ENV === "development") {
+          console.debug("[TenderQuery] cache-hit", { queryKey });
+        }
+        return () => {
+          controller.abort();
+        };
+      }
+      setIsBackgroundRefreshing(true);
+      if (process.env.NODE_ENV === "development") {
+        console.debug("[TenderQuery] cache-stale-revalidate", { queryKey });
+      }
+    } else if (hasResolvedDataRef.current) {
       setIsTableRefreshing(true);
     } else {
       setIsInitialLoading(true);
     }
+
     setListError(null);
 
-    const cachedTotal = totalsByFilterKey.get(listFilterKey);
+    const cachedTotal = getCachedListTotal(listFilterKey);
     const includeCount =
       filters.page === 1 || cachedTotal === undefined ? true : false;
 
@@ -408,6 +479,9 @@ export function TenderExplorer({
         const params = new URLSearchParams(queryKey);
         if (!includeCount) params.set("includeCount", "0");
         const qs = params.toString();
+        if (process.env.NODE_ENV === "development") {
+          console.debug("[TenderQuery] fetch", { qs, includeCount });
+        }
         const response = await fetch(`/api/tenders${qs ? `?${qs}` : ""}`, {
           signal: controller.signal,
           cache: "no-store",
@@ -420,18 +494,16 @@ export function TenderExplorer({
         const nextTotal =
           data.total >= 0 ? data.total : (cachedTotal ?? total);
         if (data.total >= 0) {
-          totalsByFilterKey.set(listFilterKey, data.total);
+          setCachedListTotal(listFilterKey, data.total);
         }
 
-        const cached: ListResponse = {
-          ...data,
+        const cachedPayload: TenderListCachePayload = {
+          rows: data.rows,
           total: nextTotal,
+          page: data.page,
+          pageSize: data.pageSize,
         };
-        listCache.set(queryKey, cached);
-        if (listCache.size > CACHE_LIMIT) {
-          const first = listCache.keys().next().value;
-          if (typeof first === "string") listCache.delete(first);
-        }
+        setCachedTenderList(queryKey, cachedPayload);
 
         setRows(data.rows);
         setTotal(nextTotal);
@@ -460,6 +532,7 @@ export function TenderExplorer({
         if (!listRequestSerial.current.isLatest(requestId)) return;
         setIsInitialLoading(false);
         setIsTableRefreshing(false);
+        setIsBackgroundRefreshing(false);
       }
     })();
 
@@ -469,6 +542,37 @@ export function TenderExplorer({
     // total is only used as fallback when count is skipped; omit from deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- stable filter key + page drive fetches
   }, [queryKey, refreshToken, listFilterKey, filters.page]);
+
+  // Restore scroll after returning from Tender Detail (sessionStorage).
+  React.useEffect(() => {
+    if (scrollRestoreDone.current) return;
+    if (!hasResolvedData) return;
+    const y = consumeTendersListScroll();
+    if (y == null) {
+      scrollRestoreDone.current = true;
+      return;
+    }
+    scrollRestoreDone.current = true;
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: y, behavior: "auto" });
+    });
+  }, [hasResolvedData, queryKey]);
+
+  const openTenderDetail = React.useCallback(
+    (tenderId: string) => {
+      const href = tendersListHrefFromParts(pathname, queryKey);
+      rememberTendersListReturn(href, window.scrollY);
+      router.push(`/tenders/${tenderId}`);
+    },
+    [pathname, queryKey, router],
+  );
+
+  const prefetchTenderDetail = React.useCallback(
+    (tenderId: string) => {
+      router.prefetch(`/tenders/${tenderId}`);
+    },
+    [router],
+  );
 
   React.useEffect(() => {
     setSelectedIds(new Set());
@@ -492,7 +596,10 @@ export function TenderExplorer({
   ]);
 
   const navigate = React.useCallback(
-    (updates: Record<string, string | undefined>) => {
+    (
+      updates: Record<string, string | undefined>,
+      options?: { replace?: boolean },
+    ) => {
       const qs = buildSearchParams(searchParams, updates);
       const nextHref = `${pathname}${qs}`;
       const currentHref = `${pathname}${queryKey ? `?${queryKey}` : ""}`;
@@ -500,7 +607,11 @@ export function TenderExplorer({
       if (hasResolvedDataRef.current) {
         setIsTableRefreshing(true);
       }
-      router.push(nextHref, { scroll: false });
+      if (options?.replace) {
+        router.replace(nextHref, { scroll: false });
+      } else {
+        router.push(nextHref, { scroll: false });
+      }
     },
     [pathname, queryKey, router, searchParams],
   );
@@ -510,14 +621,14 @@ export function TenderExplorer({
     if (decision.action === "none") return;
 
     if (decision.action === "clear") {
-      navigate({ q: undefined, page: "1" });
+      navigate({ q: undefined, page: "1" }, { replace: true });
       return;
     }
 
     const handle = window.setTimeout(() => {
       const latest = nextSearchQueryParam(localQ, filters.q);
       if (latest.action !== "search" || !latest.q) return;
-      navigate({ q: latest.q, page: "1" });
+      navigate({ q: latest.q, page: "1" }, { replace: true });
     }, TENDER_SEARCH_DEBOUNCE_MS);
 
     return () => window.clearTimeout(handle);
@@ -528,7 +639,7 @@ export function TenderExplorer({
     if (!q) return;
     const current = (filters.q ?? "").trim();
     if (q === current) return;
-    navigate({ q, page: "1" });
+    navigate({ q, page: "1" }, { replace: true });
   }, [filters.q, localQ, navigate]);
 
   const searchHint = tenderSearchHint(localQ);
@@ -573,8 +684,7 @@ export function TenderExplorer({
         : "All Dates";
 
   function refreshList() {
-    listCache.clear();
-    totalsByFilterKey.clear();
+    invalidateTenderListCaches("manual-refresh");
     setRefreshToken((value) => value + 1);
     router.refresh();
   }
@@ -680,9 +790,18 @@ export function TenderExplorer({
             canImport={canImport}
             canCreate={canCreate}
             disabled={isExporting}
-            onCreated={refreshList}
+            onCreated={() => {
+              invalidateTenderListCaches("manual-tender-created");
+              refreshList();
+            }}
           />
         </div>
+
+        {isBackgroundRefreshing ? (
+          <p className="text-xs text-foreground-500" aria-live="polite">
+            Refreshing tender list…
+          </p>
+        ) : null}
 
         {statusCountsState ? (
           <TenderStatsCards
@@ -1347,8 +1466,10 @@ export function TenderExplorer({
                         <tr
                           key={row.id}
                           className="group cursor-pointer border-b border-background-200/70 last:border-0 hover:bg-background-50"
+                          onMouseEnter={() => prefetchTenderDetail(row.id)}
+                          onFocus={() => prefetchTenderDetail(row.id)}
                           onClick={() => {
-                            router.push(`/tenders/${row.id}`);
+                            openTenderDetail(row.id);
                           }}
                         >
                           <td
@@ -1496,7 +1617,7 @@ export function TenderExplorer({
                               size="icon"
                               className="size-8"
                               aria-label={`View ${row.title}`}
-                              onClick={() => router.push(`/tenders/${row.id}`)}
+                              onClick={() => openTenderDetail(row.id)}
                             >
                               <Eye className="size-4" />
                             </Button>

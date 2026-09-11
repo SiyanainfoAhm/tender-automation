@@ -18,6 +18,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { invalidateTenderListCaches } from "@/lib/tenders/list-cache";
 import {
   confirmImportTendersAction,
   previewImportTendersAction,
@@ -128,6 +129,7 @@ export function ImportTendersClient({
         failed: response.failed,
       });
       setStep(4);
+      invalidateTenderListCaches("tender-import");
       router.refresh();
     });
   }

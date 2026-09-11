@@ -13,7 +13,6 @@ import {
   type ReactNode,
 } from "react";
 import {
-  ArrowLeft,
   Briefcase,
   Building2,
   Check,
@@ -52,6 +51,8 @@ import {
   qualificationStatusStyles,
 } from "@/components/tenders/tender-status-styles";
 import { CategoryCapsule } from "@/components/tenders/category-capsule";
+import { TendersBackLink } from "@/components/tenders/tenders-back-link";
+import { invalidateTenderListCaches } from "@/lib/tenders/list-cache";
 import type { QualificationStatus } from "@/components/status/qualification-badge";
 import { SourceBadge } from "@/components/status/source-badge";
 import { StatusBadge } from "@/components/status/qualification-badge";
@@ -704,6 +705,7 @@ export function TenderDetailClient({
       }
   
       toast.success(result.message);
+      invalidateTenderListCaches("tender-status-updated");
       router.refresh();
     });
   };
@@ -758,6 +760,7 @@ export function TenderDetailClient({
       }
       toast.success(result.message);
       setEditing(false);
+      invalidateTenderListCaches("tender-details-updated");
       router.refresh();
     });
   };
@@ -904,13 +907,7 @@ const statusStyle =
     <div className="min-w-0 space-y-5 overflow-x-hidden">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-1.5 text-sm">
-          <Link
-            href="/tenders"
-            className="inline-flex shrink-0 items-center gap-1 text-muted-foreground transition-colors hover:text-foreground-900"
-          >
-            <ArrowLeft className="size-4" />
-            Tenders
-          </Link>
+          <TendersBackLink />
           <ChevronRight className="size-3.5 shrink-0 text-foreground-400" />
           <span
             className="truncate font-medium text-foreground-900"
