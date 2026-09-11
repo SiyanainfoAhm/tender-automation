@@ -526,9 +526,9 @@ export function ChecklistCreationPanel({
           useAiLabel="Generate with AI"
           showExtraInstructions
           extraInstructionsPlaceholder="Optional notes for this document only (e.g. emphasize onsite CV format)"
-          onSaveAndUseAi={async ({ extraInstructions }) => {
+          onSaveAndUseAi={async (options) => {
             await onGenerateAi(selected, {
-              customInstructions: extraInstructions,
+              customInstructions: options?.extraInstructions,
             });
           }}
         />
