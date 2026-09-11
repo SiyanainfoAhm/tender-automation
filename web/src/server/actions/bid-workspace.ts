@@ -445,3 +445,208 @@ async function loadBidWorkspaceForTender(tenderId: string, companyId: string) {
     qualification: data?.qualification ?? null,
   });
 }
+
+export type IngestTenderDocumentsResult =
+  | {
+      ok: true;
+      engine: "openai" | "heuristic" | "needs_ai";
+      checklistCount: number;
+      annexureCount: number;
+      costItemCount: number;
+      sourceFileCount: number;
+      warning?: string;
+      summary?: string | null;
+    }
+  | { ok: false; error: string };
+
+/**
+ * Document Ingestion Service entrypoint for Bid Workspace "Use AI".
+ *
+ * Tender Source Documents → Ingestion → OpenAI/extraction →
+ * Structured Results (Checklist / Annexures / Cost Items) →
+ * Company Document Matching → Bid Workspace UI.
+ */
+export async function ingestTenderDocumentsAction(
+  tenderId: string,
+): Promise<IngestTenderDocumentsResult> {
+  try {
+    const session = await requirePermissionStrict("bids.edit");
+    const data = await getTenderById(tenderId);
+    if (!data) return { ok: false, error: "Tender not found." };
+
+    const workspace = await loadBidWorkspaceForTender(
+      tenderId,
+      session.companyId,
+    );
+    if (!workspace) {
+      return {
+        ok: false,
+        error: "Open the bid workspace once before running document ingestion.",
+      };
+    }
+
+    const { resolveTenderSourceDocuments } = await import(
+      "@/server/ingestion/resolveTenderSourceDocuments"
+    );
+    const sources = await resolveTenderSourceDocuments({
+      tenderId,
+      companyId: session.companyId,
+      workspaceId: workspace.id,
+      documentsZipUrl:
+        typeof data.tender.documents_zip_url === "string"
+          ? data.tender.documents_zip_url
+          : null,
+    });
+
+    if (!sources.length) {
+      return {
+        ok: false,
+        error:
+          "No tender source documents found. Download the portal archive or upload PDF/ZIP/DOCX/XLSX first.",
+      };
+    }
+
+    const { runTenderDocumentIngestion } = await import(
+      "@/server/ingestion/runTenderDocumentIngestion"
+    );
+    const result = await runTenderDocumentIngestion({
+      workspaceId: workspace.id,
+      companyId: session.companyId,
+      tenderId,
+      userId: session.user.id,
+      documentUrls: sources.map((s) => ({
+        fileName: s.fileName,
+        url: s.url,
+      })),
+      workspaceDocuments: workspace.documents,
+    });
+
+    await insertTenderActivity({
+      tenderId,
+      companyId: session.companyId,
+      eventType: "document_ingestion",
+      summary: `Document ingestion (${result.engine}): ${result.structured.checklist.length} checklist, ${result.structured.annexures.length} annexures, ${result.structured.cost_items.length} cost items`,
+      payload: {
+        engine: result.engine,
+        sources: sources.map((s) => ({
+          fileName: s.fileName,
+          origin: s.origin,
+        })),
+        sourceFiles: result.sourceFiles,
+        warning: result.warning || null,
+      },
+      actorUserId: session.user.id,
+    });
+
+    revalidateWorkspace(tenderId);
+    return {
+      ok: true,
+      engine: result.engine,
+      checklistCount: result.structured.checklist.length,
+      annexureCount: result.structured.annexures.length,
+      costItemCount: result.structured.cost_items.length,
+      sourceFileCount: result.sourceFiles.length,
+      warning: result.warning,
+      summary: result.structured.summary,
+    };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message };
+    }
+    console.error("[bid-workspace] document ingestion failed", error);
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to ingest tender documents.",
+    };
+  }
+}
+
+export type GenerateChecklistDocumentActionResult =
+  | {
+      ok: true;
+      documentId: string;
+      fileName: string;
+      title: string;
+      versionLabel: string;
+      documentType: string;
+      fileSizeBytes: number;
+      missingInformation: string[];
+      warnings: string[];
+    }
+  | { ok: false; error: string };
+
+/**
+ * Per-item AI drafting: Generate with AI on a checklist requirement.
+ * Saves ONLY as a tender workspace document (never company library).
+ */
+export async function generateChecklistDocumentAction(input: {
+  tenderId: string;
+  requirementId: string;
+  customInstructions?: string;
+}): Promise<GenerateChecklistDocumentActionResult> {
+  try {
+    const { session, detail, workspaceId } = await requireEditableWorkspace(
+      input.tenderId,
+      "bids.edit",
+    );
+
+    const { generateChecklistDocument } = await import(
+      "@/server/generation/generateChecklistDocument"
+    );
+
+    const result = await generateChecklistDocument({
+      companyId: session.companyId,
+      userId: session.user.id,
+      workspaceId,
+      tenderId: detail.id,
+      tenderReference: detail.sourceTenderId || detail.referenceNo || detail.id,
+      requirementId: input.requirementId,
+      customInstructions: input.customInstructions || null,
+    });
+
+    await insertTenderActivity({
+      tenderId: input.tenderId,
+      companyId: session.companyId,
+      eventType: "checklist_document_generated",
+      summary: `AI draft generated: ${result.fileName}`,
+      payload: {
+        requirementId: input.requirementId,
+        documentId: result.documentId,
+        fileName: result.fileName,
+        versionLabel: result.versionLabel,
+        model: result.model,
+        generationPolicy: result.generationPolicy,
+        fileSizeBytes: result.fileSizeBytes,
+      },
+      actorUserId: session.user.id,
+    });
+
+    revalidateWorkspace(input.tenderId);
+    return {
+      ok: true,
+      documentId: result.documentId,
+      fileName: result.fileName,
+      title: result.title,
+      versionLabel: result.versionLabel,
+      documentType: result.documentType,
+      fileSizeBytes: result.fileSizeBytes,
+      missingInformation: result.missingInformation,
+      warnings: result.warnings,
+    };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message };
+    }
+    console.error("[bid-workspace] checklist document generation failed", error);
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Document generation failed.",
+    };
+  }
+}

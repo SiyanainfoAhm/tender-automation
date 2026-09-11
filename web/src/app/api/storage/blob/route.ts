@@ -7,6 +7,9 @@ import { invokeBlobRead } from "@/server/storage/tenderAutomationDocumentFunctio
 /**
  * Authenticated proxy for Azure blobs.
  * Required because the storage account disallows anonymous/public access.
+ *
+ * Prefer `/api/tender-documents/{id}` or `/api/documents/{id}` for app documents.
+ * This route remains for portal archive URLs (documents_zip_url / ai_summary_url).
  */
 export async function GET(request: Request) {
   const session = await getSession();
@@ -35,6 +38,23 @@ export async function GET(request: Request) {
       disposition: download ? "attachment" : "inline",
       fileName,
     });
+
+    if (!upstream.ok) {
+      const contentType = upstream.headers.get("content-type") || "";
+      let message =
+        "File not found in Azure storage. Re-upload the document or re-run the crawler archive upload.";
+      if (contentType.includes("application/json")) {
+        const body = (await upstream.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        if (body?.error) message = body.error;
+      }
+      return NextResponse.json(
+        { success: false, error: message },
+        { status: upstream.status === 404 ? 404 : 502 },
+      );
+    }
+
     const headers = new Headers();
     const contentType = upstream.headers.get("content-type");
     if (contentType) headers.set("Content-Type", contentType);
@@ -44,13 +64,10 @@ export async function GET(request: Request) {
     if (contentDisposition) {
       headers.set("Content-Disposition", contentDisposition);
     }
-    headers.set(
-      "Cache-Control",
-      upstream.ok ? "private, max-age=300" : "no-store",
-    );
+    headers.set("Cache-Control", "private, max-age=300");
 
     return new Response(upstream.body, {
-      status: upstream.status,
+      status: 200,
       headers,
     });
   } catch (error) {

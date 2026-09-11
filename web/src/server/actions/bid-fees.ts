@@ -54,7 +54,7 @@ function extensionAllowed(name: string): boolean {
   return /\.(pdf|doc|docx|xls|xlsx|png|jpe?g|webp)$/i.test(name);
 }
 
-/** Route MANUAL tender uploads under {companyName_id}/tender-artifacts/manual/{created-date}/{tender-id}/. */
+/** Route MANUAL tender uploads under companies/{key}/tender-artifacts/manual/{created-date}/{tender-id}/. */
 function applyManualTenderArtifactFields(
   form: FormData,
   tender: Record<string, unknown> | null | undefined,

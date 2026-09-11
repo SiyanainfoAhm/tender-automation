@@ -8,8 +8,8 @@
  *       General|Certificate|Other/{file}
  *     tender-artifacts/
  *       {portal}/{date}/{tenderId}/{file}
- *     templates/
- *       …
+ *   companies/{key}/tender-artifacts/manual/{date}/{tenderId}/{file}
+ *     (manual tenders — legacy Storage Explorer layout)
  */
 
 export type AzureDocumentCategory = "General" | "Certificate" | "Financial";
@@ -104,6 +104,12 @@ export function buildCompanyDocumentBlobName(options: {
   return `${companyRoot}/companydocs/${categoryFolder}/${safeFileName}`;
 }
 
+/**
+ * Tender artifact blob paths.
+ * - MANUAL → companies/{key}/tender-artifacts/manual/{date}/{id}/{file}
+ *   (matches existing Azure Storage Explorer layout)
+ * - Portal crawlers → {companyName}_{companyId}/tender-artifacts/{portal}/…
+ */
 export function buildTenderArtifactBlobName(options: {
   companyName: string;
   companyId: string;
@@ -111,11 +117,8 @@ export function buildTenderArtifactBlobName(options: {
   sourceTenderId: string;
   runDate: string;
   fileName: string;
+  companyKey?: string | null;
 }): string {
-  const companyRoot = buildCompanyRootFolder(
-    options.companyName,
-    options.companyId,
-  );
   const portal = String(options.sourcePortal || "")
     .toLowerCase()
     .replace(/[^a-z0-9_-]/g, "");
@@ -125,5 +128,27 @@ export function buildTenderArtifactBlobName(options: {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(options.runDate)
     ? options.runDate
     : "undated";
-  return `${companyRoot}/tender-artifacts/${portal || "unknown"}/${date}/${id || "unknown"}/${sanitizeBlobFileName(options.fileName)}`;
+  const file = sanitizeBlobFileName(options.fileName);
+
+  if (portal === "manual") {
+    const envKey = String(
+      options.companyKey ||
+        process.env.COMPANY_BLOB_KEY ||
+        process.env.NEXT_PUBLIC_COMPANY_BLOB_KEY ||
+        "",
+    )
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    const key =
+      envKey || slugifyBlobSegment(options.companyName).split("-")[0] || "company";
+    return `companies/${key}/tender-artifacts/manual/${date}/${id || "unknown"}/${file}`;
+  }
+
+  const companyRoot = buildCompanyRootFolder(
+    options.companyName,
+    options.companyId,
+  );
+  return `${companyRoot}/tender-artifacts/${portal || "unknown"}/${date}/${id || "unknown"}/${file}`;
 }

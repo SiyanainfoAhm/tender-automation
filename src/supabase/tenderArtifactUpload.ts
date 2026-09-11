@@ -100,13 +100,28 @@ export function buildTenderArtifactBlobName(options: {
   const date = options.runDate.match(/^\d{4}-\d{2}-\d{2}$/)
     ? options.runDate
     : "undated";
+  const file = sanitizeBlobFileName(options.fileName);
+
+  // Manual tenders keep the historical Storage Explorer layout:
+  // companies/{key}/tender-artifacts/manual/{date}/{id}/{file}
+  if (portal === "manual") {
+    const envKey = String(process.env.COMPANY_BLOB_KEY || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    const key =
+      envKey ||
+      slugifyBlobSegment(String(options.companyName || "siyana")).split("-")[0] ||
+      "siyana";
+    return `companies/${key}/tender-artifacts/manual/${date}/${id}/${file}`;
+  }
+
   const companyRoot = resolveCompanyBlobRoot({
     companyName: options.companyName,
     companyId: options.companyId,
   });
-  // Company-based path — never include Tender247 account id.
-  // Sibling of companydocs/ under {companyName_id}/.
-  return `${companyRoot}/tender-artifacts/${portal}/${date}/${id}/${sanitizeBlobFileName(options.fileName)}`;
+  return `${companyRoot}/tender-artifacts/${portal}/${date}/${id}/${file}`;
 }
 
 /** Resolve local file path for an artifact kind (canonical Tender247 layout). */

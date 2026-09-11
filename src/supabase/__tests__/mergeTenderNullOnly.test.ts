@@ -73,7 +73,7 @@ describe("buildTenderArtifactBlobName", () => {
     );
   });
 
-  it("builds manual portal path under tender-artifacts/manual", () => {
+  it("builds manual portal path under companies/{key}/tender-artifacts/manual", () => {
     assert.equal(
       buildTenderArtifactBlobName({
         sourcePortal: "MANUAL",
@@ -83,7 +83,7 @@ describe("buildTenderArtifactBlobName", () => {
         companyName: "Siyana Info Solutions Pvt. Ltd.",
         companyId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       }),
-      "siyana-info-solutions-pvt-ltd_a1b2c3d4-e5f6-7890-abcd-ef1234567890/tender-artifacts/manual/2026-08-25/MAN-55AF81E6E54B/scope.pdf",
+      "companies/siyana/tender-artifacts/manual/2026-08-25/MAN-55AF81E6E54B/scope.pdf",
     );
   });
 });

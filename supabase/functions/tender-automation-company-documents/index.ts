@@ -1,5 +1,8 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { createWriteOnlyBlobUploadUrl } from "./directUploadSas.ts";
+import {
+  createReadOnlyBlobUrl,
+  createWriteOnlyBlobUploadUrl,
+} from "./directUploadSas.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -537,15 +540,39 @@ async function readAzureBlob(azure: AzureConfig, blobName: string) {
   const storageUrl = `${azureBaseUrl(azure)}/${encoded}`;
   const authenticatedUrl = `${storageUrl}${normalizeSas(azure.sasToken)}`;
 
-  const response = await fetch(authenticatedUrl, {
+  let response = await fetch(authenticatedUrl, {
     method: "GET",
     headers: {
       "x-ms-version": "2020-10-02",
     },
   });
 
+  // Container SAS may be expired/mis-scoped; retry with account-key read SAS.
+  if (!response.ok) {
+    try {
+      const keyedUrl = createReadOnlyBlobUrl({ azure, blobName });
+      const retry = await fetch(keyedUrl, {
+        method: "GET",
+        headers: { "x-ms-version": "2020-10-02" },
+      });
+      if (retry.ok) {
+        console.info("[tender-automation-azure] read via account-key SAS", {
+          blobName,
+          priorStatus: response.status,
+        });
+        return retry;
+      }
+      response = retry;
+    } catch (error) {
+      console.error("[tender-automation-azure] account-key read SAS failed", {
+        blobName,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   if (response.status === 404) {
-    throw new HttpError(404, "File not found.");
+    throw new HttpError(404, "File not found in Azure storage. Re-upload the document.");
   }
 
   if (!response.ok) {
@@ -2540,10 +2567,21 @@ async function handleCompleteDirectUpload(
   }
 
   // Verify the browser actually wrote the blob before activating the row.
-  const head = await fetch(
+  let head = await fetch(
     `${azureBaseUrl(azure)}/${encodeBlobPath(blobName)}${normalizeSas(azure.sasToken)}`,
     { method: "HEAD", headers: { "x-ms-version": "2020-10-02" } },
   );
+  if (!head.ok) {
+    try {
+      const keyedUrl = createReadOnlyBlobUrl({ azure, blobName });
+      head = await fetch(keyedUrl, {
+        method: "HEAD",
+        headers: { "x-ms-version": "2020-10-02" },
+      });
+    } catch {
+      // fall through to missing-blob error below
+    }
+  }
   if (!head.ok) {
     console.error("[tender-automation-documents] direct-upload blob missing", {
       documentId,
@@ -2689,12 +2727,29 @@ function buildTenderArtifactBlobName(options: {
   const date = /^\d{4}-\d{2}-\d{2}$/.test(options.runDate)
     ? options.runDate
     : "undated";
-  // {companyName_id}/tender-artifacts/{portal}/{date}/{tenderId}/…
-  // alongside companydocs/ under the same company root.
+  const file = sanitizeTenderArtifactFileName(options.fileName);
+
+  // Manual tenders stay under the historical Azure layout shown in Storage Explorer:
+  //   companies/{key}/tender-artifacts/manual/{date}/{tenderId}/{file}
+  // Portal crawler artifacts use the company root folder next to companydocs/.
+  if (portal === "manual") {
+    const fromEnv = (Deno.env.get("COMPANY_BLOB_KEY") || "").trim();
+    const key =
+      (fromEnv
+        ? fromEnv
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-+|-+$/g, "")
+        : "") ||
+      slugify(options.companyName).split("-")[0] ||
+      "company";
+    return `companies/${key}/tender-artifacts/manual/${date}/${id || "unknown"}/${file}`;
+  }
+
   return (
     `${buildCompanyRootFolder(options.companyName, options.companyId)}/` +
     `tender-artifacts/${portal || "unknown"}/${date}/${id || "unknown"}/` +
-    sanitizeTenderArtifactFileName(options.fileName)
+    file
   );
 }
 

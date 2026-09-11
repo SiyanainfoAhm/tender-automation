@@ -24,6 +24,9 @@ export const WORKSPACE_DOCUMENT_TYPES = [
   "Tender Fee",
   "Power of Attorney",
   "Other",
+  "Pre-Qualification",
+  "Technical",
+  "Annexure",
 ] as const;
 
 export const WORKSPACE_DOCUMENT_STATUSES = [

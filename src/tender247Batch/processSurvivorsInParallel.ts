@@ -9,7 +9,14 @@ import {
   dismissTender247AdvanceSearchModal,
   dismissTender247Interruptions,
 } from "../tenderDetails/dismissTender247Interruptions.js";
-import { readCurrentSelectMailDate } from "../tenderDetails/selectTender247MailDate.js";
+import {
+  loginToTender247,
+  isTender247DashboardAuthenticated,
+} from "../tenderDetails/ensureTender247LoggedIn.js";
+import {
+  readCurrentSelectMailDate,
+  waitForSelectMailDateCard,
+} from "../tenderDetails/selectTender247MailDate.js";
 import { ensureTender247FreshListForDate } from "./ensureTender247FreshListForDate.js";
 import { getActiveTender247RunContext } from "./tender247RunContext.js";
 import {
@@ -35,15 +42,52 @@ async function readMailDateIsoSafe(page: Page): Promise<string | null> {
   }
 }
 
+async function gotoDashboardAndWaitForMailDateCard(
+  listPage: Page,
+  config: AppConfig,
+  logger: Logger,
+  reason: string,
+): Promise<string | null> {
+  const dashboardUrl = tender247DashboardUrl(config);
+  logger.warn(
+    `T247_LIST_RECOVER_RETURN_DASHBOARD reason=${reason} url=${dashboardUrl}`,
+  );
+  await listPage
+    .goto(dashboardUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: config.pageTimeoutMs,
+    })
+    .catch(() => undefined);
+  await listPage
+    .waitForLoadState("networkidle", {
+      timeout: Math.min(config.pageTimeoutMs, 20_000),
+    })
+    .catch(() => undefined);
+  await listPage.waitForTimeout(1_200);
+  await dismissTender247Interruptions(listPage, logger, config).catch(
+    () => undefined,
+  );
+  await dismissTender247AdvanceSearchModal(listPage, logger).catch(
+    () => undefined,
+  );
+  await waitForSelectMailDateCard(
+    listPage,
+    Math.min(config.pageTimeoutMs, 25_000),
+  ).catch(() => undefined);
+  return readMailDateIsoSafe(listPage);
+}
+
 /**
  * Soft-recover list UI so a failed/detail-open tender does not poison the next one.
  *
  * After AI-summary / search-by-ID opens, the list page is often still on the
  * detail URL — Select Mail Date is missing. Return to the dashboard and only
  * open the calendar when the visible mail date is wrong (not on every tender).
+ * When the card stays missing (session drift), re-login once then re-select.
  */
 async function recoverListPageBetweenTenders(
   listPage: Page,
+  context: BrowserContext,
   config: AppConfig,
   logger: Logger,
   dateFolder: string,
@@ -73,27 +117,12 @@ async function recoverListPageBetweenTenders(
       return;
     }
 
-    const dashboardUrl = tender247DashboardUrl(config);
-    logger.warn(
-      `T247_LIST_RECOVER_RETURN_DASHBOARD reason=${
-        iso ? `mail-date=${iso}` : "mail-date-card-missing"
-      } url=${dashboardUrl}`,
+    iso = await gotoDashboardAndWaitForMailDateCard(
+      listPage,
+      config,
+      logger,
+      iso ? `mail-date=${iso}` : "mail-date-card-missing",
     );
-    await listPage
-      .goto(dashboardUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: config.pageTimeoutMs,
-      })
-      .catch(() => undefined);
-    await listPage.waitForTimeout(600);
-    await dismissTender247Interruptions(listPage, logger, config).catch(
-      () => undefined,
-    );
-    await dismissTender247AdvanceSearchModal(listPage, logger).catch(
-      () => undefined,
-    );
-
-    iso = await readMailDateIsoSafe(listPage);
     if (iso === requestedDate) {
       logger.info(`T247_LIST_RECOVER_MAIL_DATE_OK=${requestedDate}`);
       return;
@@ -113,26 +142,48 @@ async function recoverListPageBetweenTenders(
         `T247_LIST_RECOVER_MAIL_DATE_SOFT_FAIL=${msg.slice(0, 160)}`,
       );
       logger.warn(
-        `TENDER247_UI_HARD_RESET reason=between-tenders url=${dashboardUrl}`,
-      );
-      await listPage
-        .goto(dashboardUrl, {
-          waitUntil: "domcontentloaded",
-          timeout: config.pageTimeoutMs,
-        })
-        .catch(() => undefined);
-      await listPage.waitForTimeout(600);
-      await dismissTender247Interruptions(listPage, logger, config).catch(
-        () => undefined,
-      );
-      await dismissTender247AdvanceSearchModal(listPage, logger).catch(
-        () => undefined,
+        `TENDER247_UI_HARD_RESET reason=between-tenders url=${tender247DashboardUrl(config)}`,
       );
 
-      const afterReset = await readMailDateIsoSafe(listPage);
+      let afterReset = await gotoDashboardAndWaitForMailDateCard(
+        listPage,
+        config,
+        logger,
+        "hard-reset",
+      );
       if (afterReset === requestedDate) {
         logger.info(`T247_LIST_RECOVER_MAIL_DATE_OK=${requestedDate}`);
         return;
+      }
+
+      const authenticated = await isTender247DashboardAuthenticated(
+        listPage,
+      ).catch(() => false);
+      if (!authenticated || !afterReset) {
+        logger.warn(
+          "T247_LIST_RECOVER_RELOGIN=true (mail-date card still missing)",
+        );
+        await loginToTender247(listPage, context, logger, config).catch(
+          (loginError) => {
+            const loginMsg =
+              loginError instanceof Error
+                ? loginError.message
+                : String(loginError);
+            logger.warn(
+              `T247_LIST_RECOVER_RELOGIN_FAIL=${loginMsg.slice(0, 160)}`,
+            );
+          },
+        );
+        afterReset = await gotoDashboardAndWaitForMailDateCard(
+          listPage,
+          config,
+          logger,
+          "after-relogin",
+        );
+        if (afterReset === requestedDate) {
+          logger.info(`T247_LIST_RECOVER_MAIL_DATE_OK=${requestedDate}`);
+          return;
+        }
       }
 
       await ensureTender247FreshListForDate(
@@ -243,6 +294,15 @@ export async function processSurvivorsInParallel(options: {
         options.logger,
       );
 
+      // Preflight: do not start a tender while Select Mail Date is missing.
+      await recoverListPageBetweenTenders(
+        options.listPage,
+        options.context,
+        options.config,
+        options.logger,
+        options.dateFolder,
+      );
+
       const excel = options.excelValueById.get(t247Id);
       const result = await processTender247ArtifactTransaction({
         listPage: options.listPage,
@@ -276,6 +336,7 @@ export async function processSurvivorsInParallel(options: {
       // Failed expand / accidental Advance Search must not block the next ID.
       await recoverListPageBetweenTenders(
         options.listPage,
+        options.context,
         options.config,
         options.logger,
         options.dateFolder,

@@ -35,7 +35,7 @@
       "value": "1Z7okWykAZaYJEX",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1820476547,
+      "expires": 1820507427,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -192,10 +192,10 @@
     },
     {
       "name": "AWSALBCORS",
-      "value": "ksRdH2oH73raVwzdqMxNhwk1P9PL59J9U8SlgVQkmWrvjpACtFmtk/p5W1drgVhFuGT5IebADxCcb5cxIaJK1ToK6gnziwEW6vzdLJdFperWzIVaPHE89CXe/uaIzqd7m0tH/aVDhaNBpqrYeEXfLG+TTWJCEirR3uhPd5H8oRlpu6T7yAC5GNkIFbMMkA==",
+      "value": "gRc+H3VDY9HrjMXaadF9HaQoX8aId4oyeyObVAKBc3PnlqdWFpjUHH7K/JNTHG5KJkR6v8NSGfc0VmmBhUE/CiRz9se0ZjaiATIxBQddeBQ2Ffjh49E+DmLdHMR1OaeeL2r11AW/f1mSObdwFxIxF9jWUShpfR00++XNIiitRXmhtmWZIdLvbfdKJRtuvg==",
       "domain": "widget-mediator.zopim.com",
       "path": "/",
-      "expires": 1789545347.743127,
+      "expires": 1789576227.552979,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
@@ -207,11 +207,11 @@
       "localStorage": [
         {
           "name": "ZD-store",
-          "value": "{\"activeEmbed\":\"chat\",\"widgetShown\":false,\"is_chatting\":true}"
+          "value": "{\"activeEmbed\":\"chat\",\"widgetShown\":false,\"is_chatting\":false}"
         },
         {
           "name": "ZD-suid",
-          "value": "{\"id\":\"93360acb21f54161b15eb1e67d0980e9\",\"expiry\":1788941447295,\"tabs\":{\"count\":1,\"expiry\":0}}"
+          "value": "{\"id\":\"9c158541e24f49389094598e160f6e08\",\"expiry\":1788972327201,\"tabs\":{\"count\":1,\"expiry\":0}}"
         },
         {
           "name": "userData",
@@ -235,7 +235,7 @@
         },
         {
           "name": "__zlcstore",
-          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1788940547976,\"account_status\":\"offline\"}}"
+          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1788971427820,\"account_status\":\"offline\"}}"
         }
       ],
       "indexedDB": []

@@ -120,6 +120,8 @@ test("processSurvivors recovers list UI between tenders after failure", () => {
   assert.match(src, /T247_LIST_RECOVER/);
   assert.match(src, /T247_LIST_RECOVER_MAIL_DATE_OK/);
   assert.match(src, /T247_LIST_RECOVER_RETURN_DASHBOARD/);
+  assert.match(src, /T247_LIST_RECOVER_RELOGIN/);
+  assert.match(src, /waitForSelectMailDateCard/);
   assert.match(src, /continuing to next tender/);
 });
 
@@ -131,6 +133,8 @@ test("openSingleTenderDirectly skips calendar when mail date already matches", (
   assert.match(src, /TENDER247_DETAIL_MAIL_DATE_OK/);
   assert.match(src, /TENDER247_DETAIL_RETURN_DASHBOARD/);
   assert.match(src, /mail-date-card-missing/);
+  assert.match(src, /TENDER247_MAIL_DATE_RESTORE_RELOGIN/);
+  assert.match(src, /waitForSelectMailDateCard/);
 });
 
 test("openSingleTenderDirectly prefers API detail URL and recovers list expand", () => {

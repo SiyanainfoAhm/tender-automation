@@ -16,6 +16,7 @@ import { dismissTender247SupportChat } from "./dismissSupportChat.js";
 import {
   assertSameBrowserContext,
   ensureTender247DetailAuthenticated,
+  loginToTender247,
 } from "./ensureTender247LoggedIn.js";
 import type { TenderListItem } from "./types.js";
 import {
@@ -28,7 +29,10 @@ import {
   expandTender247Row,
   readTender247CardTitle,
 } from "./tender247Expansion.js";
-import { readCurrentSelectMailDate } from "./selectTender247MailDate.js";
+import {
+  readCurrentSelectMailDate,
+  waitForSelectMailDateCard,
+} from "./selectTender247MailDate.js";
 import { searchTender247ListById } from "./searchTender247ById.js";
 import {
   buildDetailPageUrl,
@@ -143,6 +147,7 @@ export interface OpenSingleTenderResult {
 
 async function ensureListMailDateForDetailOpen(
   page: Page,
+  context: BrowserContext,
   config: AppConfig,
   logger: Logger,
   dateFolder?: string,
@@ -168,13 +173,22 @@ async function ensureListMailDateForDetailOpen(
       waitUntil: "domcontentloaded",
       timeout: config.pageTimeoutMs,
     });
-    await page.waitForTimeout(800);
+    await page
+      .waitForLoadState("networkidle", {
+        timeout: Math.min(config.pageTimeoutMs, 20_000),
+      })
+      .catch(() => undefined);
+    await page.waitForTimeout(1_200);
     await dismissTender247Interruptions(page, logger, config).catch(
       () => undefined,
     );
     await dismissTender247AdvanceSearchModal(page, logger).catch(
       () => undefined,
     );
+    await waitForSelectMailDateCard(
+      page,
+      Math.min(config.pageTimeoutMs, 25_000),
+    ).catch(() => undefined);
   };
 
   const readIsoSafe = async (): Promise<string | null> => {
@@ -253,12 +267,33 @@ async function ensureListMailDateForDetailOpen(
     logger.warn(
       `TENDER247_MAIL_DATE_RESTORE_RETRY hard-reset after=${code || "error"} reason=${msg.slice(0, 160)}`,
     );
-    return await tryRestore(true);
+    try {
+      return await tryRestore(true);
+    } catch (secondError) {
+      const secondMsg =
+        secondError instanceof Error
+          ? secondError.message
+          : String(secondError);
+      const secondCode =
+        secondError instanceof AutomationError ? secondError.code : "";
+      const needsRelogin =
+        secondCode === "TENDER247_MAIL_DATE_CONTROL_NOT_FOUND" ||
+        /Select Mail Date/i.test(secondMsg);
+      if (!needsRelogin) {
+        throw secondError;
+      }
+      logger.warn(
+        `TENDER247_MAIL_DATE_RESTORE_RELOGIN after=${secondCode || "error"} reason=${secondMsg.slice(0, 160)}`,
+      );
+      await loginToTender247(page, context, logger, config);
+      return await tryRestore(true);
+    }
   }
 }
 
 async function restoreListAndMailDate(
   page: Page,
+  context: BrowserContext,
   config: AppConfig,
   logger: Logger,
   dateFolder?: string,
@@ -280,13 +315,22 @@ async function restoreListAndMailDate(
       waitUntil: "domcontentloaded",
       timeout: config.pageTimeoutMs,
     });
-    await page.waitForTimeout(800);
+    await page
+      .waitForLoadState("networkidle", {
+        timeout: Math.min(config.pageTimeoutMs, 20_000),
+      })
+      .catch(() => undefined);
+    await page.waitForTimeout(1_200);
     await dismissTender247Interruptions(page, logger, config).catch(
       () => undefined,
     );
     await dismissTender247AdvanceSearchModal(page, logger).catch(
       () => undefined,
     );
+    await waitForSelectMailDateCard(
+      page,
+      Math.min(config.pageTimeoutMs, 25_000),
+    ).catch(() => undefined);
   };
 
   // Reminder / Advance Search can leave Select Mail Date unreadable ("unknown")
@@ -332,7 +376,13 @@ async function restoreListAndMailDate(
       );
       return;
     }
-    await ensureListMailDateForDetailOpen(page, config, logger, dateFolder);
+    await ensureListMailDateForDetailOpen(
+      page,
+      context,
+      config,
+      logger,
+      dateFolder,
+    );
   };
 
   try {
@@ -346,7 +396,29 @@ async function restoreListAndMailDate(
       `TENDER247_MAIL_DATE_RESTORE_RETRY hard-reset after=${code || "error"} reason=${msg.slice(0, 160)}`,
     );
     await hardResetDashboard("mail-date-picker-blocked");
-    await applyMailDate();
+    try {
+      await applyMailDate();
+    } catch (secondError) {
+      const secondMsg =
+        secondError instanceof Error
+          ? secondError.message
+          : String(secondError);
+      const secondCode =
+        secondError instanceof AutomationError ? secondError.code : "";
+      if (
+        secondCode === "TENDER247_MAIL_DATE_CONTROL_NOT_FOUND" ||
+        /Select Mail Date/i.test(secondMsg)
+      ) {
+        logger.warn(
+          `TENDER247_MAIL_DATE_RESTORE_RELOGIN after=${secondCode || "error"} reason=${secondMsg.slice(0, 160)}`,
+        );
+        await loginToTender247(page, context, logger, config);
+        await hardResetDashboard("after-relogin");
+        await applyMailDate();
+        return;
+      }
+      throw secondError;
+    }
   }
 }
 
@@ -396,6 +468,7 @@ export async function openSingleTenderDirectly(
   await dismissTender247SupportChat(page, logger);
   await ensureListMailDateForDetailOpen(
     page,
+    context,
     config,
     logger,
     screening?.dateFolder,
@@ -419,7 +492,13 @@ export async function openSingleTenderDirectly(
       `SEARCH_FAILED id=${id} stage=search attempt=1 reason=${firstMsg}`,
     );
     logger.info(`SEARCH_RETRY id=${id} restoring list and mail date`);
-    await restoreListAndMailDate(page, config, logger, screening?.dateFolder);
+    await restoreListAndMailDate(
+      page,
+      context,
+      config,
+      logger,
+      screening?.dateFolder,
+    );
     await dismissTender247BlockingOverlays(page, logger, config);
     await dismissTender247SupportChat(page, logger);
     try {
@@ -547,7 +626,13 @@ export async function openSingleTenderDirectly(
       return openViaSecurityCode(securityCodeFromSearch);
     }
 
-    await restoreListAndMailDate(page, config, logger, screening?.dateFolder);
+    await restoreListAndMailDate(
+      page,
+      context,
+      config,
+      logger,
+      screening?.dateFolder,
+    );
 
     const requestedDate =
       getActiveTender247RunContext()?.requestedDate ??

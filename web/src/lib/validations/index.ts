@@ -249,15 +249,15 @@ export const tenderFiltersSchema = z
     const selectedDate = isIsoCalendarDate(data.selectedDate)
       ? data.selectedDate
       : undefined;
-    // Default scraped_date filter to today. Explicit `date=all` means no
-    // scraped-date filter (show every date).
+    // Default scraped_date filter to today. Keep explicit `date=all` as "all"
+    // (do not coerce to undefined — re-parsing would default back to today).
     const rawDate =
       typeof data.date === "string" ? data.date.trim().toLowerCase() : "";
     const date =
       !rawDate
         ? ("today" as const)
         : rawDate === "all"
-          ? undefined
+          ? ("all" as const)
           : normalizeDatePreset(data.date);
     const createdFrom = isIsoCalendarDate(data.createdFrom)
       ? data.createdFrom

@@ -212,7 +212,8 @@ export function createMailDateScreenshotHook(
 
 /**
  * Locate the dashboard card that contains exact "Select Mail Date" text.
- * Excludes Today Tenders.
+ * Prefers compact cards without Today Tenders; falls back to the tightest
+ * Select Mail Date ancestor when both labels share a parent (SPA drift).
  */
 async function markSelectMailDateCard(page: Page): Promise<Locator> {
   await page
@@ -227,23 +228,30 @@ async function markSelectMailDateCard(page: Page): Promise<Locator> {
     const all = Array.from(document.querySelectorAll("body *")) as HTMLElement[];
     let best: HTMLElement | null = null;
     let bestScore = Number.POSITIVE_INFINITY;
+    let fallback: HTMLElement | null = null;
+    let fallbackScore = Number.POSITIVE_INFINITY;
 
     for (const el of all) {
       const style = window.getComputedStyle(el);
       if (style.display === "none" || style.visibility === "hidden") continue;
       const text = (el.innerText || "").replace(/\s+/g, " ").trim();
       if (!/Select\s+Mail\s+Date/i.test(text)) continue;
-      if (/Today\s+Tenders/i.test(text)) continue;
+      const hasToday = /Today\s+Tenders/i.test(text);
       // Prefer compact cards that also show a date value
       const hasDate = /\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}/.test(text);
       const score = text.length + (hasDate ? 0 : 10_000);
-      if (score < bestScore) {
+      if (!hasToday && score < bestScore) {
         best = el;
         bestScore = score;
       }
+      if (hasToday && score < fallbackScore) {
+        fallback = el;
+        fallbackScore = score;
+      }
     }
-    if (!best) return false;
-    best.setAttribute(attr, "true");
+    const chosen = best || fallback;
+    if (!chosen) return false;
+    chosen.setAttribute(attr, "true");
     return true;
   }, MAIL_DATE_CARD_ATTR);
 
@@ -255,6 +263,30 @@ async function markSelectMailDateCard(page: Page): Promise<Locator> {
   }
 
   return page.locator(`[${MAIL_DATE_CARD_ATTR}="true"]`).first();
+}
+
+/** Poll until the Select Mail Date card is in the DOM (SPA after dashboard goto). */
+export async function waitForSelectMailDateCard(
+  page: Page,
+  timeoutMs = 20_000,
+): Promise<Locator> {
+  const deadline = Date.now() + Math.max(1_000, timeoutMs);
+  let lastError: unknown;
+  while (Date.now() < deadline) {
+    try {
+      return await markSelectMailDateCard(page);
+    } catch (error) {
+      lastError = error;
+      await page.waitForTimeout(400);
+    }
+  }
+  if (lastError instanceof AutomationError) {
+    throw lastError;
+  }
+  throw new AutomationError(
+    "TENDER247_MAIL_DATE_CONTROL_NOT_FOUND",
+    'Could not find the "Select Mail Date" dashboard card (excluding Today Tenders)',
+  );
 }
 
 async function readMailDateInputFromCard(card: Locator): Promise<string> {

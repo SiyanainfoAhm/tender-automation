@@ -25,6 +25,9 @@ test("ai-summary pipeline always downloads documents and uploads Azure artifacts
   assert.match(src, /preserveExistingQualificationStatus/);
   assert.match(src, /persistGptScreenedWorkbookToDatabase/);
   assert.match(src, /listAiSummaryQueueForDate/);
+  assert.match(src, /resolveAiSummaryResumeIdFilter/);
+  assert.match(src, /computeAiSummaryResumeIdFilter/);
+  assert.match(src, /AI_SUMMARY_PIPELINE_AUTO_RESUME/);
   assert.match(src, /ai_summary_url/);
   assert.match(src, /documents_zip_url/);
   assert.match(src, /skippedLocalArtifacts/);
@@ -141,6 +144,44 @@ test("ai-summary pipeline rejects mistyped --accountid", async () => {
       return true;
     },
   );
+});
+
+test("computeAiSummaryResumeIdFilter retries failed only when Excel and DB counts match", async () => {
+  const mod = await import("../runAiSummaryFirstDocumentPipeline.js");
+  const failed = ["104146865", "104146868"];
+  const excelIds = ["1", "2", "3", ...failed];
+  const dbIds = new Set(excelIds);
+
+  const sameCount = mod.computeAiSummaryResumeIdFilter({
+    priorFailedIds: failed,
+    excelRowCount: excelIds.length,
+    dbRowCount: excelIds.length,
+    excelIds,
+    dbIds,
+  });
+  assert.equal(sameCount.mode, "failed-only");
+  assert.deepEqual(sameCount.ids, failed);
+
+  const gapIds = ["999001", "999002"];
+  const mismatch = mod.computeAiSummaryResumeIdFilter({
+    priorFailedIds: failed,
+    excelRowCount: excelIds.length + gapIds.length,
+    dbRowCount: excelIds.length,
+    excelIds: [...excelIds, ...gapIds],
+    dbIds,
+  });
+  assert.equal(mismatch.mode, "failed-plus-gap");
+  assert.deepEqual(mismatch.ids, [...failed, ...gapIds]);
+
+  const none = mod.computeAiSummaryResumeIdFilter({
+    priorFailedIds: [],
+    excelRowCount: 10,
+    dbRowCount: 10,
+    excelIds: ["1"],
+    dbIds: new Set(["1"]),
+  });
+  assert.equal(none.mode, "none");
+  assert.equal(none.ids, null);
 });
 
 test("package.json exposes pipeline:tender247:ai-summary", () => {

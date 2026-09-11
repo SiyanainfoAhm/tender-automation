@@ -1,7 +1,6 @@
 import "server-only";
 
 import { getServerSupabase } from "@/lib/db/server";
-import { toAccessibleStorageUrl } from "@/lib/storage/accessible-storage-url";
 import {
   BID_FEE_TYPE_LABELS,
   type BidFeeRecord,
@@ -99,12 +98,10 @@ function mapFee(row: FeeRow): BidFeeRecord {
 }
 
 function mapDoc(row: DocRow): TenderDocumentRecord {
+  // Prefer app-owned download routes (never expose raw Azure URLs in the UI).
   const downloadUrl = row.company_document_id
     ? `/api/documents/${row.company_document_id}?download=1`
-    : toAccessibleStorageUrl(row.storage_url, {
-        download: true,
-        fileName: row.original_name || row.file_name,
-      });
+    : `/api/tender-documents/${row.id}?download=1`;
   return {
     id: row.id,
     companyId: row.company_id,

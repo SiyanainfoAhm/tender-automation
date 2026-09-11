@@ -7,6 +7,7 @@ import {
   getOrCreateWorkspace,
   loadBidWorkspace,
 } from "@/server/repositories/bidWorkspaceRepository";
+import { loadChecklistForWorkspace } from "@/server/repositories/bidChecklistRepository";
 import { insertTenderActivity } from "@/server/repositories/tenderActivityRepository";
 import { loadTenderDetailSafe } from "@/server/tenders/load-tender-detail";
 
@@ -76,6 +77,28 @@ export default async function BidWorkspacePage({
     );
   }
 
+  let checklistItems: Awaited<
+    ReturnType<typeof loadChecklistForWorkspace>
+  >["items"] = [];
+  let checklistProgress: Awaited<
+    ReturnType<typeof loadChecklistForWorkspace>
+  >["progress"] = { completed: 0, total: 0, percent: 0 };
+  let companyDocuments: Awaited<
+    ReturnType<typeof loadChecklistForWorkspace>
+  >["companyDocuments"] = [];
+  try {
+    const checklist = await loadChecklistForWorkspace({
+      workspace,
+      companyId: session.companyId,
+      missingDocuments: tender.qualification?.missingDocuments ?? [],
+    });
+    checklistItems = checklist.items;
+    checklistProgress = checklist.progress;
+    companyDocuments = checklist.companyDocuments;
+  } catch (error) {
+    console.error("[bid-workspace] checklist load failed", error);
+  }
+
   const refreshed = created.created
     ? await loadTenderDetailSafe({
         tenderId: id,
@@ -88,6 +111,9 @@ export default async function BidWorkspacePage({
     <BidWorkspaceClient
       tender={refreshed.ok ? refreshed.tender : tender}
       workspace={workspace}
+      checklistItems={checklistItems}
+      checklistProgress={checklistProgress}
+      companyDocuments={companyDocuments}
       canEdit={sessionHasPermission(session, "bids.edit")}
       canSubmit={sessionHasPermission(session, "bids.submit")}
     />

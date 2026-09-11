@@ -4,10 +4,15 @@ import { tenderFiltersSchema } from "@/lib/validations";
 describe("tender repository filter contracts", () => {
   it("defaults scraped date to today and allows explicit all", () => {
     expect(tenderFiltersSchema.parse({}).date).toBe("today");
-    expect(tenderFiltersSchema.parse({ date: "all" }).date).toBeUndefined();
+    expect(tenderFiltersSchema.parse({ date: "all" }).date).toBe("all");
     expect(tenderFiltersSchema.parse({ date: "yesterday" }).date).toBe(
       "yesterday",
     );
+    // Re-parse must not collapse date=all back to today (status-count path).
+    const allDates = tenderFiltersSchema.parse({ date: "all" });
+    expect(
+      tenderFiltersSchema.parse({ ...allDates, status: "ALL", page: 1 }).date,
+    ).toBe("all");
   });
 
   it("supports source filtering", () => {

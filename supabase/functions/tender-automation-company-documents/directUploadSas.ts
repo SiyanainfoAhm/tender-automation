@@ -110,3 +110,39 @@ export function createWriteOnlyBlobUploadUrl(options: {
     sasSp: params.get("sp"),
   };
 }
+
+/** Short-lived read-only blob SAS (Edge streaming when container SAS fails). */
+export function createReadOnlyBlobUrl(options: {
+  azure: AzureSasConfig;
+  blobName: string;
+  nowMs?: number;
+}): string {
+  const accountKey = requireAzureAccountKey();
+  const credential = new StorageSharedKeyCredential(
+    options.azure.accountName,
+    accountKey,
+  );
+  const { startsOn, expiresOn } = computeDirectUploadSasWindow(
+    options.nowMs ?? Date.now(),
+  );
+  const sas = generateBlobSASQueryParameters(
+    {
+      containerName: options.azure.containerName,
+      blobName: options.blobName,
+      permissions: BlobSASPermissions.parse("r"),
+      startsOn,
+      expiresOn,
+      protocol: SASProtocol.Https,
+    },
+    credential,
+  ).toString();
+
+  const encoded = options.blobName
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/");
+  return (
+    `https://${options.azure.accountName}.blob.core.windows.net/` +
+    `${options.azure.containerName}/${encoded}?${sas}`
+  );
+}

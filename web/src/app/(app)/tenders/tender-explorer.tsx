@@ -89,7 +89,6 @@ import type {
 } from "@/server/repositories/tenderRepository";
 
 type TenderExplorerProps = {
-  allCount: number;
   categories: TenderExplorerFacet[];
   portals: Array<"TENDER247" | "BIDASSIST" | "MANUAL">;
   cities: TenderExplorerFacet[];
@@ -162,7 +161,7 @@ function panelFilterCount(filters: TenderFilters): number {
     filters.status && filters.status !== "ALL",
     Boolean(filters.category?.trim()),
     Boolean(filters.city?.trim()),
-    Boolean(filters.date),
+    Boolean(filters.date && filters.date !== "all"),
     Boolean(filters.closingDate),
   ].filter(Boolean).length;
 }
@@ -297,7 +296,6 @@ function TableRowSkeleton() {
 }
 
 export function TenderExplorer({
-  allCount,
   categories,
   portals,
   cities,
@@ -556,8 +554,8 @@ export function TenderExplorer({
         ].join(" – ")
       : filters.date === "custom" && filters.selectedDate
         ? formatCompactAppDate(`${filters.selectedDate}T12:00:00+05:30`)
-        : filters.date
-          ? CREATED_DATE_PRESET_LABELS[filters.date]
+        : filters.date && filters.date !== "all"
+          ? CREATED_DATE_PRESET_LABELS[filters.date as CreatedDatePreset]
           : "All Dates";
   const closingTriggerLabel =
     filters.closingDate === "custom" &&
@@ -785,7 +783,7 @@ export function TenderExplorer({
 
       {filtersActive ? (
         <div className="flex flex-wrap items-center gap-2">
-          {filters.date ? (
+          {filters.date && filters.date !== "all" ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-background-100 px-2.5 py-1 text-xs text-foreground-700">
               Scraped: {dateTriggerLabel}
               <button
@@ -1148,7 +1146,9 @@ export function TenderExplorer({
           <span className="font-semibold text-foreground-800">
             {total.toLocaleString("en-IN")}
           </span>{" "}
-          of {allCount.toLocaleString("en-IN")} tenders
+          of{" "}
+          {(statusCountsState?.totalTenders ?? total).toLocaleString("en-IN")}{" "}
+          tenders
         </p>
         <div className="flex items-center gap-2">
           <TenderExportButtons

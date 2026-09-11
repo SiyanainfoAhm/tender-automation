@@ -13,6 +13,11 @@
  * Same-day scheduled re-runs re-download Excel so newly listed tenders are
  * inserted, then only process rows still missing either artifact URL.
  *
+ * When a prior ai-summary-pipeline-summary.json lists failedIds, the next run
+ * auto-resumes without --only-failed:
+ *   - Excel row count == Supabase row count for the date → retry failedIds only
+ *   - Counts differ → retry failedIds plus Excel IDs not yet stored in Supabase
+ *
  * Usage:
  *   npm run pipeline:tender247:ai-summary
  *   npm run pipeline:tender247:ai-summary -- --date=2026-09-06
@@ -156,6 +161,7 @@ function parseIdsFilter(argv: string[]): string[] | null {
 }
 
 function loadFailedIdsFromSummary(dateFolder: string): string[] {
+  const ids = loadPriorSummaryFailedIds(dateFolder);
   const summaryPath = path.join(dateFolder, "ai-summary-pipeline-summary.json");
   if (!fs.existsSync(summaryPath)) {
     throw new AutomationError(
@@ -163,21 +169,204 @@ function loadFailedIdsFromSummary(dateFolder: string): string[] {
       `Missing ${summaryPath}. Run a full AI-summary pipeline first, or pass --ids=...`,
     );
   }
-  const parsed = JSON.parse(fs.readFileSync(summaryPath, "utf8")) as {
-    failedIds?: unknown;
-  };
-  const ids = Array.isArray(parsed.failedIds)
-    ? parsed.failedIds
-        .map((id) => normalizeTenderIdDigits(String(id)))
-        .filter(Boolean)
-    : [];
   if (!ids.length) {
     throw new AutomationError(
       "AI_SUMMARY_FAILED_IDS_EMPTY",
       `${summaryPath} has no failedIds to retry`,
     );
   }
-  return [...new Set(ids)];
+  return ids;
+}
+
+/** Prior run failures; empty when no summary or no failedIds. */
+export function loadPriorSummaryFailedIds(dateFolder: string): string[] {
+  const summaryPath = path.join(dateFolder, "ai-summary-pipeline-summary.json");
+  if (!fs.existsSync(summaryPath)) {
+    return [];
+  }
+  const parsed = JSON.parse(fs.readFileSync(summaryPath, "utf8")) as {
+    failedIds?: unknown;
+  };
+  if (!Array.isArray(parsed.failedIds)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      parsed.failedIds
+        .map((id) => normalizeTenderIdDigits(String(id)))
+        .filter(Boolean),
+    ),
+  ];
+}
+
+export type AiSummaryResumeMode = "none" | "failed-only" | "failed-plus-gap";
+
+export function resolveExcelPathForAiSummaryCount(options: {
+  dateFolder: string;
+  runDate: string;
+  excelPath?: string | null;
+}): string | null {
+  const dailyPath = path.join(
+    options.dateFolder,
+    "screening",
+    dailyScreeningOutputFilename(options.runDate),
+  );
+  return (
+    options.excelPath ||
+    resolveExistingScreenedWorkbook(options.dateFolder, options.runDate) ||
+    (fs.existsSync(dailyPath) ? dailyPath : null)
+  );
+}
+
+export function countExcelTender247Rows(excelPath: string): number {
+  return parseSourceWorkbook(excelPath, "TENDER247").length;
+}
+
+export function listExcelTender247Ids(excelPath: string): string[] {
+  const rows = parseSourceWorkbook(excelPath, "TENDER247");
+  return [
+    ...new Set(
+      rows
+        .map((row) => normalizeTenderIdDigits(row.tender247Id))
+        .filter(Boolean),
+    ),
+  ];
+}
+
+/** Pure resume decision: failed-only when Excel/DB counts match, else failed + Excel gap. */
+export function computeAiSummaryResumeIdFilter(options: {
+  priorFailedIds: string[];
+  excelRowCount: number;
+  dbRowCount: number;
+  excelIds: string[];
+  dbIds: Set<string>;
+}): { ids: string[] | null; mode: AiSummaryResumeMode } {
+  if (!options.priorFailedIds.length) {
+    return { ids: null, mode: "none" };
+  }
+  if (options.excelRowCount === options.dbRowCount) {
+    return { ids: options.priorFailedIds, mode: "failed-only" };
+  }
+  const gapIds = options.excelIds.filter((id) => !options.dbIds.has(id));
+  return {
+    ids: [...new Set([...options.priorFailedIds, ...gapIds])],
+    mode: "failed-plus-gap",
+  };
+}
+
+export async function countT247TendersForScrapedDate(
+  scrapedDate: string,
+): Promise<number> {
+  if (!isSupabaseConfigured()) {
+    throw new AutomationError(
+      "SUPABASE_NOT_CONFIGURED",
+      "Supabase is not configured — cannot count tenders for resume",
+    );
+  }
+  const client = getSupabaseAdminClient();
+  const { count, error } = await client
+    .from("agenttender_tenders")
+    .select("id", { count: "exact", head: true })
+    .eq("source_portal", "TENDER247")
+    .eq("scraped_date", scrapedDate);
+  if (error) {
+    throw new AutomationError(
+      "AI_SUMMARY_TENDER_COUNT_FAILED",
+      `Failed to count tenders for ${scrapedDate}: ${error.message}`,
+    );
+  }
+  return count ?? 0;
+}
+
+export async function listT247SourceIdsForScrapedDate(
+  scrapedDate: string,
+): Promise<Set<string>> {
+  if (!isSupabaseConfigured()) {
+    throw new AutomationError(
+      "SUPABASE_NOT_CONFIGURED",
+      "Supabase is not configured — cannot list tender IDs for resume",
+    );
+  }
+  const client = getSupabaseAdminClient();
+  const pageSize = 1000;
+  const ids = new Set<string>();
+  for (let from = 0; ; from += pageSize) {
+    const to = from + pageSize - 1;
+    const { data, error } = await client
+      .from("agenttender_tenders")
+      .select("source_tender_id")
+      .eq("source_portal", "TENDER247")
+      .eq("scraped_date", scrapedDate)
+      .order("source_tender_id", { ascending: true })
+      .range(from, to);
+    if (error) {
+      throw new AutomationError(
+        "AI_SUMMARY_TENDER_IDS_FAILED",
+        `Failed to list tender IDs for ${scrapedDate}: ${error.message}`,
+      );
+    }
+    const batch = data || [];
+    for (const row of batch) {
+      const id = normalizeTenderIdDigits(String(row.source_tender_id || ""));
+      if (id) ids.add(id);
+    }
+    if (batch.length < pageSize) {
+      break;
+    }
+  }
+  return ids;
+}
+
+export async function resolveAiSummaryResumeIdFilter(options: {
+  dateFolder: string;
+  runDate: string;
+  excelPath?: string | null;
+}): Promise<{
+  ids: string[] | null;
+  mode: AiSummaryResumeMode;
+  excelRowCount: number | null;
+  dbRowCount: number | null;
+}> {
+  const priorFailedIds = loadPriorSummaryFailedIds(options.dateFolder);
+  if (!priorFailedIds.length) {
+    return {
+      ids: null,
+      mode: "none",
+      excelRowCount: null,
+      dbRowCount: null,
+    };
+  }
+
+  const excelPath = resolveExcelPathForAiSummaryCount({
+    dateFolder: options.dateFolder,
+    runDate: options.runDate,
+    excelPath: options.excelPath,
+  });
+  if (!excelPath) {
+    return {
+      ids: priorFailedIds,
+      mode: "failed-only",
+      excelRowCount: null,
+      dbRowCount: null,
+    };
+  }
+
+  const excelRowCount = countExcelTender247Rows(excelPath);
+  const dbRowCount = await countT247TendersForScrapedDate(options.runDate);
+  const excelIds = listExcelTender247Ids(excelPath);
+  const dbIds = await listT247SourceIdsForScrapedDate(options.runDate);
+  const resolved = computeAiSummaryResumeIdFilter({
+    priorFailedIds,
+    excelRowCount,
+    dbRowCount,
+    excelIds,
+    dbIds,
+  });
+  return {
+    ...resolved,
+    excelRowCount,
+    dbRowCount,
+  };
 }
 
 function parseArgs(argv: string[]): {
@@ -539,20 +728,45 @@ export async function runAiSummaryFirstDocumentPipeline(
     logger.info("AI_SUMMARY_PIPELINE_UPSERT_SKIPPED=true (--skip-upsert)");
   }
 
-  const idFilter: string[] | null = args.onlyFailed
-    ? loadFailedIdsFromSummary(dateFolder)
-    : args.ids;
   if (args.onlyFailed && args.ids?.length) {
     throw new AutomationError(
       "AI_SUMMARY_ID_FILTER_CONFLICT",
       "Pass either --only-failed or --ids=..., not both",
     );
   }
+
+  let idFilterSource = args.onlyFailed
+    ? "ai-summary-pipeline-summary.json"
+    : args.ids?.length
+      ? "--ids"
+      : "";
+  let autoResumeMode: AiSummaryResumeMode = "none";
+  let idFilter: string[] | null = args.onlyFailed
+    ? loadFailedIdsFromSummary(dateFolder)
+    : args.ids;
+
+  if (!idFilter?.length && !args.force) {
+    const resume = await resolveAiSummaryResumeIdFilter({
+      dateFolder,
+      runDate: dateIso,
+      excelPath: summary.excelPath,
+    });
+    autoResumeMode = resume.mode;
+    if (resume.ids?.length) {
+      idFilter = resume.ids;
+      idFilterSource = `auto-resume:${resume.mode}`;
+      logger.info(
+        `AI_SUMMARY_PIPELINE_AUTO_RESUME mode=${resume.mode} excelRows=${resume.excelRowCount ?? "n/a"} dbRows=${resume.dbRowCount ?? "n/a"} count=${resume.ids.length}`,
+      );
+      console.log(
+        `AI_SUMMARY_PIPELINE_AUTO_RESUME mode=${resume.mode} excelRows=${resume.excelRowCount ?? "n/a"} dbRows=${resume.dbRowCount ?? "n/a"} count=${resume.ids.length}`,
+      );
+    }
+  }
+
   if (idFilter?.length) {
     logger.info(
-      `AI_SUMMARY_PIPELINE_ID_FILTER count=${idFilter.length} source=${
-        args.onlyFailed ? "ai-summary-pipeline-summary.json" : "--ids"
-      }`,
+      `AI_SUMMARY_PIPELINE_ID_FILTER count=${idFilter.length} source=${idFilterSource}`,
     );
     console.log(
       `AI_SUMMARY_PIPELINE_ID_FILTER count=${idFilter.length} ids=${idFilter.join(",")}`,
@@ -644,6 +858,7 @@ export async function runAiSummaryFirstDocumentPipeline(
     allowNoBidDetailOpen: true,
     idFilter: idFilter || null,
     onlyFailed: args.onlyFailed,
+    autoResumeMode,
     totalMatching: allCandidates.length,
     skippedExistingAi: summary.skippedExistingAi,
     skippedLocalArtifacts: summary.skippedLocalArtifacts,
