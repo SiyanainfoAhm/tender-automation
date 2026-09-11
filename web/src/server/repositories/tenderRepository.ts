@@ -69,6 +69,11 @@ export type WebTenderListRow = {
   verdict: string | null;
   reason: string | null;
   screening_reason: string | null;
+  /** Portal / Azure archive path when present (URL metadata only). */
+  documents_zip_url?: string | null;
+  ai_summary_url?: string | null;
+  ai_summary_available?: boolean | null;
+  document_archive_available?: boolean | null;
   required_action: string | null;
   confidence: number | null;
   manual_review_required: boolean | null;
@@ -88,7 +93,7 @@ export type WebTenderListRow = {
   startup_exemption: boolean | null;
 };
 
-/** Columns needed for the tender table — avoid RFP text, AI JSON, archives. */
+/** Columns needed for the tender table — avoid RFP text and AI JSON payloads. */
 export const WEB_TENDER_LIST_SELECT = [
   "id",
   "source_portal",
@@ -118,6 +123,11 @@ export const WEB_TENDER_LIST_SELECT = [
   "effective_qualification_status",
   "reason",
   "screening_reason",
+  "prescreen_reason",
+  "documents_zip_url",
+  "ai_summary_url",
+  "ai_summary_available",
+  "document_archive_available",
   "msme_exemption",
   "startup_exemption",
   "duplicate_of_source_tender_id",

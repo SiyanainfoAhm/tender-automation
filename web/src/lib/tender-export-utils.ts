@@ -60,7 +60,12 @@ export function formatExemptionExport(
 }
 
 export function tenderExportReason(row: WebTenderListRow): string {
-  return (row.screening_reason || row.reason || "").trim();
+  return (
+    row.screening_reason ||
+    row.reason ||
+    row.prescreen_reason ||
+    ""
+  ).trim();
 }
 
 export function tenderExportStatusLabel(

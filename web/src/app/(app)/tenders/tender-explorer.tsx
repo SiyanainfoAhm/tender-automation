@@ -30,10 +30,22 @@ import {
   downloadTenderExportXlsx,
   exportAllFilteredTenders,
 } from "@/lib/tender-export";
+import {
+  tenderDocumentsDetailHref,
+  tenderListHasAiSummary,
+  tenderListHasDocuments,
+  tenderListPrescreenReason,
+} from "@/lib/tenders/list-row-meta";
 import type { QualificationStatus } from "@/components/status/qualification-badge";
 import { StatusBadge } from "@/components/status/qualification-badge";
 import { SourceBadge } from "@/components/status/source-badge";
 import type { TenderSource } from "@/components/tenders/tender-status-styles";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   isIndianStateName,
   normalizeTenderCity,
@@ -559,10 +571,17 @@ export function TenderExplorer({
   }, [hasResolvedData, queryKey]);
 
   const openTenderDetail = React.useCallback(
-    (tenderId: string) => {
+    (
+      tenderId: string,
+      options?: { tab?: "documents"; focus?: "ai-summary" },
+    ) => {
       const href = tendersListHrefFromParts(pathname, queryKey);
       rememberTendersListReturn(href, window.scrollY);
-      router.push(`/tenders/${tenderId}`);
+      const params = new URLSearchParams();
+      if (options?.tab === "documents") params.set("tab", "documents");
+      if (options?.focus === "ai-summary") params.set("focus", "ai-summary");
+      const qs = params.toString();
+      router.push(qs ? `/tenders/${tenderId}?${qs}` : `/tenders/${tenderId}`);
     },
     [pathname, queryKey, router],
   );
@@ -570,6 +589,7 @@ export function TenderExplorer({
   const prefetchTenderDetail = React.useCallback(
     (tenderId: string) => {
       router.prefetch(`/tenders/${tenderId}`);
+      router.prefetch(tenderDocumentsDetailHref(tenderId));
     },
     [router],
   );
@@ -777,6 +797,7 @@ export function TenderExplorer({
     rows.length === 0;
 
   return (
+    <TooltipProvider delayDuration={250}>
     <div className="relative" aria-busy={tableBusy}>
       <div className="space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -1512,6 +1533,87 @@ export function TenderExplorer({
                                 <span className="truncate">{place}</span>
                               </p>
                             ) : null}
+                            {(() => {
+                              const chatgpt = tenderListPrescreenReason(row);
+                              const hasDocs = tenderListHasDocuments(row);
+                              const hasAi = tenderListHasAiSummary(row);
+                              if (!chatgpt && !hasDocs && !hasAi) return null;
+                              return (
+                                <div
+                                  className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] leading-snug text-foreground-500"
+                                  onClick={(event) => event.stopPropagation()}
+                                >
+                                  {chatgpt ? (
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <p className="min-w-0 max-w-full truncate sm:max-w-[28rem]">
+                                          <span className="font-medium text-foreground-600">
+                                            ChatGPT:
+                                          </span>{" "}
+                                          <span>{chatgpt}</span>
+                                        </p>
+                                      </TooltipTrigger>
+                                      <TooltipContent className="max-w-sm text-xs leading-relaxed">
+                                        {chatgpt}
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  ) : null}
+                                  {chatgpt && (hasDocs || hasAi) ? (
+                                    <span className="text-foreground-300" aria-hidden>
+                                      |
+                                    </span>
+                                  ) : null}
+                                  {hasDocs ? (
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <button
+                                          type="button"
+                                          className="shrink-0 font-medium text-sky-700 hover:underline"
+                                          aria-label={`View tender documents for ${listTitle(row)}`}
+                                          onClick={() =>
+                                            openTenderDetail(row.id, {
+                                              tab: "documents",
+                                            })
+                                          }
+                                        >
+                                          Tender Documents
+                                        </button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        View official tender/RFP documents
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  ) : null}
+                                  {hasDocs && hasAi ? (
+                                    <span className="text-foreground-300" aria-hidden>
+                                      |
+                                    </span>
+                                  ) : null}
+                                  {hasAi ? (
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <button
+                                          type="button"
+                                          className="shrink-0 font-medium text-sky-700 hover:underline"
+                                          aria-label={`View AI summary for ${listTitle(row)}`}
+                                          onClick={() =>
+                                            openTenderDetail(row.id, {
+                                              tab: "documents",
+                                              focus: "ai-summary",
+                                            })
+                                          }
+                                        >
+                                          AI Summary
+                                        </button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        View AI-generated tender summary
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  ) : null}
+                                </div>
+                              );
+                            })()}
                           </td>
                           <td className="max-w-0 overflow-hidden px-4 py-3 align-middle">
                             <CategoryCapsule
@@ -1673,6 +1775,7 @@ export function TenderExplorer({
         />
       ) : null}
     </div>
+    </TooltipProvider>
   );
 }
 

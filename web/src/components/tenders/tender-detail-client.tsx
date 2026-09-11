@@ -170,6 +170,10 @@ type TenderDetailClientProps = {
   eligibleTender: FeeEligibleTender | null;
   canEdit: boolean;
   canCreateFee: boolean;
+  /** Deep-link from tender list (`?tab=documents`). */
+  initialTab?: TabId;
+  /** Optional focus target within Documents (`?focus=ai-summary`). */
+  initialFocus?: string | null;
 };
 
 function toStatusBadge(status: TenderStatus | null): QualificationStatus | null {
@@ -553,6 +557,11 @@ function DocumentSection({
             {items.map((doc) => (
               <li
                 key={doc.key}
+                id={
+                  /ai[_\s-]?summary/i.test(doc.name)
+                    ? "tender-ai-summary-doc"
+                    : undefined
+                }
                 className="group flex min-w-0 items-center gap-3 rounded-lg border border-border/80 bg-white px-3 py-3"
               >
                 <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
@@ -621,9 +630,13 @@ export function TenderDetailClient({
   eligibleTender,
   canEdit,
   canCreateFee,
+  initialTab = "overview",
+  initialFocus = null,
 }: TenderDetailClientProps) {
   const router = useRouter();
-  const [tab, setTab] = useState<TabId>("overview");
+  const [tab, setTab] = useState<TabId>(
+    initialTab === "documents" ? "documents" : "overview",
+  );
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<EditDraft>(() => buildDraft(tender));
   const [pending, startTransition] = useTransition();
@@ -789,6 +802,16 @@ export function TenderDetailClient({
 
     return [...archiveItems, ...dbItems];
   }, [documents, tender.archiveDocuments]);
+
+  useEffect(() => {
+    if (tab !== "documents" || initialFocus !== "ai-summary") return;
+    const timer = window.setTimeout(() => {
+      document
+        .getElementById("tender-ai-summary-doc")
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [tab, initialFocus, tender.id]);
 
   const sectionDocs = useCallback(
     (section: TenderDocumentSection): DocRowItem[] =>

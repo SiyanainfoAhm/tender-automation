@@ -20,14 +20,21 @@ import { loadTenderDetailSafe } from "@/server/tenders/load-tender-detail";
 
 type TenderDetailPageProps = {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ tab?: string; focus?: string }>;
 };
 
 export default async function TenderDetailPage({
   params,
+  searchParams,
 }: TenderDetailPageProps) {
   const correlationId = createCorrelationId();
   const session = await requireSession();
   const { id } = await params;
+  const query = await searchParams;
+  const initialTab =
+    query.tab === "documents" ? ("documents" as const) : ("overview" as const);
+  const initialFocus =
+    typeof query.focus === "string" ? query.focus.trim() || null : null;
   const companyId = session.user.companyId;
   if (!companyId) notFound();
 
@@ -153,6 +160,8 @@ export default async function TenderDetailPage({
       eligibleTender={eligibleTender}
       canEdit={sessionHasPermission(session, "tenders.edit")}
       canCreateFee={sessionHasPermission(session, "bids.create")}
+      initialTab={initialTab}
+      initialFocus={initialFocus}
     />
   );
 }
