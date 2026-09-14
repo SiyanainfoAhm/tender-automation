@@ -19,6 +19,13 @@ type AppShellProps = {
     theme: string;
     sidebarCollapsed: boolean;
   };
+  companies?: Array<{
+    id: string;
+    name: string;
+    role: string;
+    active: boolean;
+  }>;
+  activeCompanyName?: string | null;
   tenderCount?: number | null;
   wonTenderCount?: number | null;
   children: React.ReactNode;
@@ -27,6 +34,8 @@ type AppShellProps = {
 export function AppShell({
   user,
   preferences,
+  companies = [],
+  activeCompanyName = null,
   tenderCount = null,
   wonTenderCount = null,
   children,
@@ -92,6 +101,8 @@ export function AppShell({
               email: user.email,
               role: user.role,
             }}
+            companies={companies}
+            activeCompanyName={activeCompanyName}
             searchValue={searchValue}
             onSearchChange={setSearchValue}
             onSearchSubmit={(q) => {

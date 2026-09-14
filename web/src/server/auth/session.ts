@@ -288,6 +288,19 @@ export async function loginWithPassword(
     lastLoginAt: row.last_login_at,
   };
 
+  try {
+    const { ensureActiveMembership } = await import(
+      "@/server/repositories/membershipRepository"
+    );
+    const membership = await ensureActiveMembership(row.id, row.company_id);
+    if (membership) {
+      sessionUser.companyId = membership.companyId;
+      sessionUser.role = membership.role;
+    }
+  } catch {
+    /* keep row values if memberships unavailable */
+  }
+
   return {
     ok: true,
     user: sessionUser,
@@ -393,6 +406,14 @@ export async function getSession(): Promise<AuthSession | null> {
       .eq("id", session.id);
   }
 
+  const { ensureActiveMembership } = await import(
+    "@/server/repositories/membershipRepository"
+  );
+  const membership = await ensureActiveMembership(
+    user.id as string,
+    (user.company_id as string) || null,
+  );
+
   return {
     sessionId: session.id,
     expiresAt: session.expires_at,
@@ -400,8 +421,8 @@ export async function getSession(): Promise<AuthSession | null> {
       id: user.id,
       email: user.email,
       fullName: user.full_name,
-      role: user.role as UserRole,
-      companyId: (user.company_id as string) || null,
+      role: (membership?.role || user.role) as UserRole,
+      companyId: membership?.companyId || null,
       mustChangePassword: user.must_change_password,
       lastLoginAt: user.last_login_at,
     },

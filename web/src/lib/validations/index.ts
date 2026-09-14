@@ -5,7 +5,7 @@ import {
   DEFAULT_TENDER_SORT_DIR,
   isWhitelistedSortKey,
 } from "@/lib/tender-sort";
-import { isOptionalPhoneValid } from "@/lib/validations/phone-rules";
+import { isOptionalPhoneValidAnyCountry } from "@/lib/validations/phone-rules";
 
 export const USER_ROLES = [
   "ADMIN",
@@ -101,12 +101,12 @@ export const signupSchema = z
     phone: z
       .string()
       .trim()
-      .max(20)
+      .max(24)
       .optional()
       .or(z.literal(""))
       .refine(
-        (v) => isOptionalPhoneValid(v || ""),
-        "Enter a valid 10-digit mobile number",
+        (v) => isOptionalPhoneValidAnyCountry(v || ""),
+        "Enter a valid phone number",
       ),
     website: z.string().trim().max(200).optional().or(z.literal("")),
     location: z.string().trim().max(160).optional().or(z.literal("")),

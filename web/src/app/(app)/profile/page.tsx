@@ -76,11 +76,20 @@ export default async function ProfilePage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card id="security">
         <CardHeader>
-          <CardTitle className="text-base">Change password</CardTitle>
+          <CardTitle className="text-base">Security</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <div>
+            <h3 className="text-sm font-medium text-text-primary">
+              Change password
+            </h3>
+            <p className="mt-1 text-xs text-text-muted">
+              Verify your current password, then choose a new one that meets the
+              security requirements.
+            </p>
+          </div>
           <ChangePasswordForm />
         </CardContent>
       </Card>

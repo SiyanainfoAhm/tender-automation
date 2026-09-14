@@ -33,16 +33,41 @@ export async function listUsers(options?: {
   companyId?: string;
 }): Promise<SafeUser[]> {
   const supabase = getServerSupabase();
-  let query = supabase
+
+  if (options?.companyId) {
+    const { listMemberUserIdsForCompany } = await import(
+      "./membershipRepository"
+    );
+    const members = await listMemberUserIdsForCompany(options.companyId);
+    if (members.length === 0) return [];
+
+    const roleByUserId = new Map(
+      members.map((m) => [m.userId, m.role] as const),
+    );
+    const { data, error } = await supabase
+      .from("agenttender_users")
+      .select(ADMIN_SAFE_USER_SELECT)
+      .in(
+        "id",
+        members.map((m) => m.userId),
+      )
+      .order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return (data || []).map((r) => {
+      const mapped = mapAdminUser(r as Record<string, unknown>);
+      const membershipRole = roleByUserId.get(mapped.id);
+      return {
+        ...mapped,
+        role: membershipRole || mapped.role,
+        companyId: options.companyId!,
+      };
+    });
+  }
+
+  const { data, error } = await supabase
     .from("agenttender_users")
     .select(ADMIN_SAFE_USER_SELECT)
     .order("created_at", { ascending: false });
-
-  if (options?.companyId) {
-    query = query.eq("company_id", options.companyId);
-  }
-
-  const { data, error } = await query;
   if (error) throw new Error(error.message);
   return (data || []).map((r) => mapAdminUser(r as Record<string, unknown>));
 }
@@ -103,6 +128,16 @@ export async function createUser(options: {
     user_id: data.id,
   });
 
+  if (options.companyId) {
+    const { createMembership } = await import("./membershipRepository");
+    await createMembership({
+      userId: data.id,
+      companyId: options.companyId,
+      role: options.role,
+      createdBy: options.createdBy,
+    });
+  }
+
   await recordAuthEvent({
     userId: options.createdBy,
     attemptedEmail: options.email,
@@ -115,7 +150,10 @@ export async function createUser(options: {
 
 /**
  * Public self-registration. Creates a NEW company (never defaults to Siyana),
- * then an ADMIN user linked to that company (company creator).
+ * then an ADMIN user + membership linked to that company.
+ *
+ * Existing emails must sign in and use Create Company — never create a
+ * second identity for the same email.
  */
 export async function registerPublicUser(options: {
   email: string;
@@ -132,7 +170,9 @@ export async function registerPublicUser(options: {
 }): Promise<SafeUser> {
   const existing = await getUserByEmail(options.email);
   if (existing) {
-    throw new Error("An account with this email already exists");
+    const error = new Error("EXISTING_ACCOUNT");
+    error.name = "ExistingAccountError";
+    throw error;
   }
 
   const { createCompany } = await import("./companyRepository");
@@ -160,7 +200,25 @@ export async function registerPublicUser(options: {
     .select(ADMIN_SAFE_USER_SELECT)
     .single();
 
-  if (error) throw new Error(error.message);
+  if (error) {
+    // Best-effort cleanup if user insert fails after company create.
+    await supabase.from("agenttender_companies").delete().eq("id", company.id);
+    throw new Error(error.message);
+  }
+
+  try {
+    const { createMembership } = await import("./membershipRepository");
+    await createMembership({
+      userId: data.id,
+      companyId: company.id,
+      role: "ADMIN",
+      createdBy: data.id,
+    });
+  } catch (membershipError) {
+    await supabase.from("agenttender_users").delete().eq("id", data.id);
+    await supabase.from("agenttender_companies").delete().eq("id", company.id);
+    throw membershipError;
+  }
 
   await supabase.from("agenttender_user_preferences").insert({
     user_id: data.id,
@@ -237,6 +295,15 @@ export async function updateUser(
     .select(ADMIN_SAFE_USER_SELECT)
     .single();
   if (error) throw new Error(error.message);
+
+  if (patch.role != null && target.companyId) {
+    const { updateMembershipRole } = await import("./membershipRepository");
+    await updateMembershipRole({
+      userId: id,
+      companyId: target.companyId,
+      role: patch.role,
+    });
+  }
 
   if (patch.isActive === false) {
     await recordAuthEvent({
@@ -426,15 +493,25 @@ export async function deleteCompanyUser(options: {
   actorId: string;
   companyId: string;
 }): Promise<void> {
-  const target = await getUserById(options.userId);
-  if (!target || target.companyId !== options.companyId) {
+  const { getMembership, listMembershipsForUser, removeMembership } =
+    await import("./membershipRepository");
+
+  const membership = await getMembership(options.userId, options.companyId);
+  if (!membership || membership.status !== "active") {
     throw new Error("User not found in your company.");
   }
+
+  const target = await getUserById(options.userId);
+  if (!target) throw new Error("User not found in your company.");
 
   const companyUsers = await listUsers({ companyId: options.companyId });
   const guard = assertUserDeletionAllowed({
     actorId: options.actorId,
-    target: target as AdminGuardUser,
+    target: {
+      ...target,
+      role: membership.role,
+      companyId: options.companyId,
+    } as AdminGuardUser,
     activeAdminCount: countActiveAdmins(companyUsers as AdminGuardUser[]),
   });
   if (!guard.ok) throw new Error(guard.message);
@@ -444,19 +521,22 @@ export async function deleteCompanyUser(options: {
     attemptedEmail: target.email,
     eventType: "USER_DISABLED",
     success: true,
-    reason: `deleted:${target.id}`,
+    reason: `removed_membership:${target.id}:${options.companyId}`,
   });
 
-  const supabase = getServerSupabase();
-  const { data, error } = await supabase
-    .from("agenttender_users")
-    .delete()
-    .eq("id", target.id)
-    .eq("company_id", options.companyId)
-    .select("id");
+  const remainingBefore = await listMembershipsForUser(options.userId);
+  await removeMembership({
+    userId: options.userId,
+    companyId: options.companyId,
+  });
 
-  if (error) throw new Error(error.message);
-  if (!data?.length) {
-    throw new Error("User not found in your company.");
+  // Only delete the identity when this was their last company membership.
+  if (remainingBefore.length <= 1) {
+    const supabase = getServerSupabase();
+    const { error } = await supabase
+      .from("agenttender_users")
+      .delete()
+      .eq("id", target.id);
+    if (error) throw new Error(error.message);
   }
 }

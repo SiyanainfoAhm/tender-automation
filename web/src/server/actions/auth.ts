@@ -111,7 +111,7 @@ export async function logoutAction(): Promise<void> {
 export async function signupAction(
   _prev: unknown,
   formData: FormData,
-): Promise<{ error?: string }> {
+): Promise<{ error?: string; code?: "EXISTING_ACCOUNT" }> {
   const parsed = signupSchema.safeParse({
     fullName: formData.get("fullName"),
     email: formData.get("email"),
@@ -158,6 +158,17 @@ export async function signupAction(
     redirect("/company-profile");
   } catch (error) {
     if (isRedirectError(error)) throw error;
+    if (
+      error instanceof Error &&
+      (error.name === "ExistingAccountError" ||
+        error.message === "EXISTING_ACCOUNT")
+    ) {
+      return {
+        error:
+          "You already have an account. Sign in to continue and create or access another company.",
+        code: "EXISTING_ACCOUNT" as const,
+      };
+    }
     return {
       error:
         error instanceof Error ? error.message : "Unable to create account",

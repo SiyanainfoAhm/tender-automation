@@ -2,6 +2,8 @@ import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/layout/app-shell";
 import { getSession } from "@/server/auth/session";
+import { getCompanyById } from "@/server/repositories/companyRepository";
+import { listMembershipsForUser } from "@/server/repositories/membershipRepository";
 import { getUserPreferences } from "@/server/repositories/savedViewRepository";
 import { countVisibleTenders } from "@/server/repositories/tenderRepository";
 import { countWonProjects } from "@/server/repositories/wonProjectRepository";
@@ -30,29 +32,41 @@ export default async function AppLayout({
 
   const companyId = session.user.companyId;
 
-  const [preferences, tenderCount, wonTenderCount] = await Promise.all([
-    getUserPreferences(session.user.id).catch((error) => {
-      console.warn(
-        JSON.stringify({
-          level: "warn",
-          event: "user_preferences_load_failed",
-          userId: session.user.id,
-          message: error instanceof Error ? error.message : String(error),
-        }),
-      );
-      return {
-        theme: DEFAULT_PREFERENCES.theme,
-        tableDensity: "comfortable",
-        sidebarCollapsed: DEFAULT_PREFERENCES.sidebarCollapsed,
-        defaultDateFilter: null,
-        preferences: {},
-      };
-    }),
-    countVisibleTenders().catch(() => null),
-    companyId
-      ? countWonProjects(companyId).catch(() => null)
-      : Promise.resolve(null),
-  ]);
+  const [preferences, tenderCount, wonTenderCount, memberships, activeCompany] =
+    await Promise.all([
+      getUserPreferences(session.user.id).catch((error) => {
+        console.warn(
+          JSON.stringify({
+            level: "warn",
+            event: "user_preferences_load_failed",
+            userId: session.user.id,
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        );
+        return {
+          theme: DEFAULT_PREFERENCES.theme,
+          tableDensity: "comfortable",
+          sidebarCollapsed: DEFAULT_PREFERENCES.sidebarCollapsed,
+          defaultDateFilter: null,
+          preferences: {},
+        };
+      }),
+      countVisibleTenders().catch(() => null),
+      companyId
+        ? countWonProjects(companyId).catch(() => null)
+        : Promise.resolve(null),
+      listMembershipsForUser(session.user.id).catch(() => []),
+      companyId
+        ? getCompanyById(companyId).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+
+  const companies = memberships.map((m) => ({
+    id: m.companyId,
+    name: m.companyName || "Company",
+    role: m.role,
+    active: m.companyId === companyId,
+  }));
 
   return (
     <AppShell
@@ -61,6 +75,8 @@ export default async function AppLayout({
         theme: preferences.theme,
         sidebarCollapsed: preferences.sidebarCollapsed,
       }}
+      companies={companies}
+      activeCompanyName={activeCompany?.name || null}
       tenderCount={tenderCount}
       wonTenderCount={wonTenderCount}
     >

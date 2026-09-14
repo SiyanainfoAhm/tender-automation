@@ -76,7 +76,7 @@ describe("TF-3 auth validation contracts", () => {
     expect("email" in parsed).toBe(false);
   });
 
-  it("validates optional signup phone as Indian mobile when provided", async () => {
+  it("validates optional signup phone for India and US when provided", async () => {
     const { signupSchema } = await import("@/lib/validations");
     const base = {
       fullName: "Alex",
@@ -92,9 +92,12 @@ describe("TF-3 auth validation contracts", () => {
     expect(signupSchema.parse({ ...base, phone: "+91 98765 43210" }).phone).toBe(
       "+91 98765 43210",
     );
+    expect(signupSchema.parse({ ...base, phone: "+1 2025550123" }).phone).toBe(
+      "+1 2025550123",
+    );
     expect(() =>
       signupSchema.parse({ ...base, phone: "12345" }),
-    ).toThrow(/mobile/i);
+    ).toThrow(/phone/i);
   });
 });
 

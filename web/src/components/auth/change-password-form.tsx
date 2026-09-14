@@ -26,7 +26,16 @@ export function ChangePasswordForm({ forced = false }: ChangePasswordFormProps) 
   const [newPasswordTouched, setNewPasswordTouched] = useState(false);
   const [confirmTouched, setConfirmTouched] = useState(false);
   const [state, formAction, pending] = useActionState(
-    async (_prev: unknown, formData: FormData) => changePasswordAction(formData),
+    async (_prev: unknown, formData: FormData) => {
+      const result = await changePasswordAction(formData);
+      if (result?.ok) {
+        setNewPassword("");
+        setConfirmPassword("");
+        setNewPasswordTouched(false);
+        setConfirmTouched(false);
+      }
+      return result;
+    },
     {},
   );
 
@@ -56,6 +65,7 @@ export function ChangePasswordForm({ forced = false }: ChangePasswordFormProps) 
             required
             disabled={pending}
             autoComplete="current-password"
+            key={state?.ok ? "pw-ok" : "pw"}
           />
           <button
             type="button"
@@ -131,7 +141,9 @@ export function ChangePasswordForm({ forced = false }: ChangePasswordFormProps) 
         </p>
       ) : null}
       {state?.ok ? (
-        <p className="text-sm text-emerald-600">Password updated successfully.</p>
+        <p className="text-sm text-emerald-600" role="status">
+          Password changed successfully.
+        </p>
       ) : null}
       <Button type="submit" disabled={pending || !canSubmit} className="min-h-11">
         {pending ? (

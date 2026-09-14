@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import {
+  Building2,
   LogOut,
   Search,
   Shield,
@@ -23,6 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { CompanySwitcherMenuItems } from "@/components/layout/company-switcher";
 
 export type TopbarUser = {
   fullName: string;
@@ -32,6 +34,13 @@ export type TopbarUser = {
 
 type TopbarProps = {
   user: TopbarUser;
+  companies?: Array<{
+    id: string;
+    name: string;
+    role: string;
+    active: boolean;
+  }>;
+  activeCompanyName?: string | null;
   searchValue?: string;
   onSearchChange?: (value: string) => void;
   onSearchSubmit?: (value: string) => void;
@@ -51,6 +60,8 @@ function getInitials(name: string): string {
 
 export function Topbar({
   user,
+  companies = [],
+  activeCompanyName = null,
   searchValue = "",
   onSearchChange,
   onSearchSubmit,
@@ -101,6 +112,13 @@ export function Topbar({
       </form>
 
       <div className="ml-auto flex items-center gap-1">
+        {activeCompanyName ? (
+          <div className="mr-1 hidden max-w-[180px] items-center gap-1.5 truncate rounded-md bg-surface-secondary px-2.5 py-1.5 text-xs text-text-secondary sm:flex">
+            <Building2 className="size-3.5 shrink-0" />
+            <span className="truncate font-medium">{activeCompanyName}</span>
+          </div>
+        ) : null}
+
         <Button
           variant="ghost"
           size="icon"
@@ -135,7 +153,7 @@ export function Topbar({
               </span>
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-[260px]">
+          <DropdownMenuContent align="end" className="w-[280px]">
             <DropdownMenuLabel className="px-3 py-3 font-normal">
               <div className="flex items-start gap-3">
                 <Avatar className="size-9">
@@ -161,10 +179,12 @@ export function Topbar({
               <User className="size-4" />
               Profile
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => router.push("/profile")}>
+            <DropdownMenuItem onClick={() => router.push("/profile#security")}>
               <Shield className="size-4" />
               Security
             </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <CompanySwitcherMenuItems companies={companies} />
             <DropdownMenuSeparator />
             <DropdownMenuItem
               className="text-status-nogo focus:text-status-nogo"

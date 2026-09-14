@@ -31,7 +31,30 @@ export async function requireCompanySession(): Promise<
       "Your account is not linked to a company.",
     );
   }
-  return { ...session, companyId: session.user.companyId };
+
+  const { getMembership } = await import(
+    "@/server/repositories/membershipRepository"
+  );
+  const membership = await getMembership(
+    session.user.id,
+    session.user.companyId,
+  );
+  if (!membership || membership.status !== "active") {
+    throw new CompanyAccessError(
+      "FORBIDDEN",
+      "You do not have access to this company.",
+    );
+  }
+
+  return {
+    ...session,
+    companyId: session.user.companyId,
+    user: {
+      ...session.user,
+      role: membership.role,
+      companyId: membership.companyId,
+    },
+  };
 }
 
 export async function requireCompanyAdminSession(): Promise<

@@ -11,7 +11,6 @@ import {
   Building2,
   Globe,
   MapPin,
-  Phone,
 } from "lucide-react";
 
 import { signupAction } from "@/server/actions/auth";
@@ -20,12 +19,12 @@ import { FieldValidationHint } from "@/components/auth/validation-hints";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PhoneCountryField } from "@/components/ui/phone-country-field";
 import { getEmailValidationStatus } from "@/lib/validations/email-rules";
 import {
   getPasswordRuleStatuses,
   isPasswordPolicyMet,
 } from "@/lib/validations/password-rules";
-import { getPhoneValidationStatus } from "@/lib/validations/phone-rules";
 
 export function SignupForm() {
   const [state, formAction, pending] = useActionState(signupAction, {});
@@ -42,13 +41,11 @@ export function SignupForm() {
   const [companyName, setCompanyName] = useState("");
   const [industry, setIndustry] = useState("");
   const [companyType, setCompanyType] = useState("");
-  const [phone, setPhone] = useState("");
-  const [phoneTouched, setPhoneTouched] = useState(false);
+  const [phoneValid, setPhoneValid] = useState(true);
   const [website, setWebsite] = useState("");
   const [location, setLocation] = useState("");
 
   const emailStatus = getEmailValidationStatus(email);
-  const phoneStatus = getPhoneValidationStatus(phone);
   const passwordRules = useMemo(
     () => getPasswordRuleStatuses(password),
     [password],
@@ -262,33 +259,14 @@ export function SignupForm() {
             </div>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="phone">Phone</Label>
-            <div className="relative">
-              <Phone className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-subtle" />
-              <Input
-                id="phone"
-                name="phone"
-                type="tel"
-                inputMode="tel"
-                autoComplete="tel"
-                disabled={pending}
-                placeholder="+91 98765 43210"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                onBlur={() => setPhoneTouched(true)}
-                className="pl-9"
-              />
-            </div>
-            <FieldValidationHint
-              show={phoneTouched && phoneStatus !== null}
-              valid={phoneStatus?.valid ?? false}
-              validMessage={phoneStatus?.message ?? "Valid mobile number"}
-              invalidMessage={
-                phoneStatus?.message ?? "Enter a valid 10-digit mobile number"
-              }
-            />
-          </div>
+          <PhoneCountryField
+            id="phone"
+            name="phone"
+            label="Phone"
+            disabled={pending}
+            defaultCountry="IN"
+            onValidityChange={setPhoneValid}
+          />
 
           <div className="space-y-1.5">
             <Label htmlFor="website">Website</Label>
@@ -323,9 +301,9 @@ export function SignupForm() {
           </div>
 
           <p className="rounded-md border border-border bg-surface-secondary px-3 py-2 text-[11px] leading-relaxed text-text-muted">
-          Company details create a <strong>new company</strong> for your
-          account. Existing Siyana users stay on the Siyana company — new
-          signups are never auto-assigned to Siyana.
+            Create a company workspace for your account. One account can belong
+            to multiple companies and you can switch between them after signing
+            in.
           </p>
 
           {state?.error ? (
@@ -333,7 +311,18 @@ export function SignupForm() {
               role="alert"
               className="rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700"
             >
-              {state.error}
+              <p>{state.error}</p>
+              {state.code === "EXISTING_ACCOUNT" ? (
+                <p className="mt-2">
+                  <Link
+                    href={`/login?next=${encodeURIComponent("/companies/new")}`}
+                    className="font-medium text-primary underline-offset-2 hover:underline"
+                  >
+                    Sign in
+                  </Link>{" "}
+                  to continue and create another company.
+                </p>
+              ) : null}
             </div>
           ) : null}
 
@@ -354,7 +343,7 @@ export function SignupForm() {
               disabled={
                 pending ||
                 !companyName.trim() ||
-                (phoneStatus != null && phoneStatus.valid === false)
+                !phoneValid
               }
             >
               {pending ? (

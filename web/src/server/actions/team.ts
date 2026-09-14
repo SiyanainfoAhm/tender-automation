@@ -56,13 +56,66 @@ export async function inviteCompanyUserAction(
     }
 
     const existing = await getUserByEmail(parsed.data.email);
-    if (existing?.companyId === session.companyId) {
-      return { error: "This user is already a member of your company." };
-    }
     if (existing) {
+      const { getMembership, createMembership } = await import(
+        "@/server/repositories/membershipRepository"
+      );
+      const membership = await getMembership(existing.id, session.companyId);
+      if (membership?.status === "active") {
+        return { error: "User is already a member of this company." };
+      }
+
+      await createMembership({
+        userId: existing.id,
+        companyId: session.companyId,
+        role: parsed.data.role,
+        createdBy: session.user.id,
+      });
+
+      try {
+        await createCompanyInvitation({
+          companyId: session.companyId,
+          email: parsed.data.email,
+          fullName: parsed.data.fullName || existing.fullName,
+          role: parsed.data.role,
+          invitedBy: session.user.id,
+        });
+      } catch {
+        /* optional audit invite row — membership is the access grant */
+      }
+
+      const company = await getCompanyById(session.companyId);
+      const emailResult = await sendTenderFlowUserInvite({
+        mode: "initial",
+        name: existing.fullName,
+        email: existing.email,
+        temporaryPassword: "(use your existing password)",
+      });
+
+      revalidatePath("/users");
+
+      if (!emailResult.ok) {
+        return {
+          ok: true,
+          userCreated: false,
+          inviteSent: false,
+          warning:
+            "Added to this company. Notification email could not be sent — ask them to sign in with their existing password.",
+        };
+      }
+
+      console.info("[TenderFlow invite] existing user added to company", {
+        userId: existing.id,
+        companyId: session.companyId,
+        companyName: company?.name,
+      });
+
       return {
-        error:
-          "An account with this email already exists in another workspace.",
+        ok: true,
+        userCreated: false,
+        inviteSent: true,
+        warning:
+          "Existing account linked to this company. They can sign in with their current password.",
       };
     }
 
@@ -140,7 +193,13 @@ export async function resendTenderFlowInviteAction(
     }
 
     const user = await getUserById(userId);
-    if (!user || user.companyId !== session.companyId) {
+    const { getMembership } = await import(
+      "@/server/repositories/membershipRepository"
+    );
+    const membership = user
+      ? await getMembership(userId, session.companyId)
+      : null;
+    if (!user || !membership || membership.status !== "active") {
       return { error: "User not found." };
     }
     if (!user.email) {
@@ -203,7 +262,13 @@ export async function updateCompanyMemberAction(
     if (!userId) return { error: "Missing user" };
 
     const target = await getUserById(userId);
-    if (!target || target.companyId !== session.companyId) {
+    const { getMembership, updateMembershipRole } = await import(
+      "@/server/repositories/membershipRepository"
+    );
+    const membership = target
+      ? await getMembership(userId, session.companyId)
+      : null;
+    if (!target || !membership || membership.status !== "active") {
       return { error: "User not found in your company." };
     }
 
@@ -219,7 +284,8 @@ export async function updateCompanyMemberAction(
         fullName: formData.get("fullName")
           ? String(formData.get("fullName"))
           : undefined,
-        role,
+        // Role is scoped to this company membership, not a global overwrite
+        // of other companies — handled below via updateMembershipRole.
         isActive:
           formData.get("isActive") == null
             ? undefined
@@ -227,6 +293,14 @@ export async function updateCompanyMemberAction(
       },
       session.user.id,
     );
+
+    if (role) {
+      await updateMembershipRole({
+        userId,
+        companyId: session.companyId,
+        role,
+      });
+    }
 
     revalidatePath("/users");
     revalidatePath(`/users/${userId}`);
