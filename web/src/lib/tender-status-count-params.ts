@@ -1,6 +1,11 @@
 /**
  * Status-card counts are a facet over the current tender population.
  * They must use every active list filter EXCEPT status (and pagination/sort).
+ *
+ * Scraped-date exception: the list defaults omitted `date` to "today", but
+ * status KPIs (especially Won / Lost) would stay at 0 under that default.
+ * When the URL has no scraped-date params, counts use `date=all`. An explicit
+ * `date=today` (or other preset) in the URL still scopes the cards.
  */
 
 /** URL/query keys that affect status-card counts (never includes `status`). */
@@ -40,6 +45,13 @@ export type TenderStatusCountParamKey =
 
 const STATUS_COUNT_KEY_SET = new Set<string>(TENDER_STATUS_COUNT_PARAM_KEYS);
 
+const SCRAPED_DATE_KEYS = [
+  "date",
+  "selectedDate",
+  "createdFrom",
+  "createdTo",
+] as const;
+
 function readParam(
   input: URLSearchParams | Record<string, string | string[] | null | undefined>,
   key: string,
@@ -58,6 +70,12 @@ function readParam(
   return text ? text : null;
 }
 
+function hasExplicitScrapedDate(
+  input: URLSearchParams | Record<string, string | string[] | null | undefined>,
+): boolean {
+  return SCRAPED_DATE_KEYS.some((key) => Boolean(readParam(input, key)));
+}
+
 /**
  * Build the query string for GET /api/tenders/status-counts from the full
  * tender-list URL. Status, page, and sort are intentionally omitted.
@@ -71,6 +89,10 @@ export function buildTenderStatusCountSearchParams(
     if (!value) continue;
     if (key === "source" && value === "ALL") continue;
     params.set(key, value);
+  }
+  // Mirror list default only when the user explicitly chose a scraped date.
+  if (!hasExplicitScrapedDate(input)) {
+    params.set("date", "all");
   }
   return params;
 }
@@ -98,6 +120,9 @@ export function searchParamsForStatusCounts(
     if (!value) continue;
     if (key === "source" && value === "ALL") continue;
     out[key] = value;
+  }
+  if (!hasExplicitScrapedDate(raw)) {
+    out.date = "all";
   }
   return out;
 }

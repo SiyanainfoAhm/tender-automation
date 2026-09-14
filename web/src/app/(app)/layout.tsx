@@ -6,6 +6,9 @@ import { getUserPreferences } from "@/server/repositories/savedViewRepository";
 import { countVisibleTenders } from "@/server/repositories/tenderRepository";
 import { countWonProjects } from "@/server/repositories/wonProjectRepository";
 
+/** Nav badges (tender / won counts) must not be served from a stale RSC cache. */
+export const dynamic = "force-dynamic";
+
 const DEFAULT_PREFERENCES = {
   theme: "light",
   sidebarCollapsed: false,

@@ -1,33 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useSyncExternalStore } from "react";
 import { ArrowLeft } from "lucide-react";
 
-import { peekTendersListReturn } from "@/lib/tenders/list-return";
-
-function subscribe() {
-  return () => {};
-}
-
-function getClientReturnHref() {
-  return peekTendersListReturn() || "/tenders";
-}
-
-function getServerReturnHref() {
-  return "/tenders";
-}
+import { useTendersListReturnHref } from "@/lib/tenders/use-tenders-list-return-href";
 
 /**
  * Returns to the preserved Tender Management URL (filters/page intact).
  * Falls back to /tenders when no safe return path was stored.
  */
 export function TendersBackLink() {
-  const href = useSyncExternalStore(
-    subscribe,
-    getClientReturnHref,
-    getServerReturnHref,
-  );
+  const href = useTendersListReturnHref();
 
   return (
     <Link

@@ -30,6 +30,18 @@ describe("tender status-count filter params", () => {
     expect(params.get("sortBy")).toBeNull();
   });
 
+  it("defaults missing scraped date to all so Won KPIs are not zeroed", () => {
+    const params = buildTenderStatusCountSearchParams(
+      new URLSearchParams({
+        city: "Delhi",
+        status: "won",
+      }),
+    );
+    expect(params.get("date")).toBe("all");
+    expect(params.get("city")).toBe("Delhi");
+    expect(searchParamsForStatusCounts({})).toEqual({ date: "all" });
+  });
+
   it("keeps the same query key when only status changes", () => {
     const withStatus = tenderStatusCountQueryKey(
       new URLSearchParams({

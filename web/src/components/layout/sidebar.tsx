@@ -21,7 +21,7 @@ import {
 } from "@/components/layout/nav-items";
 import { companyRoleLabel } from "@/lib/company/types";
 import { roleHasPermission, type PermissionKey } from "@/lib/rbac/permissions";
-import { peekTendersListReturn } from "@/lib/tenders/list-return";
+import { useTendersListReturnHref } from "@/lib/tenders/use-tenders-list-return-href";
 
 export type SidebarUser = {
   fullName: string;
@@ -115,10 +115,8 @@ export function AppSidebar({
   wonTenderCount = null,
 }: AppSidebarProps) {
   const pathname = usePathname();
-  // Intentionally re-read sessionStorage on every route change so list filters
-  // survive Bid Workspace / detail navigation for the tab lifetime.
-  void pathname;
-  const tendersHref = peekTendersListReturn() || "/tenders";
+  // Hydration-safe: SSR/hydrate use `/tenders`; client then adopts sessionStorage.
+  const tendersHref = useTendersListReturnHref();
   const mainItems = APP_MAIN_NAV.filter((item) => {
     if (item.permission) {
       return roleHasPermission(user.role, item.permission as PermissionKey);

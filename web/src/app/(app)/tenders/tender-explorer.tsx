@@ -5,9 +5,7 @@ import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
-  ArrowDown,
-  ArrowUp,
-  ArrowUpDown,
+  Building2,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -69,7 +67,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatEmdAmount, formatTenderValue } from "@/lib/format-inr";
+import { formatInrCompactAmount, formatTenderValue } from "@/lib/format-inr";
 import { getDeadlineMeta } from "@/lib/tender-deadline";
 import {
   CREATED_DATE_PRESET_LABELS,
@@ -86,9 +84,8 @@ import {
 } from "@/lib/tender-search";
 import { tenderStatusCountQueryKey } from "@/lib/tender-status-count-params";
 import {
-  nextSortState,
-  normalizeSortKeyForUi,
-  type TableSortKey,
+  sortModeId,
+  TENDER_SORT_MODES,
 } from "@/lib/tender-sort";
 import {
   getTenderUiStatus,
@@ -218,9 +215,33 @@ function locationLine(row: WebTenderListRow): string {
   return [city, state].filter(Boolean).join(", ");
 }
 
+function authorityLine(row: WebTenderListRow): string {
+  return String(
+    row.organization || row.department || row.authority || "",
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** Compact one-line tender title for the list (ellipsis when too long). */
 function listTitle(row: WebTenderListRow): string {
   return String(row.title || "").replace(/\s+/g, " ").trim();
+}
+
+function moneyLabel(
+  amount: number | null | undefined,
+  text: string | null | undefined,
+  fallbackZero = true,
+): string {
+  const compact = formatInrCompactAmount(amount ?? null);
+  if (compact) return compact;
+  if (fallbackZero && (amount == null || !Number.isFinite(Number(amount)))) {
+    const fromText = formatTenderValue({ amount, text });
+    if (fromText.isNumeric) return fromText.label;
+    if (!text?.trim()) return "₹0";
+    return fromText.label;
+  }
+  return formatTenderValue({ amount, text }).label;
 }
 
 function normalizeStatusChip(value: string | undefined): string {
@@ -260,60 +281,21 @@ function FilterCapsule({
   );
 }
 
-function SortControl({
-  label,
-  sortKey,
-  activeKey,
-  direction,
-  disabled,
-  onSort,
-}: {
-  label: string;
-  sortKey: TableSortKey;
-  activeKey: TableSortKey | null;
-  direction: "asc" | "desc";
-  disabled?: boolean;
-  onSort: (key: TableSortKey) => void;
-}) {
-  const active = activeKey === sortKey;
-  const Icon = !active
-    ? ArrowUpDown
-    : direction === "asc"
-      ? ArrowUp
-      : ArrowDown;
-
+function ListRowSkeleton() {
   return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={() => onSort(sortKey)}
-      className={cn(
-        "inline-flex items-center gap-0.5 text-xs font-medium",
-        active
-          ? "text-primary-600"
-          : "text-foreground-500 hover:text-foreground-800",
-        disabled && "cursor-wait opacity-60",
-      )}
-    >
-      {label}
-      <Icon className="size-3.5" aria-hidden />
-    </button>
-  );
-}
-
-function TableRowSkeleton() {
-  return (
-    <tr className="border-b border-background-200/70">
-      <td className="px-4 py-3">
-        <Skeleton className="size-4 rounded" />
-      </td>
-      {Array.from({ length: 8 }).map((_, index) => (
-        <td key={index} className="px-4 py-3">
-          <Skeleton className="h-4 w-full max-w-[140px]" />
-          {index === 0 ? <Skeleton className="mt-2 h-3 w-24" /> : null}
-        </td>
-      ))}
-    </tr>
+    <div className="flex gap-3 border-b border-background-200/70 px-5 py-4">
+      <Skeleton className="mt-1 size-4 shrink-0 rounded" />
+      <div className="min-w-0 flex-1 space-y-2">
+        <Skeleton className="h-5 w-3/4 max-w-xl" />
+        <Skeleton className="h-3 w-64" />
+        <Skeleton className="h-3 w-80" />
+        <Skeleton className="h-3 w-52" />
+      </div>
+      <div className="flex w-28 shrink-0 flex-col items-end gap-2">
+        <Skeleton className="h-6 w-20" />
+        <Skeleton className="size-8 rounded" />
+      </div>
+    </div>
   );
 }
 
@@ -724,7 +706,7 @@ export function TenderExplorer({
 
   const searchHint = tenderSearchHint(localQ);
   const totalPages = Math.max(1, Math.ceil(total / filters.pageSize));
-  const uiSortKey = normalizeSortKeyForUi(filters.sortBy);
+  const activeSortModeId = sortModeId(filters.sortBy, filters.sortDir);
   const filtersActive = hasActiveFilters(filters);
   const pageIds = rows.map((row) => row.id);
   const allPageSelected =
@@ -790,14 +772,10 @@ export function TenderExplorer({
 
   const tableBusy = isTableRefreshing || isExporting;
 
-  const onSort = React.useCallback(
-    (clicked: TableSortKey) => {
-      const next = nextSortState({
-        currentSortBy: filters.sortBy,
-        currentSortDir: filters.sortDir,
-        clicked,
-      });
-      if ("reset" in next) {
+  const onSortModeChange = React.useCallback(
+    (modeId: string) => {
+      const mode = TENDER_SORT_MODES.find((item) => item.id === modeId);
+      if (!mode) {
         navigate({
           sort: undefined,
           direction: undefined,
@@ -809,15 +787,15 @@ export function TenderExplorer({
         return;
       }
       navigate({
-        sort: next.sortBy,
-        direction: next.sortDir,
+        sort: mode.sort,
+        direction: mode.dir,
         order: undefined,
         sortBy: undefined,
         sortDir: undefined,
         page: "1",
       });
     },
-    [filters.sortBy, filters.sortDir, navigate],
+    [navigate],
   );
 
   function clearFilters() {
@@ -888,12 +866,29 @@ export function TenderExplorer({
           <TenderStatsCards
             counts={statusCountsState}
             activeStatus={currentStatus}
-            onSelectStatus={(status) =>
-              navigate({
+            onSelectStatus={(status) => {
+              // Outcome statuses are rarely on "scraped today" — open All Dates
+              // so the list matches the KPI instead of an empty page.
+              const outcomeStatuses = new Set([
+                "won",
+                "lost",
+                "disqualified",
+                "cancelled",
+                "submitted",
+                "partnership",
+              ]);
+              const updates: Record<string, string | undefined> = {
                 status: status ?? undefined,
                 page: "1",
-              })
-            }
+              };
+              if (status && outcomeStatuses.has(status)) {
+                updates.date = "all";
+                updates.selectedDate = undefined;
+                updates.createdFrom = undefined;
+                updates.createdTo = undefined;
+              }
+              navigate(updates);
+            }}
           />
         ) : null}
 
@@ -950,35 +945,6 @@ export function TenderExplorer({
             Clear Filters
           </Button>
         ) : null}
-
-        <div className="ml-auto flex flex-wrap items-center gap-1.5">
-          {(
-            [
-              { key: "closing" as const, label: "Deadline" },
-              { key: "value" as const, label: "Value" },
-              { key: "created" as const, label: "Created" },
-            ] as const
-          ).map((item) => (
-            <Button
-              key={item.key}
-              type="button"
-              variant={uiSortKey === item.key ? "default" : "secondary"}
-              className="h-9 gap-1 text-sm"
-              onClick={() => onSort(item.key)}
-            >
-              {item.label}
-              {uiSortKey === item.key ? (
-                filters.sortDir === "asc" ? (
-                  <ArrowUp className="size-3.5" />
-                ) : (
-                  <ArrowDown className="size-3.5" />
-                )
-              ) : (
-                <ArrowUpDown className="size-3.5 opacity-50" />
-              )}
-            </Button>
-          ))}
-        </div>
       </div>
 
       {filtersActive ? (
@@ -1340,7 +1306,7 @@ export function TenderExplorer({
         </div>
       ) : null}
 
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <p className="flex items-center gap-2 text-sm text-foreground-500">
           Showing{" "}
           <span className="font-semibold text-foreground-800">
@@ -1350,7 +1316,23 @@ export function TenderExplorer({
           {(statusCountsState?.totalTenders ?? total).toLocaleString("en-IN")}{" "}
           tenders
         </p>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Select
+            value={activeSortModeId}
+            disabled={tableBusy}
+            onValueChange={onSortModeChange}
+          >
+            <SelectTrigger className="h-8 w-[210px]">
+              <SelectValue placeholder="Sort by" />
+            </SelectTrigger>
+            <SelectContent>
+              {TENDER_SORT_MODES.map((mode) => (
+                <SelectItem key={mode.id} value={mode.id}>
+                  {mode.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <TenderExportButtons
             rows={rows}
             total={total}
@@ -1453,356 +1435,335 @@ export function TenderExplorer({
           ) : null}
           <div
             className={cn(
-              "overflow-x-auto transition-opacity",
+              "transition-opacity",
               isTableRefreshing && "opacity-60",
             )}
           >
-            <table className="w-full min-w-[1120px] table-fixed">
-              <thead>
-                <tr className="border-b border-background-200/70 bg-background-50">
-                  <th className="w-10 px-4 py-3">
-                    <Checkbox
-                      checked={allPageSelected}
-                      onCheckedChange={(value) =>
-                        toggleAllPage(value === true)
-                      }
-                      aria-label="Select page"
-                    />
-                  </th>
-                  <th className="w-[30%] px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-foreground-500">
-                    Tender Name
-                  </th>
-                  <th className="w-[152px] px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-foreground-500">
-                    Category
-                  </th>
-                  <th className="w-[108px] px-4 py-3 text-left">
-                    <SortControl
-                      label="Est. Value"
-                      sortKey="value"
-                      activeKey={uiSortKey}
-                      direction={filters.sortDir}
-                      onSort={onSort}
-                    />
-                  </th>
-                  <th className="w-[92px] px-4 py-3 text-left">
-                    <SortControl
-                      label="EMD"
-                      sortKey="emd"
-                      activeKey={uiSortKey}
-                      direction={filters.sortDir}
-                      onSort={onSort}
-                    />
-                  </th>
-                  <th className="w-[118px] px-4 py-3 text-left">
-                    <SortControl
-                      label="Deadline"
-                      sortKey="closing"
-                      activeKey={uiSortKey}
-                      direction={filters.sortDir}
-                      onSort={onSort}
-                    />
-                  </th>
-                  <th className="w-[124px] px-4 py-3 text-left">
-                    <SortControl
-                      label="Status"
-                      sortKey="status"
-                      activeKey={uiSortKey}
-                      direction={filters.sortDir}
-                      onSort={onSort}
-                    />
-                  </th>
-                  <th className="w-14 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-foreground-500">
-                    Action
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {showSkeleton
-                  ? Array.from({ length: 8 }).map((_, index) => (
-                      <TableRowSkeleton key={index} />
-                    ))
-                  : rows.map((row) => {
-                      const deadline = getDeadlineMeta(row.closing_date);
-                      const value = formatTenderValue({
-                        amount: row.tender_value,
-                        text: row.tender_value_text,
-                      });
-                      const emd = formatEmdAmount({
-                        amount: row.emd_amount,
-                        text: row.emd_text,
-                      });
-                      const status =
-                        row.qualification_status ??
-                        row.effective_qualification_status;
-                      const reference = row.reference_no || "—";
-                      const place = locationLine(row);
-                      const portal =
-                        row.source_portal === "TENDER247" ||
-                        row.source_portal === "BIDASSIST" ||
-                        row.source_portal === "MANUAL"
-                          ? (row.source_portal as TenderSource)
-                          : "MANUAL";
+            <div className="flex items-center gap-3 border-b border-background-200/70 bg-background-50/80 px-5 py-2.5">
+              <Checkbox
+                checked={allPageSelected}
+                onCheckedChange={(value) => toggleAllPage(value === true)}
+                aria-label="Select page"
+              />
+              <span className="text-xs font-medium text-foreground-500">
+                Select page
+              </span>
+            </div>
+            {showSkeleton
+              ? Array.from({ length: 6 }).map((_, index) => (
+                  <ListRowSkeleton key={index} />
+                ))
+              : rows.map((row) => {
+                  const deadline = getDeadlineMeta(row.closing_date);
+                  const bidLabel = moneyLabel(
+                    row.tender_value,
+                    row.tender_value_text,
+                  );
+                  const emdLabel = moneyLabel(row.emd_amount, row.emd_text);
+                  const status =
+                    row.qualification_status ??
+                    row.effective_qualification_status;
+                  const reference = row.reference_no?.trim() || "";
+                  const place = locationLine(row);
+                  const authority = authorityLine(row);
+                  const portal =
+                    row.source_portal === "TENDER247" ||
+                    row.source_portal === "BIDASSIST" ||
+                    row.source_portal === "MANUAL"
+                      ? (row.source_portal as TenderSource)
+                      : "MANUAL";
+                  const hasDocs = tenderListHasDocuments(row);
+                  const hasAi = tenderListHasAiSummary(row);
+                  const chatgpt = tenderListPrescreenReason(row);
 
-                      return (
-                        <tr
-                          key={row.id}
-                          className="group cursor-pointer border-b border-background-200/70 last:border-0 hover:bg-background-50"
-                          onMouseEnter={() => prefetchTenderDetail(row.id)}
-                          onFocus={() => prefetchTenderDetail(row.id)}
-                          onClick={() => {
-                            openTenderDetail(row.id);
-                          }}
+                  return (
+                    <div
+                      key={row.id}
+                      role="button"
+                      tabIndex={0}
+                      className="group flex cursor-pointer gap-3 border-b border-background-200/70 px-5 py-4 last:border-0 hover:bg-background-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500/30"
+                      onMouseEnter={() => prefetchTenderDetail(row.id)}
+                      onFocus={() => prefetchTenderDetail(row.id)}
+                      onClick={() => openTenderDetail(row.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          openTenderDetail(row.id);
+                        }
+                      }}
+                    >
+                      <div
+                        className="pt-1"
+                        onClick={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => event.stopPropagation()}
+                      >
+                        <Checkbox
+                          checked={selectedIds.has(row.id)}
+                          onCheckedChange={(value) =>
+                            toggleRow(row.id, value === true)
+                          }
+                          aria-label={`Select ${row.title}`}
+                        />
+                      </div>
+
+                      <div className="min-w-0 flex-1 space-y-1.5">
+                        <h3
+                          className="line-clamp-2 text-[15px] font-semibold leading-snug text-foreground-900 group-hover:text-primary-700"
+                          title={listTitle(row)}
                         >
-                          <td
-                            className="px-4 py-3"
+                          {listTitle(row)}
+                        </h3>
+
+                        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-foreground-500">
+                          <SourceBadge
+                            source={portal}
+                            size="sm"
+                            className="rounded px-1.5 py-0.5 normal-case tracking-normal"
+                          />
+                          <span className="min-w-0 truncate">
+                            ID: {row.source_tender_id}
+                          </span>
+                          {reference && reference !== row.source_tender_id ? (
+                            <span className="min-w-0 truncate">
+                              Ref: {reference}
+                            </span>
+                          ) : null}
+                          <span className="text-foreground-300" aria-hidden>
+                            ·
+                          </span>
+                          <CategoryCapsule
+                            category={row.project_category}
+                            title={row.title}
+                            sourceCategory={row.category}
+                          />
+                        </div>
+
+                        <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-foreground-700">
+                          <span>
+                            <span className="text-foreground-500">
+                              Bid Value:
+                            </span>{" "}
+                            <span className="font-semibold text-foreground-900">
+                              {bidLabel}
+                            </span>
+                          </span>
+                          <span className="text-foreground-300" aria-hidden>
+                            |
+                          </span>
+                          <span>
+                            <span className="text-foreground-500">EMD:</span>{" "}
+                            <span className="font-medium">{emdLabel}</span>
+                          </span>
+                          <span className="text-foreground-300" aria-hidden>
+                            |
+                          </span>
+                          <span>
+                            <span className="text-foreground-500">
+                              Deadline:
+                            </span>{" "}
+                            <span className="font-medium">
+                              {deadline.dateLabel}
+                            </span>
+                            {deadline.relativeLabel ? (
+                              <>
+                                <span className="text-foreground-400">
+                                  {" "}
+                                  ·{" "}
+                                </span>
+                                <span className={deadline.relativeClassName}>
+                                  {deadline.relativeLabel}
+                                </span>
+                              </>
+                            ) : null}
+                          </span>
+                        </p>
+
+                        {(authority || place) && (
+                          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-foreground-500">
+                            {authority ? (
+                              <span className="inline-flex min-w-0 max-w-full items-center gap-1">
+                                <Building2
+                                  className="size-3.5 shrink-0 text-foreground-400"
+                                  aria-hidden
+                                />
+                                <span className="truncate">{authority}</span>
+                              </span>
+                            ) : null}
+                            {place ? (
+                              <span className="inline-flex min-w-0 max-w-full items-center gap-1">
+                                <MapPin
+                                  className="size-3.5 shrink-0 text-foreground-400"
+                                  aria-hidden
+                                />
+                                <span className="truncate">{place}</span>
+                              </span>
+                            ) : null}
+                          </div>
+                        )}
+
+                        {(chatgpt || hasDocs || hasAi) && (
+                          <div
+                            className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] leading-snug text-foreground-500"
                             onClick={(event) => event.stopPropagation()}
                           >
-                            <Checkbox
-                              checked={selectedIds.has(row.id)}
-                              onCheckedChange={(value) =>
-                                toggleRow(row.id, value === true)
-                              }
-                              aria-label={`Select ${row.title}`}
-                            />
-                          </td>
-                          <td className="max-w-0 px-4 py-3">
-                            <p
-                              className="truncate text-sm font-medium text-foreground-800 group-hover:text-primary-600"
-                              title={listTitle(row)}
-                            >
-                              {listTitle(row)}
-                            </p>
-                            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2">
-                              <SourceBadge
-                                source={portal}
-                                size="sm"
-                                className="rounded px-1.5 py-0.5 normal-case tracking-normal"
-                              />
-                              <span className="min-w-0 truncate text-xs text-foreground-500">
-                                ID: {row.source_tender_id}
-                              </span>
-                              {reference && reference !== row.source_tender_id ? (
-                                <span className="min-w-0 truncate text-xs text-foreground-500">
-                                  Ref: {reference}
-                                </span>
-                              ) : null}
-                            </div>
-                            {place ? (
-                              <p className="mt-0.5 flex min-w-0 items-center gap-1 truncate text-xs text-foreground-400">
-                                <MapPin className="size-3 shrink-0" aria-hidden />
-                                <span className="truncate">{place}</span>
-                              </p>
+                            {chatgpt ? (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <p className="min-w-0 max-w-full truncate sm:max-w-[28rem]">
+                                    <span className="font-medium text-foreground-600">
+                                      ChatGPT:
+                                    </span>{" "}
+                                    <span>{chatgpt}</span>
+                                  </p>
+                                </TooltipTrigger>
+                                <TooltipContent className="max-w-sm text-xs leading-relaxed">
+                                  {chatgpt}
+                                </TooltipContent>
+                              </Tooltip>
                             ) : null}
-                            {(() => {
-                              const chatgpt = tenderListPrescreenReason(row);
-                              const hasDocs = tenderListHasDocuments(row);
-                              const hasAi = tenderListHasAiSummary(row);
-                              if (!chatgpt && !hasDocs && !hasAi) return null;
-                              return (
-                                <div
-                                  className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] leading-snug text-foreground-500"
-                                  onClick={(event) => event.stopPropagation()}
-                                >
-                                  {chatgpt ? (
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <p className="min-w-0 max-w-full truncate sm:max-w-[28rem]">
-                                          <span className="font-medium text-foreground-600">
-                                            ChatGPT:
-                                          </span>{" "}
-                                          <span>{chatgpt}</span>
-                                        </p>
-                                      </TooltipTrigger>
-                                      <TooltipContent className="max-w-sm text-xs leading-relaxed">
-                                        {chatgpt}
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  ) : null}
-                                  {chatgpt && (hasDocs || hasAi) ? (
-                                    <span className="text-foreground-300" aria-hidden>
-                                      |
-                                    </span>
-                                  ) : null}
-                                  {hasDocs ? (
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <button
-                                          type="button"
-                                          className="shrink-0 font-medium text-sky-700 hover:underline"
-                                          aria-label={`View tender documents for ${listTitle(row)}`}
-                                          onClick={() =>
-                                            openTenderDetail(row.id, {
-                                              tab: "documents",
-                                            })
+                            {chatgpt && (hasDocs || hasAi) ? (
+                              <span className="text-foreground-300" aria-hidden>
+                                |
+                              </span>
+                            ) : null}
+                            {hasDocs ? (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <button
+                                    type="button"
+                                    className="shrink-0 font-medium text-sky-700 hover:underline"
+                                    aria-label={`View tender documents for ${listTitle(row)}`}
+                                    onClick={() =>
+                                      openTenderDetail(row.id, {
+                                        tab: "documents",
+                                      })
+                                    }
+                                  >
+                                    Tender Documents
+                                  </button>
+                                </TooltipTrigger>
+                                <TooltipContent>
+                                  View official tender/RFP documents
+                                </TooltipContent>
+                              </Tooltip>
+                            ) : null}
+                            {hasDocs && hasAi ? (
+                              <span className="text-foreground-300" aria-hidden>
+                                |
+                              </span>
+                            ) : null}
+                            {hasAi ? (
+                              <button
+                                type="button"
+                                className={cn(
+                                  "inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-medium text-emerald-700",
+                                  "hover:bg-emerald-50 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30",
+                                )}
+                                aria-label={`View AI summary for ${listTitle(row)}`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openAiSummary(row);
+                                }}
+                                onMouseEnter={() => scheduleAiSummaryOpen(row)}
+                                onMouseLeave={cancelAiSummaryOpen}
+                                onFocus={() =>
+                                  preloadAiSummaryUrl(row.ai_summary_url)
+                                }
+                                onKeyDown={(event) => {
+                                  if (
+                                    event.key === "Enter" ||
+                                    event.key === " "
+                                  ) {
+                                    event.preventDefault();
+                                    openAiSummary(row);
+                                  }
+                                }}
+                              >
+                                <Sparkles
+                                  className="size-3.5 shrink-0"
+                                  aria-hidden
+                                />
+                                AI Summary
+                              </button>
+                            ) : null}
+                          </div>
+                        )}
+                      </div>
+
+                      <div
+                        className="flex w-[7.5rem] shrink-0 flex-col items-end gap-2 sm:w-32"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        {status &&
+                        (TENDER_STATUSES as readonly string[]).includes(
+                          status,
+                        ) ? (
+                          <div className="flex w-full flex-col items-end gap-1">
+                            <StatusBadge
+                              status={status as QualificationStatus}
+                              size="sm"
+                              className="max-w-full truncate"
+                            />
+                            {status === "DUPLICATE"
+                              ? (() => {
+                                  const ref = formatDuplicateReference({
+                                    duplicateOfSourceTenderId:
+                                      row.duplicate_of_source_tender_id,
+                                    duplicateOfTenderId:
+                                      row.duplicate_of_tender_id,
+                                    duplicateMatchKind:
+                                      row.duplicate_match_kind,
+                                    screeningReason:
+                                      row.screening_reason || row.reason,
+                                    sourcePortal: row.source_portal,
+                                  });
+                                  if (!ref) return null;
+                                  return (
+                                    <p className="w-full truncate text-right text-[10px] text-foreground-500">
+                                      {duplicateMatchKindLabel(ref.matchKind) ? (
+                                        <span>
+                                          {duplicateMatchKindLabel(ref.matchKind)}
+                                          {": "}
+                                        </span>
+                                      ) : null}
+                                      {ref.href ? (
+                                        <Link
+                                          href={ref.href}
+                                          className="font-medium text-sky-700 hover:underline"
+                                          onClick={(event) =>
+                                            event.stopPropagation()
                                           }
                                         >
-                                          Tender Documents
-                                        </button>
-                                      </TooltipTrigger>
-                                      <TooltipContent>
-                                        View official tender/RFP documents
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  ) : null}
-                                  {hasDocs && hasAi ? (
-                                    <span className="text-foreground-300" aria-hidden>
-                                      |
-                                    </span>
-                                  ) : null}
-                                  {hasAi ? (
-                                    <button
-                                      type="button"
-                                      className={cn(
-                                        "inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-medium text-emerald-700",
-                                        "hover:bg-emerald-50 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/30",
+                                          {ref.label}
+                                        </Link>
+                                      ) : (
+                                        <span>{ref.label}</span>
                                       )}
-                                      aria-label={`View AI summary for ${listTitle(row)}`}
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        openAiSummary(row);
-                                      }}
-                                      onMouseEnter={() =>
-                                        scheduleAiSummaryOpen(row)
-                                      }
-                                      onMouseLeave={cancelAiSummaryOpen}
-                                      onFocus={() =>
-                                        preloadAiSummaryUrl(row.ai_summary_url)
-                                      }
-                                      onKeyDown={(event) => {
-                                        if (
-                                          event.key === "Enter" ||
-                                          event.key === " "
-                                        ) {
-                                          event.preventDefault();
-                                          openAiSummary(row);
-                                        }
-                                      }}
-                                    >
-                                      <Sparkles
-                                        className="size-3.5 shrink-0"
-                                        aria-hidden
-                                      />
-                                      AI Summary
-                                    </button>
-                                  ) : null}
-                                </div>
-                              );
-                            })()}
-                          </td>
-                          <td className="max-w-0 overflow-hidden px-4 py-3 align-middle">
-                            <CategoryCapsule
-                              category={row.project_category}
-                              title={row.title}
-                              sourceCategory={row.category}
-                            />
-                          </td>
-                          <td className="max-w-0 overflow-hidden px-4 py-3 align-middle">
-                            <p className="truncate text-sm font-semibold text-foreground-800">
-                              {value.label}
-                            </p>
-                          </td>
-                          <td className="max-w-0 overflow-hidden px-4 py-3 align-middle">
-                            <p className="truncate text-sm text-foreground-700">
-                              {emd.label}
-                            </p>
-                          </td>
-                          <td className="max-w-0 overflow-hidden px-4 py-3 align-middle">
-                            <p className="text-sm text-foreground-700">
-                              {deadline.dateLabel}
-                            </p>
-                            {deadline.relativeLabel ? (
-                              <p
-                                className={cn(
-                                  "text-xs",
-                                  deadline.relativeClassName,
-                                )}
-                              >
-                                {deadline.relativeLabel}
-                              </p>
-                            ) : null}
-                          </td>
-                          <td className="max-w-0 overflow-hidden px-4 py-3 align-middle">
-                            {status &&
-                            (TENDER_STATUSES as readonly string[]).includes(
-                              status,
-                            ) ? (
-                              <div className="space-y-1">
-                                <StatusBadge
-                                  status={status as QualificationStatus}
-                                  size="sm"
-                                  className="max-w-full truncate"
-                                />
-                                {status === "DUPLICATE" ? (
-                                  (() => {
-                                    const ref = formatDuplicateReference({
-                                      duplicateOfSourceTenderId:
-                                        row.duplicate_of_source_tender_id,
-                                      duplicateOfTenderId:
-                                        row.duplicate_of_tender_id,
-                                      duplicateMatchKind:
-                                        row.duplicate_match_kind,
-                                      screeningReason:
-                                        row.screening_reason || row.reason,
-                                      sourcePortal: row.source_portal,
-                                    });
-                                    if (!ref) return null;
-                                    return (
-                                      <p className="truncate text-[10px] text-foreground-500">
-                                        {duplicateMatchKindLabel(
-                                          ref.matchKind,
-                                        ) ? (
-                                          <span>
-                                            {duplicateMatchKindLabel(
-                                              ref.matchKind,
-                                            )}
-                                            {": "}
-                                          </span>
-                                        ) : null}
-                                        {ref.href ? (
-                                          <Link
-                                            href={ref.href}
-                                            className="font-medium text-sky-700 hover:underline"
-                                            onClick={(event) =>
-                                              event.stopPropagation()
-                                            }
-                                          >
-                                            {ref.label}
-                                          </Link>
-                                        ) : (
-                                          <span>{ref.label}</span>
-                                        )}
-                                      </p>
-                                    );
-                                  })()
-                                ) : null}
-                              </div>
-                            ) : (
-                              <span className="inline-flex max-w-full items-center gap-1.5 truncate rounded-md bg-background-200 px-2 py-0.5 text-[11px] font-medium text-foreground-600">
-                                <span className="size-1.5 shrink-0 rounded-full bg-foreground-400" />
-                                <span className="truncate">Under Evaluation</span>
-                              </span>
-                            )}
-                          </td>
-                          <td
-                            className="px-4 py-3"
-                            onClick={(event) => event.stopPropagation()}
-                          >
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="size-8"
-                              aria-label={`View ${row.title}`}
-                              onClick={() => openTenderDetail(row.id)}
-                            >
-                              <Eye className="size-4" />
-                            </Button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-              </tbody>
-            </table>
+                                    </p>
+                                  );
+                                })()
+                              : null}
+                          </div>
+                        ) : (
+                          <span className="inline-flex max-w-full items-center gap-1.5 truncate rounded-md bg-background-200 px-2 py-0.5 text-[11px] font-medium text-foreground-600">
+                            <span className="size-1.5 shrink-0 rounded-full bg-foreground-400" />
+                            <span className="truncate">Under Evaluation</span>
+                          </span>
+                        )}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-8"
+                          aria-label={`View ${row.title}`}
+                          onClick={() => openTenderDetail(row.id)}
+                        >
+                          <Eye className="size-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
           </div>
         </div>
       )}

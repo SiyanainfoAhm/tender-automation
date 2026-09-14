@@ -7,6 +7,8 @@
 
 const RETURN_URL_KEY = "tenderflow:tenders-list-return";
 const SCROLL_KEY = "tenderflow:tenders-list-scroll";
+export const TENDERS_LIST_RETURN_CHANGED_EVENT =
+  "tenderflow:tenders-list-return";
 
 /** Only allow returning to the list route (never open redirects). */
 export function isSafeTendersListReturnPath(path: string): boolean {
@@ -16,6 +18,11 @@ export function isSafeTendersListReturnPath(path: string): boolean {
   const pathOnly = path.split("?")[0]?.split("#")[0] || "";
   // Exact list page — not /tenders/[id] or nested routes.
   return pathOnly === "/tenders";
+}
+
+function notifyReturnChanged() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(TENDERS_LIST_RETURN_CHANGED_EVENT));
 }
 
 export function rememberTendersListReturn(
@@ -29,6 +36,7 @@ export function rememberTendersListReturn(
     if (typeof scrollY === "number" && Number.isFinite(scrollY)) {
       sessionStorage.setItem(SCROLL_KEY, String(Math.max(0, Math.round(scrollY))));
     }
+    notifyReturnChanged();
   } catch {
     /* private mode / quota */
   }
@@ -40,6 +48,7 @@ export function rememberTendersListFilters(href: string): void {
   if (!isSafeTendersListReturnPath(href)) return;
   try {
     sessionStorage.setItem(RETURN_URL_KEY, href);
+    notifyReturnChanged();
   } catch {
     /* private mode / quota */
   }

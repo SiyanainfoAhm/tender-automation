@@ -1,4 +1,10 @@
-import { differenceInCalendarDays, startOfDay, parseISO, isValid } from "date-fns";
+import {
+  differenceInCalendarDays,
+  format,
+  startOfDay,
+  parseISO,
+  isValid,
+} from "date-fns";
 
 export type DeadlineMeta = {
   dateLabel: string;
@@ -37,50 +43,47 @@ export function getDeadlineMeta(
     };
   }
 
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  const dateLabel = `${year}-${month}-${day}`;
-
+  const dateLabel = format(date, "dd MMM yyyy");
   const days = differenceInCalendarDays(startOfDay(date), startOfDay(now));
+
   if (days < 0) {
     return {
       dateLabel,
-      relativeLabel: "Past due",
-      relativeClassName: "text-rose-600",
+      relativeLabel: "Expired",
+      relativeClassName: "text-rose-600 font-medium",
       isClosed: true,
     };
   }
   if (days === 0) {
     return {
       dateLabel,
-      relativeLabel: "Today",
-      relativeClassName: "text-rose-600",
+      relativeLabel: "Due Today",
+      relativeClassName: "text-rose-600 font-medium",
       isClosed: false,
     };
   }
 
-  const relativeLabel = days === 1 ? "1 day left" : `${days} days left`;
+  const relativeLabel = days === 1 ? "1 Day Left" : `${days} Days Left`;
+  if (days <= 3) {
+    return {
+      dateLabel,
+      relativeLabel,
+      relativeClassName: "text-rose-600 font-medium",
+      isClosed: false,
+    };
+  }
   if (days <= 7) {
     return {
       dateLabel,
       relativeLabel,
-      relativeClassName: "text-rose-600",
-      isClosed: false,
-    };
-  }
-  if (days <= 14) {
-    return {
-      dateLabel,
-      relativeLabel,
-      relativeClassName: "text-amber-600",
+      relativeClassName: "text-amber-600 font-medium",
       isClosed: false,
     };
   }
   return {
     dateLabel,
     relativeLabel,
-    relativeClassName: "text-foreground-400",
+    relativeClassName: "text-foreground-500",
     isClosed: false,
   };
 }

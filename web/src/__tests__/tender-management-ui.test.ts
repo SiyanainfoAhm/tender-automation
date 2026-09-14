@@ -29,24 +29,30 @@ describe("categoryCapsuleClass", () => {
 describe("getDeadlineMeta", () => {
   const now = new Date("2026-08-14T10:00:00");
 
-  it("formats the ISO date and remaining days", () => {
+  it("formats the date and remaining days", () => {
     const meta = getDeadlineMeta("2026-08-18", now);
-    expect(meta.dateLabel).toBe("2026-08-18");
-    expect(meta.relativeLabel).toBe("4 days left");
-    expect(meta.relativeClassName).toContain("rose");
+    expect(meta.dateLabel).toBe("18 Aug 2026");
+    expect(meta.relativeLabel).toBe("4 Days Left");
+    expect(meta.relativeClassName).toContain("amber");
     expect(meta.isClosed).toBe(false);
   });
 
-  it("marks past deadlines as closed", () => {
+  it("marks past deadlines as expired", () => {
     const meta = getDeadlineMeta("2026-08-10", now);
-    expect(meta.relativeLabel).toBe("Closed");
+    expect(meta.relativeLabel).toBe("Expired");
     expect(meta.isClosed).toBe(true);
   });
 
-  it("uses amber between 8 and 14 days", () => {
+  it("uses muted styling beyond 7 days", () => {
     const meta = getDeadlineMeta("2026-08-24", now);
-    expect(meta.relativeLabel).toBe("10 days left");
-    expect(meta.relativeClassName).toContain("amber");
+    expect(meta.relativeLabel).toBe("10 Days Left");
+    expect(meta.relativeClassName).toContain("foreground-500");
+  });
+
+  it("uses rose urgency within 3 days", () => {
+    const meta = getDeadlineMeta("2026-08-16", now);
+    expect(meta.relativeLabel).toBe("2 Days Left");
+    expect(meta.relativeClassName).toContain("rose");
   });
 });
 
