@@ -25,6 +25,7 @@ import {
   getPasswordRuleStatuses,
   isPasswordPolicyMet,
 } from "@/lib/validations/password-rules";
+import { getPhoneValidationStatus } from "@/lib/validations/phone-rules";
 
 export function SignupForm() {
   const [state, formAction, pending] = useActionState(signupAction, {});
@@ -42,10 +43,12 @@ export function SignupForm() {
   const [industry, setIndustry] = useState("");
   const [companyType, setCompanyType] = useState("");
   const [phone, setPhone] = useState("");
+  const [phoneTouched, setPhoneTouched] = useState(false);
   const [website, setWebsite] = useState("");
   const [location, setLocation] = useState("");
 
   const emailStatus = getEmailValidationStatus(email);
+  const phoneStatus = getPhoneValidationStatus(phone);
   const passwordRules = useMemo(
     () => getPasswordRuleStatuses(password),
     [password],
@@ -266,13 +269,25 @@ export function SignupForm() {
               <Input
                 id="phone"
                 name="phone"
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
                 disabled={pending}
-                placeholder="+91…"
+                placeholder="+91 98765 43210"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
+                onBlur={() => setPhoneTouched(true)}
                 className="pl-9"
               />
             </div>
+            <FieldValidationHint
+              show={phoneTouched && phoneStatus !== null}
+              valid={phoneStatus?.valid ?? false}
+              validMessage={phoneStatus?.message ?? "Valid mobile number"}
+              invalidMessage={
+                phoneStatus?.message ?? "Enter a valid 10-digit mobile number"
+              }
+            />
           </div>
 
           <div className="space-y-1.5">
@@ -336,7 +351,11 @@ export function SignupForm() {
             <Button
               type="submit"
               className="flex-1"
-              disabled={pending || !companyName.trim()}
+              disabled={
+                pending ||
+                !companyName.trim() ||
+                (phoneStatus != null && phoneStatus.valid === false)
+              }
             >
               {pending ? (
                 <>

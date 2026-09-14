@@ -31,22 +31,74 @@ import {
   SCREENING_POLICY_FIELDS,
   type ScreeningPolicies,
 } from "@/lib/company/screening-policies";
+import { parseValidYearEstablished } from "@/lib/validations/phone-rules";
 
-const companyProfileSchema = z.object({
-  name: z.string().trim().min(1).max(200),
-  industryType: z.string().trim().max(120).optional().or(z.literal("")),
-  businessLocation: z.string().trim().max(160).optional().or(z.literal("")),
-  website: z.string().trim().max(200).optional().or(z.literal("")),
-  yearEstablished: z
-    .string()
-    .optional()
-    .transform((v) => {
-      if (!v || !v.trim()) return null;
-      const n = Number.parseInt(v, 10);
-      return Number.isFinite(n) ? n : null;
-    }),
-  description: z.string().trim().max(4000).optional().or(z.literal("")),
-});
+function optionalWebsiteUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const candidate = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+  try {
+    const url = new URL(candidate);
+    if (!url.hostname || !url.hostname.includes(".")) {
+      return null;
+    }
+    return trimmed;
+  } catch {
+    return null;
+  }
+}
+
+const companyProfileSchema = z
+  .object({
+    name: z.string().trim().min(1, "Company name is required").max(200),
+    industryType: z
+      .string()
+      .trim()
+      .min(1, "Industry type is required")
+      .max(120),
+    businessLocation: z
+      .string()
+      .trim()
+      .min(1, "Business location is required")
+      .max(160),
+    website: z.string().trim().max(200).optional().or(z.literal("")),
+    yearEstablished: z.string().trim().optional().or(z.literal("")),
+    description: z.string().trim().max(4000).optional().or(z.literal("")),
+  })
+  .superRefine((data, ctx) => {
+    if (data.website?.trim()) {
+      if (optionalWebsiteUrl(data.website) == null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["website"],
+          message: "Enter a valid website URL",
+        });
+      }
+    }
+    const year = parseValidYearEstablished(data.yearEstablished || "");
+    if (!year.ok) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["yearEstablished"],
+        message: year.message,
+      });
+    }
+  })
+  .transform((data) => {
+    const year = parseValidYearEstablished(data.yearEstablished || "");
+    return {
+      name: data.name,
+      industryType: data.industryType,
+      businessLocation: data.businessLocation,
+      website: data.website?.trim()
+        ? optionalWebsiteUrl(data.website) || data.website.trim()
+        : null,
+      yearEstablished: year.ok ? year.year : null,
+      description: data.description?.trim() || null,
+    };
+  });
 
 const bidPreferencesSchema = z.object({
   maxEmdInr: z
@@ -114,9 +166,9 @@ export async function updateCompanyProfileAction(
       name: parsed.data.name,
       industryType: parsed.data.industryType || null,
       businessLocation: parsed.data.businessLocation || null,
-      website: parsed.data.website || null,
+      website: parsed.data.website,
       yearEstablished: parsed.data.yearEstablished,
-      description: parsed.data.description || null,
+      description: parsed.data.description,
     });
 
     revalidatePath("/company-profile");

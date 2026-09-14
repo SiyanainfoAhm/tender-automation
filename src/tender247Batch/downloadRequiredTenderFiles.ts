@@ -89,6 +89,11 @@ export async function downloadRequiredTenderFiles(options: {
   skipAiSummary?: boolean;
   skipAllDocuments?: boolean;
   /**
+   * When true with skipAiSummary: treat AI as already satisfied (Supabase
+   * ai_summary_url present) even if the local PDF is missing.
+   */
+  skipAiSummaryAssumeComplete?: boolean;
+  /**
    * When true: download documents only if AI Summary was not captured.
    * Used by the AI-summary-first pipeline.
    */
@@ -153,6 +158,24 @@ export async function downloadRequiredTenderFiles(options: {
         aiStage: "COMPLETE",
         aiSummaryValid: true,
       });
+    } else if (options.skipAiSummaryAssumeComplete === true) {
+      ai = {
+        attempted: true,
+        available: true,
+        status: "complete",
+        method: "NATIVE_DOWNLOAD",
+        path: null,
+        size: 0,
+        sectionFound: true,
+        scrollContainerFound: true,
+      };
+      saveAiSummaryStage({
+        tenderDir: tenderFolder,
+        t247Id,
+        aiStage: "COMPLETE",
+        aiSummaryValid: true,
+      });
+      logger.info("AI_SUMMARY_SKIPPED_EXISTING_URL=true");
     } else {
       const saved = loadAiSummaryStage(tenderFolder);
       const skippedStatus =
@@ -265,12 +288,18 @@ export async function downloadRequiredTenderFiles(options: {
     logger.info("DOCUMENTS_SKIPPED_AI_SUMMARY_PRESENT=true");
     t247Event(logger, t247Id, "DOCUMENTS_SKIPPED_AI_SUMMARY_PRESENT");
     options.documentStage?.set("success");
-  } else if (options.skipAllDocuments && alreadyCanonical) {
+  } else if (options.skipAllDocuments) {
     allDocumentsSkipped = true;
     documentsAttempted = true;
     documentsStatus = "complete";
-    logger.info("ALL_DOCUMENTS_ALREADY_PRESENT_SKIP");
-    logger.info("T247_CANONICAL_ZIP_VERIFIED=true");
+    allDocumentsDownloaded = true;
+    if (alreadyCanonical) {
+      logger.info("ALL_DOCUMENTS_ALREADY_PRESENT_SKIP");
+      logger.info("T247_CANONICAL_ZIP_VERIFIED=true");
+    } else {
+      // Supabase already has documents_zip_url — do not re-download from Tender247.
+      logger.info("ALL_DOCUMENTS_SKIPPED_EXISTING_URL=true");
+    }
     options.documentStage?.set("success");
   } else {
     if (alreadyCanonical) {

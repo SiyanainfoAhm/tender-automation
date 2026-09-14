@@ -289,6 +289,32 @@ function writeMarker(
 }
 
 /**
+ * Seed Azure URL marker from Supabase so re-uploads are skipped and
+ * existing non-empty URLs are never overwritten.
+ */
+export function seedArtifactUploadUrlsFromSupabase(
+  tenderFolder: string,
+  urls: {
+    documents_zip_url?: string | null;
+    ai_summary_url?: string | null;
+  },
+): void {
+  if (!fs.existsSync(tenderFolder)) {
+    fs.mkdirSync(tenderFolder, { recursive: true });
+  }
+  const existing = readExistingUrls(tenderFolder);
+  const docs =
+    String(urls.documents_zip_url || "").trim() ||
+    existing.documents_zip_url;
+  const summary =
+    String(urls.ai_summary_url || "").trim() || existing.ai_summary_url;
+  writeMarker(tenderFolder, {
+    documents_zip_url: docs || null,
+    ai_summary_url: summary || null,
+  });
+}
+
+/**
  * Upload available local artifacts and persist public URLs on the tender row.
  * AI Summary missing is success (skipped), not failure.
  * Called right after Tender247 download/zip — before ChatGPT qualification.

@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { NATURE_OF_WORK_OPTIONS } from "@/lib/experience/nature-of-work";
 import { parseInrInput } from "@/lib/format-inr";
+import { isValidIndianMobile } from "@/lib/validations/phone-rules";
 
 const optionalEmail = z
   .string()
@@ -36,16 +37,10 @@ const indianMobile = z
   .trim()
   .min(1, "Mobile number is required")
   .max(20)
-  .refine((v) => {
-    const digits = v.replace(/\D/g, "");
-    if (digits.length === 12 && digits.startsWith("91")) {
-      return /^[6-9]\d{9}$/.test(digits.slice(2));
-    }
-    if (digits.length === 11 && digits.startsWith("0")) {
-      return /^[6-9]\d{9}$/.test(digits.slice(1));
-    }
-    return /^[6-9]\d{9}$/.test(digits);
-  }, "Enter a valid 10-digit mobile number");
+  .refine(
+    (v) => isValidIndianMobile(v),
+    "Enter a valid 10-digit mobile number",
+  );
 
 export const companyExperienceSchema = z
   .object({

@@ -76,7 +76,7 @@ import {
   fetchTender247Metadata,
   upsertTender247Metadata,
 } from "../supabase/tenderMetadataStore.js";
-import { uploadTenderArtifactsAndPersistUrls } from "../supabase/tenderArtifactUpload.js";
+import { uploadTenderArtifactsAndPersistUrls, seedArtifactUploadUrlsFromSupabase } from "../supabase/tenderArtifactUpload.js";
 import {
   assertOpenSingleTenderDetailsAllowed,
   loadPhase1DecisionsFromDisk,
@@ -145,6 +145,12 @@ export interface ProcessLiveTenderOptions {
    * Verify/May Bid document pipeline.
    */
   phase1ScreeningStatusOverride?: string | null;
+  /**
+   * Canonical Azure URLs from Supabase for this tender (AI-summary pipeline).
+   * Drive skip/resume — local downloads/ are cache only.
+   */
+  existingDocumentsZipUrl?: string | null;
+  existingAiSummaryUrl?: string | null;
 }
 
 /**
@@ -259,18 +265,38 @@ export async function processLiveTender(
     logger.info(`[T247 ${t247Id}] DETAIL_SCRAPE_ALLOWED=true`);
   }
 
-  // -------- LEVEL A: skip reopen when local artifacts already satisfy the run --------
+  // -------- LEVEL A: skip reopen when artifacts already satisfy the run --------
   let resume = inspectTenderResumeState(dateFolder, t247Id);
   const localArtifacts = inspectTenderArtifactState(resume.tenderFolder, t247Id);
+  const supabaseDocsUrl = String(options.existingDocumentsZipUrl || "").trim();
+  const supabaseSummaryUrl = String(options.existingAiSummaryUrl || "").trim();
+  const hasSupabaseDocs = Boolean(supabaseDocsUrl);
+  const hasSupabaseSummary = Boolean(supabaseSummaryUrl);
+  const aiSummaryPipelineUsesSupabaseUrls =
+    options.allowNoBidDetailOpen === true &&
+    options.documentsOnlyIfAiMissing !== true &&
+    (options.existingDocumentsZipUrl !== undefined ||
+      options.existingAiSummaryUrl !== undefined);
+
+  // Seed marker so upload never overwrites existing non-empty Supabase URLs.
+  if (aiSummaryPipelineUsesSupabaseUrls && (hasSupabaseDocs || hasSupabaseSummary)) {
+    seedArtifactUploadUrlsFromSupabase(resume.tenderFolder, {
+      documents_zip_url: supabaseDocsUrl || null,
+      ai_summary_url: supabaseSummaryUrl || null,
+    });
+  }
+
   // Legacy AI-only mode: skip when AI PDF or docs zip already exists.
   const aiSummaryPipelineLocalDone =
     options.documentsOnlyIfAiMissing === true &&
     (localArtifacts.aiSummaryValid || localArtifacts.documentsZipValid);
-  // AI+docs pipeline: skip reopen only when metadata + AI + docs are complete.
+  // AI+docs pipeline: completeness is Supabase URLs when provided; else local.
   const aiSummaryPipelineFullLocalDone =
     options.documentsOnlyIfAiMissing !== true &&
     options.allowNoBidDetailOpen === true &&
-    localArtifacts.complete;
+    (aiSummaryPipelineUsesSupabaseUrls
+      ? hasSupabaseDocs && hasSupabaseSummary
+      : localArtifacts.complete);
   // Document pipeline: skip when core docs+metadata are ready (AI optional).
   const classicCoreDone =
     options.documentsOnlyIfAiMissing !== true &&
@@ -831,6 +857,24 @@ export async function processLiveTender(
     // ---- Sequential artifacts: AI Summary then documents (concurrency=1) ----
     logger.info("AI_SUMMARY_CAPTURE_START");
     try {
+      const skipAiFromSupabase =
+        aiSummaryPipelineUsesSupabaseUrls &&
+        !options.force &&
+        hasSupabaseSummary;
+      const skipDocsFromSupabase =
+        aiSummaryPipelineUsesSupabaseUrls &&
+        !options.force &&
+        hasSupabaseDocs;
+      if (skipAiFromSupabase) {
+        logger.info(
+          `RESUME_DOCUMENTS_ONLY=T247-${t247Id} reason=supabase_ai_summary_url`,
+        );
+      }
+      if (skipDocsFromSupabase) {
+        logger.info(
+          `RESUME_SUMMARY_ONLY=T247-${t247Id} reason=supabase_documents_zip_url`,
+        );
+      }
       const downloads = await downloadRequiredTenderFiles({
         detailPage,
         context,
@@ -844,14 +888,17 @@ export async function processLiveTender(
         ),
         maxRetries: Math.min(1, config.documentDownloadMaxRetries),
         logger,
-        skipAiSummary: shouldSkipAiSummaryRetry(
-          resume.aiSummaryValid,
-          resolveAiSummaryStage({
-            tenderDir: resume.tenderFolder,
-            aiSummaryValid: resume.aiSummaryValid,
-          }),
-        ),
-        skipAllDocuments: resume.allDocumentsValid,
+        skipAiSummary:
+          skipAiFromSupabase ||
+          shouldSkipAiSummaryRetry(
+            resume.aiSummaryValid,
+            resolveAiSummaryStage({
+              tenderDir: resume.tenderFolder,
+              aiSummaryValid: resume.aiSummaryValid,
+            }),
+          ),
+        skipAiSummaryAssumeComplete: skipAiFromSupabase,
+        skipAllDocuments: skipDocsFromSupabase || resume.allDocumentsValid,
         documentsOnlyIfAiMissing: options.documentsOnlyIfAiMissing === true,
         keepDebugFiles: config.keepDebugFiles,
         documentStage,

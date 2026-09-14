@@ -243,6 +243,14 @@ export async function processSurvivorsInParallel(options: {
    * can still receive an AI Summary download.
    */
   allowNoBidDetailOpen?: boolean;
+  /**
+   * Supabase artifact URLs keyed by Tender247 id — resume/skip source of truth
+   * for the AI-summary pipeline (local downloads/ are cache only).
+   */
+  existingArtifactUrlsById?: Map<
+    string,
+    { documentsZipUrl?: string | null; aiSummaryUrl?: string | null }
+  >;
 }): Promise<{
   results: ProcessTenderResult[];
   attemptedIds: string[];
@@ -304,6 +312,7 @@ export async function processSurvivorsInParallel(options: {
       );
 
       const excel = options.excelValueById.get(t247Id);
+      const existingUrls = options.existingArtifactUrlsById?.get(t247Id);
       const result = await processTender247ArtifactTransaction({
         listPage: options.listPage,
         context: options.context,
@@ -324,6 +333,8 @@ export async function processSurvivorsInParallel(options: {
         phase1ScreeningAuthoritative: options.phase1ScreeningAuthoritative,
         phase1ScreeningStatusOverride:
           options.screeningStatusById?.get(t247Id) ?? null,
+        existingDocumentsZipUrl: existingUrls?.documentsZipUrl ?? null,
+        existingAiSummaryUrl: existingUrls?.aiSummaryUrl ?? null,
       });
       results.push(result);
 

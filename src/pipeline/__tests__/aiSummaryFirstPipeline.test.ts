@@ -30,11 +30,16 @@ test("ai-summary pipeline always downloads documents and uploads Azure artifacts
   assert.match(src, /AI_SUMMARY_PIPELINE_AUTO_RESUME/);
   assert.match(src, /ai_summary_url/);
   assert.match(src, /documents_zip_url/);
-  assert.match(src, /skippedLocalArtifacts/);
-  assert.match(src, /AI_SUMMARY_PIPELINE_SKIP_LOCAL/);
-  assert.match(src, /inspectTenderArtifactState/);
+  assert.match(src, /resolveAiSummaryArtifactMode/);
+  assert.match(src, /SKIP_ALREADY_COMPLETE/);
+  assert.match(src, /RESUME_SUMMARY_ONLY/);
+  assert.match(src, /RESUME_DOCUMENTS_ONLY/);
+  assert.match(src, /PROCESS_FULL/);
+  assert.match(src, /existingArtifactUrlsById/);
+  assert.doesNotMatch(src, /AI_SUMMARY_PIPELINE_SKIP_LOCAL/);
+  assert.doesNotMatch(src, /inspectTenderArtifactState/);
   assert.match(src, /INVALID_ACCOUNT_FLAG/);
-  assert.match(src, /aiSummaryUrl && documentsZipUrl/);
+  assert.match(src, /resolveAiSummaryArtifactMode/);
   assert.doesNotMatch(
     src,
     /crawl !== "VERIFY" && crawl !== "MAY_BID" && crawl !== "WILL_BID"/,
@@ -182,6 +187,46 @@ test("computeAiSummaryResumeIdFilter retries failed only when Excel and DB count
   });
   assert.equal(none.mode, "none");
   assert.equal(none.ids, null);
+});
+
+test("resolveAiSummaryArtifactMode uses Supabase URLs only", async () => {
+  const mod = await import("../runAiSummaryFirstDocumentPipeline.js");
+  assert.equal(
+    mod.resolveAiSummaryArtifactMode({
+      documentsZipUrl: "https://blob/docs.zip",
+      aiSummaryUrl: "https://blob/ai.pdf",
+    }),
+    "SKIP_ALREADY_COMPLETE",
+  );
+  assert.equal(
+    mod.resolveAiSummaryArtifactMode({
+      documentsZipUrl: "https://blob/docs.zip",
+      aiSummaryUrl: null,
+    }),
+    "RESUME_SUMMARY_ONLY",
+  );
+  assert.equal(
+    mod.resolveAiSummaryArtifactMode({
+      documentsZipUrl: "  ",
+      aiSummaryUrl: "https://blob/ai.pdf",
+    }),
+    "RESUME_DOCUMENTS_ONLY",
+  );
+  assert.equal(
+    mod.resolveAiSummaryArtifactMode({
+      documentsZipUrl: null,
+      aiSummaryUrl: null,
+    }),
+    "PROCESS_FULL",
+  );
+  assert.equal(
+    mod.resolveAiSummaryArtifactMode({
+      documentsZipUrl: "https://blob/docs.zip",
+      aiSummaryUrl: "https://blob/ai.pdf",
+      force: true,
+    }),
+    "PROCESS_FULL",
+  );
 });
 
 test("package.json exposes pipeline:tender247:ai-summary", () => {

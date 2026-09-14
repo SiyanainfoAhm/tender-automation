@@ -70,10 +70,6 @@ import { getSupabaseAdminClient, isSupabaseConfigured } from "../supabase/client
 import { ensureTender247FreshListForDate } from "../tender247Batch/ensureTender247FreshListForDate.js";
 import { processSurvivorsInParallel } from "../tender247Batch/processSurvivorsInParallel.js";
 import {
-  inspectTenderArtifactState,
-  listT247TenderDirs,
-} from "../tender247Batch/tenderArtifactState.js";
-import {
   createTender247RunContext,
   ensureTender247DateScopedDir,
   logTender247RunContext,
@@ -109,6 +105,27 @@ export type AiSummaryQueueRow = {
   documentsZipUrl: string | null;
   aiSummaryUrl: string | null;
 };
+
+/** Supabase URL–driven resume mode (local downloads/ are cache only). */
+export type AiSummaryArtifactMode =
+  | "SKIP_ALREADY_COMPLETE"
+  | "RESUME_SUMMARY_ONLY"
+  | "RESUME_DOCUMENTS_ONLY"
+  | "PROCESS_FULL";
+
+export function resolveAiSummaryArtifactMode(options: {
+  documentsZipUrl?: string | null;
+  aiSummaryUrl?: string | null;
+  force?: boolean;
+}): AiSummaryArtifactMode {
+  if (options.force) return "PROCESS_FULL";
+  const hasDocs = Boolean(String(options.documentsZipUrl || "").trim());
+  const hasSummary = Boolean(String(options.aiSummaryUrl || "").trim());
+  if (hasDocs && hasSummary) return "SKIP_ALREADY_COMPLETE";
+  if (hasDocs && !hasSummary) return "RESUME_SUMMARY_ONLY";
+  if (!hasDocs && hasSummary) return "RESUME_DOCUMENTS_ONLY";
+  return "PROCESS_FULL";
+}
 
 export type AiSummaryPipelineSummary = {
   date: string;
@@ -616,15 +633,19 @@ export async function listAiSummaryQueueForDate(options: {
     const status = String(row.qualification_status || "").trim().toUpperCase();
 
     const documentsZipUrl = row.documents_zip_url
-      ? String(row.documents_zip_url)
+      ? String(row.documents_zip_url).trim() || null
       : null;
     const aiSummaryUrl = row.ai_summary_url
-      ? String(row.ai_summary_url)
+      ? String(row.ai_summary_url).trim() || null
       : null;
 
-    // Finished only when BOTH Azure artifact URLs exist (unless --force).
-    // Missing docs URL must still crawl even if AI Summary URL is already set.
-    if (!options.force && aiSummaryUrl && documentsZipUrl) {
+    // Supabase URLs are canonical — skip only when both are present.
+    const mode = resolveAiSummaryArtifactMode({
+      documentsZipUrl,
+      aiSummaryUrl,
+      force: options.force,
+    });
+    if (mode === "SKIP_ALREADY_COMPLETE") {
       continue;
     }
 
@@ -803,44 +824,33 @@ export async function runAiSummaryFirstDocumentPipeline(
     }
   }
 
-  // Skip browser reopen when local AI + docs are both present AND Azure URLs
-  // already exist. If URLs are missing, keep the id in the crawl queue so
-  // processTender early-skip can upload without reopening the portal.
-  const localDoneIds = new Set<string>();
-  if (!args.force) {
-    for (const { t247Id, tenderDir } of listT247TenderDirs(dateFolder)) {
-      const state = inspectTenderArtifactState(tenderDir, t247Id);
-      if (!state.aiSummaryValid || !state.documentsZipValid) continue;
-      const pendingRow = pending.find((row) => row.sourceTenderId === t247Id);
-      const urlsComplete = Boolean(
-        pendingRow?.aiSummaryUrl && pendingRow?.documentsZipUrl,
-      );
-      // Not in today's pending queue (already finished in DB) — safe to ignore.
-      if (!pendingRow) {
-        localDoneIds.add(t247Id);
-        continue;
-      }
-      if (!urlsComplete) {
-        // Local files exist; leave in queue for Azure upload via early-skip.
-        continue;
-      }
-      localDoneIds.add(t247Id);
-      const inFilter = !idFilter?.length || idFilter.includes(t247Id);
-      if (inFilter) {
-        summary.fullSuccess += 1;
+  // Resume/skip is decided only from Supabase documents_zip_url / ai_summary_url.
+  // Local downloads/ folders are cache and must not remove tenders from the queue.
+  const skippedCompleteIds: string[] = [];
+  if (!args.force && !idFilter?.length) {
+    for (const row of allCandidates) {
+      const mode = resolveAiSummaryArtifactMode({
+        documentsZipUrl: row.documentsZipUrl,
+        aiSummaryUrl: row.aiSummaryUrl,
+      });
+      if (mode === "SKIP_ALREADY_COMPLETE") {
+        skippedCompleteIds.push(row.sourceTenderId);
+        logger.info(`SKIP_ALREADY_COMPLETE=T247-${row.sourceTenderId}`);
       }
     }
-    if (localDoneIds.size) {
-      const beforeLocal = queue.length;
-      queue = queue.filter((row) => !localDoneIds.has(row.sourceTenderId));
-      summary.skippedLocalArtifacts = Math.max(0, beforeLocal - queue.length);
-      logger.info(
-        `AI_SUMMARY_PIPELINE_SKIP_LOCAL count=${summary.skippedLocalArtifacts} (ai_and_docs_and_urls already present)`,
-      );
-      console.log(
-        `AI_SUMMARY_PIPELINE_SKIP_LOCAL=${summary.skippedLocalArtifacts}`,
-      );
-    }
+  }
+  summary.skippedLocalArtifacts = 0;
+  for (const row of queue) {
+    const mode = resolveAiSummaryArtifactMode({
+      documentsZipUrl: row.documentsZipUrl,
+      aiSummaryUrl: row.aiSummaryUrl,
+      force: args.force,
+    });
+    logger.info(`${mode}=T247-${row.sourceTenderId}`);
+    console.log(`${mode}=T247-${row.sourceTenderId}`);
+  }
+  if (skippedCompleteIds.length) {
+    console.log(`SKIP_ALREADY_COMPLETE count=${skippedCompleteIds.length}`);
   }
 
   if (args.limit != null) {
@@ -861,7 +871,8 @@ export async function runAiSummaryFirstDocumentPipeline(
     autoResumeMode,
     totalMatching: allCandidates.length,
     skippedExistingAi: summary.skippedExistingAi,
-    skippedLocalArtifacts: summary.skippedLocalArtifacts,
+    skippedAlreadyComplete: skippedCompleteIds.length,
+    skippedLocalArtifacts: 0,
     queued: queue.length,
     ids: queue.map((r) => r.sourceTenderId),
     rows: queue,
@@ -870,10 +881,10 @@ export async function runAiSummaryFirstDocumentPipeline(
 
   logger.info(`AI_SUMMARY_PIPELINE_QUEUE_FILE=${queuePath}`);
   logger.info(
-    `AI_SUMMARY_PIPELINE_SELECTED total=${allCandidates.length} queued=${queue.length} skippedAiUrls=${summary.skippedExistingAi} skippedLocal=${summary.skippedLocalArtifacts}`,
+    `AI_SUMMARY_PIPELINE_SELECTED total=${allCandidates.length} queued=${queue.length} skippedAiUrls=${summary.skippedExistingAi} skippedComplete=${skippedCompleteIds.length}`,
   );
   console.log(
-    `AI_SUMMARY_PIPELINE_QUEUE queued=${queue.length} skippedExistingAi=${summary.skippedExistingAi} skippedLocal=${summary.skippedLocalArtifacts}`,
+    `AI_SUMMARY_PIPELINE_QUEUE queued=${queue.length} skippedExistingAi=${summary.skippedExistingAi} skippedComplete=${skippedCompleteIds.length}`,
   );
 
   if (args.dryRun) {
@@ -967,6 +978,15 @@ export async function runAiSummaryFirstDocumentPipeline(
         }
 
         const survivorIds = queue.map((r) => r.sourceTenderId);
+        const existingArtifactUrlsById = new Map(
+          queue.map((row) => [
+            row.sourceTenderId,
+            {
+              documentsZipUrl: row.documentsZipUrl,
+              aiSummaryUrl: row.aiSummaryUrl,
+            },
+          ]),
+        );
         console.log(`AI_SUMMARY_PIPELINE_CRAWL_START count=${survivorIds.length}`);
         logger.info(
           `AI_SUMMARY_PIPELINE_CRAWL_START count=${survivorIds.length} documentsOnlyIfAiMissing=false`,
@@ -979,18 +999,23 @@ export async function runAiSummaryFirstDocumentPipeline(
           dateFolder,
           config,
           logger,
-          alreadyCompleted: localDoneIds,
+          alreadyCompleted: new Set<string>(),
           force: args.force,
           documentsOnlyIfAiMissing: false,
           allowNoBidDetailOpen: true,
           phase1ScreeningAuthoritative: true,
           screeningStatusById,
           excelValueById,
+          existingArtifactUrlsById,
         });
 
         summary.attempted = parallel.attemptedIds.length;
         summary.failed = parallel.failedIds.length;
         summary.failedIds = [...parallel.failedIds];
+        for (const id of summary.failedIds) {
+          logger.info(`FAILED=T247-${id}`);
+          console.log(`FAILED=T247-${id}`);
+        }
 
         // AI complete = full success for this pipeline.
         // Docs-only fallback (no AI) = partial.
@@ -1053,9 +1078,9 @@ export async function runAiSummaryFirstDocumentPipeline(
     `Upsert: attempted=${summary.upsertAttempted} stored=${summary.upsertStored} created=${summary.upsertCreated} updated=${summary.upsertUpdated}`,
   );
   console.log(`Selected (DB): ${summary.selected}`);
-  console.log(`Skipped (AI or zip URL already set): ${summary.skippedExistingAi}`);
+  console.log(`Skipped (both Azure URLs already set): ${summary.skippedExistingAi}`);
   console.log(
-    `Skipped (local AI or docs already present): ${summary.skippedLocalArtifacts}`,
+    `Skipped (local folder completeness): ${summary.skippedLocalArtifacts} (disabled; Supabase URLs are canonical)`,
   );
   console.log(`Attempted: ${summary.attempted}`);
   console.log(`AI Summary success: ${summary.fullSuccess}`);

@@ -75,4 +75,46 @@ describe("TF-3 auth validation contracts", () => {
     expect(parsed.fullName).toBe("Alex Manager");
     expect("email" in parsed).toBe(false);
   });
+
+  it("validates optional signup phone as Indian mobile when provided", async () => {
+    const { signupSchema } = await import("@/lib/validations");
+    const base = {
+      fullName: "Alex",
+      email: "alex@example.com",
+      password: "Secure1!",
+      confirmPassword: "Secure1!",
+      companyName: "Acme",
+    };
+    expect(signupSchema.parse({ ...base, phone: "" }).phone).toBe("");
+    expect(signupSchema.parse({ ...base, phone: "9876543210" }).phone).toBe(
+      "9876543210",
+    );
+    expect(signupSchema.parse({ ...base, phone: "+91 98765 43210" }).phone).toBe(
+      "+91 98765 43210",
+    );
+    expect(() =>
+      signupSchema.parse({ ...base, phone: "12345" }),
+    ).toThrow(/mobile/i);
+  });
+});
+
+describe("TF-16 year established number validation", () => {
+  it("accepts empty or a 4-digit year in range", async () => {
+    const {
+      getYearEstablishedValidationStatus,
+      parseValidYearEstablished,
+    } = await import("@/lib/validations/phone-rules");
+    expect(getYearEstablishedValidationStatus("")).toBeNull();
+    expect(parseValidYearEstablished("").ok).toBe(true);
+    expect(parseValidYearEstablished("2015")).toEqual({
+      ok: true,
+      year: 2015,
+    });
+    expect(parseValidYearEstablished("99").ok).toBe(false);
+    expect(parseValidYearEstablished("abc").ok).toBe(false);
+    expect(parseValidYearEstablished("1700").ok).toBe(false);
+    expect(parseValidYearEstablished(String(new Date().getFullYear() + 1)).ok).toBe(
+      false,
+    );
+  });
 });
