@@ -3,14 +3,15 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
-import { generateTemporaryPassword } from "@/lib/auth/temporary-password";
+import { generateCompanyTemporaryPassword } from "@/lib/auth/temporary-password";
 import { sendTenderFlowUserInvite } from "@/lib/email/tenderflow-user-invite";
 import type {
   InviteUserActionResult,
   ResendInviteActionResult,
 } from "@/lib/users/invite-results";
-import { USER_ROLES, passwordSchema, type UserRole } from "@/lib/validations";
+import { USER_ROLES, type UserRole } from "@/lib/validations";
 import { hasPermission, requirePermissionStrict } from "@/server/auth/permissions";
+import { getCompanyById } from "@/server/repositories/companyRepository";
 import {
   acceptCompanyInvitation,
   cancelCompanyInvitation,
@@ -30,7 +31,6 @@ const inviteSchema = z.object({
   email: z.string().email().transform((v) => v.trim().toLowerCase()),
   fullName: z.string().trim().max(120).optional().or(z.literal("")),
   role: z.enum(USER_ROLES),
-  temporaryPassword: passwordSchema,
 });
 
 export async function inviteCompanyUserAction(
@@ -43,7 +43,6 @@ export async function inviteCompanyUserAction(
       email: formData.get("email"),
       fullName: formData.get("fullName") || "",
       role: formData.get("role"),
-      temporaryPassword: formData.get("temporaryPassword"),
     });
     if (!parsed.success) {
       return { error: parsed.error.issues[0]?.message || "Invalid invite" };
@@ -67,6 +66,13 @@ export async function inviteCompanyUserAction(
       };
     }
 
+    const company = await getCompanyById(session.companyId);
+    const invitationDate = new Date();
+    const temporaryPassword = generateCompanyTemporaryPassword(
+      company?.name || "User",
+      invitationDate,
+    );
+
     const { invite } = await createCompanyInvitation({
       companyId: session.companyId,
       email: parsed.data.email,
@@ -79,7 +85,7 @@ export async function inviteCompanyUserAction(
       email: parsed.data.email,
       fullName:
         parsed.data.fullName || parsed.data.email.split("@")[0] || "User",
-      password: parsed.data.temporaryPassword,
+      password: temporaryPassword,
       role: parsed.data.role,
       createdBy: session.user.id,
       companyId: session.companyId,
@@ -94,7 +100,7 @@ export async function inviteCompanyUserAction(
       mode: "initial",
       name: created.fullName,
       email: created.email,
-      temporaryPassword: parsed.data.temporaryPassword,
+      temporaryPassword,
     });
 
     revalidatePath("/users");
@@ -141,7 +147,13 @@ export async function resendTenderFlowInviteAction(
       return { error: "This user does not have an email address." };
     }
 
-    const temporaryPassword = generateTemporaryPassword();
+    const company = user.companyId
+      ? await getCompanyById(user.companyId)
+      : null;
+    const temporaryPassword = generateCompanyTemporaryPassword(
+      company?.name || "User",
+      new Date(),
+    );
     await resetUserPassword({
       userId: user.id,
       temporaryPassword,

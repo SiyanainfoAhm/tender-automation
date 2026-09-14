@@ -72,6 +72,16 @@ export function DocumentsClient({
     });
   }, [documents, q, category]);
 
+  const existingFinancialTypes = useMemo(() => {
+    const types = new Set<string>();
+    for (const doc of documents) {
+      if (doc.documentCategory !== "Financial") continue;
+      const type = doc.documentType?.trim();
+      if (type) types.add(type);
+    }
+    return [...types];
+  }, [documents]);
+
   const filters = [
     "All",
     ...DOCUMENT_CATEGORIES.filter(
@@ -259,6 +269,7 @@ export function DocumentsClient({
         open={uploadOpen}
         onOpenChange={setUploadOpen}
         kind={uploadKind}
+        existingFinancialTypes={existingFinancialTypes}
       />
       <PastExperienceDialog
         open={experienceOpen}

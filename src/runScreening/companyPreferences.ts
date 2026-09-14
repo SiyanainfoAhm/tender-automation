@@ -28,6 +28,7 @@ export type CompanyBidPreferenceSnapshot = {
   maxEmdInr: number | null;
   minTenderValueInr: number | null;
   maxTenderValueInr: number | null;
+  minBidLeadDays: number | null;
   serviceScope: string[];
   excludedScope: string[];
   extras: Record<string, unknown>;
@@ -83,6 +84,7 @@ function mapPrefs(
       maxEmdInr: null,
       minTenderValueInr: null,
       maxTenderValueInr: null,
+      minBidLeadDays: null,
       serviceScope: [],
       excludedScope: [],
       extras: {},
@@ -100,6 +102,8 @@ function mapPrefs(
       row.min_tender_value_inr == null ? null : Number(row.min_tender_value_inr),
     maxTenderValueInr:
       row.max_tender_value_inr == null ? null : Number(row.max_tender_value_inr),
+    minBidLeadDays:
+      row.min_bid_lead_days == null ? null : Number(row.min_bid_lead_days),
     serviceScope: asStringArray(row.service_scope),
     excludedScope: asStringArray(row.excluded_scope),
     extras,
@@ -119,6 +123,7 @@ export function toTenderScreeningPreferenceSnapshot(
       minTenderValueInr: preferences.minTenderValueInr,
       maxTenderValueInr: preferences.maxTenderValueInr,
     },
+    minBidLeadDays: preferences.minBidLeadDays,
     preferredScopes: [...preferences.serviceScope],
     excludedScopes: [...preferences.excludedScope],
     policies: parseScreeningPolicies(preferences.extras),

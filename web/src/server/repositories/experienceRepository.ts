@@ -1,6 +1,7 @@
 import "server-only";
 
 import { getServerSupabase } from "@/lib/db/server";
+import { parseNatureOfWorkList } from "@/lib/experience/nature-of-work";
 import type {
   CompanyExperience,
   CompanyExperienceInsert,
@@ -17,7 +18,8 @@ function mapExperience(row: Record<string, unknown>): CompanyExperience {
     projectName: String(row.project_name),
     clientName: String(row.client_name || ""),
     location: String(row.location || ""),
-    natureOfWork: String(row.nature_of_work || ""),
+    projectType: String(row.project_type || ""),
+    natureOfWork: parseNatureOfWorkList(row.nature_of_work),
     projectValueInr:
       row.project_value_inr == null ? 0 : Number(row.project_value_inr),
     projectStatus: projectStatus as ExperienceProjectStatus,
@@ -50,7 +52,8 @@ function toRow(input: CompanyExperienceInsert) {
     project_name: input.projectName.trim(),
     client_name: input.clientName.trim(),
     location: input.location.trim(),
-    nature_of_work: input.natureOfWork.trim(),
+    project_type: input.projectType.trim(),
+    nature_of_work: input.natureOfWork.map((item) => item.trim()).filter(Boolean),
     project_value_inr: input.projectValueInr,
     project_status: input.projectStatus,
     start_date: input.startDate,

@@ -41,7 +41,19 @@ type UploadDocumentDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   kind: UploadKind;
+  /** Existing financial document types for the company (for custom-type uniqueness). */
+  existingFinancialTypes?: string[];
 };
+
+const CUSTOM_DOCUMENT_TYPE_VALUE = "__custom__";
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function normalizeTypeKey(value: string): string {
+  return value.trim().toLowerCase();
+}
 
 const COPY: Record<
   UploadKind,
@@ -57,7 +69,7 @@ const COPY: Record<
     title: "Certificate",
     subtitle:
       "Upload certifications with expiry tracking — ISO, CMMI, MSME, Startup India, and more.",
-    info: "Expiry dates power dashboard renewal reminders.",
+    info: "Issue date is required. Expiry is optional and powers dashboard renewal reminders when set.",
   },
   financial: {
     title: "Financial Document",
@@ -80,6 +92,7 @@ export function UploadDocumentDialog({
   open,
   onOpenChange,
   kind,
+  existingFinancialTypes = [],
 }: UploadDocumentDialogProps) {
   const router = useRouter();
   const managerRef = useRef<UploadManager | null>(null);
@@ -91,9 +104,12 @@ export function UploadDocumentDialog({
   const [confirmClose, setConfirmClose] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [formKey, setFormKey] = useState(0);
+  const [documentTypeChoice, setDocumentTypeChoice] = useState("");
+  const [customDocumentType, setCustomDocumentType] = useState("");
   const fyOptions = generateFinancialYears(12);
   const copy = COPY[kind];
   const uploading = isActiveStatus(progress?.status);
+  const maxIssueDate = todayIsoDate();
 
   useEffect(() => {
     const manager = new UploadManager();
@@ -117,6 +133,8 @@ export function UploadDocumentDialog({
       setProgress(null);
       setConfirmClose(false);
       setFormError(null);
+      setDocumentTypeChoice("");
+      setCustomDocumentType("");
     }
   }, [open]);
 
@@ -183,6 +201,31 @@ export function UploadDocumentDialog({
       ? (formData.get("file") as File)
       : null);
 
+    let documentType = String(formData.get("documentType") || "").trim();
+    if (kind === "financial") {
+      if (documentTypeChoice === CUSTOM_DOCUMENT_TYPE_VALUE) {
+        documentType = customDocumentType.trim();
+        if (!documentType) {
+          setFormError("Enter a document type name");
+          return;
+        }
+        const known = new Set(
+          [
+            ...FINANCIAL_DOCUMENT_TYPES,
+            ...existingFinancialTypes,
+          ].map(normalizeTypeKey),
+        );
+        if (known.has(normalizeTypeKey(documentType))) {
+          setFormError(
+            "This document type already exists. Choose it from the list instead.",
+          );
+          return;
+        }
+      } else {
+        documentType = documentTypeChoice.trim();
+      }
+    }
+
     const metadata: DocumentUploadMetadata = {
       name: String(formData.get("name") || "").trim(),
       uploadKind: kind,
@@ -192,7 +235,7 @@ export function UploadDocumentDialog({
       issueDate: String(formData.get("issueDate") || "").trim(),
       expiryDate: String(formData.get("expiryDate") || "").trim(),
       financialYear: String(formData.get("financialYear") || "").trim(),
-      documentType: String(formData.get("documentType") || "").trim(),
+      documentType,
     };
 
     const fileError = validateDocumentFile(selected);
@@ -374,15 +417,20 @@ export function UploadDocumentDialog({
                       <div className="grid gap-3 sm:grid-cols-2">
                         <div className="space-y-1.5">
                           <Label htmlFor="issueDate">Issue Date *</Label>
-                          <Input id="issueDate" name="issueDate" type="date" required />
+                          <Input
+                            id="issueDate"
+                            name="issueDate"
+                            type="date"
+                            required
+                            max={maxIssueDate}
+                          />
                         </div>
                         <div className="space-y-1.5">
-                          <Label htmlFor="expiryDate">Expiry Date *</Label>
+                          <Label htmlFor="expiryDate">Expiry Date</Label>
                           <Input
                             id="expiryDate"
                             name="expiryDate"
                             type="date"
-                            required
                           />
                         </div>
                       </div>
@@ -412,7 +460,14 @@ export function UploadDocumentDialog({
                         <select
                           id="documentType"
                           name="documentType"
-                          required
+                          required={documentTypeChoice !== CUSTOM_DOCUMENT_TYPE_VALUE}
+                          value={documentTypeChoice}
+                          onChange={(event) => {
+                            setDocumentTypeChoice(event.target.value);
+                            if (event.target.value !== CUSTOM_DOCUMENT_TYPE_VALUE) {
+                              setCustomDocumentType("");
+                            }
+                          }}
                           className="flex h-9 w-full rounded-md border border-border bg-white px-3 text-sm disabled:opacity-60"
                         >
                           <option value="">Select type</option>
@@ -421,8 +476,28 @@ export function UploadDocumentDialog({
                               {type}
                             </option>
                           ))}
+                          <option value={CUSTOM_DOCUMENT_TYPE_VALUE}>
+                            Add New Document Type
+                          </option>
                         </select>
                       </div>
+                      {documentTypeChoice === CUSTOM_DOCUMENT_TYPE_VALUE ? (
+                        <div className="space-y-1.5">
+                          <Label htmlFor="customDocumentType">
+                            New Document Type *
+                          </Label>
+                          <Input
+                            id="customDocumentType"
+                            name="customDocumentType"
+                            value={customDocumentType}
+                            onChange={(event) =>
+                              setCustomDocumentType(event.target.value)
+                            }
+                            placeholder="e.g. Solvency Certificate"
+                            required
+                          />
+                        </div>
+                      ) : null}
                     </>
                   ) : null}
 

@@ -3,6 +3,8 @@ export const BID_FEE_TYPES = [
   "emd",
   "processing",
   "pbg",
+  "courier",
+  "legal",
   "other",
 ] as const;
 
@@ -13,6 +15,8 @@ export const BID_FEE_TYPE_LABELS: Record<BidFeeType, string> = {
   emd: "EMD / Bid Security",
   processing: "Processing Fees",
   pbg: "Performance Guarantee",
+  courier: "Courier Fee",
+  legal: "Legal Fee",
   other: "Other",
 };
 
@@ -20,6 +24,7 @@ export const BID_FEE_STATUSES = [
   "pending",
   "submitted",
   "paid",
+  "pending_refund",
   "refunded",
   "released",
   "expired",
@@ -28,9 +33,10 @@ export const BID_FEE_STATUSES = [
 export type BidFeeStatus = (typeof BID_FEE_STATUSES)[number];
 
 export const BID_FEE_STATUS_LABELS: Record<BidFeeStatus, string> = {
-  pending: "Pending",
+  pending: "Pending Payment",
   submitted: "Submitted",
   paid: "Paid",
+  pending_refund: "Pending Refund",
   refunded: "Refunded",
   released: "Released",
   expired: "Expired",

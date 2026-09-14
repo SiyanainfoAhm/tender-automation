@@ -338,6 +338,24 @@ export function evaluateHardGates(options: {
         emdAmount: emd,
       };
     }
+    const minBidLeadDays = snapshot.minBidLeadDays;
+    if (
+      minBidLeadDays != null &&
+      Number.isFinite(minBidLeadDays) &&
+      minBidLeadDays >= 0
+    ) {
+      const daysUntilClosing = Math.round(
+        (d.getTime() - r.getTime()) / 86_400_000,
+      );
+      if (daysUntilClosing <= minBidLeadDays) {
+        return {
+          failed: true,
+          code: "INSUFFICIENT_LEAD_TIME",
+          reason: `Only ${daysUntilClosing} calendar day(s) until closing; company minimum bid lead time is ${minBidLeadDays} day(s)`,
+          emdAmount: emd,
+        };
+      }
+    }
   }
 
   if (emd != null && maxEmd != null && emd > maxEmd) {

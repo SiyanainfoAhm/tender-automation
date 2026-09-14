@@ -1,4 +1,5 @@
 import type { NatureOfWork } from "@/lib/experience/nature-of-work";
+import type { ProjectType } from "@/lib/experience/project-type";
 
 export type ExperienceProjectStatus = "ongoing" | "completed";
 export type ExperienceRecordStatus = "active" | "archived";
@@ -9,7 +10,8 @@ export type CompanyExperience = {
   projectName: string;
   clientName: string;
   location: string;
-  natureOfWork: NatureOfWork | string;
+  projectType: ProjectType | string;
+  natureOfWork: Array<NatureOfWork | string>;
   projectValueInr: number;
   projectStatus: ExperienceProjectStatus;
   startDate: string | null;
@@ -35,7 +37,8 @@ export type CompanyExperienceInsert = {
   projectName: string;
   clientName: string;
   location: string;
-  natureOfWork: string;
+  projectType: string;
+  natureOfWork: string[];
   projectValueInr: number;
   projectStatus: ExperienceProjectStatus;
   startDate: string;

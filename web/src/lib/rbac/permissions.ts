@@ -143,14 +143,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, PermissionKey[]> = {
     "documents.view",
     "documents.upload",
     "documents.edit",
+    "documents.delete",
     "reports.view",
     "reports.export",
-    "users.view",
     "company.view",
-    "company.preferences.edit",
     "settings.view",
-    "settings.edit",
-    "integrations.manage",
   ),
   TECHNICAL_LEAD: pick(
     "tenders.view",
@@ -214,9 +211,9 @@ export const ROLE_META: RoleMeta[] = [
   },
   {
     key: "BID_MANAGER",
-    name: "Bid Manager",
+    name: "Manager",
     description:
-      "Oversees bids and tenders. Coordinate work and manage bid lifecycle.",
+      "Dashboard, full tender and document access, bid fees; company profile view-only. No user management.",
   },
   {
     key: "TECHNICAL_LEAD",

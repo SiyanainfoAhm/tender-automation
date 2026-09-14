@@ -2,6 +2,7 @@ import "server-only";
 
 import { getServerSupabase } from "@/lib/db/server";
 import {
+  BID_FEE_TYPES,
   BID_FEE_TYPE_LABELS,
   type BidFeeRecord,
   type BidFeeStatus,
@@ -306,6 +307,31 @@ export async function deleteBidFee(options: {
   if (error) throw new Error(error.message);
 }
 
+/**
+ * When a tender is LOST or DISQUALIFIED, move paid refundable fees to pending_refund.
+ * Returns the number of fee rows updated.
+ */
+export async function markRefundableFeesPendingRefund(options: {
+  companyId: string;
+  tenderId: string;
+  userId?: string | null;
+}): Promise<number> {
+  const supabase = getServerSupabase();
+  const { data, error } = await supabase
+    .from("agenttender_bid_fees")
+    .update({
+      status: "pending_refund",
+      updated_by: options.userId || null,
+    })
+    .eq("company_id", options.companyId)
+    .eq("tender_id", options.tenderId)
+    .eq("status", "paid")
+    .eq("refundable", true)
+    .select("id");
+  if (error) throw new Error(error.message);
+  return data?.length ?? 0;
+}
+
 export async function listTenderDocuments(options: {
   companyId: string;
   tenderId: string;
@@ -439,13 +465,9 @@ export type BidFeeSummary = {
 };
 
 export function summarizeBidFees(fees: BidFeeRecord[]): BidFeeSummary {
-  const byType = {
-    tender_fee: { count: 0, total: 0 },
-    emd: { count: 0, total: 0 },
-    processing: { count: 0, total: 0 },
-    pbg: { count: 0, total: 0 },
-    other: { count: 0, total: 0 },
-  } as BidFeeSummary["byType"];
+  const byType = Object.fromEntries(
+    BID_FEE_TYPES.map((type) => [type, { count: 0, total: 0 }]),
+  ) as BidFeeSummary["byType"];
 
   let totalRefundable = 0;
   let totalRefunded = 0;
@@ -453,8 +475,11 @@ export function summarizeBidFees(fees: BidFeeRecord[]): BidFeeSummary {
   let totalAmount = 0;
 
   for (const fee of fees) {
-    byType[fee.feeType].count += 1;
-    byType[fee.feeType].total += fee.amount;
+    const bucket = byType[fee.feeType];
+    if (bucket) {
+      bucket.count += 1;
+      bucket.total += fee.amount;
+    }
     totalAmount += fee.amount;
     if (fee.refundable) totalRefundable += fee.amount;
     else totalNonRefundable += fee.amount;

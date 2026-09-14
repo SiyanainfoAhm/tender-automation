@@ -33,7 +33,8 @@ function sampleExperience(
     projectName: "UIDAI Data Center",
     clientName: "UIDAI",
     location: "Delhi",
-    natureOfWork: "Software Development",
+    projectType: "Central Government",
+    natureOfWork: ["Software Development"],
     projectValueInr: 150000,
     projectStatus: "ongoing",
     startDate: new Date().toISOString().slice(0, 10),
@@ -94,6 +95,23 @@ describe("ExperienceCard", () => {
     expect(screen.getAllByText("Completed").length).toBeGreaterThan(0);
     expect(screen.queryByText("Ongoing")).toBeNull();
     expect(screen.getAllByText("2026-08-17").length).toBeGreaterThan(0);
+  });
+
+  it("shows project type and nature of work on the card", () => {
+    render(
+      <ExperienceCard
+        experience={sampleExperience({
+          projectType: "PSU",
+          natureOfWork: ["Cloud Services", "GIS"],
+        })}
+        canManage
+        onView={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+    expect(screen.getAllByText("PSU").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Cloud Services").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("GIS").length).toBeGreaterThan(0);
   });
 
   it("opens the existing action menu", async () => {

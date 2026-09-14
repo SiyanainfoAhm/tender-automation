@@ -31,6 +31,7 @@ import {
   insertTenderDocument,
   updateBidFee,
 } from "@/server/repositories/bidFeeRepository";
+import { sendCompanyPendingRefundReminders } from "@/server/bid-fees/pending-refund-reminders";
 import { getTenderById } from "@/server/repositories/tenderRepository";
 import { insertTenderActivity } from "@/server/repositories/tenderActivityRepository";
 import { resolveUploadedDocumentId } from "@/lib/uploads/resolveUploadedDocumentId";
@@ -539,6 +540,52 @@ export async function deleteBidFeeAction(feeId: string): Promise<FeeActionResult
     return {
       ok: false,
       error: error instanceof Error ? error.message : "Unable to delete fee.",
+    };
+  }
+}
+
+export type PendingRefundReminderActionResult =
+  | {
+      ok: true;
+      message: string;
+      feeCount: number;
+      sent: number;
+    }
+  | { ok: false; error: string };
+
+/** Manual reminder from Bid Fees page — emails company Admins + Bid Managers. */
+export async function sendPendingRefundRemindersAction(): Promise<PendingRefundReminderActionResult> {
+  try {
+    const session = await requirePermissionStrict("bids.view");
+    const result = await sendCompanyPendingRefundReminders(session.companyId);
+    if (result.skipped) {
+      return { ok: false, error: "No fees are currently pending refund." };
+    }
+    if (!result.ok && result.sent === 0) {
+      return {
+        ok: false,
+        error: result.error || "Unable to send pending refund reminders.",
+      };
+    }
+    return {
+      ok: true,
+      feeCount: result.feeCount,
+      sent: result.sent,
+      message:
+        result.failed > 0
+          ? `Sent ${result.sent} of ${result.recipientCount} reminder(s) for ${result.feeCount} fee(s). Some deliveries failed.`
+          : `Sent reminder to ${result.sent} Admin/Manager recipient(s) for ${result.feeCount} pending refund fee(s).`,
+    };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message };
+    }
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to send pending refund reminders.",
     };
   }
 }

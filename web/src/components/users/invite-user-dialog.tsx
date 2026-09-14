@@ -4,10 +4,7 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { Loader2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 
-import {
-  FieldValidationHint,
-  PasswordRuleList,
-} from "@/components/auth/validation-hints";
+import { FieldValidationHint } from "@/components/auth/validation-hints";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -27,19 +24,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ROLE_META } from "@/lib/rbac/permissions";
-import { USER_ROLES } from "@/lib/validations";
 import { getEmailValidationStatus } from "@/lib/validations/email-rules";
-import { getPasswordRuleStatuses } from "@/lib/validations/password-rules";
 import type { InviteUserActionResult } from "@/lib/users/invite-results";
 import { inviteCompanyUserAction } from "@/server/actions/team";
+
+/** TF-23 approved invite roles: Admin + Manager only. */
+const INVITE_ROLES = ["ADMIN", "BID_MANAGER"] as const;
 
 export function InviteUserDialog() {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [emailTouched, setEmailTouched] = useState(false);
-  const [passwordTouched, setPasswordTouched] = useState(false);
-  const [role, setRole] = useState("BID_COORDINATOR");
+  const [role, setRole] = useState<(typeof INVITE_ROLES)[number]>("BID_MANAGER");
   const [state, formAction, pending] = useActionState(
     inviteCompanyUserAction,
     {} as InviteUserActionResult,
@@ -52,10 +48,8 @@ export function InviteUserDialog() {
         toast.success("User created and invitation sent.");
         setOpen(false);
         setEmail("");
-        setPassword("");
-        setRole("BID_COORDINATOR");
+        setRole("BID_MANAGER");
         setEmailTouched(false);
-        setPasswordTouched(false);
       } else if (state?.ok && state.inviteSent === false) {
         toast.error(
           state.warning ||
@@ -63,17 +57,14 @@ export function InviteUserDialog() {
         );
         setOpen(false);
         setEmail("");
-        setPassword("");
-        setRole("BID_COORDINATOR");
+        setRole("BID_MANAGER");
         setEmailTouched(false);
-        setPasswordTouched(false);
       }
     }
     wasPending.current = pending;
   }, [pending, state]);
 
   const emailStatus = getEmailValidationStatus(email);
-  const passwordRules = getPasswordRuleStatuses(password);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -87,8 +78,9 @@ export function InviteUserDialog() {
         <DialogHeader>
           <DialogTitle>Invite User</DialogTitle>
           <DialogDescription>
-            Invite a teammate to your company workspace. They must change the
-            temporary password on first login.
+            Invite a teammate to your company workspace. A temporary password is
+            generated automatically and sent by email; they must change it on
+            first login.
           </DialogDescription>
         </DialogHeader>
         <form action={formAction} className="space-y-4">
@@ -127,12 +119,18 @@ export function InviteUserDialog() {
           <div className="space-y-2">
             <Label>Role *</Label>
             <input type="hidden" name="role" value={role} />
-            <Select value={role} onValueChange={setRole} disabled={pending}>
+            <Select
+              value={role}
+              onValueChange={(value) =>
+                setRole(value as (typeof INVITE_ROLES)[number])
+              }
+              disabled={pending}
+            >
               <SelectTrigger className="h-9 rounded-md">
                 <SelectValue placeholder="Select role" />
               </SelectTrigger>
               <SelectContent>
-                {USER_ROLES.map((r) => (
+                {INVITE_ROLES.map((r) => (
                   <SelectItem key={r} value={r}>
                     {ROLE_META.find((m) => m.key === r)?.name || r}
                   </SelectItem>
@@ -140,28 +138,14 @@ export function InviteUserDialog() {
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="invite-password">Temporary password *</Label>
-            <Input
-              id="invite-password"
-              name="temporaryPassword"
-              type="password"
-              required
-              disabled={pending}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onBlur={() => setPasswordTouched(true)}
-              className="h-9 rounded-md"
-            />
-            <PasswordRuleList
-              rules={passwordRules}
-              show={passwordTouched && password.length > 0}
-            />
-          </div>
           {state?.error ? (
             <p className="text-sm text-red-600">{state.error}</p>
           ) : null}
-          <Button type="submit" disabled={pending} className="w-full">
+          <Button
+            type="submit"
+            disabled={pending || emailStatus?.valid === false}
+            className="w-full"
+          >
             {pending ? (
               <>
                 <Loader2 className="size-4 animate-spin" />

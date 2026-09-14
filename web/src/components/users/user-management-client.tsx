@@ -1,11 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
 
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { UserRole } from "@/lib/validations";
-import { PermissionsMatrix } from "./permissions-matrix";
 import {
   TeamMemberFilters,
   type TeamFilters,
@@ -42,7 +39,6 @@ type UserManagementClientProps = {
   canEdit: boolean;
   canDeactivate: boolean;
   canManageRoles: boolean;
-  initialTab: "members" | "permissions";
 };
 
 function toRows(
@@ -86,10 +82,7 @@ export function UserManagementClient({
   canEdit,
   canDeactivate,
   canManageRoles,
-  initialTab,
 }: UserManagementClientProps) {
-  const searchParams = useSearchParams();
-  const [tab, setTab] = useState<"members" | "permissions">(initialTab);
   const [filters, setFilters] = useState<TeamFilters>({
     search: "",
     status: "all",
@@ -122,60 +115,34 @@ export function UserManagementClient({
     });
   }, [members, pendingInvites, filters]);
 
-  function onTabChange(value: string) {
-    const next = value === "permissions" ? "permissions" : "members";
-    setTab(next);
-    // Update URL without Next navigation — avoids aborting a slow RSC stream.
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("tab", next);
-    window.history.replaceState(null, "", `/users?${params.toString()}`);
-  }
-
   return (
-    <Tabs value={tab} onValueChange={onTabChange}>
-      <TabsList className="h-9 rounded-md bg-[#efece6] p-0.5">
-        <TabsTrigger
-          value="members"
-          className="h-8 rounded-[5px] px-3 text-xs data-[state=active]:shadow-sm"
-        >
-          Team Members
-        </TabsTrigger>
-        <TabsTrigger
-          value="permissions"
-          className="h-8 rounded-[5px] px-3 text-xs data-[state=active]:shadow-sm"
-        >
-          Permissions Matrix
-        </TabsTrigger>
-      </TabsList>
-
-      <TabsContent value="members" className="mt-6 space-y-4">
-        <TeamMemberStats
-          active={stats.active}
-          pending={stats.pending}
-          inactive={stats.inactive}
-        />
-        <TeamMemberFilters
-          filters={filters}
-          onChange={setFilters}
-          canInvite={canInvite}
-        />
-        <TeamMemberTable
-          rows={filteredRows}
-          canEdit={canEdit}
-          canInvite={canInvite}
-          canDeactivate={canDeactivate}
-          canManageRoles={canManageRoles}
-          emptyMessage={
-            members.length === 0 && pendingInvites.length === 0
-              ? "No team members in this company yet. Invite someone to get started."
-              : "No team members match your filters."
-          }
-        />
-      </TabsContent>
-
-      <TabsContent value="permissions" className="mt-6">
-        <PermissionsMatrix />
-      </TabsContent>
-    </Tabs>
+    <div className="space-y-4">
+      <TeamMemberStats
+        active={stats.active}
+        pending={stats.pending}
+        inactive={stats.inactive}
+        selected={filters.status}
+        onSelect={(status) =>
+          setFilters((prev) => ({ ...prev, status }))
+        }
+      />
+      <TeamMemberFilters
+        filters={filters}
+        onChange={setFilters}
+        canInvite={canInvite}
+      />
+      <TeamMemberTable
+        rows={filteredRows}
+        canEdit={canEdit}
+        canInvite={canInvite}
+        canDeactivate={canDeactivate}
+        canManageRoles={canManageRoles}
+        emptyMessage={
+          members.length === 0 && pendingInvites.length === 0
+            ? "No team members in this company yet. Invite someone to get started."
+            : "No team members match your filters."
+        }
+      />
+    </div>
   );
 }

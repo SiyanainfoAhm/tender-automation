@@ -16,6 +16,8 @@ import {
   listBidFees,
   listTenderDocuments,
 } from "@/server/repositories/bidFeeRepository";
+import { getWonProjectByTenderId } from "@/server/repositories/wonProjectRepository";
+import { listUsers } from "@/server/repositories/userRepository";
 import { loadTenderDetailSafe } from "@/server/tenders/load-tender-detail";
 
 type TenderDetailPageProps = {
@@ -151,6 +153,40 @@ export default async function TenderDetailPage({
       }
     : null;
 
+  let existingWonProject: { id: string; projectCode: string } | null = null;
+  let teamMembers: { id: string; fullName: string }[] = [];
+
+  try {
+    const [wonProject, members] = await Promise.all([
+      getWonProjectByTenderId(id, companyId),
+      listUsers({ companyId }),
+    ]);
+    if (wonProject) {
+      existingWonProject = {
+        id: wonProject.id,
+        projectCode: wonProject.projectCode,
+      };
+    }
+    teamMembers = members
+      .filter((m) => m.isActive)
+      .map((m) => ({
+        id: m.id,
+        fullName: m.fullName || m.email,
+      }));
+  } catch (error) {
+    logDiagnostic({
+      level: "warn",
+      event: "tender_won_project_load_failed",
+      correlationId,
+      operation: "getWonProjectByTenderId",
+      tenderId: id,
+      userId: session.user.id,
+      companyId,
+      message: error instanceof Error ? error.message : String(error),
+      ok: false,
+    });
+  }
+
   return (
     <TenderDetailClient
       tender={tender}
@@ -160,6 +196,8 @@ export default async function TenderDetailPage({
       eligibleTender={eligibleTender}
       canEdit={sessionHasPermission(session, "tenders.edit")}
       canCreateFee={sessionHasPermission(session, "bids.create")}
+      existingWonProject={existingWonProject}
+      teamMembers={teamMembers}
       initialTab={initialTab}
       initialFocus={initialFocus}
     />

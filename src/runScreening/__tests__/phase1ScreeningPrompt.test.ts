@@ -43,6 +43,7 @@ function snapshot(
       maxEmdInr: 1_500_000,
       minTenderValueInr: 0,
       maxTenderValueInr: 50_000_000,
+      minBidLeadDays: null,
       serviceScope: [
         "Information Technology",
         "Software Development",

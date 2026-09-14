@@ -87,13 +87,19 @@ export function validateDocumentMetadata(
     if (!metadata.issuingAuthority?.trim()) {
       return new UploadError("validation", "Issuing authority is required");
     }
-    if (!metadata.issueDate?.trim()) {
+    const issueDate = metadata.issueDate?.trim() || "";
+    if (!issueDate) {
       return new UploadError("validation", "Issue date is required");
     }
-    if (!metadata.expiryDate?.trim()) {
-      return new UploadError("validation", "Expiry date is required");
+    const today = new Date().toISOString().slice(0, 10);
+    if (issueDate > today) {
+      return new UploadError(
+        "validation",
+        "Issue date cannot be after today",
+      );
     }
-    if (metadata.expiryDate < metadata.issueDate) {
+    const expiryDate = metadata.expiryDate?.trim() || "";
+    if (expiryDate && expiryDate < issueDate) {
       return new UploadError(
         "validation",
         "Expiry date must be on or after issue date",

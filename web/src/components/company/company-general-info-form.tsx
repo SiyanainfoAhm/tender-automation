@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useMemo, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -32,11 +32,37 @@ export function CompanyGeneralInfoForm({
     updateCompanyProfileAction,
     {},
   );
+  const [name, setName] = useState(initial.name);
+  const [industryType, setIndustryType] = useState(initial.industryType);
+  const [businessLocation, setBusinessLocation] = useState(
+    initial.businessLocation,
+  );
+  const [website, setWebsite] = useState(initial.website);
   const [yearEstablished, setYearEstablished] = useState(
     initial.yearEstablished,
   );
+  const [description, setDescription] = useState(initial.description);
   const [yearTouched, setYearTouched] = useState(false);
   const yearStatus = getYearEstablishedValidationStatus(yearEstablished);
+
+  const dirty = useMemo(
+    () =>
+      name !== initial.name ||
+      industryType !== initial.industryType ||
+      businessLocation !== initial.businessLocation ||
+      website !== initial.website ||
+      yearEstablished !== initial.yearEstablished ||
+      description !== initial.description,
+    [
+      name,
+      industryType,
+      businessLocation,
+      website,
+      yearEstablished,
+      description,
+      initial,
+    ],
+  );
 
   useEffect(() => {
     if (state?.ok) toast.success("Company profile saved");
@@ -58,7 +84,8 @@ export function CompanyGeneralInfoForm({
             id="name"
             name="name"
             required
-            defaultValue={initial.name}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
             disabled={!canEdit || pending}
           />
         </div>
@@ -68,7 +95,8 @@ export function CompanyGeneralInfoForm({
             id="industryType"
             name="industryType"
             required
-            defaultValue={initial.industryType}
+            value={industryType}
+            onChange={(e) => setIndustryType(e.target.value)}
             disabled={!canEdit || pending}
           />
         </div>
@@ -78,7 +106,8 @@ export function CompanyGeneralInfoForm({
             id="businessLocation"
             name="businessLocation"
             required
-            defaultValue={initial.businessLocation}
+            value={businessLocation}
+            onChange={(e) => setBusinessLocation(e.target.value)}
             disabled={!canEdit || pending}
           />
         </div>
@@ -89,7 +118,8 @@ export function CompanyGeneralInfoForm({
             name="website"
             type="url"
             placeholder="https://example.com"
-            defaultValue={initial.website}
+            value={website}
+            onChange={(e) => setWebsite(e.target.value)}
             disabled={!canEdit || pending}
           />
         </div>
@@ -122,7 +152,8 @@ export function CompanyGeneralInfoForm({
             id="description"
             name="description"
             rows={4}
-            defaultValue={initial.description}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
             disabled={!canEdit || pending}
           />
         </div>
@@ -133,7 +164,9 @@ export function CompanyGeneralInfoForm({
           <Button
             type="submit"
             disabled={
-              pending || (yearStatus != null && yearStatus.valid === false)
+              pending ||
+              !dirty ||
+              (yearStatus != null && yearStatus.valid === false)
             }
           >
             {pending ? (

@@ -58,3 +58,24 @@ export function loadPrescreenConfig(
     timezone: env.PRESCREEN_TIMEZONE?.trim() || "Asia/Kolkata",
   };
 }
+
+/**
+ * Map company profile threshold X (exclude when days remaining <= X)
+ * onto the prescreen engine's minLeadDays (exclude when days remaining < min).
+ */
+export function applyCompanyMinBidLeadDays(
+  config: PrescreenConfig,
+  companyThreshold: number | null | undefined,
+): PrescreenConfig {
+  if (
+    companyThreshold == null ||
+    !Number.isFinite(companyThreshold) ||
+    companyThreshold < 0
+  ) {
+    return config;
+  }
+  return {
+    ...config,
+    minLeadDays: Math.floor(companyThreshold) + 1,
+  };
+}

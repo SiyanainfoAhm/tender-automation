@@ -43,6 +43,7 @@ function parseExperienceForm(formData: FormData) {
     projectName: String(formData.get("projectName") || ""),
     clientName: String(formData.get("clientName") || ""),
     location: String(formData.get("location") || ""),
+    projectType: String(formData.get("projectType") || ""),
     natureOfWork: String(formData.get("natureOfWork") || ""),
     contractValue: String(formData.get("contractValue") || ""),
     projectStatus: String(formData.get("projectStatus") || "ongoing"),
@@ -60,7 +61,8 @@ function toInsert(
     projectName: string;
     clientName: string;
     location: string;
-    natureOfWork: string;
+    projectType: string;
+    natureOfWork: string[];
     contractValue: number;
     projectStatus: "ongoing" | "completed";
     startDate: string;
@@ -83,6 +85,7 @@ function toInsert(
     projectName: parsed.projectName,
     clientName: parsed.clientName,
     location: parsed.location,
+    projectType: parsed.projectType,
     natureOfWork: parsed.natureOfWork,
     projectValueInr: parsed.contractValue,
     projectStatus: parsed.projectStatus,

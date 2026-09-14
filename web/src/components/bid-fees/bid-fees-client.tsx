@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Plus } from "lucide-react";
+import { useMemo, useState, useTransition } from "react";
+import { Mail, Plus } from "lucide-react";
+import { toast } from "sonner";
 
 import {
   AddFeeWizard,
@@ -21,6 +22,7 @@ import {
   type TenderDocumentRecord,
 } from "@/lib/bid-fees";
 import { formatIndianCurrency } from "@/lib/format";
+import { sendPendingRefundRemindersAction } from "@/server/actions/bid-fees";
 
 export type { FeeEligibleTender };
 
@@ -55,6 +57,16 @@ export function BidFeesClient({
   >(undefined);
   const [selectedFee, setSelectedFee] = useState<BidFeeRecord | null>(null);
   const [feeModalOpen, setFeeModalOpen] = useState(false);
+  const [reminderPending, startReminder] = useTransition();
+
+  const pendingRefundFees = useMemo(
+    () => fees.filter((fee) => fee.status === "pending_refund"),
+    [fees],
+  );
+  const pendingRefundTotal = useMemo(
+    () => pendingRefundFees.reduce((sum, fee) => sum + fee.amount, 0),
+    [pendingRefundFees],
+  );
 
   const totals = useMemo(
     () => [
@@ -76,11 +88,22 @@ export function BidFeesClient({
     setFeeModalOpen(true);
   }
 
+  function sendReminder() {
+    startReminder(async () => {
+      const result = await sendPendingRefundRemindersAction();
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
+      }
+      toast.success(result.message);
+    });
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="Bid Fees & Payments"
-        subtitle="Track tender fees, EMD, processing charges, and performance guarantees."
+        subtitle="Track tender fees, EMD, processing charges, courier/legal fees, and performance guarantees."
         actions={
           canCreate ? (
             <Button size="sm" onClick={() => openWizard()}>
@@ -91,7 +114,33 @@ export function BidFeesClient({
         }
       />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      {pendingRefundFees.length > 0 ? (
+        <div className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium text-amber-950">
+              {pendingRefundFees.length} fee
+              {pendingRefundFees.length === 1 ? "" : "s"} pending refund (
+              {formatIndianCurrency(pendingRefundTotal)})
+            </p>
+            <p className="mt-0.5 text-xs text-amber-800">
+              Notify company Admins and Bid Managers to chase outstanding
+              refunds.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="border-amber-300 bg-white text-amber-950 hover:bg-amber-100"
+            disabled={reminderPending}
+            onClick={sendReminder}
+          >
+            <Mail className="size-4" />
+            {reminderPending ? "Sending…" : "Send reminder"}
+          </Button>
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
         {BID_FEE_TYPES.map((type) => {
           const bucket = summary.byType[type];
           return (

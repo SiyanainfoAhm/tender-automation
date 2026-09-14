@@ -5,11 +5,8 @@ import { Loader2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import {
-  CHECKLIST_CATEGORIES,
   areRequirementTitlesSimilar,
-  categoryLabel,
   isExactRequirementDuplicate,
-  workspaceSectionLabel,
   type RequirementDestinationSection,
 } from "@/lib/bid-checklist";
 import {
@@ -28,25 +25,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
-const SECTION_OPTIONS: RequirementDestinationSection[] = [
-  "prequalification",
-  "technical",
-  "annexures",
-];
-
-const CATEGORY_OPTIONS = [
-  ...CHECKLIST_CATEGORIES.filter((c) => c !== "BOQ" && c !== "COMPLIANCE"),
-  "COMPLIANCE",
-] as const;
+const DEFAULT_SECTION: RequirementDestinationSection = "prequalification";
 
 export type AddRequirementDialogMode = "create" | "edit";
 
@@ -77,7 +58,7 @@ export function AddRequirementDialog({
   const isEdit = mode === "edit" && Boolean(editItem);
   const [title, setTitle] = useState("");
   const [section, setSection] = useState<RequirementDestinationSection>(
-    defaultSection || "prequalification",
+    defaultSection || DEFAULT_SECTION,
   );
   const [category, setCategory] = useState<string>("");
   const [description, setDescription] = useState("");
@@ -104,7 +85,7 @@ export function AddRequirementDialog({
       return;
     }
     setTitle("");
-    setSection(defaultSection || "prequalification");
+    setSection(defaultSection || DEFAULT_SECTION);
     setCategory("");
     setDescription("");
     setSourceReference("");
@@ -112,8 +93,6 @@ export function AddRequirementDialog({
     setFuzzyWarning(null);
     setForceAdd(false);
   }, [open, isEdit, editItem, defaultSection]);
-
-  const sectionRequired = !defaultSection && !isEdit;
 
   const exactClash = useMemo(() => {
     const trimmed = title.trim();
@@ -149,10 +128,6 @@ export function AddRequirementDialog({
     const trimmed = title.trim();
     if (!trimmed) {
       toast.error("Requirement title is required.");
-      return;
-    }
-    if (!section) {
-      toast.error("Choose a destination section.");
       return;
     }
     if (exactClash) {
@@ -244,7 +219,7 @@ export function AddRequirementDialog({
           <DialogDescription>
             {isEdit
               ? "Update this manually added requirement."
-              : "Add a requirement the AI missed. It appears in Checklist Creation and the destination section."}
+              : "Add a requirement the AI missed to the checklist."}
           </DialogDescription>
         </DialogHeader>
 
@@ -267,57 +242,6 @@ export function AddRequirementDialog({
                 Exact match already exists: {exactClash.requirementName}
               </p>
             ) : null}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Section *</Label>
-            <Select
-              value={section}
-              onValueChange={(value) =>
-                setSection(value as RequirementDestinationSection)
-              }
-              disabled={saving}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Choose section" />
-              </SelectTrigger>
-              <SelectContent>
-                {SECTION_OPTIONS.map((value) => (
-                  <SelectItem key={value} value={value}>
-                    {workspaceSectionLabel(value)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {sectionRequired ? (
-              <p className="text-xs text-foreground-500">
-                Checklist Creation is an aggregate view — pick the real
-                destination section.
-              </p>
-            ) : null}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Category / Type</Label>
-            <Select
-              value={category || "__none__"}
-              onValueChange={(value) =>
-                setCategory(value === "__none__" ? "" : value)
-              }
-              disabled={saving}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Optional" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">Optional</SelectItem>
-                {CATEGORY_OPTIONS.map((value) => (
-                  <SelectItem key={value} value={value}>
-                    {categoryLabel(value)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
           </div>
 
           <div className="space-y-1.5">

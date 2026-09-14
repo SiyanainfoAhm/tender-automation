@@ -11,7 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { getPasswordRuleStatuses } from "@/lib/validations/password-rules";
+import { getPasswordRuleStatuses, isPasswordPolicyMet } from "@/lib/validations/password-rules";
 
 type ChangePasswordFormProps = {
   forced?: boolean;
@@ -33,6 +33,10 @@ export function ChangePasswordForm({ forced = false }: ChangePasswordFormProps) 
   const passwordRules = getPasswordRuleStatuses(newPassword);
   const passwordsMatch =
     confirmPassword.length > 0 && newPassword === confirmPassword;
+  const canSubmit =
+    isPasswordPolicyMet(newPassword) &&
+    passwordsMatch &&
+    newPassword.length > 0;
 
   return (
     <form action={formAction} className="max-w-md space-y-4">
@@ -129,7 +133,7 @@ export function ChangePasswordForm({ forced = false }: ChangePasswordFormProps) 
       {state?.ok ? (
         <p className="text-sm text-emerald-600">Password updated successfully.</p>
       ) : null}
-      <Button type="submit" disabled={pending} className="min-h-11">
+      <Button type="submit" disabled={pending || !canSubmit} className="min-h-11">
         {pending ? (
           <>
             <Loader2 className="size-4 animate-spin" />

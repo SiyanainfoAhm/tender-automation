@@ -34,6 +34,7 @@ function snapshot(): CompanyPreferenceSnapshot {
       maxEmdInr: 1_500_000,
       minTenderValueInr: 0,
       maxTenderValueInr: 50_000_000,
+      minBidLeadDays: null,
       serviceScope: ["Software Development", "Website Development"],
       excludedScope: ["NON-IT", "Hardware Only", "EOI / Expression of Interest"],
       extras: {},

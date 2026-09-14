@@ -2,11 +2,15 @@ import type { Logger } from "../logger.js";
 import type { BidassistMetadata } from "../bidassist/bidassistTypes.js";
 import type { CompleteTenderMetadata } from "../tender247Batch/extractCompleteMetadata.js";
 import { evaluatePrescreen } from "./prescreenRuleEngine.js";
-import { loadPrescreenConfig } from "./prescreenConfig.js";
+import {
+  applyCompanyMinBidLeadDays,
+  loadPrescreenConfig,
+} from "./prescreenConfig.js";
 import {
   logPrescreenDecision,
   persistPrescreenResult,
 } from "./prescreenRepository.js";
+import { loadCompanyPreferenceSnapshot } from "../runScreening/companyPreferences.js";
 import type {
   PrescreenDecision,
   PrescreenInput,
@@ -96,7 +100,15 @@ export async function runAndPersistPrescreen(options: {
   metadataHash?: string | null;
   logger: Logger | { info: (msg: string) => void; warn?: (msg: string) => void };
 }): Promise<{ ok: boolean; decision: PrescreenDecision; error: string | null }> {
-  const config = loadPrescreenConfig();
+  const baseConfig = loadPrescreenConfig();
+  let companyLeadDays: number | null = null;
+  try {
+    const snapshot = await loadCompanyPreferenceSnapshot();
+    companyLeadDays = snapshot.preferences.minBidLeadDays;
+  } catch {
+    // Fall back to env-configured lead time when company prefs are unavailable.
+  }
+  const config = applyCompanyMinBidLeadDays(baseConfig, companyLeadDays);
   const decision = evaluatePrescreen(options.input, config);
   logPrescreenDecision(
     options.logger,

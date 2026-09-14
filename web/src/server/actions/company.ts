@@ -100,34 +100,96 @@ const companyProfileSchema = z
     };
   });
 
-const bidPreferencesSchema = z.object({
-  maxEmdInr: z
-    .string()
-    .optional()
-    .transform((v) => {
-      if (v == null || v.trim() === "") return null;
-      const n = Number(v);
-      return Number.isFinite(n) ? n : null;
-    }),
-  minTenderValueInr: z
-    .string()
-    .optional()
-    .transform((v) => {
-      if (v == null || v.trim() === "") return null;
-      const n = Number(v);
-      return Number.isFinite(n) ? n : null;
-    }),
-  maxTenderValueInr: z
-    .string()
-    .optional()
-    .transform((v) => {
-      if (v == null || v.trim() === "") return null;
-      const n = Number(v);
-      return Number.isFinite(n) ? n : null;
-    }),
-  serviceScope: z.string().optional(),
-  excludedScope: z.string().optional(),
-});
+const bidPreferencesSchema = z
+  .object({
+    maxEmdInr: z
+      .string()
+      .optional()
+      .transform((v) => {
+        if (v == null || v.trim() === "") return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      }),
+    minTenderValueInr: z
+      .string()
+      .optional()
+      .transform((v) => {
+        if (v == null || v.trim() === "") return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      }),
+    maxTenderValueInr: z
+      .string()
+      .optional()
+      .transform((v) => {
+        if (v == null || v.trim() === "") return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? n : null;
+      }),
+    minBidLeadDays: z
+      .string()
+      .optional()
+      .transform((v) => {
+        if (v == null || v.trim() === "") return null;
+        const n = Number(v);
+        if (!Number.isFinite(n) || !Number.isInteger(n) || n < 0) {
+          return Number.NaN;
+        }
+        return n;
+      }),
+    serviceScope: z.string().optional(),
+    excludedScope: z.string().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (
+      data.maxEmdInr != null &&
+      (data.maxEmdInr < 0 || !Number.isFinite(data.maxEmdInr))
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["maxEmdInr"],
+        message: "Maximum EMD must be a non-negative number",
+      });
+    }
+    if (
+      data.minTenderValueInr != null &&
+      (data.minTenderValueInr < 0 || !Number.isFinite(data.minTenderValueInr))
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["minTenderValueInr"],
+        message: "Minimum tender value must be a non-negative number",
+      });
+    }
+    if (
+      data.maxTenderValueInr != null &&
+      (data.maxTenderValueInr < 0 || !Number.isFinite(data.maxTenderValueInr))
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["maxTenderValueInr"],
+        message: "Maximum tender value must be a non-negative number",
+      });
+    }
+    if (
+      data.minTenderValueInr != null &&
+      data.maxTenderValueInr != null &&
+      data.minTenderValueInr > data.maxTenderValueInr
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["minTenderValueInr"],
+        message: "Minimum tender value cannot exceed maximum tender value",
+      });
+    }
+    if (Number.isNaN(data.minBidLeadDays as number)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["minBidLeadDays"],
+        message: "Minimum bid lead time must be zero or a positive whole number of days",
+      });
+    }
+  });
 
 function parseScopeList(raw: string | undefined): string[] {
   return parseStoredScopeList(raw);
@@ -190,6 +252,7 @@ export async function updateBidPreferencesAction(
       maxEmdInr: String(formData.get("maxEmdInr") ?? ""),
       minTenderValueInr: String(formData.get("minTenderValueInr") ?? ""),
       maxTenderValueInr: String(formData.get("maxTenderValueInr") ?? ""),
+      minBidLeadDays: String(formData.get("minBidLeadDays") ?? ""),
       serviceScope: formData.get("serviceScope") || "",
       excludedScope: formData.get("excludedScope") || "",
     });
@@ -203,6 +266,7 @@ export async function updateBidPreferencesAction(
       maxEmdInr: parsed.data.maxEmdInr,
       minTenderValueInr: parsed.data.minTenderValueInr,
       maxTenderValueInr: parsed.data.maxTenderValueInr,
+      minBidLeadDays: parsed.data.minBidLeadDays,
       serviceScope: parseScopeList(parsed.data.serviceScope),
       excludedScope: parseScopeList(parsed.data.excludedScope),
       screeningPolicies: parsePoliciesFromForm(formData),
@@ -270,8 +334,11 @@ export async function uploadCompanyDocumentAction(
       }
       if (!issuingAuthority) return { error: "Issuing authority is required" };
       if (!issueDate) return { error: "Issue date is required" };
-      if (!expiryDate) return { error: "Expiry date is required" };
-      if (expiryDate < issueDate) {
+      const today = new Date().toISOString().slice(0, 10);
+      if (issueDate > today) {
+        return { error: "Issue date cannot be after today" };
+      }
+      if (expiryDate && expiryDate < issueDate) {
         return { error: "Expiry date must be on or after issue date" };
       }
     } else if (uploadKind === "financial") {

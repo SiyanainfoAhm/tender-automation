@@ -228,6 +228,13 @@ export function isQualifiedStatus(
   return status === "GO";
 }
 
+/** Bid Workspace is only available for Will Bid (GO) tenders. */
+export function canOpenBidWorkspace(
+  status: string | null | undefined,
+): boolean {
+  return isQualifiedStatus(status);
+}
+
 export function isActionableStatus(
   status: string | null | undefined,
 ): boolean {

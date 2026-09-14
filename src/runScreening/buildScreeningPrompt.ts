@@ -652,6 +652,10 @@ If closing date equals screening date:
 → NO_BID
 unless current policy explicitly allows same-day bids.
 
+If the company configures a minimum bid lead time of X days:
+→ NO_BID when calendar days remaining until closing are X or fewer.
+Record reason as insufficient bid lead time.
+
 If deadline is missing or ambiguous:
 do not invent it.
 

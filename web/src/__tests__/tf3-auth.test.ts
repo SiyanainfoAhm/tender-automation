@@ -118,3 +118,47 @@ describe("TF-16 year established number validation", () => {
     );
   });
 });
+
+describe("TF-19 financial bid preference bounds", () => {
+  it("rejects when minimum tender value exceeds maximum", async () => {
+    const { z } = await import("zod");
+    // Mirror the action rule without importing server-only action module.
+    const schema = z
+      .object({
+        minTenderValueInr: z.number().nullable(),
+        maxTenderValueInr: z.number().nullable(),
+      })
+      .superRefine((data, ctx) => {
+        if (
+          data.minTenderValueInr != null &&
+          data.maxTenderValueInr != null &&
+          data.minTenderValueInr > data.maxTenderValueInr
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Minimum tender value cannot exceed maximum tender value",
+          });
+        }
+      });
+
+    expect(
+      schema.safeParse({ minTenderValueInr: 10, maxTenderValueInr: 5 }).success,
+    ).toBe(false);
+    expect(
+      schema.safeParse({ minTenderValueInr: 5, maxTenderValueInr: 10 }).success,
+    ).toBe(true);
+    expect(
+      schema.safeParse({ minTenderValueInr: null, maxTenderValueInr: 10 }).success,
+    ).toBe(true);
+  });
+});
+
+describe("TF-7 / TF-14 password policy gate", () => {
+  it("requires all configured password rules before submit is allowed", async () => {
+    const { isPasswordPolicyMet } = await import(
+      "@/lib/validations/password-rules"
+    );
+    expect(isPasswordPolicyMet("short")).toBe(false);
+    expect(isPasswordPolicyMet("Secure1!")).toBe(true);
+  });
+});

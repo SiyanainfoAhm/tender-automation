@@ -51,6 +51,7 @@ function snapshot(
       maxEmdInr: 1_500_000,
       minTenderValueInr: null,
       maxTenderValueInr: 50_000_000,
+      minBidLeadDays: null,
       serviceScope: ["Website development", "Mobile applications"],
       excludedScope: ["scanning / digitization"],
       extras: { localOfficeRequired: false },

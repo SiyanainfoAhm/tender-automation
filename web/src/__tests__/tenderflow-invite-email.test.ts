@@ -24,17 +24,19 @@ function walkFiles(dir: string, acc: string[] = []): string[] {
 }
 
 describe("temporary password generation", () => {
-  it("meets TenderFlow password policy without Math.random", () => {
-    const password = generateTemporaryPassword();
+  it("uses company prefix @ DDMM and meets password policy", () => {
+    const password = generateTemporaryPassword(
+      "Siyana",
+      new Date("2026-09-07T12:00:00+05:30"),
+    );
+    expect(password).toBe("Siya@0709");
     expect(passwordSchema.safeParse(password).success).toBe(true);
-    expect(password).not.toMatch(/undefined/);
   });
 
-  it("produces distinct values", () => {
-    const passwords = new Set(
-      Array.from({ length: 8 }, () => generateTemporaryPassword()),
-    );
-    expect(passwords.size).toBeGreaterThan(1);
+  it("changes with invitation date", () => {
+    const a = generateTemporaryPassword("Siyana", new Date("2026-09-07"));
+    const b = generateTemporaryPassword("Siyana", new Date("2026-09-08"));
+    expect(a).not.toBe(b);
   });
 });
 

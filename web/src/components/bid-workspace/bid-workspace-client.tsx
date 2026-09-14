@@ -33,7 +33,6 @@ import {
 } from "@/components/ui/tooltip";
 import {
   calculateSectionProgress,
-  itemMatchesWorkspaceSection,
 } from "@/lib/bid-checklist";
 import type { BidWorkspaceDTO } from "@/lib/bid-workspace";
 import {
@@ -62,12 +61,7 @@ import type {
 import type { CompanyDocument } from "@/server/repositories/documentRepository";
 import { lineTotal } from "@/lib/bid-workspace";
 
-type WorkspaceTab =
-  | "checklist"
-  | "prequalification"
-  | "technical"
-  | "annexures"
-  | "cost";
+type WorkspaceTab = "checklist" | "cost";
 
 type BidWorkspaceClientProps = {
   tender: TenderDetailDTO;
@@ -446,41 +440,6 @@ export function BidWorkspaceClient({
     router.refresh();
   }
 
-  const pqItems = useMemo(
-    () =>
-      items.filter((item) =>
-        itemMatchesWorkspaceSection(item, "prequalification"),
-      ),
-    [items],
-  );
-  const technicalItems = useMemo(
-    () =>
-      items.filter((item) =>
-        itemMatchesWorkspaceSection(item, "technical"),
-      ),
-    [items],
-  );
-  const annexureItems = useMemo(
-    () =>
-      items.filter((item) =>
-        itemMatchesWorkspaceSection(item, "annexures"),
-      ),
-    [items],
-  );
-
-  const pqStats = useMemo(
-    () => calculateSectionProgress(items, "prequalification"),
-    [items],
-  );
-  const technicalStats = useMemo(
-    () => calculateSectionProgress(items, "technical"),
-    [items],
-  );
-  const annexureStats = useMemo(
-    () => calculateSectionProgress(items, "annexures"),
-    [items],
-  );
-
   const boqTotal = useMemo(
     () =>
       workspace.boqItems.reduce(
@@ -499,37 +458,12 @@ export function BidWorkspaceClient({
         count: `${progress.completed}/${progress.total}`,
       },
       {
-        id: "prequalification" as const,
-        label: "Pre-Qualification Documents",
-        count: `${pqStats.completed}/${pqStats.total}`,
-      },
-      {
-        id: "technical" as const,
-        label: "Technical Documents",
-        count: `${technicalStats.completed}/${technicalStats.total}`,
-      },
-      {
-        id: "annexures" as const,
-        label: "Annexures & Undertakings",
-        count: `${annexureStats.completed}/${annexureStats.total}`,
-      },
-      {
         id: "cost" as const,
         label: "Cost Estimator",
         count: String(workspace.boqItems.length),
       },
     ],
-    [
-      annexureStats.completed,
-      annexureStats.total,
-      pqStats.completed,
-      pqStats.total,
-      progress.completed,
-      progress.total,
-      technicalStats.completed,
-      technicalStats.total,
-      workspace.boqItems.length,
-    ],
+    [progress.completed, progress.total, workspace.boqItems.length],
   );
 
   async function submit() {
@@ -779,39 +713,6 @@ export function BidWorkspaceClient({
                 items={items}
                 progress={progress}
                 addSection={null}
-              />
-            ) : null}
-
-            {tab === "prequalification" ? (
-              <RequirementListPanel
-                {...sharedPanelProps}
-                title="Pre-Qualification Documents"
-                subtitle="Mandatory credentials and compliance certificates"
-                items={pqItems}
-                progress={pqStats}
-                addSection="prequalification"
-              />
-            ) : null}
-
-            {tab === "technical" ? (
-              <RequirementListPanel
-                {...sharedPanelProps}
-                title="Technical Documents"
-                subtitle="Technical proposals, certifications and approach documents"
-                items={technicalItems}
-                progress={technicalStats}
-                addSection="technical"
-              />
-            ) : null}
-
-            {tab === "annexures" ? (
-              <RequirementListPanel
-                {...sharedPanelProps}
-                title="Formats: Annexures & Undertakings"
-                subtitle="Standard templates, declarations and format documents"
-                items={annexureItems}
-                progress={annexureStats}
-                addSection="annexures"
               />
             ) : null}
 

@@ -23,6 +23,7 @@ const initial = {
   maxEmdInr: "1500000",
   minTenderValueInr: "",
   maxTenderValueInr: "50000000",
+  minBidLeadDays: "",
   serviceScope: ["Information Technology"],
   excludedScope: ["NON-IT"],
 };

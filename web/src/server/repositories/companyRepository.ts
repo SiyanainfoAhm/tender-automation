@@ -28,6 +28,7 @@ export type CompanyBidPreferences = {
   maxEmdInr: number | null;
   minTenderValueInr: number | null;
   maxTenderValueInr: number | null;
+  minBidLeadDays: number | null;
   serviceScope: string[];
   excludedScope: string[];
   extras: Record<string, unknown>;
@@ -62,6 +63,8 @@ function mapPrefs(row: Record<string, unknown>): CompanyBidPreferences {
       row.min_tender_value_inr == null ? null : Number(row.min_tender_value_inr),
     maxTenderValueInr:
       row.max_tender_value_inr == null ? null : Number(row.max_tender_value_inr),
+    minBidLeadDays:
+      row.min_bid_lead_days == null ? null : Number(row.min_bid_lead_days),
     serviceScope: parseStoredScopeList(service),
     excludedScope: parseStoredScopeList(excluded),
     extras: (row.extras as Record<string, unknown>) || {},
@@ -134,6 +137,7 @@ export async function upsertCompanyBidPreferences(
     maxEmdInr?: number | null;
     minTenderValueInr?: number | null;
     maxTenderValueInr?: number | null;
+    minBidLeadDays?: number | null;
     serviceScope?: string[];
     excludedScope?: string[];
     screeningPolicies?: ScreeningPolicies;
@@ -151,6 +155,10 @@ export async function upsertCompanyBidPreferences(
       patch.minTenderValueInr ?? existing?.minTenderValueInr ?? null,
     max_tender_value_inr:
       patch.maxTenderValueInr ?? existing?.maxTenderValueInr ?? null,
+    min_bid_lead_days:
+      patch.minBidLeadDays === undefined
+        ? (existing?.minBidLeadDays ?? null)
+        : patch.minBidLeadDays,
     service_scope: patch.serviceScope ?? existing?.serviceScope ?? [],
     excluded_scope: patch.excludedScope ?? existing?.excludedScope ?? [],
     extras,

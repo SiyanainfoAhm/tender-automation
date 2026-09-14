@@ -112,6 +112,7 @@ export const FINANCIAL_DOCUMENT_TYPES = [
   "ITR",
   "Audit Report",
   "Turnover Certificate",
+  "Net Worth Certificate",
   "CA Certificate",
   "Other",
 ] as const;

@@ -2,11 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import {
-  Bell,
-  CircleHelp,
   LogOut,
   Search,
-  Settings,
   Shield,
   User,
 } from "lucide-react";
@@ -115,26 +112,6 @@ export function Topbar({
           <Search className="size-[18px]" />
         </Button>
 
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-8 text-text-muted"
-          aria-label="Help"
-          type="button"
-        >
-          <CircleHelp className="size-[18px]" />
-        </Button>
-
-        <Button
-          variant="ghost"
-          size="icon"
-          className="size-8 text-text-muted"
-          aria-label="Notifications"
-          type="button"
-        >
-          <Bell className="size-[18px]" />
-        </Button>
-
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
@@ -183,10 +160,6 @@ export function Topbar({
             <DropdownMenuItem onClick={() => router.push("/profile")}>
               <User className="size-4" />
               Profile
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => router.push("/settings")}>
-              <Settings className="size-4" />
-              Preferences
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => router.push("/profile")}>
               <Shield className="size-4" />

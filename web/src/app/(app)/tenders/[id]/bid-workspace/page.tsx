@@ -1,7 +1,8 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 
 import { BidWorkspaceClient } from "@/components/bid-workspace/bid-workspace-client";
 import { requirePermission, sessionHasPermission } from "@/server/auth/permissions";
+import { canOpenBidWorkspace } from "@/lib/tender-status";
 import { getTenderById } from "@/server/repositories/tenderRepository";
 import {
   getOrCreateWorkspace,
@@ -36,6 +37,10 @@ export default async function BidWorkspacePage({
     );
   }
   const tender = loaded.tender;
+
+  if (!canOpenBidWorkspace(tender.qualificationStatus)) {
+    redirect(`/tenders/${id}`);
+  }
 
   const created = await getOrCreateWorkspace({
     tenderId: id,

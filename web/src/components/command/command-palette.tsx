@@ -4,11 +4,10 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Command as CommandPrimitive } from "cmdk";
 import {
-  BarChart3,
   FileText,
   LayoutDashboard,
   Search,
-  Settings,
+  Trophy,
   Users,
 } from "lucide-react";
 
@@ -46,18 +45,11 @@ const commandActions: CommandAction[] = [
     keywords: ["bids", "rfp", "procurement"],
   },
   {
-    id: "templates",
-    label: "Bid Profile Templates",
-    href: "/templates",
-    icon: FileText,
-    keywords: ["templates", "bid profile", "prepare"],
-  },
-  {
-    id: "analytics",
-    label: "Analytics",
-    href: "/analytics",
-    icon: BarChart3,
-    keywords: ["reports", "insights"],
+    id: "won-tenders",
+    label: "Won Tenders",
+    href: "/won-tenders",
+    icon: Trophy,
+    keywords: ["won", "project", "execution", "award"],
   },
   {
     id: "users",
@@ -66,13 +58,6 @@ const commandActions: CommandAction[] = [
     icon: Users,
     keywords: ["team", "admin"],
     adminOnly: true,
-  },
-  {
-    id: "settings",
-    label: "Settings",
-    href: "/settings",
-    icon: Settings,
-    keywords: ["preferences", "config"],
   },
 ];
 

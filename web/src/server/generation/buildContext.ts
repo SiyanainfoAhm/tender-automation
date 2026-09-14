@@ -154,7 +154,8 @@ export type GenerationContextBundle = {
     projectName: string;
     clientName: string;
     location: string;
-    natureOfWork: string;
+    projectType: string;
+    natureOfWork: string[];
     projectValueInr: number;
     projectStatus: string;
     description: string | null;
@@ -357,6 +358,7 @@ export async function buildGenerationContext(options: {
       projectName: exp.projectName,
       clientName: exp.clientName,
       location: exp.location,
+      projectType: exp.projectType,
       natureOfWork: exp.natureOfWork,
       projectValueInr: exp.projectValueInr,
       projectStatus: exp.projectStatus,

@@ -15,10 +15,8 @@ import {
 import { toast } from "sonner";
 
 import {
-  categoryLabel,
   completionSourceLabel,
   isFromScratchGeneratable,
-  workspaceSectionLabel,
   type RequirementDestinationSection,
 } from "@/lib/bid-checklist";
 import { promptKeyForChecklistCategory } from "@/lib/bid-ai-prompts";
@@ -289,10 +287,12 @@ export function RequirementListPanel({
                     </span>
                     <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-foreground-500">
                       <span>
-                        {categoryLabel(item.category)}
-                        {manual ? " · Manually Added" : ""}
-                        {complete ? " · Completed" : ""}
-                        {!complete ? ` · ${statusLine(item)}` : ""}
+                        {[
+                          manual ? "Manually Added" : null,
+                          complete ? "Completed" : statusLine(item),
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
                       </span>
                       {item.sourceClause ? (
                         <span className="text-foreground-400">
@@ -395,15 +395,16 @@ export function RequirementListPanel({
                   ) : null}
                 </div>
                 <SheetDescription className="text-left">
-                  {categoryLabel(selected.category)}
-                  {isManual ? " · Manually Added" : ""}
-                  {selected.mandatory ? " · Required" : " · Optional"}
-                  {selected.sourcePage
-                    ? ` · RFP Page ${selected.sourcePage}`
-                    : ""}
-                  {selected.sourceClause
-                    ? ` · ${selected.sourceClause}`
-                    : ""}
+                  {[
+                    isManual ? "Manually Added" : null,
+                    selected.mandatory ? "Required" : "Optional",
+                    selected.sourcePage
+                      ? `RFP Page ${selected.sourcePage}`
+                      : null,
+                    selected.sourceClause || null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
                 </SheetDescription>
               </SheetHeader>
 
@@ -447,9 +448,6 @@ export function RequirementListPanel({
                           : ""}
                     </p>
                   )}
-                  <p className="mt-1 text-xs text-foreground-400">
-                    Section: {workspaceSectionLabel(selected.workspaceSection)}
-                  </p>
                 </div>
 
                 {selected.description ? (

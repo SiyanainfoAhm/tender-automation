@@ -4,6 +4,7 @@ import { AppShell } from "@/components/layout/app-shell";
 import { getSession } from "@/server/auth/session";
 import { getUserPreferences } from "@/server/repositories/savedViewRepository";
 import { countVisibleTenders } from "@/server/repositories/tenderRepository";
+import { countWonProjects } from "@/server/repositories/wonProjectRepository";
 
 const DEFAULT_PREFERENCES = {
   theme: "light",
@@ -24,7 +25,9 @@ export default async function AppLayout({
     redirect("/change-password");
   }
 
-  const [preferences, tenderCount] = await Promise.all([
+  const companyId = session.user.companyId;
+
+  const [preferences, tenderCount, wonTenderCount] = await Promise.all([
     getUserPreferences(session.user.id).catch((error) => {
       console.warn(
         JSON.stringify({
@@ -43,6 +46,9 @@ export default async function AppLayout({
       };
     }),
     countVisibleTenders().catch(() => null),
+    companyId
+      ? countWonProjects(companyId).catch(() => null)
+      : Promise.resolve(null),
   ]);
 
   return (
@@ -53,6 +59,7 @@ export default async function AppLayout({
         sidebarCollapsed: preferences.sidebarCollapsed,
       }}
       tenderCount={tenderCount}
+      wonTenderCount={wonTenderCount}
     >
       {children}
     </AppShell>

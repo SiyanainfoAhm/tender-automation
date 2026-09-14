@@ -14,7 +14,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { APP_BOTTOM_NAV, APP_MAIN_NAV } from "@/components/layout/nav-items";
+import {
+  APP_BOTTOM_NAV,
+  APP_MAIN_NAV,
+  type NavCountKey,
+} from "@/components/layout/nav-items";
 import { companyRoleLabel } from "@/lib/company/types";
 import { roleHasPermission, type PermissionKey } from "@/lib/rbac/permissions";
 import { peekTendersListReturn } from "@/lib/tenders/list-return";
@@ -39,7 +43,17 @@ type AppSidebarProps = {
   collapsed: boolean;
   onToggle: () => void;
   tenderCount?: number | null;
+  wonTenderCount?: number | null;
 };
+
+function navItemCount(
+  countKey: NavCountKey | undefined,
+  tenderCount: number | null,
+  wonTenderCount: number | null,
+): number | null {
+  if (countKey === "wonTenders") return wonTenderCount;
+  return tenderCount;
+}
 
 function NavLink({
   href,
@@ -98,6 +112,7 @@ export function AppSidebar({
   collapsed,
   onToggle,
   tenderCount = null,
+  wonTenderCount = null,
 }: AppSidebarProps) {
   const pathname = usePathname();
   // Intentionally re-read sessionStorage on every route change so list filters
@@ -166,7 +181,11 @@ export function AppSidebar({
                   icon={item.icon}
                   collapsed={collapsed}
                   active={active}
-                  count={item.showCount ? tenderCount : null}
+                  count={
+                    item.showCount
+                      ? navItemCount(item.countKey, tenderCount, wonTenderCount)
+                      : null
+                  }
                 />
               );
             })}

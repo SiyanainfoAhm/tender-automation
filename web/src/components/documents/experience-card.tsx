@@ -171,11 +171,19 @@ export function ExperienceCard({
                   <h3 className="text-sm font-semibold text-foreground-900">
                     {experience.projectName}
                   </h3>
-                  {experience.natureOfWork ? (
-                    <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700">
-                      {experience.natureOfWork}
+                  {experience.projectType ? (
+                    <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-800">
+                      {experience.projectType}
                     </span>
                   ) : null}
+                  {experience.natureOfWork.map((item) => (
+                    <span
+                      key={item}
+                      className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-700"
+                    >
+                      {item}
+                    </span>
+                  ))}
                 </div>
                 <p className="text-sm text-foreground-600">{experience.clientName}</p>
               </div>

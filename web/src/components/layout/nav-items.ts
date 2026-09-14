@@ -1,15 +1,15 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  BarChart3,
   Building2,
   FileStack,
   FileText,
-  Layers3,
   LayoutDashboard,
-  Settings,
+  Trophy,
   Users,
   Wallet,
 } from "lucide-react";
+
+export type NavCountKey = "tenders" | "wonTenders";
 
 export type AppNavItem = {
   href: string;
@@ -20,10 +20,13 @@ export type AppNavItem = {
   permission?: string;
   section?: "main" | "bottom";
   showCount?: boolean;
+  /** Which badge count to show when showCount is true (defaults to tenders). */
+  countKey?: NavCountKey;
 };
 
 /**
- * Real routes only. Reports → /analytics
+ * Approved product navigation only.
+ * Reports, Templates, and Settings modules are removed from design (TF-61–63).
  */
 export const APP_MAIN_NAV: AppNavItem[] = [
   {
@@ -47,21 +50,18 @@ export const APP_MAIN_NAV: AppNavItem[] = [
     permission: "bids.view",
   },
   {
+    href: "/won-tenders",
+    label: "Won Tenders",
+    icon: Trophy,
+    section: "main",
+    permission: "tenders.view",
+    showCount: true,
+    countKey: "wonTenders",
+  },
+  {
     href: "/documents",
     label: "Documents",
     icon: FileStack,
-    section: "main",
-  },
-  {
-    href: "/templates",
-    label: "Templates",
-    icon: Layers3,
-    section: "main",
-  },
-  {
-    href: "/analytics",
-    label: "Reports",
-    icon: BarChart3,
     section: "main",
   },
   {
@@ -80,5 +80,4 @@ export const APP_BOTTOM_NAV: AppNavItem[] = [
     icon: Building2,
     section: "bottom",
   },
-  { href: "/settings", label: "Settings", icon: Settings, section: "bottom" },
 ];

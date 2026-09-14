@@ -69,6 +69,10 @@ export default async function CompanyProfilePage() {
                     prefs?.maxTenderValueInr != null
                       ? String(prefs.maxTenderValueInr)
                       : "",
+                  minBidLeadDays:
+                    prefs?.minBidLeadDays != null
+                      ? String(prefs.minBidLeadDays)
+                      : "",
                   serviceScope: prefs?.serviceScope || [],
                   excludedScope: prefs?.excludedScope || [],
                   screeningPolicies: prefs?.screeningPolicies || {},

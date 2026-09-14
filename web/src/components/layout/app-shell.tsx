@@ -10,7 +10,7 @@ import { MobileNav } from "@/components/layout/mobile-nav";
 import { PageContainer } from "@/components/layout/page-container";
 import { CommandPalette } from "@/components/command/command-palette";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { logoutAction } from "@/server/actions/auth";
+import { LogoutForm } from "@/components/auth/logout-form";
 import type { SessionUser } from "@/server/auth/session";
 
 type AppShellProps = {
@@ -20,6 +20,7 @@ type AppShellProps = {
     sidebarCollapsed: boolean;
   };
   tenderCount?: number | null;
+  wonTenderCount?: number | null;
   children: React.ReactNode;
 };
 
@@ -27,6 +28,7 @@ export function AppShell({
   user,
   preferences,
   tenderCount = null,
+  wonTenderCount = null,
   children,
 }: AppShellProps) {
   const router = useRouter();
@@ -68,12 +70,17 @@ export function AppShell({
             collapsed={collapsed}
             onToggle={() => setCollapsed((c) => !c)}
             tenderCount={tenderCount}
+            wonTenderCount={wonTenderCount}
           />
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <div className="flex h-16 items-center gap-2 border-b border-border bg-white px-4 sm:px-5 lg:hidden">
-            <MobileNav userRole={user.role} tenderCount={tenderCount} />
+            <MobileNav
+              userRole={user.role}
+              tenderCount={tenderCount}
+              wonTenderCount={wonTenderCount}
+            />
             <span className="font-heading text-sm font-semibold text-text-primary">
               TenderFlow
             </span>
@@ -111,12 +118,7 @@ export function AppShell({
           initialQuery={searchValue}
         />
 
-        <form
-          id="logout-form"
-          action={logoutAction}
-          className="hidden"
-          aria-hidden
-        />
+        <LogoutForm />
 
         <Link href="/profile" className="sr-only" prefetch={false}>
           Profile

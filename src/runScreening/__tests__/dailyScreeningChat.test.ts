@@ -164,6 +164,7 @@ test("writeScreeningMdPreferences writes company rules file", () => {
       maxEmdInr: 1_500_000,
       minTenderValueInr: null,
       maxTenderValueInr: 50_000_000,
+      minBidLeadDays: null,
       serviceScope: ["custom software", "web portals"],
       excludedScope: ["pure hardware"],
       extras: {},

@@ -12,6 +12,7 @@ import {
 import { CompanyAccessError } from "@/server/auth/company-access";
 import { requirePermissionStrict } from "@/server/auth/permissions";
 import { getServerSupabase } from "@/lib/db/server";
+import { markRefundableFeesPendingRefund } from "@/server/repositories/bidFeeRepository";
 import { insertTenderActivity } from "@/server/repositories/tenderActivityRepository";
 import { getTenderById } from "@/server/repositories/tenderRepository";
 
@@ -72,6 +73,17 @@ export async function updateTenderClassificationAction(input: {
         .update({ qualification_status: input.status })
         .eq("id", tenderId);
       if (error) throw new Error(error.message);
+    }
+
+    if (
+      (input.status as string) === "LOST" ||
+      (input.status as string) === "DISQUALIFIED"
+    ) {
+      await markRefundableFeesPendingRefund({
+        companyId: session.companyId,
+        tenderId,
+        userId: session.user.id,
+      });
     }
 
     await insertTenderActivity({

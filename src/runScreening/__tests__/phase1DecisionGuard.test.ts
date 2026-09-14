@@ -26,6 +26,7 @@ function companySnapshot(): CompanyPreferenceSnapshot {
       maxEmdInr: 1_500_000,
       minTenderValueInr: 0,
       maxTenderValueInr: 50_000_000,
+      minBidLeadDays: null,
       serviceScope: [
         "Information Technology",
         "Software Development",
@@ -389,4 +390,22 @@ test("enforcePhase1ScreeningDecisions overwrites ChatGPT VERIFY after EMD hard-g
   assert.equal(enforced.rows[0]?.screeningStatus, "NO_GO");
   assert.match(enforced.rows[0]?.screeningReason || "", /EMD/i);
   assert.ok(enforced.corrected >= 1);
+});
+
+test("INSUFFICIENT_LEAD_TIME when company threshold excludes remaining days", () => {
+  const result = decidePhase1Row({
+    tenderId: "lead-1",
+    title: "Custom software development for portal",
+    deadline: "2026-08-19",
+    emdAmount: "10000",
+    estimatedCost: "1000000",
+    runDate: "2026-08-17",
+    snapshot: {
+      ...screening(),
+      minBidLeadDays: 2,
+    },
+    llmStatus: "MAY_BID",
+  });
+  assert.equal(result.status, "NO_BID");
+  assert.match(result.reason || "", /lead time/i);
 });

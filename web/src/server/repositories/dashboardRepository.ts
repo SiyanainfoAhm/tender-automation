@@ -20,6 +20,10 @@ import {
   getEmdCommitted,
 } from "@/lib/dashboard/financial-metrics";
 import {
+  isUpcomingDeadlineDue,
+  isUpcomingDeadlineStatus,
+} from "@/lib/dashboard/upcoming-deadlines";
+import {
   DASHBOARD_PIPELINE_META,
   DASHBOARD_PIPELINE_STAGES,
   isLiveDashboardPipelineStage,
@@ -375,35 +379,23 @@ function buildWonPortfolio(
 
 function buildUpcomingDeadlines(
   rows: TenderRow[],
-  submittedIds: Set<string>,
+  _submittedIds: Set<string>,
 ): DashboardDeadlineItem[] {
   const today = startOfDay(new Date());
   return rows
     .filter((row) => {
       if (!row.closing_date) return false;
-      if (isWonQualificationStatus(row.effective_qualification_status)) {
-        return false;
-      }
-      if (
-        row.effective_qualification_status === "NO_GO" ||
-        row.effective_qualification_status === "CANCELLED" ||
-        row.effective_qualification_status === "LOST" ||
-        row.effective_qualification_status === "DISQUALIFIED"
-      ) {
-        return false;
-      }
-      return true;
+      return isUpcomingDeadlineStatus(row.effective_qualification_status);
     })
     .map((row) => {
       const closing = startOfDay(parseISO(String(row.closing_date)));
       const daysLeft = differenceInCalendarDays(closing, today);
       let urgency: DashboardDeadlineItem["urgency"] = "ok";
-      if (daysLeft < 0) urgency = "overdue";
-      else if (daysLeft <= 3) urgency = "urgent";
+      if (daysLeft <= 3) urgency = "urgent";
       else if (daysLeft <= 7) urgency = "soon";
       return { row, closing, daysLeft, urgency };
     })
-    .filter((item) => item.daysLeft <= 45)
+    .filter((item) => isUpcomingDeadlineDue(item.daysLeft))
     .sort((a, b) => a.daysLeft - b.daysLeft)
     .slice(0, 8)
     .map(({ row, closing, daysLeft, urgency }) => ({

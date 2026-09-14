@@ -14,15 +14,33 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { APP_BOTTOM_NAV, APP_MAIN_NAV } from "@/components/layout/nav-items";
+import {
+  APP_BOTTOM_NAV,
+  APP_MAIN_NAV,
+  type NavCountKey,
+} from "@/components/layout/nav-items";
 import { roleHasPermission, type PermissionKey } from "@/lib/rbac/permissions";
 
 type MobileNavProps = {
   userRole: UserRole;
   tenderCount?: number | null;
+  wonTenderCount?: number | null;
 };
 
-export function MobileNav({ userRole, tenderCount = null }: MobileNavProps) {
+function navItemCount(
+  countKey: NavCountKey | undefined,
+  tenderCount: number | null,
+  wonTenderCount: number | null,
+): number | null {
+  if (countKey === "wonTenders") return wonTenderCount;
+  return tenderCount;
+}
+
+export function MobileNav({
+  userRole,
+  tenderCount = null,
+  wonTenderCount = null,
+}: MobileNavProps) {
   const pathname = usePathname();
   const visibleItems = [
     ...APP_MAIN_NAV.filter((item) => {
@@ -80,9 +98,15 @@ export function MobileNav({ userRole, tenderCount = null }: MobileNavProps) {
               >
                 <Icon className="size-[18px] shrink-0" />
                 <span className="truncate">{item.label}</span>
-                {item.showCount && typeof tenderCount === "number" ? (
+                {item.showCount &&
+                typeof navItemCount(item.countKey, tenderCount, wonTenderCount) ===
+                  "number" ? (
                   <span className="ml-auto inline-flex min-w-6 items-center justify-center rounded-full bg-primary-50 px-2 py-0.5 text-[11px] font-medium text-primary-700">
-                    {tenderCount.toLocaleString("en-IN")}
+                    {navItemCount(
+                      item.countKey,
+                      tenderCount,
+                      wonTenderCount,
+                    )!.toLocaleString("en-IN")}
                   </span>
                 ) : null}
               </Link>

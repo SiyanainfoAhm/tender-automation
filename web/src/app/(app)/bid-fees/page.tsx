@@ -2,8 +2,10 @@ import { BidFeesClient } from "@/components/bid-fees/bid-fees-client";
 import type { FeeEligibleTender } from "@/components/bid-fees/add-fee-wizard";
 import { getServerSupabase } from "@/lib/db/server";
 import { canCreateFeeForTender } from "@/lib/tender-document-access";
-import { sessionHasPermission } from "@/server/auth/permissions";
-import { requireSession } from "@/server/auth/session";
+import {
+  requirePermission,
+  sessionHasPermission,
+} from "@/server/auth/permissions";
 import {
   listBidFees,
   listTenderDocuments,
@@ -80,8 +82,8 @@ async function loadFeeAttachments(
 }
 
 export default async function BidFeesPage() {
-  const session = await requireSession();
-  const companyId = session.user.companyId;
+  const session = await requirePermission("bids.view");
+  const companyId = session.companyId;
 
   if (!companyId) {
     return (

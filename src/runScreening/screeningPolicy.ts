@@ -51,6 +51,8 @@ export type TenderScreeningPreferenceSnapshot = {
     minTenderValueInr: number | null;
     maxTenderValueInr: number | null;
   };
+  /** Company threshold X: tenders with X or fewer days remaining are excluded. */
+  minBidLeadDays: number | null;
   preferredScopes: string[];
   excludedScopes: string[];
   policies: ScreeningPolicies;

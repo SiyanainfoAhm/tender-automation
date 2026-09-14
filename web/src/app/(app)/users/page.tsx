@@ -7,17 +7,10 @@ import { hasPermission, requirePermission } from "@/server/auth/permissions";
 import { listCompanyInvitations } from "@/server/repositories/rbacRepository";
 import { listUsers } from "@/server/repositories/userRepository";
 
-type UsersPageProps = {
-  searchParams?: Promise<{ tab?: string }>;
-};
-
-export default async function UsersPage({ searchParams }: UsersPageProps) {
+export default async function UsersPage() {
   const session = await requirePermission("users.view");
-  const params = (await searchParams) || {};
-  const initialTab =
-    params.tab === "permissions" ? "permissions" : "members";
 
-  // Matrix/auth use in-code ROLE_PERMISSIONS. Do not call syncPermissionCatalog
+  // Auth uses in-code ROLE_PERMISSIONS. Do not call syncPermissionCatalog
   // on every page load — it rewrites role_permissions and stalls the RSC stream.
 
   const [members, pendingInvites] = await Promise.all([
@@ -53,13 +46,12 @@ export default async function UsersPage({ searchParams }: UsersPageProps) {
     <div className="space-y-6">
       <PageHeader
         title="User Management"
-        subtitle="Manage team access, assign roles, and review permission levels"
+        subtitle="Manage team access and assign roles"
       />
 
       <Suspense
         fallback={
           <div className="space-y-4">
-            <Skeleton className="h-9 w-64" />
             <div className="grid gap-3 sm:grid-cols-3">
               <Skeleton className="h-20" />
               <Skeleton className="h-20" />
@@ -79,7 +71,6 @@ export default async function UsersPage({ searchParams }: UsersPageProps) {
             session.user.role,
             "users.manage_roles",
           )}
-          initialTab={initialTab}
         />
       </Suspense>
     </div>

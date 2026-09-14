@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { NATURE_OF_WORK_OPTIONS } from "@/lib/experience/nature-of-work";
+import { PROJECT_TYPE_OPTIONS } from "@/lib/experience/project-type";
 import { parseInrInput } from "@/lib/format-inr";
 import { isValidIndianMobile } from "@/lib/validations/phone-rules";
 
@@ -42,6 +43,26 @@ const indianMobile = z
     "Enter a valid 10-digit mobile number",
   );
 
+const natureOfWorkValue = z.preprocess((raw) => {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    if (trimmed.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(trimmed) as unknown;
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [trimmed];
+      }
+    }
+    return [trimmed];
+  }
+  return [];
+}, z
+  .array(z.enum(NATURE_OF_WORK_OPTIONS))
+  .min(1, "Select at least one nature of work"));
+
 export const companyExperienceSchema = z
   .object({
     projectName: z
@@ -55,9 +76,10 @@ export const companyExperienceSchema = z
       .min(1, "Client / Organization is required")
       .max(200),
     location: z.string().trim().min(1, "Location is required").max(200),
-    natureOfWork: z.enum(NATURE_OF_WORK_OPTIONS, {
-      message: "Select nature of work",
+    projectType: z.enum(PROJECT_TYPE_OPTIONS, {
+      message: "Select project type",
     }),
+    natureOfWork: natureOfWorkValue,
     contractValue: z
       .string()
       .trim()

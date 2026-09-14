@@ -124,4 +124,32 @@ describe("UploadDocumentDialog copy", () => {
     expect(select.textContent).not.toMatch(/\bGST\b/);
     expect(select.textContent).not.toMatch(/\bPAN\b/);
   });
+
+  it("makes certificate expiry optional and caps issue date at today", () => {
+    render(
+      <UploadDocumentDialog
+        open
+        onOpenChange={() => undefined}
+        kind="certificate"
+      />,
+    );
+    expect(screen.getByLabelText("Issue Date *")).toBeTruthy();
+    expect(screen.getByLabelText("Expiry Date")).toBeTruthy();
+    expect(screen.queryByLabelText("Expiry Date *")).toBeNull();
+    const issue = screen.getByLabelText("Issue Date *") as HTMLInputElement;
+    expect(issue.max).toBe(new Date().toISOString().slice(0, 10));
+  });
+
+  it("includes Net Worth Certificate and custom document type option", () => {
+    render(
+      <UploadDocumentDialog
+        open
+        onOpenChange={() => undefined}
+        kind="financial"
+      />,
+    );
+    const select = screen.getByLabelText(/Document Type/i);
+    expect(select.textContent).toMatch(/Net Worth Certificate/);
+    expect(select.textContent).toMatch(/Add New Document Type/);
+  });
 });

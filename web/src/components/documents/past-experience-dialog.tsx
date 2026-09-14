@@ -13,6 +13,7 @@ import {
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -31,7 +32,11 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { MAX_SINGLE_SHOT_UPLOAD_BYTES } from "@/lib/company/types";
-import { NATURE_OF_WORK_OPTIONS } from "@/lib/experience/nature-of-work";
+import {
+  NATURE_OF_WORK_OPTIONS,
+  parseNatureOfWorkList,
+} from "@/lib/experience/nature-of-work";
+import { PROJECT_TYPE_OPTIONS } from "@/lib/experience/project-type";
 import type { CompanyExperience } from "@/lib/experience/types";
 import { formatBytes, formatIndianCurrency } from "@/lib/format";
 import {
@@ -206,8 +211,11 @@ export function PastExperienceDialog({
   const [ongoing, setOngoing] = useState(
     experience ? experience.projectStatus !== "completed" : true,
   );
-  const [natureOfWork, setNatureOfWork] = useState(
-    experience?.natureOfWork || "",
+  const [projectType, setProjectType] = useState(
+    experience?.projectType || "",
+  );
+  const [natureOfWork, setNatureOfWork] = useState<string[]>(
+    parseNatureOfWorkList(experience?.natureOfWork),
   );
   const [workOrderFile, setWorkOrderFile] = useState<File | null>(null);
   const [completionFile, setCompletionFile] = useState<File | null>(null);
@@ -221,11 +229,18 @@ export function PastExperienceDialog({
   useEffect(() => {
     if (!open) return;
     setOngoing(experience ? experience.projectStatus !== "completed" : true);
-    setNatureOfWork(experience?.natureOfWork || "");
+    setProjectType(experience?.projectType || "");
+    setNatureOfWork(parseNatureOfWorkList(experience?.natureOfWork));
     setWorkOrderFile(null);
     setCompletionFile(null);
     setFormKey((k) => k + 1);
-  }, [open, experience?.id, experience?.projectStatus, experience?.natureOfWork]);
+  }, [
+    open,
+    experience?.id,
+    experience?.projectStatus,
+    experience?.projectType,
+    experience?.natureOfWork,
+  ]);
 
   useEffect(() => {
     if (!submissionPendingRef.current) return;
@@ -247,9 +262,19 @@ export function PastExperienceDialog({
     onOpenChange(next);
   }
 
+  function toggleNatureOfWork(option: string, checked: boolean) {
+    setNatureOfWork((prev) => {
+      if (checked) {
+        return prev.includes(option) ? prev : [...prev, option];
+      }
+      return prev.filter((item) => item !== option);
+    });
+  }
+
   function handleAction(formData: FormData) {
     formData.set("projectStatus", ongoing ? "ongoing" : "completed");
-    formData.set("natureOfWork", natureOfWork);
+    formData.set("projectType", projectType);
+    formData.set("natureOfWork", JSON.stringify(natureOfWork));
     if (workOrderFile) formData.set("workOrder", workOrderFile);
     if (!ongoing && completionFile) {
       formData.set("completionCertificate", completionFile);
@@ -325,9 +350,14 @@ export function PastExperienceDialog({
               event.preventDefault();
               return;
             }
-            if (!natureOfWork) {
+            if (!projectType) {
               event.preventDefault();
-              toast.error("Select nature of work");
+              toast.error("Select project type");
+              return;
+            }
+            if (natureOfWork.length === 0) {
+              event.preventDefault();
+              toast.error("Select at least one nature of work");
               return;
             }
             if (mode === "create" && !workOrderFile) {
@@ -422,23 +452,50 @@ export function PastExperienceDialog({
                     />
                   </div>
                   <div className="space-y-1">
-                    <Label>Nature of Work *</Label>
+                    <Label>Project Type *</Label>
                     <Select
-                      value={natureOfWork || undefined}
-                      onValueChange={setNatureOfWork}
+                      value={projectType || undefined}
+                      onValueChange={setProjectType}
                       disabled={readOnly}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Select nature..." />
+                        <SelectValue placeholder="Select project type..." />
                       </SelectTrigger>
                       <SelectContent>
-                        {NATURE_OF_WORK_OPTIONS.map((option) => (
+                        {PROJECT_TYPE_OPTIONS.map((option) => (
                           <SelectItem key={option} value={option}>
                             {option}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Nature of Work *</Label>
+                  <div className="grid max-h-48 gap-2 overflow-y-auto rounded-lg border border-background-200/70 p-3 sm:grid-cols-2">
+                    {NATURE_OF_WORK_OPTIONS.map((option) => {
+                      const checked = natureOfWork.includes(option);
+                      return (
+                        <label
+                          key={option}
+                          className={cn(
+                            "flex cursor-pointer items-start gap-2 rounded-md px-1 py-1 text-sm text-foreground-700",
+                            readOnly && "cursor-not-allowed opacity-70",
+                          )}
+                        >
+                          <Checkbox
+                            checked={checked}
+                            disabled={readOnly}
+                            onCheckedChange={(value) =>
+                              toggleNatureOfWork(option, value === true)
+                            }
+                            aria-label={option}
+                          />
+                          <span>{option}</span>
+                        </label>
+                      );
+                    })}
                   </div>
                 </div>
                 <div className="space-y-1">

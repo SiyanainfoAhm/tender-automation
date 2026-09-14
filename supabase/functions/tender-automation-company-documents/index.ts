@@ -1376,8 +1376,11 @@ async function handleCreateUploadSession(
     if (!certificateType) throw new HttpError(400, "Certificate type is required");
     if (!issuingAuthority) throw new HttpError(400, "Issuing authority is required");
     if (!issueDate) throw new HttpError(400, "Issue date is required");
-    if (!expiryDate) throw new HttpError(400, "Expiry date is required");
-    if (expiryDate < issueDate) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (issueDate > today) {
+      throw new HttpError(400, "Issue date cannot be after today");
+    }
+    if (expiryDate && expiryDate < issueDate) {
       throw new HttpError(400, "Expiry date must be on or after issue date");
     }
   } else if (category === "Financial") {
@@ -1813,8 +1816,11 @@ async function handleUpload(req: Request, form: FormData) {
     if (!certificateType) throw new HttpError(400, "Certificate type is required");
     if (!issuingAuthority) throw new HttpError(400, "Issuing authority is required");
     if (!issueDate) throw new HttpError(400, "Issue date is required");
-    if (!expiryDate) throw new HttpError(400, "Expiry date is required");
-    if (expiryDate < issueDate) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (issueDate > today) {
+      throw new HttpError(400, "Issue date cannot be after today");
+    }
+    if (expiryDate && expiryDate < issueDate) {
       throw new HttpError(400, "Expiry date must be on or after issue date");
     }
   } else if (category === "Financial") {

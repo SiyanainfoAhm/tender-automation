@@ -1,42 +1,37 @@
-import { randomInt } from "node:crypto";
-
 import { passwordSchema } from "@/lib/validations";
 
-const UPPERS = "ABCDEFGHJKLMNPQRSTUVWXYZ";
-const LOWERS = "abcdefghijkmnopqrstuvwxyz";
-const DIGITS = "23456789";
-const SPECIALS = "!@#$%^&*?";
-const ALL = `${UPPERS}${LOWERS}${DIGITS}${SPECIALS}`;
-
-function pick(alphabet: string): string {
-  return alphabet[randomInt(alphabet.length)] ?? alphabet[0]!;
+/**
+ * TF-25: Temporary password = first 4 characters of company name + @ + DDMM.
+ * Example: Siyana + 07-09-2026 → Siya@0709
+ */
+export function generateCompanyTemporaryPassword(
+  companyName: string,
+  invitationDate: Date = new Date(),
+): string {
+  const letters = companyName.replace(/[^A-Za-z]/g, "");
+  const prefixRaw = (letters || "User").slice(0, 4);
+  const prefix =
+    prefixRaw.length >= 4
+      ? prefixRaw[0]!.toUpperCase() + prefixRaw.slice(1).toLowerCase()
+      : (prefixRaw[0]!.toUpperCase() + (prefixRaw.slice(1) + "xxxx").slice(0, 3)).slice(
+          0,
+          4,
+        );
+  const dd = String(invitationDate.getDate()).padStart(2, "0");
+  const mm = String(invitationDate.getMonth() + 1).padStart(2, "0");
+  const password = `${prefix}@${dd}${mm}`;
+  if (!passwordSchema.safeParse(password).success) {
+    // Ensure policy compliance for short company names by padding lowers.
+    const padded = `${prefix.padEnd(4, "x")}@${dd}${mm}`;
+    if (passwordSchema.safeParse(padded).success) return padded;
+  }
+  return password;
 }
 
-function shuffle(chars: string[]): string[] {
-  for (let i = chars.length - 1; i > 0; i -= 1) {
-    const j = randomInt(i + 1);
-    const current = chars[i]!;
-    chars[i] = chars[j]!;
-    chars[j] = current;
-  }
-  return chars;
-}
-
-/** Crypto-secure temporary password that satisfies TenderFlow login policy. */
-export function generateTemporaryPassword(length = 14): string {
-  const size = Math.max(12, length);
-  for (let attempt = 0; attempt < 8; attempt += 1) {
-    const chars = shuffle([
-      pick(UPPERS),
-      pick(LOWERS),
-      pick(DIGITS),
-      pick(SPECIALS),
-      ...Array.from({ length: size - 4 }, () => pick(ALL)),
-    ]);
-    const password = chars.join("");
-    if (passwordSchema.safeParse(password).success) {
-      return password;
-    }
-  }
-  throw new Error("Unable to generate a valid temporary password.");
+/** @deprecated Prefer generateCompanyTemporaryPassword for invites (TF-25). */
+export function generateTemporaryPassword(
+  companyName = "User",
+  invitationDate?: Date,
+): string {
+  return generateCompanyTemporaryPassword(companyName, invitationDate);
 }

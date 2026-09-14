@@ -34,6 +34,7 @@ import {
   Sparkles,
   Tag,
   Trash2,
+  Trophy,
   Upload,
   User,
   Users,
@@ -47,6 +48,7 @@ import {
   AddFeeWizard,
   type FeeEligibleTender,
 } from "@/components/bid-fees/add-fee-wizard";
+import { MarkAsWonDialog } from "@/components/won-tenders/mark-as-won-dialog";
 import {
   qualificationStatusStyles,
 } from "@/components/tenders/tender-status-styles";
@@ -98,6 +100,7 @@ import {
   financialDocumentsLockReason,
 } from "@/lib/tender-document-access";
 import {
+  canOpenBidWorkspace,
   STATUS_DISPLAY_LABELS,
   TENDER_STATUSES,
   type TenderStatus,
@@ -161,6 +164,16 @@ type EditDraft = {
 
 const EXEMPTION_TYPES = ["Turnover", "Experience", "EMD"] as const;
 
+type ExistingWonProject = {
+  id: string;
+  projectCode: string;
+};
+
+type TeamMemberOption = {
+  id: string;
+  fullName: string;
+};
+
 type TenderDetailClientProps = {
   tender: TenderDetailDTO;
   documents: TenderDocumentRecord[];
@@ -170,6 +183,8 @@ type TenderDetailClientProps = {
   eligibleTender: FeeEligibleTender | null;
   canEdit: boolean;
   canCreateFee: boolean;
+  existingWonProject?: ExistingWonProject | null;
+  teamMembers?: TeamMemberOption[];
   /** Deep-link from tender list (`?tab=documents`). */
   initialTab?: TabId;
   /** Optional focus target within Documents (`?focus=ai-summary`). */
@@ -630,6 +645,8 @@ export function TenderDetailClient({
   eligibleTender,
   canEdit,
   canCreateFee,
+  existingWonProject = null,
+  teamMembers = [],
   initialTab = "overview",
   initialFocus = null,
 }: TenderDetailClientProps) {
@@ -643,6 +660,8 @@ export function TenderDetailClient({
   const [statusPending, startStatusTransition] = useTransition();
   const [uploadPending, startUploadTransition] = useTransition();
   const [feeWizardOpen, setFeeWizardOpen] = useState(false);
+  const [markAsWonOpen, setMarkAsWonOpen] = useState(false);
+  const [pendingWonFromEdit, setPendingWonFromEdit] = useState(false);
 
   useEffect(() => {
     if (!editing) setDraft(buildDraft(tender));
@@ -683,10 +702,29 @@ export function TenderDetailClient({
     setDraft((prev) => ({ ...prev, ...patch }));
   }, []);
 
+  const openMarkAsWonFlow = (fromEditSave = false) => {
+    if (existingWonProject) {
+      toast.info("This tender already has a won project.", {
+        action: {
+          label: "Open project",
+          onClick: () =>
+            router.push(`/won-tenders/${existingWonProject.id}`),
+        },
+      });
+      return;
+    }
+    setPendingWonFromEdit(fromEditSave);
+    setMarkAsWonOpen(true);
+  };
+
   const handleStatusChange = (next: string) => {
     const isUnderEvaluation = next === UNDER_EVALUATION_VALUE;
-  
+
     if (editing) {
+      if (next === "WON") {
+        openMarkAsWonFlow(true);
+        return;
+      }
       patchDraft({
         qualificationStatus: isUnderEvaluation
           ? ""
@@ -694,29 +732,32 @@ export function TenderDetailClient({
       });
       return;
     }
-  
+
     if (!canEdit) return;
-  
+
     if (
       !isUnderEvaluation &&
       !(TENDER_STATUSES as readonly string[]).includes(next)
     ) {
       return;
     }
-  
+
+    if (next === "WON") {
+      openMarkAsWonFlow(false);
+      return;
+    }
+
     startStatusTransition(async () => {
       const result = await updateTenderStatusAction({
         tenderId: tender.id,
-        status: isUnderEvaluation
-          ? null
-          : (next as TenderStatus),
+        status: isUnderEvaluation ? null : (next as TenderStatus),
       });
-  
+
       if (!result.ok) {
         toast.error(result.error);
         return;
       }
-  
+
       toast.success(result.message);
       invalidateTenderListCaches("tender-status-updated");
       router.refresh();
@@ -729,6 +770,14 @@ export function TenderDetailClient({
   };
 
   const handleSave = () => {
+    if (
+      draft.qualificationStatus === "WON" &&
+      tender.qualificationStatus !== "WON"
+    ) {
+      openMarkAsWonFlow(true);
+      return;
+    }
+
     startTransition(async () => {
       const showExemptions = draft.msmeExemption || draft.startupExemption;
       const result = await updateTenderDetailsAction({
@@ -1075,6 +1124,34 @@ const statusStyle =
               </Select>
             </div>
 
+            {canEdit && tender.qualificationStatus !== "WON" ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 w-full text-xs"
+                onClick={() => openMarkAsWonFlow(false)}
+              >
+                <Trophy className="size-3.5" />
+                Mark as Won
+              </Button>
+            ) : null}
+
+            {existingWonProject ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 w-full text-xs"
+                asChild
+              >
+                <Link href={`/won-tenders/${existingWonProject.id}`}>
+                  <Trophy className="size-3.5" />
+                  {existingWonProject.projectCode}
+                </Link>
+              </Button>
+            ) : null}
+
             <div
               className={cn(
                 "w-full rounded-lg border px-3 py-3 text-center",
@@ -1112,13 +1189,25 @@ const statusStyle =
               <span>AI Qualification Analysis</span>
             </Link>
 
-            <Link
-              href={`/tenders/${tender.id}/bid-workspace`}
-              className="inline-flex h-9 w-full flex-none items-center justify-center gap-2 rounded-md bg-emerald-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-emerald-700"
-            >
-              <Briefcase className="size-3.5 shrink-0" aria-hidden />
-              <span>Open Bid Workspace</span>
-            </Link>
+            {canOpenBidWorkspace(currentQualificationStatus) ? (
+              <Link
+                href={`/tenders/${tender.id}/bid-workspace`}
+                className="inline-flex h-9 w-full flex-none items-center justify-center gap-2 rounded-md bg-emerald-600 px-3 text-xs font-semibold text-white transition-colors hover:bg-emerald-700"
+              >
+                <Briefcase className="size-3.5 shrink-0" aria-hidden />
+                <span>Open Bid Workspace</span>
+              </Link>
+            ) : (
+              <button
+                type="button"
+                disabled
+                title="Bid Workspace is only available for Will Bid tenders"
+                className="inline-flex h-9 w-full flex-none cursor-not-allowed items-center justify-center gap-2 rounded-md bg-emerald-600/40 px-3 text-xs font-semibold text-white"
+              >
+                <Briefcase className="size-3.5 shrink-0" aria-hidden />
+                <span>Open Bid Workspace</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -1885,6 +1974,25 @@ const statusStyle =
           ) : null}
         </div>
       ) : null}
+
+      <MarkAsWonDialog
+        open={markAsWonOpen}
+        onOpenChange={(open) => {
+          setMarkAsWonOpen(open);
+          if (!open) setPendingWonFromEdit(false);
+        }}
+        tenderId={tender.id}
+        tenderTitle={tender.title}
+        defaultAwardValue={tender.tenderValue}
+        teamMembers={teamMembers}
+        onSuccess={() => {
+          if (pendingWonFromEdit) {
+            setEditing(false);
+            setPendingWonFromEdit(false);
+          }
+          invalidateTenderListCaches("tender-marked-won");
+        }}
+      />
     </div>
   );
 }
