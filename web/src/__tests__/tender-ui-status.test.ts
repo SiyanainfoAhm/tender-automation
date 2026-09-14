@@ -62,7 +62,18 @@ describe("tender UI status mapping", () => {
       kind: "in",
       values: ["DISQUALIFIED"],
     });
+    expect(getTenderUiStatus("UNDER_EVALUATION")).toBe("under_evaluation");
+    expect(tenderUiStatusLabel("UNDER_EVALUATION")).toBe("Under Evaluation");
+    expect(getTenderUiStatus("SUBMITTED")).toBe("submitted");
     expect(qualificationStatusesForFilter("under_evaluation")).toEqual({
+      kind: "in",
+      values: ["UNDER_EVALUATION"],
+    });
+    expect(qualificationStatusesForFilter("UNDER_EVALUATION")).toEqual({
+      kind: "in",
+      values: ["UNDER_EVALUATION"],
+    });
+    expect(qualificationStatusesForFilter("not_evaluated")).toEqual({
       kind: "null",
     });
   });

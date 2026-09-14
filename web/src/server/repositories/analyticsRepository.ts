@@ -295,7 +295,7 @@ export async function getTenderListStatusCounts(
   ] = await Promise.all([
     runCount(),
     runCount((q) => q.eq("qualification_status", "VERIFY")),
-    runCount((q) => q.is("qualification_status", null)),
+    runCount((q) => q.eq("qualification_status", "UNDER_EVALUATION")),
     runCount((q) => q.eq("qualification_status", "GO")),
     runCount((q) => q.eq("qualification_status", "CONDITIONAL_GO")),
     runCount((q) => q.eq("qualification_status", "NO_GO")),

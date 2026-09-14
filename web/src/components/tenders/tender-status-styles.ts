@@ -47,6 +47,14 @@ export const qualificationStatusStyles: Record<
     border: "border-sky-200",
     dot: "bg-sky-600",
   },
+  UNDER_EVALUATION: {
+    label: STATUS_DISPLAY_LABELS.UNDER_EVALUATION,
+    shortLabel: "Under Evaluation",
+    bg: "bg-slate-100",
+    text: "text-slate-700",
+    border: "border-slate-200",
+    dot: "bg-slate-500",
+  },
   NO_GO: {
     label: STATUS_DISPLAY_LABELS.NO_GO,
     shortLabel: "No Bid",

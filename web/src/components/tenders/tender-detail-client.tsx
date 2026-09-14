@@ -127,8 +127,6 @@ const TABS = [
   { id: "overview", label: "Overview", icon: LayoutGrid },
   { id: "documents", label: "Documents", icon: FolderOpen },
 ] as const;
-const UNDER_EVALUATION_VALUE = "__UNDER_EVALUATION__";
-
 type TabId = (typeof TABS)[number]["id"];
 
 type ContactDraft = { name: string; mobile: string; email: string };
@@ -238,7 +236,9 @@ function buildDraft(tender: TenderDetailDTO): EditDraft {
     location: tender.location || "",
     publishedDate: dateInputValue(tender.publishedDate),
     closingDate: dateInputValue(tender.closingDate),
-    qualificationStatus: tender.qualificationStatus || "",
+    qualificationStatus:
+      (tender.qualificationStatus as TenderStatus | null) ||
+      "UNDER_EVALUATION",
     description: tender.description || "",
     notes: tender.notes || "",
     tenderValue:
@@ -718,7 +718,9 @@ export function TenderDetailClient({
   };
 
   const handleStatusChange = (next: string) => {
-    const isUnderEvaluation = next === UNDER_EVALUATION_VALUE;
+    if (!(TENDER_STATUSES as readonly string[]).includes(next)) {
+      return;
+    }
 
     if (editing) {
       if (next === "WON") {
@@ -726,21 +728,12 @@ export function TenderDetailClient({
         return;
       }
       patchDraft({
-        qualificationStatus: isUnderEvaluation
-          ? ""
-          : (next as TenderStatus),
+        qualificationStatus: next as TenderStatus,
       });
       return;
     }
 
     if (!canEdit) return;
-
-    if (
-      !isUnderEvaluation &&
-      !(TENDER_STATUSES as readonly string[]).includes(next)
-    ) {
-      return;
-    }
 
     if (next === "WON") {
       openMarkAsWonFlow(false);
@@ -750,7 +743,7 @@ export function TenderDetailClient({
     startStatusTransition(async () => {
       const result = await updateTenderStatusAction({
         tenderId: tender.id,
-        status: isUnderEvaluation ? null : (next as TenderStatus),
+        status: next as TenderStatus,
       });
 
       if (!result.ok) {
@@ -794,7 +787,8 @@ export function TenderDetailClient({
         closingDate: draft.closingDate || null,
         description: draft.description.trim() || null,
         notes: draft.notes.trim() || null,
-        qualificationStatus: draft.qualificationStatus || null,
+        qualificationStatus:
+          draft.qualificationStatus || "UNDER_EVALUATION",
         tenderValue: parseAmount(draft.tenderValue),
         tenderEstCost: parseAmount(draft.tenderEstCost),
         emdAmount: parseAmount(draft.emdAmount),
@@ -960,15 +954,15 @@ export function TenderDetailClient({
   };
 
   const currentQualificationStatus = editing
-  ? draft.qualificationStatus
-  : tender.qualificationStatus;
+    ? draft.qualificationStatus
+    : tender.qualificationStatus;
 
-const statusSelectValue =
-  currentQualificationStatus || UNDER_EVALUATION_VALUE;
+  const statusSelectValue =
+    currentQualificationStatus || "UNDER_EVALUATION";
 
-const statusStyle =
-  statusSelectValue !== UNDER_EVALUATION_VALUE &&
-  (TENDER_STATUSES as readonly string[]).includes(statusSelectValue)
+  const statusStyle = (TENDER_STATUSES as readonly string[]).includes(
+    statusSelectValue,
+  )
     ? qualificationStatusStyles[statusSelectValue as TenderStatus]
     : null;
 
@@ -1111,10 +1105,6 @@ const statusStyle =
                   <SelectValue placeholder="Set status" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={UNDER_EVALUATION_VALUE}>
-                    Under Evaluation
-                  </SelectItem>
-
                   {TENDER_STATUSES.map((status) => (
                     <SelectItem key={status} value={status}>
                       {STATUS_DISPLAY_LABELS[status]}

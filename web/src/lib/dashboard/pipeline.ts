@@ -177,6 +177,7 @@ export function mapToDashboardPipelineStage(options: {
   if (raw === "PARTNER_BID" || raw === "PARTNERSHIP") return "partnership";
   if (raw === "CONDITIONAL_GO" || raw === "MAY_BID") return "may_bid";
   if (raw === "VERIFY") return "verify";
+  if (raw === "UNDER_EVALUATION") return "under_evaluation";
   return "under_evaluation";
 }
 

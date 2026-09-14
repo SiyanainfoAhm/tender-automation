@@ -182,15 +182,13 @@ export async function updateTenderDetailsAction(
         return { ok: false, error: "Invalid status." };
       }
     
-      // Main tender status.
-      // NULL represents "Under Evaluation".
+      // Main tender status (UNDER_EVALUATION is a real DB value).
       patch.qualification_status = status;
     
       if (existing.qualification) {
         if (status === null) {
           /*
-           * Under Evaluation is represented by NULL.
-           *
+           * Clearing qualification_status (legacy empty).
            * Remove the old effective qualification result; otherwise
            * agenttender_web_tender_list can continue showing the previous
            * qualification status (e.g. DUPLICATE / NO_GO / GO).

@@ -3,6 +3,7 @@ export const TENDER_STATUSES = [
   "CONDITIONAL_GO",
   "PARTNER_BID",
   "VERIFY",
+  "UNDER_EVALUATION",
   "NO_GO",
   "DUPLICATE",
   "WON",
@@ -34,6 +35,7 @@ export const STATUS_DISPLAY_LABELS: Record<TenderStatus, string> = {
   CONDITIONAL_GO: "May Bid",
   PARTNER_BID: "Partnership",
   VERIFY: "Verify",
+  UNDER_EVALUATION: "Under Evaluation",
   NO_GO: "No Bid",
   DUPLICATE: "Duplicate",
   WON: "Won",
@@ -123,7 +125,12 @@ export function getTenderUiStatus(
     .trim()
     .toUpperCase()
     .replace(/[\s-]+/g, "_");
-  if (!value || value === "NOT_EVALUATED" || value === "NEW") {
+  if (
+    !value ||
+    value === "NOT_EVALUATED" ||
+    value === "NEW" ||
+    value === "UNDER_EVALUATION"
+  ) {
     return "under_evaluation";
   }
   if (value === "GO" || value === "WILL_BID") return "will_bid";
@@ -156,13 +163,11 @@ export function qualificationStatusesForFilter(
   const upper = value.toUpperCase().replace(/[\s-]+/g, "_");
   const ui = value.toLowerCase().replace(/[\s-]+/g, "_");
 
-  if (
-    ui === "not_evaluated" ||
-    ui === "under_evaluation" ||
-    upper === "NOT_EVALUATED" ||
-    upper === "UNDER_EVALUATION"
-  ) {
+  if (ui === "not_evaluated" || upper === "NOT_EVALUATED") {
     return { kind: "null" };
+  }
+  if (ui === "under_evaluation" || upper === "UNDER_EVALUATION") {
+    return { kind: "in", values: ["UNDER_EVALUATION"] };
   }
   if (ui === "verify" || upper === "VERIFY") {
     return { kind: "in", values: ["VERIFY"] };
@@ -212,6 +217,7 @@ export const DECISION_CHART_COLORS: Record<TenderStatus | "NOT_EVALUATED", strin
   CONDITIONAL_GO: "#d97706",
   PARTNER_BID: "#7c3aed",
   VERIFY: "#2563eb",
+  UNDER_EVALUATION: "#64748b",
   NO_GO: "#dc2626",
   DUPLICATE: "#6b7280",
   WON: "#16a34a",
