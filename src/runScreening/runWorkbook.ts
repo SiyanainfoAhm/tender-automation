@@ -95,6 +95,9 @@ const T247_ID_HEADERS = [
   "Tender Id",
   "Tender ID",
   "Canonical ID",
+  // Tender247 Global Excel export uses BM ID for the portal tender id.
+  "BM ID",
+  "BMID",
 ];
 const REFERENCE_NO_HEADERS = [
   "REFERENCE NO",
@@ -108,6 +111,8 @@ const BA_ID_HEADERS = ["BidAssist ID", "GEM/Eprocure ID"];
 const TITLE_HEADERS = [
   "TENDER BRIEF",
   "Tender Brief",
+  "BIDS BRIEF",
+  "Bids Brief",
   "Tender Name",
   "Summary",
   "Title",
@@ -260,9 +265,11 @@ function sheetLooksLikeTenders(headerMap: Map<string, string>): boolean {
     hasAnyHeaders(headerMap, [...T247_ID_HEADERS, ...TITLE_HEADERS, "EMD", "Deadline"], 2) ||
     headerMap.has(normalizeHeaderKey("T247 ID")) ||
     headerMap.has(normalizeHeaderKey("T247 ID2")) ||
+    headerMap.has(normalizeHeaderKey("BM ID")) ||
     headerMap.has(normalizeHeaderKey("Canonical ID")) ||
     headerMap.has(normalizeHeaderKey("Tender Name")) ||
-    headerMap.has(normalizeHeaderKey("Tender Brief"))
+    headerMap.has(normalizeHeaderKey("Tender Brief")) ||
+    headerMap.has(normalizeHeaderKey("BIDS BRIEF"))
   );
 }
 
@@ -286,6 +293,8 @@ function scoreTenderSheet(sheetName: string, headerMap: Map<string, string>): nu
   if (headerMap.has(normalizeHeaderKey("Tender Brief"))) score += 20;
   if (headerMap.has(normalizeHeaderKey("Tender247 ID"))) score += 15;
   if (headerMap.has(normalizeHeaderKey("T247 ID2"))) score += 15;
+  if (headerMap.has(normalizeHeaderKey("BM ID"))) score += 15;
+  if (headerMap.has(normalizeHeaderKey("BIDS BRIEF"))) score += 20;
   if (headerMap.has(normalizeHeaderKey("Screening Status"))) score += 15;
   if (headerMap.has(normalizeHeaderKey("Organization"))) score += 10;
   if (headerMap.has(normalizeHeaderKey("Estimated Cost"))) score += 5;

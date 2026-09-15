@@ -27,6 +27,8 @@ type AppShellProps = {
   }>;
   activeCompanyName?: string | null;
   tenderCount?: number | null;
+  indianTenderCount?: number | null;
+  globalTenderCount?: number | null;
   wonTenderCount?: number | null;
   children: React.ReactNode;
 };
@@ -37,6 +39,8 @@ export function AppShell({
   companies = [],
   activeCompanyName = null,
   tenderCount = null,
+  indianTenderCount = null,
+  globalTenderCount = null,
   wonTenderCount = null,
   children,
 }: AppShellProps) {
@@ -59,7 +63,7 @@ export function AppShell({
     const handle = window.setTimeout(() => {
       if (!q) return;
       if (q.length < 3) return;
-      router.push(`/tenders?q=${encodeURIComponent(q)}`);
+      router.push(`/tenders/indian?q=${encodeURIComponent(q)}`);
     }, 450);
     return () => window.clearTimeout(handle);
   }, [searchValue, router, commandOpen]);
@@ -79,6 +83,8 @@ export function AppShell({
             collapsed={collapsed}
             onToggle={() => setCollapsed((c) => !c)}
             tenderCount={tenderCount}
+            indianTenderCount={indianTenderCount}
+            globalTenderCount={globalTenderCount}
             wonTenderCount={wonTenderCount}
           />
         </div>
@@ -88,6 +94,8 @@ export function AppShell({
             <MobileNav
               userRole={user.role}
               tenderCount={tenderCount}
+              indianTenderCount={indianTenderCount}
+              globalTenderCount={globalTenderCount}
               wonTenderCount={wonTenderCount}
             />
             <span className="font-heading text-sm font-semibold text-text-primary">
@@ -108,11 +116,11 @@ export function AppShell({
             onSearchSubmit={(q) => {
               const next = q.trim();
               if (!next) {
-                router.push("/tenders");
+                router.push("/tenders/indian");
                 return;
               }
               if (next.length < 3) return;
-              router.push(`/tenders?q=${encodeURIComponent(next)}`);
+              router.push(`/tenders/indian?q=${encodeURIComponent(next)}`);
             }}
             onOpenCommandPalette={() => setCommandOpen(true)}
           />

@@ -29,9 +29,21 @@ import {
 } from "./processTender.js";
 import { runSequentialArtifactAcquisition } from "./runSequentialArtifactAcquisition.js";
 import type { ProcessTenderResult } from "./types.js";
+import {
+  DEFAULT_TENDER247_SOURCE_REGION,
+  getTender247Source,
+  urlMatchesTender247Region,
+  type Tender247SourceRegion,
+} from "../tender247/sourceRegion.js";
 
-function tender247DashboardUrl(config: AppConfig): string {
-  return config.tender247Url?.trim() || "https://www.tender247.com/auth/tender";
+function tender247DashboardUrl(
+  config: AppConfig,
+  region: Tender247SourceRegion = DEFAULT_TENDER247_SOURCE_REGION,
+): string {
+  if (region === "GLOBAL") {
+    return getTender247Source("GLOBAL").url;
+  }
+  return config.tender247Url?.trim() || getTender247Source("INDIAN").url;
 }
 
 async function readMailDateIsoSafe(page: Page): Promise<string | null> {
@@ -47,8 +59,9 @@ async function gotoDashboardAndWaitForMailDateCard(
   config: AppConfig,
   logger: Logger,
   reason: string,
+  region: Tender247SourceRegion = DEFAULT_TENDER247_SOURCE_REGION,
 ): Promise<string | null> {
-  const dashboardUrl = tender247DashboardUrl(config);
+  const dashboardUrl = tender247DashboardUrl(config, region);
   logger.warn(
     `T247_LIST_RECOVER_RETURN_DASHBOARD reason=${reason} url=${dashboardUrl}`,
   );
@@ -84,6 +97,9 @@ async function gotoDashboardAndWaitForMailDateCard(
  * detail URL — Select Mail Date is missing. Return to the dashboard and only
  * open the calendar when the visible mail date is wrong (not on every tender).
  * When the card stays missing (session drift), re-login once then re-select.
+ *
+ * Critical for Global: never treat Indian `/auth/tender` as recovered even when
+ * the mail date matches — Global IDs only appear on `/auth/globaltender`.
  */
 async function recoverListPageBetweenTenders(
   listPage: Page,
@@ -91,6 +107,7 @@ async function recoverListPageBetweenTenders(
   config: AppConfig,
   logger: Logger,
   dateFolder: string,
+  region: Tender247SourceRegion = DEFAULT_TENDER247_SOURCE_REGION,
 ): Promise<void> {
   if (listPage.isClosed()) {
     return;
@@ -111,19 +128,33 @@ async function recoverListPageBetweenTenders(
       return;
     }
 
+    const onCorrectRegion = urlMatchesTender247Region(listPage.url(), region);
     let iso = await readMailDateIsoSafe(listPage);
-    if (iso === requestedDate) {
+    if (iso === requestedDate && onCorrectRegion) {
       logger.info(`T247_LIST_RECOVER_MAIL_DATE_OK=${requestedDate}`);
       return;
+    }
+    if (!onCorrectRegion) {
+      logger.warn(
+        `T247_LIST_RECOVER_WRONG_REGION expected=${region} url=${listPage.url()}`,
+      );
     }
 
     iso = await gotoDashboardAndWaitForMailDateCard(
       listPage,
       config,
       logger,
-      iso ? `mail-date=${iso}` : "mail-date-card-missing",
+      !onCorrectRegion
+        ? `wrong-region→${region}`
+        : iso
+          ? `mail-date=${iso}`
+          : "mail-date-card-missing",
+      region,
     );
-    if (iso === requestedDate) {
+    if (
+      iso === requestedDate &&
+      urlMatchesTender247Region(listPage.url(), region)
+    ) {
       logger.info(`T247_LIST_RECOVER_MAIL_DATE_OK=${requestedDate}`);
       return;
     }
@@ -142,7 +173,7 @@ async function recoverListPageBetweenTenders(
         `T247_LIST_RECOVER_MAIL_DATE_SOFT_FAIL=${msg.slice(0, 160)}`,
       );
       logger.warn(
-        `TENDER247_UI_HARD_RESET reason=between-tenders url=${tender247DashboardUrl(config)}`,
+        `TENDER247_UI_HARD_RESET reason=between-tenders url=${tender247DashboardUrl(config, region)}`,
       );
 
       let afterReset = await gotoDashboardAndWaitForMailDateCard(
@@ -150,8 +181,12 @@ async function recoverListPageBetweenTenders(
         config,
         logger,
         "hard-reset",
+        region,
       );
-      if (afterReset === requestedDate) {
+      if (
+        afterReset === requestedDate &&
+        urlMatchesTender247Region(listPage.url(), region)
+      ) {
         logger.info(`T247_LIST_RECOVER_MAIL_DATE_OK=${requestedDate}`);
         return;
       }
@@ -174,13 +209,18 @@ async function recoverListPageBetweenTenders(
             );
           },
         );
+        // Login lands on Indian /auth/tender — force Global feed when needed.
         afterReset = await gotoDashboardAndWaitForMailDateCard(
           listPage,
           config,
           logger,
           "after-relogin",
+          region,
         );
-        if (afterReset === requestedDate) {
+        if (
+          afterReset === requestedDate &&
+          urlMatchesTender247Region(listPage.url(), region)
+        ) {
           logger.info(`T247_LIST_RECOVER_MAIL_DATE_OK=${requestedDate}`);
           return;
         }
@@ -244,6 +284,11 @@ export async function processSurvivorsInParallel(options: {
    */
   allowNoBidDetailOpen?: boolean;
   /**
+   * When false (Global), skip AI Summary capture and treat documents ZIP
+   * as sufficient for completion.
+   */
+  aiSummaryRequired?: boolean;
+  /**
    * Supabase artifact URLs keyed by Tender247 id — resume/skip source of truth
    * for the AI-summary pipeline (local downloads/ are cache only).
    */
@@ -251,6 +296,8 @@ export async function processSurvivorsInParallel(options: {
     string,
     { documentsZipUrl?: string | null; aiSummaryUrl?: string | null }
   >;
+  /** Tender247 Indian vs Global list context for detail opens. */
+  sourceRegion?: "INDIAN" | "GLOBAL";
 }): Promise<{
   results: ProcessTenderResult[];
   attemptedIds: string[];
@@ -261,6 +308,23 @@ export async function processSurvivorsInParallel(options: {
   const pending = options.survivorIds.filter(
     (id) => !options.alreadyCompleted.has(id),
   );
+
+  if (options.sourceRegion) {
+    const { ensureTender247Region } = await import(
+      "../tenderDetails/ensureTender247Region.js"
+    );
+    await ensureTender247Region(
+      options.listPage,
+      options.sourceRegion,
+      options.logger,
+      options.config.pageTimeoutMs,
+    ).catch((error) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      options.logger.warn(
+        `TENDER247_REGION_ENSURE_SOFT_FAIL region=${options.sourceRegion} msg=${msg.slice(0, 160)}`,
+      );
+    });
+  }
 
   options.logger.info("T247_PHASE=ARTIFACT_ACQUISITION");
   options.logger.info(
@@ -309,6 +373,7 @@ export async function processSurvivorsInParallel(options: {
         options.config,
         options.logger,
         options.dateFolder,
+        options.sourceRegion || DEFAULT_TENDER247_SOURCE_REGION,
       );
 
       const excel = options.excelValueById.get(t247Id);
@@ -330,6 +395,9 @@ export async function processSurvivorsInParallel(options: {
         force: options.force === true,
         documentsOnlyIfAiMissing: options.documentsOnlyIfAiMissing === true,
         allowNoBidDetailOpen: options.allowNoBidDetailOpen === true,
+        aiSummaryRequired: options.aiSummaryRequired !== false,
+        sourceRegion:
+          options.sourceRegion || DEFAULT_TENDER247_SOURCE_REGION,
         phase1ScreeningAuthoritative: options.phase1ScreeningAuthoritative,
         phase1ScreeningStatusOverride:
           options.screeningStatusById?.get(t247Id) ?? null,
@@ -351,6 +419,7 @@ export async function processSurvivorsInParallel(options: {
         options.config,
         options.logger,
         options.dateFolder,
+        options.sourceRegion || DEFAULT_TENDER247_SOURCE_REGION,
       );
 
       if (

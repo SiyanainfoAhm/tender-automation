@@ -14,9 +14,10 @@ const FILTER_EXPAND_TIMEOUT_MS = 10_000;
 export const tender247IdSearchSelectors = {
   tenderFiltersHeader: (page: Page): Locator =>
     page
-      .getByText("Tender Filters", { exact: true })
+      .getByText("Global Tender Filters", { exact: true })
+      .or(page.getByText("Tender Filters", { exact: true }))
       .or(page.getByText("FILTERS", { exact: true }))
-      .or(page.getByRole("button", { name: /tender\s*filters|filters/i }))
+      .or(page.getByRole("button", { name: /global\s*tender\s*filters|tender\s*filters|filters/i }))
       .first(),
 
   /** Exact SEARCH control — never ADVANCE SEARCH */
@@ -39,10 +40,13 @@ export const tender247IdSearchSelectors = {
   t247IdSearchInput: (page: Page): Locator =>
     page
       .getByPlaceholder(/Search\s+By\s+T247\s+ID\s*\/\s*Relevance/i)
+      .or(page.getByPlaceholder(/^Search\s+T247\s+ID$/i))
+      .or(page.getByPlaceholder(/Search\s+T247\s+ID/i))
       .or(page.getByLabel(/Search\s+By\s+T247\s+ID\s*\/\s*Relevance/i))
+      .or(page.getByLabel(/Search\s+T247\s+ID/i))
       .or(
         page.getByRole("textbox", {
-          name: /Search\s+By\s+T247\s+ID|T247\s+ID\s*\/\s*Relevance/i,
+          name: /Search\s+By\s+T247\s+ID|T247\s+ID\s*\/\s*Relevance|Search\s+T247\s+ID/i,
         }),
       )
       .or(
@@ -107,10 +111,18 @@ export async function expandTenderFiltersIfCollapsed(
   await searchInput
     .waitFor({ state: "visible", timeout: FILTER_EXPAND_TIMEOUT_MS })
     .catch(async () => {
-      await dateField
-        .waitFor({ state: "visible", timeout: FILTER_EXPAND_TIMEOUT_MS })
-        .catch(() => {
-          logger.warn("Filter fields still not visible after expanding Tender Filters");
+      // Global feed may keep the input attached but off-layout until a second click/scroll.
+      await searchInput.scrollIntoViewIfNeeded().catch(() => undefined);
+      await searchInput
+        .waitFor({ state: "attached", timeout: FILTER_EXPAND_TIMEOUT_MS })
+        .catch(async () => {
+          await dateField
+            .waitFor({ state: "visible", timeout: FILTER_EXPAND_TIMEOUT_MS })
+            .catch(() => {
+              logger.warn(
+                "Filter fields still not visible after expanding Tender Filters",
+              );
+            });
         });
     });
 }
@@ -193,13 +205,28 @@ export async function searchTender247ListById(options: {
   try {
     await input.waitFor({ state: "visible", timeout: FILTER_EXPAND_TIMEOUT_MS });
   } catch {
-    throw new AutomationError(
-      "TENDER247_ID_SEARCH_INPUT_NOT_FOUND",
-      'Could not find "Search By T247 ID / Relevance" input',
-    );
+    // Global: expand "Global Tender Filters" then accept attached Search T247 ID.
+    const header = tender247IdSearchSelectors.tenderFiltersHeader(page);
+    if (await header.isVisible().catch(() => false)) {
+      await header.click({ timeout: FILTER_EXPAND_TIMEOUT_MS }).catch(() => undefined);
+      await page.waitForTimeout(400);
+    }
+    const attached = await input
+      .waitFor({ state: "attached", timeout: FILTER_EXPAND_TIMEOUT_MS })
+      .then(() => true)
+      .catch(() => false);
+    if (!attached) {
+      throw new AutomationError(
+        "TENDER247_ID_SEARCH_INPUT_NOT_FOUND",
+        'Could not find "Search T247 ID" / "Search By T247 ID / Relevance" input',
+      );
+    }
   }
 
-  await input.click({ timeout: 5_000 });
+  const inputVisible = await input.isVisible().catch(() => false);
+  await input.click({ timeout: 5_000, force: !inputVisible }).catch(async () => {
+    await input.focus({ force: true });
+  });
   await input.fill("");
   await input.fill(id);
   logger.info(`SEARCH_STARTED id=${id}`);

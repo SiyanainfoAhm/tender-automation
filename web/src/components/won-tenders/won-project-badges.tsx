@@ -138,8 +138,14 @@ export function HealthStatusBadge({
 export function MilestoneStatusBadge({
   status,
   className,
-}: BadgeProps & { status: WonMilestoneStatus }) {
-  const style = milestoneStyles[status];
+}: BadgeProps & { status: WonMilestoneStatus | string }) {
+  const resolved =
+    status in milestoneStyles
+      ? (status as WonMilestoneStatus)
+      : ("not_started" as WonMilestoneStatus);
+  const style = milestoneStyles[resolved];
+  const label =
+    WON_MILESTONE_STATUS_LABELS[resolved] ?? String(status || "Not Started");
   return (
     <span
       className={cn(
@@ -149,7 +155,7 @@ export function MilestoneStatusBadge({
         className,
       )}
     >
-      {WON_MILESTONE_STATUS_LABELS[status]}
+      {label}
     </span>
   );
 }

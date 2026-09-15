@@ -36,6 +36,9 @@ test("ai-summary pipeline always downloads documents and uploads Azure artifacts
   assert.match(src, /RESUME_DOCUMENTS_ONLY/);
   assert.match(src, /PROCESS_FULL/);
   assert.match(src, /existingArtifactUrlsById/);
+  assert.match(src, /aiSummaryRequired/);
+  assert.match(src, /global-documents-first/);
+  assert.match(src, /AI_SUMMARY_PIPELINE_AI_REQUIRED/);
   assert.doesNotMatch(src, /AI_SUMMARY_PIPELINE_SKIP_LOCAL/);
   assert.doesNotMatch(src, /inspectTenderArtifactState/);
   assert.match(src, /INVALID_ACCOUNT_FLAG/);
@@ -204,6 +207,22 @@ test("resolveAiSummaryArtifactMode uses Supabase URLs only", async () => {
       aiSummaryUrl: null,
     }),
     "RESUME_SUMMARY_ONLY",
+  );
+  assert.equal(
+    mod.resolveAiSummaryArtifactMode({
+      documentsZipUrl: "https://blob/docs.zip",
+      aiSummaryUrl: null,
+      aiSummaryRequired: false,
+    }),
+    "SKIP_ALREADY_COMPLETE",
+  );
+  assert.equal(
+    mod.resolveAiSummaryArtifactMode({
+      documentsZipUrl: null,
+      aiSummaryUrl: null,
+      aiSummaryRequired: false,
+    }),
+    "PROCESS_FULL",
   );
   assert.equal(
     mod.resolveAiSummaryArtifactMode({

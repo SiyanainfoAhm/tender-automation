@@ -34,6 +34,7 @@ export function escapePostgrestSearchTerm(raw: string): string {
 export type WebTenderListRow = {
   id: string;
   source_portal: "TENDER247" | "BIDASSIST" | "MANUAL";
+  source_region?: "INDIAN" | "GLOBAL" | null;
   source_tender_id: string;
   folder_id: string | null;
   reference_no: string | null;
@@ -97,6 +98,7 @@ export type WebTenderListRow = {
 export const WEB_TENDER_LIST_SELECT = [
   "id",
   "source_portal",
+  "source_region",
   "source_tender_id",
   "folder_id",
   "reference_no",
@@ -262,6 +264,10 @@ export async function applyTenderListNonStatusFilters(
 
   if (filters.source && filters.source !== "ALL") {
     q = q.eq("source_portal", filters.source);
+  }
+
+  if (filters.region && filters.region !== "ALL") {
+    q = q.eq("source_region", filters.region);
   }
 
   if (filters.downloadStatus) {
@@ -646,6 +652,42 @@ export type TenderExplorerFacet = {
   value: string;
   label: string;
 };
+
+export type TenderRegionCounts = {
+  all: number;
+  indian: number;
+  global: number;
+};
+
+/** Absolute INDIAN / GLOBAL row counts for Tender Management tabs. */
+export async function getTenderRegionCounts(): Promise<TenderRegionCounts> {
+  const supabase = getServerSupabase();
+  const [indianRes, globalRes] = await Promise.all([
+    supabase
+      .from("agenttender_tenders")
+      .select("id", { count: "exact", head: true })
+      .eq("source_region", "INDIAN"),
+    supabase
+      .from("agenttender_tenders")
+      .select("id", { count: "exact", head: true })
+      .eq("source_region", "GLOBAL"),
+  ]);
+  assertSupabaseOk(indianRes, {
+    queryName: "getTenderRegionCounts.indian",
+    selectedColumns: "id (count exact head)",
+  });
+  assertSupabaseOk(globalRes, {
+    queryName: "getTenderRegionCounts.global",
+    selectedColumns: "id (count exact head)",
+  });
+  const indian = indianRes.count ?? 0;
+  const global = globalRes.count ?? 0;
+  return {
+    all: indian + global,
+    indian,
+    global,
+  };
+}
 
 export async function getTenderExplorerFacets(): Promise<{
   categories: TenderExplorerFacet[];

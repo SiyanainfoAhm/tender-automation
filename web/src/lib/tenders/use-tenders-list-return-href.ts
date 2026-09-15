@@ -8,6 +8,8 @@ import {
   TENDERS_LIST_RETURN_CHANGED_EVENT,
 } from "@/lib/tenders/list-return";
 
+const DEFAULT_TENDERS_HREF = "/tenders/indian";
+
 function subscribe(onStoreChange: () => void) {
   if (typeof window === "undefined") return () => {};
   window.addEventListener(TENDERS_LIST_RETURN_CHANGED_EVENT, onStoreChange);
@@ -19,16 +21,16 @@ function subscribe(onStoreChange: () => void) {
 }
 
 function getClientSnapshot() {
-  return peekTendersListReturn() || "/tenders";
+  return peekTendersListReturn() || DEFAULT_TENDERS_HREF;
 }
 
 function getServerSnapshot() {
-  return "/tenders";
+  return DEFAULT_TENDERS_HREF;
 }
 
 /**
  * Hydration-safe return href for sidebar / back links.
- * Server + hydrate paint always `/tenders`; client then adopts sessionStorage.
+ * Server + hydrate paint always `/tenders/indian`; client then adopts sessionStorage.
  * Re-reads on route changes so filters survive detail / workspace navigation.
  */
 export function useTendersListReturnHref(): string {
@@ -41,7 +43,7 @@ export function useTendersListReturnHref(): string {
   const [href, setHref] = useState(storeHref);
 
   useEffect(() => {
-    setHref(peekTendersListReturn() || "/tenders");
+    setHref(peekTendersListReturn() || DEFAULT_TENDERS_HREF);
   }, [pathname, storeHref]);
 
   return href;

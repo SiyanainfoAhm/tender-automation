@@ -155,7 +155,9 @@ export async function hasVisibleTender247Cards(page: Page): Promise<boolean> {
     return true;
   }
 
-  const detailLink = page.locator('a[href*="/auth/tender/"]').first();
+  const detailLink = page
+    .locator('a[href*="/auth/tender/"], a[href*="/auth/globaltender/"]')
+    .first();
   if (await detailLink.isVisible().catch(() => false)) {
     return true;
   }

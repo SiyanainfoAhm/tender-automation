@@ -1,52 +1,20 @@
-import { sessionHasPermission } from "@/server/auth/permissions";
-import { requireSession } from "@/server/auth/session";
-import { getTenderListStatusCounts } from "@/server/repositories/analyticsRepository";
-import { getTenderExplorerFacets } from "@/server/repositories/tenderRepository";
-import { tenderFiltersSchema } from "@/lib/validations";
-import {
-  searchParamsForStatusCounts,
-  tenderStatusCountQueryKey,
-} from "@/lib/tender-status-count-params";
+import { redirect } from "next/navigation";
 
-import { TenderExplorer, TenderExplorerSkeleton } from "./tender-explorer";
-
-type TendersPageProps = {
+type TendersIndexProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-export default async function TendersPage({ searchParams }: TendersPageProps) {
-  const session = await requireSession();
-  const rawParams = searchParams ? await searchParams : {};
-  const statusCountFilters = tenderFiltersSchema.parse(
-    searchParamsForStatusCounts(rawParams),
-  );
-  const statusCountsFilterKey = tenderStatusCountQueryKey(rawParams);
-
-  const [facets, counts] = await Promise.all([
-    getTenderExplorerFacets().catch(() => ({
-      categories: [],
-      portals: ["TENDER247", "BIDASSIST"] as Array<
-        "TENDER247" | "BIDASSIST" | "MANUAL"
-      >,
-      cities: [],
-    })),
-    getTenderListStatusCounts(statusCountFilters).catch((error) => {
-      console.error("[tenders] failed to load status card counts", error);
-      return null;
-    }),
-  ]);
-
-  return (
-    <TenderExplorer
-      categories={facets.categories}
-      portals={facets.portals}
-      cities={facets.cities}
-      canImport={sessionHasPermission(session, "tenders.import")}
-      canCreate={sessionHasPermission(session, "tenders.edit")}
-      statusCounts={counts}
-      statusCountsFilterKey={statusCountsFilterKey}
-    />
-  );
+/** Default Tenders entry → Indian list (Global is a sibling nav child). */
+export default async function TendersIndexPage({
+  searchParams,
+}: TendersIndexProps) {
+  const raw = searchParams ? await searchParams : {};
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(raw)) {
+    if (key === "region") continue;
+    const text = Array.isArray(value) ? value[0] : value;
+    if (text) params.set(key, text);
+  }
+  const qs = params.toString();
+  redirect(qs ? `/tenders/indian?${qs}` : "/tenders/indian");
 }
-
-export { TenderExplorerSkeleton };

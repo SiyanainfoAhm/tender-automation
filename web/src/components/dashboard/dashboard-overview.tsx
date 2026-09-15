@@ -359,7 +359,7 @@ export function DashboardOverviewClient({ data }: DashboardOverviewProps) {
               return (
                 <li key={stage.key} className="space-y-1.5">
                   <Link
-                    href={`/tenders?status=${stage.key}`}
+                    href={`/tenders/indian?status=${stage.key}`}
                     className="block rounded-lg -mx-1 px-1 py-0.5 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
                     aria-label={`View ${stage.label} tenders`}
                   >
@@ -691,7 +691,7 @@ export function DashboardOverviewClient({ data }: DashboardOverviewProps) {
               <p className="mt-0.5 text-xs text-slate-500">Nearest first</p>
             </div>
             <Link
-              href="/tenders?quickDate=closing_7"
+              href="/tenders/indian?quickDate=closing_7"
               className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:underline"
             >
               <CalendarDays className="size-3.5" />

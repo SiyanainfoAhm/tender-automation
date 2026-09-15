@@ -3,13 +3,27 @@ import {
   Building2,
   FileStack,
   FileText,
+  Globe2,
   LayoutDashboard,
+  MapPinned,
   Trophy,
   Users,
   Wallet,
 } from "lucide-react";
 
-export type NavCountKey = "tenders" | "wonTenders";
+export type NavCountKey =
+  | "tenders"
+  | "indianTenders"
+  | "globalTenders"
+  | "wonTenders";
+
+export type AppNavChildItem = {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  showCount?: boolean;
+  countKey?: NavCountKey;
+};
 
 export type AppNavItem = {
   href: string;
@@ -22,6 +36,8 @@ export type AppNavItem = {
   showCount?: boolean;
   /** Which badge count to show when showCount is true (defaults to tenders). */
   countKey?: NavCountKey;
+  /** Nested sidebar links (e.g. Tenders → Indian / Global). */
+  children?: AppNavChildItem[];
 };
 
 /**
@@ -41,6 +57,23 @@ export const APP_MAIN_NAV: AppNavItem[] = [
     icon: FileText,
     section: "main",
     showCount: true,
+    countKey: "tenders",
+    children: [
+      {
+        href: "/tenders/indian",
+        label: "Indian",
+        icon: MapPinned,
+        showCount: true,
+        countKey: "indianTenders",
+      },
+      {
+        href: "/tenders/global",
+        label: "Global",
+        icon: Globe2,
+        showCount: true,
+        countKey: "globalTenders",
+      },
+    ],
   },
   {
     href: "/bid-fees",
@@ -81,3 +114,19 @@ export const APP_BOTTOM_NAV: AppNavItem[] = [
     section: "bottom",
   },
 ];
+
+/** List routes that belong under the Tenders nav group (not detail/import). */
+export function isTendersListPath(pathname: string): boolean {
+  return (
+    pathname === "/tenders" ||
+    pathname === "/tenders/indian" ||
+    pathname === "/tenders/global"
+  );
+}
+
+export function isTendersNavActive(pathname: string): boolean {
+  return (
+    pathname === "/tenders" ||
+    pathname.startsWith("/tenders/")
+  );
+}

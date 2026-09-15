@@ -148,7 +148,11 @@ async function tryOpenDetailControl(
   const page = row.page();
   // 1) Prefer real href if present on the card
   if (card.href) {
-    const link = row.locator(`a[href*="/auth/tender/${t247Id}/"]`).first();
+    const link = row
+      .locator(
+        `a[href*="/auth/tender/${t247Id}/"], a[href*="/auth/globaltender/${t247Id}/"]`,
+      )
+      .first();
     if (await link.isVisible().catch(() => false)) {
       logger.info(`OPEN_VIA_HREF for T247-${t247Id}`);
       await clickControl(link, logger, page);

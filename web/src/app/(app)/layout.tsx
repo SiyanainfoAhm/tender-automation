@@ -5,7 +5,10 @@ import { getSession } from "@/server/auth/session";
 import { getCompanyById } from "@/server/repositories/companyRepository";
 import { listMembershipsForUser } from "@/server/repositories/membershipRepository";
 import { getUserPreferences } from "@/server/repositories/savedViewRepository";
-import { countVisibleTenders } from "@/server/repositories/tenderRepository";
+import {
+  countVisibleTenders,
+  getTenderRegionCounts,
+} from "@/server/repositories/tenderRepository";
 import { countWonProjects } from "@/server/repositories/wonProjectRepository";
 
 /** Nav badges (tender / won counts) must not be served from a stale RSC cache. */
@@ -32,8 +35,14 @@ export default async function AppLayout({
 
   const companyId = session.user.companyId;
 
-  const [preferences, tenderCount, wonTenderCount, memberships, activeCompany] =
-    await Promise.all([
+  const [
+    preferences,
+    tenderCount,
+    regionCounts,
+    wonTenderCount,
+    memberships,
+    activeCompany,
+  ] = await Promise.all([
       getUserPreferences(session.user.id).catch((error) => {
         console.warn(
           JSON.stringify({
@@ -52,6 +61,7 @@ export default async function AppLayout({
         };
       }),
       countVisibleTenders().catch(() => null),
+      getTenderRegionCounts().catch(() => null),
       companyId
         ? countWonProjects(companyId).catch(() => null)
         : Promise.resolve(null),
@@ -78,6 +88,8 @@ export default async function AppLayout({
       companies={companies}
       activeCompanyName={activeCompany?.name || null}
       tenderCount={tenderCount}
+      indianTenderCount={regionCounts?.indian ?? null}
+      globalTenderCount={regionCounts?.global ?? null}
       wonTenderCount={wonTenderCount}
     >
       {children}

@@ -11,6 +11,9 @@ export const TENDER_SEARCH_OR_FIELDS = [
   "reference_no",
   "organization",
   "authority",
+  "location_text",
+  "city",
+  "state",
 ] as const;
 
 export function trimTenderSearchInput(raw: string | null | undefined): string {

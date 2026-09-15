@@ -9,6 +9,7 @@ import { openSingleTenderDirectly } from "../tenderDetails/openSingleTenderDirec
 import type { TenderListItem } from "../tenderDetails/types.js";
 import { assertOpenSingleTenderDetailsAllowed } from "../runScreening/phase1DetailQueue.js";
 import type { Phase1CrawlStatus } from "../runScreening/phase1Statuses.js";
+import type { Tender247SourceRegion } from "../tender247/sourceRegion.js";
 
 export type ResolvedTender247Detail = {
   detailPage: Page;
@@ -30,6 +31,7 @@ export async function resolveTender247Tender(options: {
   phase1ScreeningStatus?: Phase1CrawlStatus | string;
   /** AI-summary-first: allow NO_GO / No Bid detail opens. */
   allowNoBidDetailOpen?: boolean;
+  sourceRegion?: Tender247SourceRegion;
 }): Promise<ResolvedTender247Detail> {
   if (options.phase1ScreeningStatus && options.allowNoBidDetailOpen !== true) {
     assertOpenSingleTenderDetailsAllowed(
@@ -47,6 +49,7 @@ export async function resolveTender247Tender(options: {
       dateFolder: options.dateFolder,
       phase1ScreeningStatus: options.phase1ScreeningStatus,
       allowNoBidDetailOpen: options.allowNoBidDetailOpen === true,
+      sourceRegion: options.sourceRegion,
     },
   );
   return {

@@ -12,7 +12,8 @@ import {
 } from "./ensureTender247FreshListForDate.js";
 
 const T247_ID_RE = /T247\s*ID\s*[-:]?\s*(\d+)/i;
-const DETAIL_HREF_RE = /\/auth\/tender\/(\d+)\/([0-9a-f-]{8,})/i;
+const DETAIL_HREF_RE =
+  /\/auth\/(?:global)?tender\/(\d+)\/([0-9a-f-]{8,})/i;
 
 export interface LiveTenderCard {
   t247Id: string;
@@ -160,7 +161,14 @@ async function extractHrefFromRow(
     if (attr.includes("security")) {
       if (/^[0-9a-f-]{8,}$/i.test(val)) {
         return {
-          href: `https://www.tender247.com/auth/tender/${t247Id}/${val}`,
+          href: (() => {
+            const onGlobal =
+              /globaltender/i.test(row.page().url());
+            const prefix = onGlobal
+              ? "/auth/globaltender"
+              : "/auth/tender";
+            return `https://www.tender247.com${prefix}/${t247Id}/${val}`;
+          })(),
           securityCode: val,
         };
       }

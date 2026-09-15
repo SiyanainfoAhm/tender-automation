@@ -758,8 +758,9 @@ export async function downloadTender247DailyExcel(
   dayDir: string,
   logger: Logger,
   dateIso?: string,
+  options?: { region?: "INDIAN" | "GLOBAL" },
 ): Promise<string> {
-  return downloadExcel(page, config, dayDir, logger, dateIso);
+  return downloadExcel(page, config, dayDir, logger, dateIso, options);
 }
 
 async function downloadExcel(
@@ -768,6 +769,7 @@ async function downloadExcel(
   dayDir: string,
   logger: Logger,
   dateIso?: string,
+  options?: { region?: "INDIAN" | "GLOBAL" },
 ): Promise<string> {
   await dismissTender247Popups(page, logger);
 
@@ -821,7 +823,14 @@ async function downloadExcel(
         );
   }
 
-  await xlsLocator.waitFor({ state: "visible", timeout: 30_000 });
+  await xlsLocator.scrollIntoViewIfNeeded().catch(() => undefined);
+  const visible = await xlsLocator.isVisible().catch(() => false);
+  if (visible) {
+    await xlsLocator.waitFor({ state: "visible", timeout: 10_000 }).catch(() => undefined);
+  } else {
+    // Global list can keep Download Excel attached but CSS-hidden — still clickable.
+    await xlsLocator.waitFor({ state: "attached", timeout: 10_000 });
+  }
   const enabled = await xlsLocator.isEnabled().catch(() => true);
   if (!enabled) {
     throw new AutomationError(
@@ -834,8 +843,8 @@ async function downloadExcel(
     timeout: config.downloadTimeoutMs,
   });
 
-  await xlsLocator.click();
-  logger.info("XLS clicked");
+  await xlsLocator.click({ force: !visible });
+  logger.info(`XLS clicked force=${!visible}`);
 
   let download: Download;
   try {
@@ -879,9 +888,12 @@ async function downloadExcel(
   const fileDate = dateIso && /^\d{4}-\d{2}-\d{2}$/.test(dateIso)
     ? dateIso
     : getTodayIsoDate();
+  const region = options?.region === "GLOBAL" ? "GLOBAL" : "INDIAN";
+  const baseName =
+    region === "GLOBAL" ? `Tender247_GLOBAL_${fileDate}` : `Tender247_${fileDate}`;
   const destination = uniqueDestinationPath(
     dayDir,
-    `Tender247_${fileDate}`,
+    baseName,
     ".xlsx",
   );
   relocateFile(tempPath, destination);
@@ -902,43 +914,50 @@ export async function getTender247XlsLocator(page: Page): Promise<Locator> {
   const byAccessibleName = page
     .getByRole("button", { name: /excel|xls|export|download/i })
     .or(page.getByRole("link", { name: /excel|xls|export|download/i }));
-  if (await firstVisible(byAccessibleName)) {
-    return byAccessibleName.first();
-  }
+  const accessible = await firstVisibleLocator(byAccessibleName);
+  if (accessible) return accessible;
 
   // 2) Image with alt or title containing XLS / Excel / Export / Download
   const byImageMeta = page.locator(
     'img[alt*="XLS" i], img[alt*="Excel" i], img[alt*="Export" i], img[alt*="Download" i], img[title*="XLS" i], img[title*="Excel" i], img[title*="Export" i], img[title*="Download" i]',
   );
-  if (await firstVisible(byImageMeta)) {
-    const img = byImageMeta.first();
-    const clickableParent = img.locator(
+  const imgVisible = await firstVisibleLocator(byImageMeta);
+  if (imgVisible) {
+    const clickableParent = imgVisible.locator(
       "xpath=ancestor::a[1] | ancestor::button[1] | ancestor::*[@role='button'][1]",
     );
-    if (await firstVisible(clickableParent)) {
-      return clickableParent.first();
-    }
-    return img;
+    const parent = await firstVisibleLocator(clickableParent);
+    if (parent) return parent;
+    return imgVisible;
   }
 
-  // 3) Clickable parent containing an image whose src contains xls / excel / export
-  const bySrcImage = page.locator(
-    'img[src*="xls" i], img[src*="excel" i], img[src*="export" i]',
-  );
-  if (await firstVisible(bySrcImage)) {
-    const img = bySrcImage.first();
-    const clickableParent = img.locator(
-      "xpath=ancestor::a[1] | ancestor::button[1] | ancestor::*[@role='button'][1]",
+  // Global feed sometimes keeps the Excel img in DOM but CSS-hidden; still clickable via parent.
+  const attachedImg = byImageMeta.first();
+  if ((await attachedImg.count().catch(() => 0)) > 0) {
+    const clickableParent = attachedImg.locator(
+      "xpath=ancestor::a[1] | ancestor::button[1] | ancestor::*[@role='button'][1] | xpath=..",
     );
-    if (await firstVisible(clickableParent)) {
+    if ((await clickableParent.count().catch(() => 0)) > 0) {
       return clickableParent.first();
     }
-    // Also try immediate parent if it is clickable-looking
-    const parent = img.locator("xpath=..");
-    if (await firstVisible(parent)) {
-      return parent;
-    }
-    return img;
+    return attachedImg;
+  }
+
+  // 3) Clickable parent containing an image whose src contains xls / excel / export / download-excel
+  const bySrcImage = page.locator(
+    'img[src*="xls" i], img[src*="excel" i], img[src*="export" i], img[src*="download-excel" i]',
+  );
+  const srcVisible = await firstVisibleLocator(bySrcImage);
+  if (srcVisible) {
+    const clickableParent = srcVisible.locator(
+      "xpath=ancestor::a[1] | ancestor::button[1] | ancestor::*[@role='button'][1]",
+    );
+    const parent = await firstVisibleLocator(clickableParent);
+    if (parent) return parent;
+    const immediateParent = srcVisible.locator("xpath=..");
+    const immediate = await firstVisibleLocator(immediateParent);
+    if (immediate) return immediate;
+    return srcVisible;
   }
 
   // 4) Clickable element immediately before / near the PRICE: HIGH TO LOW dropdown
@@ -947,15 +966,14 @@ export async function getTender247XlsLocator(page: Page): Promise<Locator> {
     const preceding = priceSort.locator(
       "xpath=preceding-sibling::*[self::a or self::button or self::img or @role='button'][1]",
     );
-    if (await firstVisible(preceding)) {
-      return preceding.first();
-    }
+    const precedingVisible = await firstVisibleLocator(preceding);
+    if (precedingVisible) return precedingVisible;
 
     const nearContainer = priceSort.locator(
       "xpath=ancestor::*[self::div or self::section or self::header][1]",
     );
     const nearCandidates = nearContainer.locator(
-      'a, button, [role="button"], img[src*="xls" i], img[src*="excel" i], img[src*="export" i], img[alt*="XLS" i], img[alt*="Excel" i], [title*="XLS" i], [title*="Excel" i], [aria-label*="XLS" i], [aria-label*="Excel" i], [aria-label*="Export" i], [aria-label*="Download" i]',
+      'a, button, [role="button"], img[src*="xls" i], img[src*="excel" i], img[src*="export" i], img[src*="download-excel" i], img[alt*="XLS" i], img[alt*="Excel" i], [title*="XLS" i], [title*="Excel" i], [aria-label*="XLS" i], [aria-label*="Excel" i], [aria-label*="Export" i], [aria-label*="Download" i]',
     );
     const count = await nearCandidates.count();
     for (let i = 0; i < count; i += 1) {
@@ -981,14 +999,19 @@ export async function getTender247XlsLocator(page: Page): Promise<Locator> {
   );
 }
 
-async function firstVisible(locator: Locator): Promise<boolean> {
+async function firstVisibleLocator(locator: Locator): Promise<Locator | null> {
   const count = await locator.count().catch(() => 0);
-  for (let i = 0; i < Math.min(count, 10); i += 1) {
-    if (await locator.nth(i).isVisible().catch(() => false)) {
-      return true;
+  for (let i = 0; i < Math.min(count, 12); i += 1) {
+    const candidate = locator.nth(i);
+    if (await candidate.isVisible().catch(() => false)) {
+      return candidate;
     }
   }
-  return false;
+  return null;
+}
+
+async function firstVisible(locator: Locator): Promise<boolean> {
+  return Boolean(await firstVisibleLocator(locator));
 }
 
 async function describeLocator(locator: Locator): Promise<string> {

@@ -41,8 +41,23 @@ import {
   postJson,
   resolveSessionContext,
 } from "../tender247Batch/apiClient.js";
+import {
+  DEFAULT_TENDER247_SOURCE_REGION,
+  getTender247Source,
+  tender247RegionFromUrl,
+  urlMatchesTender247Region,
+  type Tender247SourceRegion,
+} from "../tender247/sourceRegion.js";
+import { ensureTender247Region } from "./ensureTender247Region.js";
 import type { SearchTenderRow } from "../tender247Batch/types.js";
 
+function resolveDashboardUrl(
+  config: AppConfig,
+  region: Tender247SourceRegion,
+): string {
+  if (region === "GLOBAL") return getTender247Source("GLOBAL").url;
+  return config.tender247Url?.trim() || getTender247Source("INDIAN").url;
+}
 async function lookupSecurityCodeViaSearchApi(options: {
   page: Page;
   context: BrowserContext;
@@ -151,6 +166,7 @@ async function ensureListMailDateForDetailOpen(
   config: AppConfig,
   logger: Logger,
   dateFolder?: string,
+  region: Tender247SourceRegion = DEFAULT_TENDER247_SOURCE_REGION,
 ): Promise<string | null> {
   const requestedDate =
     getActiveTender247RunContext()?.requestedDate ??
@@ -162,8 +178,7 @@ async function ensureListMailDateForDetailOpen(
   await dismissTender247Interruptions(page, logger, config).catch(() => undefined);
   await dismissTender247AdvanceSearchModal(page, logger).catch(() => undefined);
 
-  const dashboardUrl =
-    config.tender247Url?.trim() || "https://www.tender247.com/auth/tender";
+  const dashboardUrl = resolveDashboardUrl(config, region);
 
   const gotoDashboard = async (reason: string): Promise<void> => {
     logger.warn(
@@ -200,8 +215,13 @@ async function ensureListMailDateForDetailOpen(
   };
 
   const tryRestore = async (hardReset: boolean): Promise<string> => {
-    if (hardReset) {
-      await gotoDashboard("mail-date-restore");
+    if (
+      !urlMatchesTender247Region(page.url(), region) ||
+      hardReset
+    ) {
+      await gotoDashboard(
+        hardReset ? "mail-date-restore" : `wrong-region→${region}`,
+      );
     } else {
       // After detail open, Select Mail Date is often gone — return to dashboard
       // without forcing a calendar click when the date is already correct.
@@ -215,7 +235,10 @@ async function ensureListMailDateForDetailOpen(
     }
 
     const currentIso = await readIsoSafe();
-    if (currentIso === requestedDate) {
+    if (
+      currentIso === requestedDate &&
+      urlMatchesTender247Region(page.url(), region)
+    ) {
       logger.info(`TENDER247_DETAIL_MAIL_DATE_OK=${requestedDate}`);
       return requestedDate;
     }
@@ -297,6 +320,7 @@ async function restoreListAndMailDate(
   config: AppConfig,
   logger: Logger,
   dateFolder?: string,
+  region: Tender247SourceRegion = DEFAULT_TENDER247_SOURCE_REGION,
 ): Promise<void> {
   await dismissTender247Interruptions(page, logger, config).catch(() => undefined);
   await dismissTender247AdvanceSearchModal(page, logger).catch(() => undefined);
@@ -306,8 +330,7 @@ async function restoreListAndMailDate(
     (dateFolder ? requestedDateFromDateFolderSafe(dateFolder) : null);
 
   const hardResetDashboard = async (reason: string): Promise<void> => {
-    const dashboardUrl =
-      config.tender247Url?.trim() || "https://www.tender247.com/auth/tender";
+    const dashboardUrl = resolveDashboardUrl(config, region);
     logger.warn(
       `TENDER247_UI_HARD_RESET reason=${reason} url=${dashboardUrl}`,
     );
@@ -341,9 +364,24 @@ async function restoreListAndMailDate(
   } catch {
     beforeIso = null;
   }
-  if (beforeIso === requestedDate) {
+  if (
+    beforeIso === requestedDate &&
+    urlMatchesTender247Region(page.url(), region)
+  ) {
     logger.info(`TENDER247_DETAIL_MAIL_DATE_OK=${requestedDate}`);
     return;
+  }
+  if (!urlMatchesTender247Region(page.url(), region)) {
+    await hardResetDashboard(`wrong-region→${region}`);
+    try {
+      beforeIso = (await readCurrentSelectMailDate(page)).iso;
+    } catch {
+      beforeIso = null;
+    }
+    if (beforeIso === requestedDate) {
+      logger.info(`TENDER247_DETAIL_MAIL_DATE_OK=${requestedDate}`);
+      return;
+    }
   }
   if (!beforeIso) {
     await hardResetDashboard("mail-date-unknown");
@@ -376,13 +414,14 @@ async function restoreListAndMailDate(
       );
       return;
     }
-    await ensureListMailDateForDetailOpen(
-      page,
-      context,
-      config,
-      logger,
-      dateFolder,
-    );
+      await ensureListMailDateForDetailOpen(
+        page,
+        context,
+        config,
+        logger,
+        dateFolder,
+        region,
+      );
   };
 
   try {
@@ -439,6 +478,8 @@ export async function openSingleTenderDirectly(
     phase1ScreeningStatus?: Phase1CrawlStatus | string;
     /** AI-summary-first: allow NO_GO / No Bid detail opens. */
     allowNoBidDetailOpen?: boolean;
+    /** Keep search/open on Indian or Global feed. */
+    sourceRegion?: Tender247SourceRegion;
   },
 ): Promise<OpenSingleTenderResult> {
   const id = requestedT247Id.replace(/\D/g, "");
@@ -448,6 +489,11 @@ export async function openSingleTenderDirectly(
       "Requested T247 ID is empty",
     );
   }
+
+  const sourceRegion =
+    screening?.sourceRegion ||
+    tender247RegionFromUrl(page.url()) ||
+    DEFAULT_TENDER247_SOURCE_REGION;
 
   let status = screening?.phase1ScreeningStatus;
   if (!status && screening?.dateFolder) {
@@ -466,12 +512,24 @@ export async function openSingleTenderDirectly(
 
   await dismissTender247BlockingOverlays(page, logger, config);
   await dismissTender247SupportChat(page, logger);
+  await ensureTender247Region(
+    page,
+    sourceRegion,
+    logger,
+    config.pageTimeoutMs,
+  ).catch((error) => {
+    const msg = error instanceof Error ? error.message : String(error);
+    logger.warn(
+      `TENDER247_REGION_ENSURE_SOFT_FAIL region=${sourceRegion} msg=${msg.slice(0, 160)}`,
+    );
+  });
   await ensureListMailDateForDetailOpen(
     page,
     context,
     config,
     logger,
     screening?.dateFolder,
+    sourceRegion,
   );
 
   let idLocator: Locator;
@@ -498,6 +556,7 @@ export async function openSingleTenderDirectly(
       config,
       logger,
       screening?.dateFolder,
+      sourceRegion,
     );
     await dismissTender247BlockingOverlays(page, logger, config);
     await dismissTender247SupportChat(page, logger);
@@ -538,8 +597,10 @@ export async function openSingleTenderDirectly(
   const openViaSecurityCode = async (
     securityCode: string,
   ): Promise<OpenSingleTenderResult> => {
-    const detailUrl = buildDetailPageUrl(id, securityCode);
-    logger.info(`EXPAND_VIA_API_DETAIL_URL id=${id}`);
+    const detailUrl = buildDetailPageUrl(id, securityCode, null, sourceRegion);
+    logger.info(
+      `EXPAND_VIA_API_DETAIL_URL id=${id} region=${sourceRegion} url=${detailUrl}`,
+    );
     console.log(`EXPAND_VIA_API_DETAIL_URL id=${id}`);
     await page.goto(detailUrl, {
       waitUntil: "domcontentloaded",
@@ -632,6 +693,7 @@ export async function openSingleTenderDirectly(
       config,
       logger,
       screening?.dateFolder,
+      sourceRegion,
     );
 
     const requestedDate =

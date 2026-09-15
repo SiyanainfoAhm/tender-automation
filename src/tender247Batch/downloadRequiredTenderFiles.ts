@@ -40,6 +40,16 @@ import {
   mapCaptureStatusToAiStage,
   saveAiSummaryStage,
 } from "./aiSummaryStage.js";
+import {
+  parseTender247DetailRoute,
+  tender247RegionFromUrl,
+} from "../tender247/sourceRegion.js";
+import {
+  postJson,
+  tenderDocumentListUrl,
+} from "./apiClient.js";
+import type { DownloadedFileRecord } from "../tenderDetails/types.js";
+import { classifyDocumentDownloadFailure } from "../tenderDetails/downloadHelpers.js";
 
 const ARTIFACT_ATTEMPTS = 3;
 
@@ -527,6 +537,28 @@ async function acquireTenderDocuments(options: {
   logger.info(`T247_DOWNLOAD_ALL_DOCUMENTS_FOUND=${allResult.controlFound}`);
   logger.info(`T247_DOWNLOAD_ALL_COMPLETED=${downloadAllSuccess}`);
   logger.info(`T247_DOWNLOAD_ALL_DOCUMENTS_SUCCESS=${downloadAllSuccess}`);
+  if (allResult.failureKind) {
+    logger.info(`T247_DOWNLOAD_ALL_FAILURE_KIND=${allResult.failureKind}`);
+  }
+  if (
+    allResult.failureKind === "DOCUMENT_NOT_AVAILABLE" ||
+    (allResult.failureKind === "PORTAL_ALERT" &&
+      (allResult.responseStatus ?? 0) >= 500)
+  ) {
+    logger.info(
+      `T247_DOCUMENTS_TERMINAL_UNAVAILABLE id=${t247Id} kind=${allResult.failureKind} — closing tender and advancing`,
+    );
+    return {
+      path: null,
+      status: "unavailable",
+      downloadAllAttempted,
+      downloadAllSuccess: false,
+      individualFallbackUsed: false,
+      individualDocsFound: 0,
+      individualDocsSuccess: 0,
+      individualDocsFailed: [],
+    };
+  }
 
   if (downloadAllSuccess && allResult.path) {
     return {
@@ -601,11 +633,44 @@ export async function locateTenderDocumentsSection(
   page: Page,
   logger: { info: (msg: string) => void },
 ): Promise<boolean> {
+  // Headed runs sometimes leave browser zoom <100% so controls look "stuck"
+  // off-layout — reset before scrolling the documents accordion into view.
+  await page
+    .evaluate(() => {
+      const root = document.documentElement as HTMLElement & { style: CSSStyleDeclaration };
+      const body = document.body as HTMLElement & { style: CSSStyleDeclaration };
+      root.style.zoom = "1";
+      body.style.zoom = "1";
+    })
+    .catch(() => undefined);
+  try {
+    const size = page.viewportSize();
+    if (!size || size.width < 1200 || size.height < 800) {
+      await page.setViewportSize({ width: 1400, height: 900 });
+    }
+  } catch {
+    /* viewport may be null in some contexts */
+  }
+
+  if (!/#tenderdocuments/i.test(page.url())) {
+    await page
+      .evaluate(() => {
+        location.hash = "tenderdocuments";
+      })
+      .catch(() => undefined);
+    await page.waitForTimeout(300).catch(() => undefined);
+  }
+
   const header = await tenderDocumentsHeader(page);
   if (!header) {
     return false;
   }
 
+  await header
+    .evaluate((el) => {
+      el.scrollIntoView({ block: "center", inline: "nearest" });
+    })
+    .catch(() => undefined);
   await header.scrollIntoViewIfNeeded().catch(() => undefined);
   const downloadAll = page.getByText(DOWNLOAD_ALL_PHRASE).first();
   const alreadyVisible = await downloadAll.isVisible().catch(() => false);
@@ -614,10 +679,51 @@ export async function locateTenderDocumentsSection(
     if (expanded !== "true") {
       await header.click({ timeout: 5_000 }).catch(() => undefined);
     }
+    await downloadAll
+      .evaluate((el) => {
+        el.scrollIntoView({ block: "center", inline: "nearest" });
+      })
+      .catch(() => undefined);
     await downloadAll.waitFor({ state: "visible", timeout: 8_000 }).catch(() => undefined);
   }
   logger.info("T247_TENDER_DOCUMENTS_SECTION_FOUND=true");
   return true;
+}
+
+async function probeTenderDocumentListCount(options: {
+  detailPage: Page;
+  context: BrowserContext;
+  t247Id: string;
+  logger: Logger;
+}): Promise<number | null> {
+  const route = parseTender247DetailRoute(options.detailPage.url());
+  const securityCode = route?.securityCode;
+  if (!securityCode) return null;
+  try {
+    const envelope = await postJson<unknown>(
+      options.context.request,
+      tenderDocumentListUrl(options.t247Id),
+      { guest_user_id: 0, security_code: securityCode, ip: "" },
+      options.logger,
+    );
+    const data = envelope.Data as unknown;
+    if (Array.isArray(data)) return data.length;
+    if (data && typeof data === "object") {
+      const rows =
+        (data as { documents?: unknown }).documents ??
+        (data as { DocumentList?: unknown }).DocumentList ??
+        (data as { list?: unknown }).list;
+      if (Array.isArray(rows)) return rows.length;
+    }
+    return null;
+  } catch (error) {
+    options.logger.warn(
+      `T247_DOCUMENT_LIST_PROBE_FAILED=${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return null;
+  }
 }
 
 async function downloadAllDocumentsOnce(options: {
@@ -627,11 +733,47 @@ async function downloadAllDocumentsOnce(options: {
   t247Id: string;
   timeoutMs: number;
   logger: Logger;
-}): Promise<{ path: string | null; attempted: boolean; controlFound: boolean }> {
+}): Promise<{
+  path: string | null;
+  attempted: boolean;
+  controlFound: boolean;
+  failureKind?: DownloadedFileRecord["failureKind"] | null;
+  portalAlert?: string | null;
+  responseStatus?: number | null;
+  downloadEndpoint?: string | null;
+  documentListCount?: number | null;
+}> {
   const { detailPage, context, documentsDir, t247Id, timeoutMs, logger } =
     options;
   ensureDir(documentsDir);
+  const detailUrl = detailPage.url();
+  const isGlobal = tender247RegionFromUrl(detailUrl) === "GLOBAL";
+  const route = parseTender247DetailRoute(detailUrl);
+  if (isGlobal) {
+    logger.info(
+      `GLOBAL_DOWNLOAD_START id=${t247Id} url=${detailUrl} securityCode=${route?.securityCode || "missing"}`,
+    );
+    console.log(`GLOBAL_DOWNLOAD_START id=${t247Id}`);
+  }
 
+  const documentListCount = await probeTenderDocumentListCount({
+    detailPage,
+    context,
+    t247Id,
+    logger,
+  });
+  if (documentListCount != null) {
+    logger.info(`T247_DOCUMENT_LIST_COUNT=${documentListCount}`);
+  }
+  // Global document-list API often returns [] even when "Download All Documents"
+  // works in the UI (manual click succeeds). Never skip the UI click for count=0.
+  if (documentListCount === 0) {
+    logger.warn(
+      `T247_DOCUMENT_LIST_EMPTY_HINT id=${t247Id} — still attempting Download All via UI`,
+    );
+  }
+
+  let sessionRetried = false;
   for (let attempt = 1; attempt <= ARTIFACT_ATTEMPTS; attempt += 1) {
     try {
       removeInvalidAllDocumentsArtifacts(documentsDir);
@@ -641,6 +783,7 @@ async function downloadAllDocumentsOnce(options: {
           path: canonicalZipPath(documentsDir),
           attempted: true,
           controlFound: true,
+          documentListCount,
         };
       }
 
@@ -650,16 +793,39 @@ async function downloadAllDocumentsOnce(options: {
       if (!control) {
         logger.info("T247_DOWNLOAD_ALL_FOUND=false");
         if (attempt < ARTIFACT_ATTEMPTS) {
-          await detailPage.waitForTimeout(1500 * attempt).catch(() => undefined);
+          await detailPage
+            .waitForTimeout(1500 * attempt)
+            .catch(() => undefined);
           continue;
         }
         t247Event(logger, t247Id, "DOWNLOAD_ALL_NOT_AVAILABLE");
-        return { path: null, attempted: true, controlFound: false };
+        if (isGlobal) {
+          logger.info(
+            `GLOBAL_DOCUMENT_NOT_AVAILABLE id=${t247Id} reason=download_all_control_missing`,
+          );
+        }
+        return {
+          path: null,
+          attempted: true,
+          controlFound: false,
+          failureKind: "DOCUMENT_NOT_AVAILABLE",
+          documentListCount,
+        };
       }
 
       logger.info("T247_DOWNLOAD_ALL_FOUND=true");
       logger.info(`T247_DOWNLOAD_ALL_ATTEMPT=${attempt}`);
       t247Event(logger, t247Id, "DOWNLOAD_ALL_LOCATING");
+      if (isGlobal) {
+        logger.info(
+          `GLOBAL_DOWNLOAD_BUTTON_FOUND id=${t247Id} attempt=${attempt}`,
+        );
+      }
+      await control
+        .evaluate((el) => {
+          el.scrollIntoView({ block: "center", inline: "nearest" });
+        })
+        .catch(() => undefined);
       await control.scrollIntoViewIfNeeded().catch(() => undefined);
       await control.waitFor({ state: "visible", timeout: 15_000 });
 
@@ -667,8 +833,14 @@ async function downloadAllDocumentsOnce(options: {
         page: detailPage,
         context,
         clickTarget: async () => {
+          await control
+            .evaluate((el) => {
+              el.scrollIntoView({ block: "center", inline: "nearest" });
+            })
+            .catch(() => undefined);
           await control.scrollIntoViewIfNeeded().catch(() => undefined);
-          await control.click({ timeout: 15_000 });
+          // force:true helps when zoom/layout leaves the control barely hit-testable
+          await control.click({ timeout: 15_000, force: true });
         },
         destinationDir: documentsDir,
         preferredBaseName: "Tender_All_Documents",
@@ -677,20 +849,99 @@ async function downloadAllDocumentsOnce(options: {
         kind: "document",
         linkText: "Download All Documents",
         t247Id,
+        capturePortalFailures: true,
       });
 
       if (record.status !== "success" || !record.finalFilename) {
-        throw new Error(record.error || "Download All Documents failed");
+        const failureKind =
+          record.failureKind ||
+          classifyDocumentDownloadFailure({
+            portalAlert: record.portalAlert,
+            error: record.error,
+            responseStatus: record.responseStatus,
+            downloadEndpoint: record.downloadEndpoint,
+          });
+        if (isGlobal) {
+          logger.warn(
+            `GLOBAL_DOWNLOAD_FAILED id=${t247Id} attempt=${attempt} kind=${failureKind} status=${record.responseStatus ?? "n/a"} endpoint=${(record.downloadEndpoint || "").slice(0, 180)} error=${(record.error || "").slice(0, 180)}`,
+          );
+        }
+
+        if (
+          failureKind === "AUTH_SESSION" &&
+          !sessionRetried
+        ) {
+          sessionRetried = true;
+          logger.warn(
+            `T247_DOWNLOAD_SESSION_REFRESH id=${t247Id} attempt=${attempt}`,
+          );
+          await detailPage
+            .reload({ waitUntil: "domcontentloaded", timeout: timeoutMs })
+            .catch(() => undefined);
+          await dismissTender247Interruptions(detailPage, logger).catch(
+            () => undefined,
+          );
+          continue;
+        }
+
+        if (
+          failureKind === "DOCUMENT_NOT_AVAILABLE" ||
+          (failureKind === "PORTAL_ALERT" &&
+            (record.responseStatus ?? 0) >= 500)
+        ) {
+          if (isGlobal) {
+            logger.info(
+              `GLOBAL_DOCUMENT_NOT_AVAILABLE id=${t247Id} reason=portal_http_${record.responseStatus ?? "alert"} — advance to next tender`,
+            );
+          }
+          t247Event(logger, t247Id, "DOCUMENT_NOT_AVAILABLE");
+          return {
+            path: null,
+            attempted: true,
+            controlFound: true,
+            failureKind: "DOCUMENT_NOT_AVAILABLE",
+            portalAlert: record.portalAlert,
+            responseStatus: record.responseStatus,
+            downloadEndpoint: record.downloadEndpoint,
+            documentListCount,
+          };
+        }
+
+        throw Object.assign(
+          new Error(record.error || "Download All Documents failed"),
+          {
+            failureKind,
+            portalAlert: record.portalAlert,
+            responseStatus: record.responseStatus,
+            downloadEndpoint: record.downloadEndpoint,
+          },
+        );
       }
 
+      // Click is not success — require valid non-empty file.
       logger.info("T247_DOWNLOAD_ALL_EVENT_RECEIVED=true");
-
       const canonicalPath = path.join(documentsDir, record.finalFilename);
-      if (!isValidArtifact(canonicalPath)) {
+      const size = record.sizeBytes || 0;
+      if (!isValidArtifact(canonicalPath) || size <= 0) {
         throw new Error("Download All Documents file empty after save");
       }
       logger.info(`T247_DOWNLOAD_ALL_COMPLETED=true`);
-      return { path: canonicalPath, attempted: true, controlFound: true };
+      logger.info(
+        `T247_DOWNLOAD_ALL_FILE filename=${record.finalFilename} size=${size}`,
+      );
+      if (isGlobal) {
+        logger.info(
+          `GLOBAL_DOWNLOAD_SUCCESS id=${t247Id} filename=${record.finalFilename} size=${size} url=${detailUrl}`,
+        );
+      }
+      return {
+        path: canonicalPath,
+        attempted: true,
+        controlFound: true,
+        documentListCount,
+        responseStatus: record.responseStatus,
+        downloadEndpoint: record.downloadEndpoint,
+      };
     } catch (error) {
       if (
         error instanceof AutomationError &&
@@ -698,12 +949,71 @@ async function downloadAllDocumentsOnce(options: {
       ) {
         throw error;
       }
+      const errObj = error as {
+        message?: string;
+        failureKind?: DownloadedFileRecord["failureKind"];
+        portalAlert?: string | null;
+        responseStatus?: number | null;
+        downloadEndpoint?: string | null;
+      };
+      const failureKind =
+        errObj.failureKind ||
+        classifyDocumentDownloadFailure({
+          portalAlert: errObj.portalAlert,
+          error: errObj.message || String(error),
+          responseStatus: errObj.responseStatus,
+          downloadEndpoint: errObj.downloadEndpoint,
+        });
       logger.warn(
         `Download All Documents attempt ${attempt}/${ARTIFACT_ATTEMPTS}: ${
           error instanceof Error ? error.message : String(error)
-        }`,
+        } kind=${failureKind}`,
       );
       logger.info("T247_DOWNLOAD_ALL_NO_EVENT_OR_SAVE_FAILED=true");
+      if (isGlobal) {
+        logger.warn(
+          `GLOBAL_DOWNLOAD_FAILED id=${t247Id} attempt=${attempt} kind=${failureKind}`,
+        );
+      }
+
+      if (
+        failureKind === "DOCUMENT_NOT_AVAILABLE" ||
+        (failureKind === "PORTAL_ALERT" &&
+          (errObj.responseStatus ?? 0) >= 500)
+      ) {
+        if (isGlobal) {
+          logger.info(
+            `GLOBAL_DOCUMENT_NOT_AVAILABLE id=${t247Id} reason=portal_http_${errObj.responseStatus ?? "alert"} — advance to next tender`,
+          );
+        }
+        t247Event(logger, t247Id, "DOCUMENT_NOT_AVAILABLE");
+        return {
+          path: null,
+          attempted: true,
+          controlFound: true,
+          failureKind: "DOCUMENT_NOT_AVAILABLE",
+          portalAlert: errObj.portalAlert ?? null,
+          responseStatus: errObj.responseStatus ?? null,
+          downloadEndpoint: errObj.downloadEndpoint ?? null,
+          documentListCount,
+        };
+      }
+
+      if (
+        failureKind === "AUTH_SESSION" &&
+        !sessionRetried
+      ) {
+        sessionRetried = true;
+        logger.warn(`T247_DOWNLOAD_SESSION_REFRESH id=${t247Id}`);
+        // Soft navigate reload of detail to refresh cookies.
+        await detailPage
+          .reload({ waitUntil: "domcontentloaded", timeout: timeoutMs })
+          .catch(() => undefined);
+        await dismissTender247Interruptions(detailPage, logger).catch(
+          () => undefined,
+        );
+      }
+
       await dismissTender247Interruptions(detailPage, logger).catch((err) => {
         if (
           err instanceof AutomationError &&
@@ -713,12 +1023,40 @@ async function downloadAllDocumentsOnce(options: {
         }
       });
       if (attempt >= ARTIFACT_ATTEMPTS) {
-        return { path: null, attempted: true, controlFound: true };
+        // DOCUMENT_NOT_AVAILABLE already returned above; remaining kinds retry out.
+        const finalKind =
+          documentListCount === 0
+            ? "DOCUMENT_NOT_AVAILABLE"
+            : failureKind === "PORTAL_ALERT"
+              ? "TEMPORARY_FAILURE"
+              : failureKind;
+        if (finalKind === "DOCUMENT_NOT_AVAILABLE" && isGlobal) {
+          logger.info(
+            `GLOBAL_DOCUMENT_NOT_AVAILABLE id=${t247Id} reason=retries_exhausted`,
+          );
+          t247Event(logger, t247Id, "DOCUMENT_NOT_AVAILABLE");
+        }
+        return {
+          path: null,
+          attempted: true,
+          controlFound: true,
+          failureKind: finalKind,
+          portalAlert: errObj.portalAlert ?? null,
+          responseStatus: errObj.responseStatus ?? null,
+          downloadEndpoint: errObj.downloadEndpoint ?? null,
+          documentListCount,
+        };
       }
-      await detailPage.waitForTimeout(1000 * attempt).catch(() => undefined);
+      const backoffMs = Math.min(12_000, 1500 * 2 ** (attempt - 1));
+      await detailPage.waitForTimeout(backoffMs).catch(() => undefined);
     }
   }
-  return { path: null, attempted: true, controlFound: false };
+  return {
+    path: null,
+    attempted: true,
+    controlFound: false,
+    documentListCount,
+  };
 }
 
 async function controlLabel(locator: Locator): Promise<string> {

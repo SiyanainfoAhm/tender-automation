@@ -197,8 +197,11 @@ export function buildDetailPageUrl(
   t247Id: string,
   securityCode: string,
   submissionEndDate?: string | null,
+  region: "INDIAN" | "GLOBAL" = "INDIAN",
 ): string {
-  const base = `https://www.tender247.com/auth/tender/${t247Id}/${securityCode}`;
+  const prefix =
+    region === "GLOBAL" ? "/auth/globaltender" : "/auth/tender";
+  const base = `https://www.tender247.com${prefix}/${t247Id}/${securityCode}`;
   if (submissionEndDate) {
     return `${base}?tesd=${encodeURIComponent(submissionEndDate)}`;
   }

@@ -30,6 +30,10 @@ import { Logger, safeErrorMessage } from "../logger.js";
 import { loadPrescreenConfig } from "../prescreen/prescreenConfig.js";
 import { downloadTender247DailyExcel } from "../sources/tender247.js";
 import {
+  DEFAULT_TENDER247_SOURCE_REGION,
+  type Tender247SourceRegion,
+} from "../tender247/sourceRegion.js";
+import {
   applyExcelEarlyFinancialFilter,
   type ExcelEarlyFilterSummary,
 } from "../tender247Batch/excelEarlyFinancialFilter.js";
@@ -39,6 +43,7 @@ import {
   loginToTender247,
   persistAuthState,
 } from "../tenderDetails/ensureTender247LoggedIn.js";
+import { ensureTender247Region } from "../tenderDetails/ensureTender247Region.js";
 import { dismissTender247BlockingOverlays } from "../tenderDetails/dismissPromotionalPopups.js";
 import { dismissTender247SupportChat } from "../tenderDetails/dismissSupportChat.js";
 import { writeExcelFilterReviewOutputs } from "./writeExcelFilterReview.js";
@@ -117,7 +122,10 @@ export async function downloadTodayExcel(options: {
   dateFolder: string;
   logger: Logger;
   dateIso: string;
+  /** Defaults to INDIAN — pass GLOBAL for Tender247 Global list/Excel. */
+  region?: Tender247SourceRegion;
 }): Promise<string> {
+  const region = options.region || DEFAULT_TENDER247_SOURCE_REGION;
   const config = loadConfig();
   const authPath = resolveTender247AuthPath(config);
   if (!authPath) {
@@ -141,6 +149,8 @@ export async function downloadTodayExcel(options: {
 
   options.logger.info(`BROWSER_BOOTSTRAP_DATE=${options.dateIso}`);
   console.log(`BROWSER_BOOTSTRAP_DATE=${options.dateIso}`);
+  options.logger.info(`TENDER247_SOURCE_REGION=${region}`);
+  console.log(`TENDER247_SOURCE_REGION=${region}`);
   options.logger.info(`OUTPUT_DIRECTORY_DATE=${options.dateIso}`);
   console.log(`OUTPUT_DIRECTORY_DATE=${options.dateIso}`);
   options.logger.info(`EXCEL_DOWNLOAD_REQUESTED_DATE=${options.dateIso}`);
@@ -162,7 +172,9 @@ export async function downloadTodayExcel(options: {
     await dismissTender247BlockingOverlays(page, options.logger, config);
     await dismissTender247SupportChat(page, options.logger);
 
-    // Date selection is the LAST UI mutation before XLS — after login/nav/dismiss.
+    // Open the region feed URL (Indian /auth/tender or Global /auth/globaltender).
+    await ensureTender247Region(page, region, options.logger, config.pageTimeoutMs);
+
     const mailDate = await ensureTender247FreshListForDate(
       page,
       options.dateIso,
@@ -176,6 +188,8 @@ export async function downloadTodayExcel(options: {
       `TENDER247_SELECTED_MAIL_DATE=${mailDate.selectedMailDateIso}`,
     );
     console.log(`TENDER247_SELECTED_MAIL_DATE=${mailDate.selectedMailDateIso}`);
+    options.logger.info(`TENDER247_SOURCE_FEED_URL=${page.url()} region=${region}`);
+    console.log(`TENDER247_SOURCE_FEED_URL=${page.url()} region=${region}`);
 
     options.logger.info("TENDER247_DAILY_EXCEL_DOWNLOAD_START");
     console.log("TENDER247_DAILY_EXCEL_DOWNLOAD_START");
@@ -185,6 +199,7 @@ export async function downloadTodayExcel(options: {
       options.dateFolder,
       options.logger,
       options.dateIso,
+      { region },
     );
 
     const savedBase = path.basename(excelPath);

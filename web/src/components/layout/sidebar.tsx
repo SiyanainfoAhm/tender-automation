@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ChevronLeft, Layers, LogOut } from "lucide-react";
+import { ChevronDown, ChevronLeft, Layers, LogOut } from "lucide-react";
+import * as React from "react";
 
 import { cn } from "@/lib/utils";
 import type { UserRole } from "@/lib/validations";
@@ -17,6 +18,7 @@ import {
 import {
   APP_BOTTOM_NAV,
   APP_MAIN_NAV,
+  isTendersNavActive,
   type NavCountKey,
 } from "@/components/layout/nav-items";
 import { companyRoleLabel } from "@/lib/company/types";
@@ -43,16 +45,24 @@ type AppSidebarProps = {
   collapsed: boolean;
   onToggle: () => void;
   tenderCount?: number | null;
+  indianTenderCount?: number | null;
+  globalTenderCount?: number | null;
   wonTenderCount?: number | null;
 };
 
 function navItemCount(
   countKey: NavCountKey | undefined,
-  tenderCount: number | null,
-  wonTenderCount: number | null,
+  counts: {
+    tenders: number | null;
+    indian: number | null;
+    global: number | null;
+    won: number | null;
+  },
 ): number | null {
-  if (countKey === "wonTenders") return wonTenderCount;
-  return tenderCount;
+  if (countKey === "wonTenders") return counts.won;
+  if (countKey === "indianTenders") return counts.indian;
+  if (countKey === "globalTenders") return counts.global;
+  return counts.tenders;
 }
 
 function NavLink({
@@ -62,6 +72,7 @@ function NavLink({
   collapsed,
   active,
   count,
+  indented,
 }: {
   href: string;
   label: string;
@@ -69,6 +80,7 @@ function NavLink({
   collapsed: boolean;
   active: boolean;
   count?: number | null;
+  indented?: boolean;
 }) {
   const link = (
     <Link
@@ -79,6 +91,7 @@ function NavLink({
           ? "bg-primary-50 text-primary-700"
           : "text-text-secondary hover:bg-surface-muted hover:text-text-primary",
         collapsed && "justify-center px-0",
+        indented && !collapsed && "pl-9",
       )}
     >
       <Icon className="size-[18px] shrink-0" />
@@ -112,11 +125,18 @@ export function AppSidebar({
   collapsed,
   onToggle,
   tenderCount = null,
+  indianTenderCount = null,
+  globalTenderCount = null,
   wonTenderCount = null,
 }: AppSidebarProps) {
   const pathname = usePathname();
-  // Hydration-safe: SSR/hydrate use `/tenders`; client then adopts sessionStorage.
   const tendersHref = useTendersListReturnHref();
+  const counts = {
+    tenders: tenderCount,
+    indian: indianTenderCount,
+    global: globalTenderCount,
+    won: wonTenderCount,
+  };
   const mainItems = APP_MAIN_NAV.filter((item) => {
     if (item.permission) {
       return roleHasPermission(user.role, item.permission as PermissionKey);
@@ -125,6 +145,12 @@ export function AppSidebar({
     return true;
   });
   const bottomItems = APP_BOTTOM_NAV;
+  const tendersOpenDefault = isTendersNavActive(pathname);
+  const [tendersOpen, setTendersOpen] = React.useState(tendersOpenDefault);
+
+  React.useEffect(() => {
+    if (isTendersNavActive(pathname)) setTendersOpen(true);
+  }, [pathname]);
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -163,28 +189,98 @@ export function AppSidebar({
               </p>
             ) : null}
             {mainItems.map((item) => {
-              const href =
+              const hasChildren = Boolean(item.children?.length);
+              if (!hasChildren) {
+                const active =
+                  pathname === item.href ||
+                  pathname.startsWith(`${item.href}/`);
+                return (
+                  <NavLink
+                    key={item.href}
+                    href={item.href}
+                    label={item.label}
+                    icon={item.icon}
+                    collapsed={collapsed}
+                    active={active}
+                    count={
+                      item.showCount
+                        ? navItemCount(item.countKey, counts)
+                        : null
+                    }
+                  />
+                );
+              }
+
+              // Tenders group with Indian / Global children
+              const childMatch = item.children!.some(
+                (child) => pathname === child.href,
+              );
+              const parentActive =
+                isTendersNavActive(pathname) && !childMatch;
+              const parentHref =
                 item.href === "/tenders" ? tendersHref : item.href;
-              const active =
-                item.href === "/tenders"
-                  ? pathname === "/tenders" ||
-                    pathname.startsWith("/tenders/")
-                  : pathname === item.href ||
-                    pathname.startsWith(`${item.href}/`);
+              const showChildren = !collapsed && tendersOpen;
+
               return (
-                <NavLink
-                  key={item.href}
-                  href={href}
-                  label={item.label}
-                  icon={item.icon}
-                  collapsed={collapsed}
-                  active={active}
-                  count={
-                    item.showCount
-                      ? navItemCount(item.countKey, tenderCount, wonTenderCount)
-                      : null
-                  }
-                />
+                <div key={item.href} className="space-y-0.5">
+                  <div className="flex items-center gap-0.5">
+                    <div className="min-w-0 flex-1">
+                      <NavLink
+                        href={parentHref}
+                        label={item.label}
+                        icon={item.icon}
+                        collapsed={collapsed}
+                        active={parentActive}
+                        count={
+                          item.showCount
+                            ? navItemCount(item.countKey, counts)
+                            : null
+                        }
+                      />
+                    </div>
+                    {!collapsed ? (
+                      <button
+                        type="button"
+                        aria-label={
+                          tendersOpen
+                            ? "Collapse Tenders menu"
+                            : "Expand Tenders menu"
+                        }
+                        aria-expanded={tendersOpen}
+                        onClick={() => setTendersOpen((open) => !open)}
+                        className="flex size-8 shrink-0 items-center justify-center rounded-md text-text-secondary hover:bg-surface-muted hover:text-text-primary"
+                      >
+                        <ChevronDown
+                          className={cn(
+                            "size-4 transition-transform",
+                            !tendersOpen && "-rotate-90",
+                          )}
+                        />
+                      </button>
+                    ) : null}
+                  </div>
+                  {showChildren
+                    ? item.children!.map((child) => {
+                        const childActive = pathname === child.href;
+                        return (
+                          <NavLink
+                            key={child.href}
+                            href={child.href}
+                            label={child.label}
+                            icon={child.icon}
+                            collapsed={false}
+                            active={childActive}
+                            indented
+                            count={
+                              child.showCount
+                                ? navItemCount(child.countKey, counts)
+                                : null
+                            }
+                          />
+                        );
+                      })
+                    : null}
+                </div>
               );
             })}
           </div>

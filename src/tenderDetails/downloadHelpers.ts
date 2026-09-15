@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { BrowserContext, Download, Page } from "playwright";
+import type { BrowserContext, Dialog, Download, Page, Response } from "playwright";
 import type { Logger } from "../logger.js";
 import { ensureDir } from "../fileUtils.js";
 import { dismissTender247Interruptions } from "./dismissTender247Interruptions.js";
@@ -13,6 +13,7 @@ import {
 } from "./tenderFolder.js";
 import type { DownloadedFileRecord } from "./types.js";
 import { correctArtifactFileExtension } from "../tender247Batch/detectDownloadedKind.js";
+import { tender247RegionFromUrl } from "../tender247/sourceRegion.js";
 
 export interface DownloadClickOptions {
   page: Page;
@@ -30,6 +31,8 @@ export interface DownloadClickOptions {
   publishedDate?: string | null;
   corrigendumType?: string | null;
   t247Id?: string;
+  /** Extra Global/Download-All diagnostics. */
+  capturePortalFailures?: boolean;
 }
 
 const activeDownloadPromises = new Set<Promise<unknown>>();
@@ -49,6 +52,57 @@ export async function waitForAllActiveDownloads(): Promise<void> {
     return;
   }
   await Promise.all(pending);
+}
+
+export function classifyDocumentDownloadFailure(input: {
+  portalAlert?: string | null;
+  error?: string | null;
+  responseStatus?: number | null;
+  downloadEndpoint?: string | null;
+}): NonNullable<DownloadedFileRecord["failureKind"]> {
+  const alert = String(input.portalAlert || "");
+  const err = String(input.error || "");
+  const combined = `${alert} ${err}`.toLowerCase();
+  const status = input.responseStatus ?? 0;
+  const endpoint = String(input.downloadEndpoint || "").toLowerCase();
+
+  if (
+    /no\s+document|document\s+not\s+available|not\s+available|no\s+file\s+found|documents?\s+missing/i.test(
+      combined,
+    )
+  ) {
+    return "DOCUMENT_NOT_AVAILABLE";
+  }
+  if (status === 401 || status === 403 || /unauthor|session|login|auth/i.test(combined)) {
+    return "AUTH_SESSION";
+  }
+  // Global download-document-all HTTP 500 (+ optional portal alert) = no archive.
+  // Do not keep retrying / waiting — close tender and move on.
+  if (
+    status >= 500 &&
+    /download-document-all|downloaddocument\/global|download-document/i.test(
+      endpoint,
+    )
+  ) {
+    return "DOCUMENT_NOT_AVAILABLE";
+  }
+  if (
+    /failed to download file/i.test(combined) &&
+    (status >= 500 ||
+      /download-document-all|downloaddocument\/global/i.test(endpoint))
+  ) {
+    return "DOCUMENT_NOT_AVAILABLE";
+  }
+  if (/failed to download file/i.test(combined)) {
+    return "PORTAL_ALERT";
+  }
+  if (/empty|DOWNLOADED_FILE_EMPTY/i.test(combined)) {
+    return "EMPTY_FILE";
+  }
+  if (/no download event|no download/i.test(combined)) {
+    return "NO_DOWNLOAD_EVENT";
+  }
+  return "TEMPORARY_FAILURE";
 }
 
 /**
@@ -74,6 +128,10 @@ export async function clickAndSaveDownload(
 
   ensureDir(destinationDir);
   const urlBefore = page.url();
+  const isGlobal = tender247RegionFromUrl(urlBefore) === "GLOBAL";
+  const isDownloadAll = /download\s+all\s+documents/i.test(linkText);
+  const capturePortalFailures =
+    options.capturePortalFailures === true || isGlobal || isDownloadAll;
   const saveOpts = {
     destinationDir,
     preferredBaseName,
@@ -87,72 +145,209 @@ export async function clickAndSaveDownload(
     t247Id: options.t247Id,
   };
 
-  await dismissInterruptionsBeforeClick(page, logger);
+  const portalState: {
+    alert: string | null;
+    lastResponse: { url: string; status: number } | null;
+  } = {
+    alert: null,
+    lastResponse: null,
+  };
 
-  const download = await clickAndWaitForPlaywrightDownload({
-    page,
-    context,
-    timeoutMs,
-    clickTarget: async () => {
-      await clickTarget();
-      if (/download\s+all\s+documents/i.test(linkText)) {
-        logDownload(logger, options.t247Id, "DOWNLOAD_ALL_CLICKED");
-      }
-    },
-  });
-
-  if (download) {
-    logDownload(logger, options.t247Id, "DOWNLOAD_EVENT_RECEIVED");
-    logDownload(logger, options.t247Id, "DOWNLOAD_SAVE_START");
-    const saved = await trackDownloadPromise(
-      savePlaywrightDownload(download, saveOpts),
+  const onDialog = (dialog: Dialog): void => {
+    const msg = dialog.message() || "";
+    portalState.alert = msg;
+    logDownload(
+      logger,
+      options.t247Id,
+      `DOWNLOAD_PORTAL_ALERT message=${msg.slice(0, 200)}`,
     );
-    const failure = await download.failure();
-    if (failure) {
-      return failedRecord(
-        kind,
-        linkText,
-        `Tender247 Download All failed: ${failure}`,
-        options,
+    if (isGlobal) {
+      logDownload(
+        logger,
+        options.t247Id,
+        `GLOBAL_DOWNLOAD_FAILED reason=portal_alert message=${msg.slice(0, 160)}`,
       );
     }
-    logDownload(logger, options.t247Id, "DOWNLOAD_SAVE_DONE");
-    return saved;
-  }
+    void dialog.accept().catch(() => undefined);
+  };
+
+  const onResponse = (response: Response): void => {
+    const u = response.url();
+    const lower = u.toLowerCase();
+    if (
+      !/download|document|zip|blob|file|attachment/i.test(lower) ||
+      /analytics|telemetry|hotjar|gtm|google-analytics|facebook/i.test(lower)
+    ) {
+      return;
+    }
+    portalState.lastResponse = { url: u, status: response.status() };
+    logDownload(
+      logger,
+      options.t247Id,
+      `DOWNLOAD_NETWORK_RESPONSE status=${response.status()} url=${u.slice(0, 220)}`,
+    );
+    if (isGlobal) {
+      logDownload(
+        logger,
+        options.t247Id,
+        `GLOBAL_DOWNLOAD_REQUEST status=${response.status()} url=${u.slice(0, 220)}`,
+      );
+    }
+  };
 
   await dismissInterruptionsBeforeClick(page, logger);
-  const urlAfter = page.url();
-  if (urlAfter !== urlBefore && looksLikeDocumentUrl(urlAfter)) {
-    logDownload(logger, options.t247Id, "DOWNLOAD_SAVE_START");
-    const saved = await saveUrlResponse(page, urlAfter, {
-      ...saveOpts,
-      preferredExtension:
-        preferredExtension || guessExtensionFromUrl(urlAfter) || "pdf",
-    });
-    logDownload(logger, options.t247Id, "DOWNLOAD_SAVE_DONE");
-    return saved;
+
+  if (capturePortalFailures) {
+    page.on("dialog", onDialog);
+    page.on("response", onResponse);
   }
 
-  return failedRecord(
-    kind,
-    linkText,
-    "No download event, popup, or file response detected after click",
-    options,
-  );
+  try {
+    const download = await clickAndWaitForPlaywrightDownload({
+      page,
+      context,
+      timeoutMs,
+      shouldAbort: () => {
+        if (portalState.alert && /failed to download/i.test(portalState.alert)) {
+          return true;
+        }
+        const last = portalState.lastResponse;
+        if (
+          last &&
+          last.status >= 500 &&
+          /download-document-all|downloaddocument\/global|download-document/i.test(
+            last.url,
+          )
+        ) {
+          return true;
+        }
+        return false;
+      },
+      clickTarget: async () => {
+        await clickTarget();
+        if (isDownloadAll) {
+          logDownload(logger, options.t247Id, "DOWNLOAD_ALL_CLICKED");
+          if (isGlobal) {
+            logDownload(logger, options.t247Id, "GLOBAL_DOWNLOAD_CLICKED");
+          }
+        }
+      },
+    });
+
+    const portalAlert = portalState.alert;
+    const lastDownloadResponse = portalState.lastResponse;
+
+    if (download) {
+      logDownload(logger, options.t247Id, "DOWNLOAD_EVENT_RECEIVED");
+      logDownload(logger, options.t247Id, "DOWNLOAD_SAVE_START");
+      const saved = await trackDownloadPromise(
+        savePlaywrightDownload(download, saveOpts),
+      );
+      const failure = await download.failure();
+      if (failure || portalAlert) {
+        const error =
+          failure ||
+          (portalAlert
+            ? `Tender247 portal alert: ${portalAlert}`
+            : "Download failed");
+        const failureKind = classifyDocumentDownloadFailure({
+          portalAlert,
+          error,
+          responseStatus: lastDownloadResponse?.status,
+          downloadEndpoint: lastDownloadResponse?.url || download.url(),
+        });
+        return failedRecord(kind, linkText, error, {
+          ...options,
+          failureKind,
+          portalAlert,
+          downloadEndpoint: lastDownloadResponse?.url || download.url(),
+          responseStatus: lastDownloadResponse?.status ?? null,
+        });
+      }
+      if (saved.status !== "success" || saved.sizeBytes <= 0) {
+        const failureKind = classifyDocumentDownloadFailure({
+          portalAlert,
+          error: saved.error || "EMPTY_FILE",
+          responseStatus: lastDownloadResponse?.status,
+          downloadEndpoint: lastDownloadResponse?.url || download.url(),
+        });
+        return {
+          ...saved,
+          status: "failed",
+          error: saved.error || "DOWNLOADED_FILE_EMPTY",
+          failureKind,
+          portalAlert,
+          downloadEndpoint: lastDownloadResponse?.url || download.url(),
+          responseStatus: lastDownloadResponse?.status ?? null,
+        };
+      }
+      logDownload(logger, options.t247Id, "DOWNLOAD_SAVE_DONE");
+      if (isGlobal && isDownloadAll) {
+        logDownload(
+          logger,
+          options.t247Id,
+          `GLOBAL_DOWNLOAD_SUCCESS filename=${saved.finalFilename} size=${saved.sizeBytes} url=${urlBefore}`,
+        );
+      }
+      return {
+        ...saved,
+        downloadEndpoint: lastDownloadResponse?.url || download.url(),
+        responseStatus: lastDownloadResponse?.status ?? null,
+      };
+    }
+
+    await dismissInterruptionsBeforeClick(page, logger);
+    const urlAfter = page.url();
+    if (urlAfter !== urlBefore && looksLikeDocumentUrl(urlAfter)) {
+      logDownload(logger, options.t247Id, "DOWNLOAD_SAVE_START");
+      const saved = await saveUrlResponse(page, urlAfter, {
+        ...saveOpts,
+        preferredExtension:
+          preferredExtension || guessExtensionFromUrl(urlAfter) || "pdf",
+      });
+      logDownload(logger, options.t247Id, "DOWNLOAD_SAVE_DONE");
+      return saved;
+    }
+
+    const error = portalAlert
+      ? `Tender247 portal alert: ${portalAlert}`
+      : "No download event, popup, or file response detected after click";
+    const failureKind = classifyDocumentDownloadFailure({
+      portalAlert,
+      error,
+      responseStatus: lastDownloadResponse?.status,
+      downloadEndpoint: lastDownloadResponse?.url,
+    });
+    return failedRecord(kind, linkText, error, {
+      ...options,
+      failureKind,
+      portalAlert,
+      downloadEndpoint: lastDownloadResponse?.url ?? null,
+      responseStatus: lastDownloadResponse?.status ?? null,
+    });
+  } finally {
+    if (capturePortalFailures) {
+      page.off("dialog", onDialog);
+      page.off("response", onResponse);
+    }
+  }
 }
 
 /**
  * Arm Playwright's download listener, then click. A popup/new tab is only
  * another source of a `download` event — never completion by itself.
+ * `shouldAbort` lets portal alerts / HTTP 500 end the wait immediately.
  */
 export async function clickAndWaitForPlaywrightDownload(options: {
   page: Page;
   context: BrowserContext;
   timeoutMs: number;
   clickTarget: () => Promise<void>;
+  shouldAbort?: () => boolean;
 }): Promise<Download | null> {
-  const { page, context, timeoutMs, clickTarget } = options;
+  const { page, context, timeoutMs, clickTarget, shouldAbort } = options;
   let popupDownload: Download | null = null;
+  let pageDownload: Download | null = null;
   const onPage = (popup: Page): void => {
     void popup
       .waitForEvent("download", { timeout: timeoutMs })
@@ -165,15 +360,27 @@ export async function clickAndWaitForPlaywrightDownload(options: {
   try {
     const pageDownloadPromise = page
       .waitForEvent("download", { timeout: timeoutMs })
+      .then((download) => {
+        pageDownload = download;
+        return download;
+      })
       .catch(() => null);
     await clickTarget();
-    const download = (await pageDownloadPromise) || popupDownload;
-    if (download) return download;
-    const deadline = Date.now() + 2_000;
-    while (!popupDownload && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 50));
+
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (pageDownload || popupDownload) {
+        return pageDownload || popupDownload;
+      }
+      if (shouldAbort?.()) {
+        return null;
+      }
+      await Promise.race([
+        pageDownloadPromise,
+        new Promise((r) => setTimeout(r, 120)),
+      ]);
     }
-    return popupDownload;
+    return pageDownload || popupDownload;
   } finally {
     context.off("page", onPage);
   }
@@ -521,7 +728,14 @@ function failedRecord(
   kind: DownloadedFileRecord["kind"],
   linkText: string,
   error: string,
-  opts: { publishedDate?: string | null; corrigendumType?: string | null },
+  opts: {
+    publishedDate?: string | null;
+    corrigendumType?: string | null;
+    failureKind?: DownloadedFileRecord["failureKind"];
+    portalAlert?: string | null;
+    downloadEndpoint?: string | null;
+    responseStatus?: number | null;
+  },
 ): DownloadedFileRecord {
   return {
     kind,
@@ -534,6 +748,10 @@ function failedRecord(
     error,
     publishedDate: opts.publishedDate ?? null,
     corrigendumType: opts.corrigendumType ?? null,
+    failureKind: opts.failureKind,
+    portalAlert: opts.portalAlert ?? null,
+    downloadEndpoint: opts.downloadEndpoint ?? null,
+    responseStatus: opts.responseStatus ?? null,
   };
 }
 

@@ -118,6 +118,8 @@ import type {
   WebTenderListRow,
 } from "@/server/repositories/tenderRepository";
 
+type TenderListRegion = "INDIAN" | "GLOBAL";
+
 type TenderExplorerProps = {
   categories: TenderExplorerFacet[];
   portals: Array<"TENDER247" | "BIDASSIST" | "MANUAL">;
@@ -127,6 +129,8 @@ type TenderExplorerProps = {
   statusCounts: TenderListStatusCounts | null;
   /** Non-status filter key used when SSR loaded `statusCounts`. */
   statusCountsFilterKey?: string;
+  /** Path-locked region (`/tenders/indian` | `/tenders/global`). */
+  lockedRegion: TenderListRegion;
 };
 
 type ListResponse = {
@@ -153,6 +157,15 @@ function buildSearchParams(
     // `date=all` is intentional (override default scraped-date=today).
     if (key === "date" && value === "all") {
       params.set("date", "all");
+      continue;
+    }
+    // Region is path-locked on Indian/Global list pages — never put ALL in URL.
+    if (key === "region") {
+      if (value === "INDIAN" || value === "GLOBAL") {
+        params.set("region", value);
+      } else {
+        params.delete(key);
+      }
       continue;
     }
     if (
@@ -307,15 +320,20 @@ export function TenderExplorer({
   canCreate,
   statusCounts,
   statusCountsFilterKey = "",
+  lockedRegion,
 }: TenderExplorerProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const filters = React.useMemo(
-    () => readFilters(searchParams),
-    [searchParams],
-  );
-  const queryKey = searchParams.toString();
+  const filters = React.useMemo(() => {
+    const parsed = readFilters(searchParams);
+    return { ...parsed, region: lockedRegion };
+  }, [searchParams, lockedRegion]);
+  const queryKey = React.useMemo(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("region", lockedRegion);
+    return params.toString();
+  }, [searchParams, lockedRegion]);
   const listFilterKey = React.useMemo(
     () => filterKeyWithoutPage(queryKey),
     [queryKey],
@@ -361,10 +379,11 @@ export function TenderExplorer({
   const statusCountsRequestSerial = React.useRef(createRequestSerial());
   const scrollRestoreDone = React.useRef(false);
 
-  const statusCountQueryKey = React.useMemo(
-    () => tenderStatusCountQueryKey(searchParams),
-    [searchParams],
-  );
+  const statusCountQueryKey = React.useMemo(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("region", lockedRegion);
+    return tenderStatusCountQueryKey(params);
+  }, [searchParams, lockedRegion]);
 
   const skipFirstStatusCountsFetch = React.useRef(
     statusCounts != null && statusCountsFilterKey === statusCountQueryKey,
@@ -662,9 +681,14 @@ export function TenderExplorer({
       updates: Record<string, string | undefined>,
       options?: { replace?: boolean },
     ) => {
-      const qs = buildSearchParams(searchParams, updates);
+      // Region comes from the route (`/tenders/indian|global`), not the query string.
+      const qs = buildSearchParams(searchParams, {
+        ...updates,
+        region: undefined,
+      });
       const nextHref = `${pathname}${qs}`;
-      const currentHref = `${pathname}${queryKey ? `?${queryKey}` : ""}`;
+      const urlQuery = searchParams.toString();
+      const currentHref = `${pathname}${urlQuery ? `?${urlQuery}` : ""}`;
       if (nextHref === currentHref) return;
       if (hasResolvedDataRef.current) {
         setIsTableRefreshing(true);
@@ -675,7 +699,7 @@ export function TenderExplorer({
         router.push(nextHref, { scroll: false });
       }
     },
-    [pathname, queryKey, router, searchParams],
+    [pathname, router, searchParams],
   );
 
   React.useEffect(() => {
@@ -840,9 +864,13 @@ export function TenderExplorer({
       <div className="space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h1 className="section-title">Tender Management</h1>
+            <h1 className="section-title">
+              {lockedRegion === "GLOBAL" ? "Global Tenders" : "Indian Tenders"}
+            </h1>
             <p className="mt-0.5 text-sm text-foreground-500">
-              Import, screen and track tenders from all your connected portals
+              {lockedRegion === "GLOBAL"
+                ? "Import, screen and track global Tender247 tenders"
+                : "Import, screen and track Indian tenders from your connected portals"}
             </p>
           </div>
           <TenderPageActions

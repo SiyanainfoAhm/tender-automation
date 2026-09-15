@@ -13,8 +13,8 @@ import {
 } from "@/lib/won-projects";
 import {
   friendlyWonStatusConstraintError,
-  isMilestoneStatus,
   isPaymentMode,
+  normalizeMilestoneStatus,
   parseExecutionStatus,
   parsePbgStatus,
 } from "@/lib/wonTenderStatuses";
@@ -313,9 +313,19 @@ export async function saveWonMilestoneAction(
     const title = payload.title?.trim();
     if (!title) return { ok: false, error: "Milestone title is required." };
     if (!payload.dueDate) return { ok: false, error: "Due date is required." };
-    if (payload.status && !isMilestoneStatus(payload.status)) {
+
+    let status: WonMilestoneStatus = "not_started";
+    try {
+      status = normalizeMilestoneStatus(payload.status, "not_started");
+    } catch {
       return { ok: false, error: "Please select a valid status." };
     }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const completedAt =
+      status === "completed"
+        ? payload.completedAt || today
+        : null;
 
     if (payload.milestoneId) {
       const patch: Record<string, unknown> = {
@@ -324,11 +334,11 @@ export async function saveWonMilestoneAction(
         due_date: payload.dueDate,
         milestone_value: payload.milestoneValue ?? null,
         payment_linked: Boolean(payload.paymentLinked),
+        status,
         owner_id: payload.ownerId || null,
-        completed_at: payload.completedAt || null,
+        completed_at: completedAt,
         notes: payload.notes ?? null,
       };
-      if (payload.status) patch.status = payload.status;
       await updateMilestone({
         companyId: session.companyId,
         userId: session.user.id,
@@ -348,9 +358,9 @@ export async function saveWonMilestoneAction(
       dueDate: payload.dueDate,
       milestoneValue: payload.milestoneValue,
       paymentLinked: payload.paymentLinked,
-      status: payload.status,
+      status,
       ownerId: payload.ownerId,
-      completedAt: payload.completedAt,
+      completedAt,
       notes: payload.notes,
     });
     revalidateWonPaths(payload.projectId);

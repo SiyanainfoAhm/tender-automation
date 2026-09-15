@@ -7,10 +7,8 @@ import {
   paymentOutstandingBalance,
   type MarkTenderWonInput,
   type WonDocumentCategory,
-  type WonExecutionStatus,
   type WonMilestoneStatus,
   type WonPaymentMode,
-  type WonPaymentStatus,
   type WonProject,
   type WonProjectDetail,
   type WonProjectDocument,
@@ -20,7 +18,12 @@ import {
   type WonProjectPaymentReceipt,
   type WonProjectSummary,
 } from "@/lib/won-projects";
-import { isPbgStatus } from "@/lib/wonTenderStatuses";
+import {
+  parseExecutionStatus,
+  parseMilestoneStatus,
+  parsePaymentStatus,
+  isPbgStatus,
+} from "@/lib/wonTenderStatuses";
 
 function num(value: unknown): number {
   const n = Number(value);
@@ -47,7 +50,8 @@ function mapProject(row: Record<string, unknown>): WonProject {
     companyId: String(row.company_id),
     tenderId: String(row.tender_id),
     projectCode: String(row.project_code || ""),
-    executionStatus: String(row.execution_status) as WonExecutionStatus,
+    executionStatus:
+      parseExecutionStatus(String(row.execution_status)) ?? "awarded",
     awardDate: String(row.award_date).slice(0, 10),
     finalAwardValue: num(row.final_award_value),
     poNumber: str(row.po_number),
@@ -113,7 +117,7 @@ function mapMilestone(
     milestoneValue:
       row.milestone_value == null ? null : num(row.milestone_value),
     paymentLinked: Boolean(row.payment_linked),
-    status: String(row.status) as WonMilestoneStatus,
+    status: parseMilestoneStatus(String(row.status)) ?? "not_started",
     ownerId: str(row.owner_id),
     ownerName,
     completedAt: row.completed_at
@@ -148,7 +152,7 @@ function mapPayment(
       ? receipts.reduce((sum, r) => sum + r.amount, 0)
       : num(row.received_amount);
   const dueDate = String(row.due_date).slice(0, 10);
-  const explicit = str(row.status);
+  const explicit = parsePaymentStatus(str(row.status));
   const derivedStatus = derivePaymentStatus({
     amount,
     receivedAmount,
@@ -173,7 +177,7 @@ function mapPayment(
       : null,
     paymentMode: str(row.payment_mode) as WonPaymentMode | null,
     transactionReference: str(row.transaction_reference),
-    status: (explicit as WonPaymentStatus) || derivedStatus,
+    status: explicit || derivedStatus,
     derivedStatus,
     balance: paymentOutstandingBalance({
       amount,
@@ -574,6 +578,11 @@ export async function createMilestone(options: {
     .limit(1)
     .maybeSingle();
   const sortOrder = num(maxRow?.sort_order) + 1;
+  const status = parseMilestoneStatus(options.status) ?? "not_started";
+  const completedAt =
+    status === "completed"
+      ? options.completedAt || new Date().toISOString().slice(0, 10)
+      : null;
   const { data, error } = await supabase
     .from("agenttender_won_project_milestones")
     .insert({
@@ -584,9 +593,9 @@ export async function createMilestone(options: {
       due_date: options.dueDate,
       milestone_value: options.milestoneValue ?? null,
       payment_linked: Boolean(options.paymentLinked),
-      status: options.status || "not_started",
+      status,
       owner_id: options.ownerId || null,
-      completed_at: options.completedAt || null,
+      completed_at: completedAt,
       notes: options.notes || null,
       sort_order: sortOrder,
       created_by: options.userId,

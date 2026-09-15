@@ -97,7 +97,13 @@ test("metadata repair upserts local metadata when Supabase row is absent", async
       getTenderMetadata: async () => null,
       upsertTender247Metadata: async () => {
         upserted = true;
-        return { ok: true, id: "row-1", contentHash: "hash", error: null };
+        return {
+          ok: true,
+          id: "row-1",
+          contentHash: "hash",
+          error: null,
+          created: true,
+        };
       },
       verifyTender247MetadataRow: async () => ({
         ok: true,

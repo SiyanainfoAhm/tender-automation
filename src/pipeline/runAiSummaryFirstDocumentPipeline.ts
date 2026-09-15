@@ -1,5 +1,10 @@
 /**
- * AI-summary Tender247 pipeline (AI Summary + all documents).
+ * Tender247 daily Excel + documents pipeline (AI Summary when available).
+ *
+ * Indian (`--region=INDIAN`, default): queue until both AI Summary URL and
+ * documents ZIP URL exist.
+ * Global (`--region=GLOBAL`): separate Excel (`Tender247_GLOBAL_*.xlsx`) and
+ * documents-first — AI Summary is skipped because Global portal rarely has it.
  *
  * 1. Download Tender247 daily Excel for --date (unless --skip-upsert)
  * 2. Upsert Excel rows into Supabase (scraped_date = date); new rows default VERIFY.
@@ -78,6 +83,11 @@ import {
 } from "../tender247Batch/tender247RunContext.js";
 import { downloadTodayExcel } from "../tender247Excel/testTender247ExcelFilter.js";
 import {
+  DEFAULT_TENDER247_SOURCE_REGION,
+  parseTender247SourceRegion,
+  type Tender247SourceRegion,
+} from "../tender247/sourceRegion.js";
+import {
   loginToTender247,
   persistAuthState,
 } from "../tenderDetails/ensureTender247LoggedIn.js";
@@ -117,18 +127,30 @@ export function resolveAiSummaryArtifactMode(options: {
   documentsZipUrl?: string | null;
   aiSummaryUrl?: string | null;
   force?: boolean;
+  /**
+   * Indian AI-summary runs require both URLs.
+   * Global runs treat documents as sufficient (portal rarely has AI Summary).
+   */
+  aiSummaryRequired?: boolean;
 }): AiSummaryArtifactMode {
   if (options.force) return "PROCESS_FULL";
   const hasDocs = Boolean(String(options.documentsZipUrl || "").trim());
   const hasSummary = Boolean(String(options.aiSummaryUrl || "").trim());
-  if (hasDocs && hasSummary) return "SKIP_ALREADY_COMPLETE";
-  if (hasDocs && !hasSummary) return "RESUME_SUMMARY_ONLY";
-  if (!hasDocs && hasSummary) return "RESUME_DOCUMENTS_ONLY";
+  const aiRequired = options.aiSummaryRequired !== false;
+  if (aiRequired) {
+    if (hasDocs && hasSummary) return "SKIP_ALREADY_COMPLETE";
+    if (hasDocs && !hasSummary) return "RESUME_SUMMARY_ONLY";
+    if (!hasDocs && hasSummary) return "RESUME_DOCUMENTS_ONLY";
+    return "PROCESS_FULL";
+  }
+  // Global / documents-first: docs ZIP is enough to skip.
+  if (hasDocs) return "SKIP_ALREADY_COMPLETE";
   return "PROCESS_FULL";
 }
 
 export type AiSummaryPipelineSummary = {
   date: string;
+  region: Tender247SourceRegion;
   excelDownloaded: boolean;
   excelPath: string | null;
   upsertAttempted: boolean;
@@ -273,6 +295,7 @@ export function computeAiSummaryResumeIdFilter(options: {
 
 export async function countT247TendersForScrapedDate(
   scrapedDate: string,
+  sourceRegion: Tender247SourceRegion = DEFAULT_TENDER247_SOURCE_REGION,
 ): Promise<number> {
   if (!isSupabaseConfigured()) {
     throw new AutomationError(
@@ -285,6 +308,7 @@ export async function countT247TendersForScrapedDate(
     .from("agenttender_tenders")
     .select("id", { count: "exact", head: true })
     .eq("source_portal", "TENDER247")
+    .eq("source_region", sourceRegion)
     .eq("scraped_date", scrapedDate);
   if (error) {
     throw new AutomationError(
@@ -297,6 +321,7 @@ export async function countT247TendersForScrapedDate(
 
 export async function listT247SourceIdsForScrapedDate(
   scrapedDate: string,
+  sourceRegion: Tender247SourceRegion = DEFAULT_TENDER247_SOURCE_REGION,
 ): Promise<Set<string>> {
   if (!isSupabaseConfigured()) {
     throw new AutomationError(
@@ -313,6 +338,7 @@ export async function listT247SourceIdsForScrapedDate(
       .from("agenttender_tenders")
       .select("source_tender_id")
       .eq("source_portal", "TENDER247")
+      .eq("source_region", sourceRegion)
       .eq("scraped_date", scrapedDate)
       .order("source_tender_id", { ascending: true })
       .range(from, to);
@@ -338,12 +364,14 @@ export async function resolveAiSummaryResumeIdFilter(options: {
   dateFolder: string;
   runDate: string;
   excelPath?: string | null;
+  sourceRegion?: Tender247SourceRegion;
 }): Promise<{
   ids: string[] | null;
   mode: AiSummaryResumeMode;
   excelRowCount: number | null;
   dbRowCount: number | null;
 }> {
+  const sourceRegion = options.sourceRegion || DEFAULT_TENDER247_SOURCE_REGION;
   const priorFailedIds = loadPriorSummaryFailedIds(options.dateFolder);
   if (!priorFailedIds.length) {
     return {
@@ -369,9 +397,15 @@ export async function resolveAiSummaryResumeIdFilter(options: {
   }
 
   const excelRowCount = countExcelTender247Rows(excelPath);
-  const dbRowCount = await countT247TendersForScrapedDate(options.runDate);
+  const dbRowCount = await countT247TendersForScrapedDate(
+    options.runDate,
+    sourceRegion,
+  );
   const excelIds = listExcelTender247Ids(excelPath);
-  const dbIds = await listT247SourceIdsForScrapedDate(options.runDate);
+  const dbIds = await listT247SourceIdsForScrapedDate(
+    options.runDate,
+    sourceRegion,
+  );
   const resolved = computeAiSummaryResumeIdFilter({
     priorFailedIds,
     excelRowCount,
@@ -388,6 +422,7 @@ export async function resolveAiSummaryResumeIdFilter(options: {
 
 function parseArgs(argv: string[]): {
   date: string;
+  region: Tender247SourceRegion;
   accountId: string | null;
   companyId: string | null;
   force: boolean;
@@ -413,8 +448,15 @@ function parseArgs(argv: string[]): {
     limitRaw && Number.isFinite(Number(limitRaw))
       ? Math.max(0, Number.parseInt(limitRaw, 10))
       : null;
+  const region = parseTender247SourceRegion(
+    getArgValue(argv, "region") ||
+      getNpmConfigValue("region") ||
+      process.env.TENDER247_REGION ||
+      DEFAULT_TENDER247_SOURCE_REGION,
+  );
   return {
     date: resolved.requestedDate,
+    region,
     accountId:
       getArgValue(argv, "account-id") ||
       getArgValue(argv, "tender247-account-id") ||
@@ -457,6 +499,7 @@ export async function upsertScreenedTendersForDate(options: {
   companyId: string;
   /** Prefer this Excel path (fresh Tender247 download). */
   excelPath?: string | null;
+  sourceRegion?: Tender247SourceRegion;
 }): Promise<{
   attempted: boolean;
   stored: number;
@@ -464,6 +507,7 @@ export async function upsertScreenedTendersForDate(options: {
   updated: number;
   excelPath: string | null;
 }> {
+  const sourceRegion = options.sourceRegion || DEFAULT_TENDER247_SOURCE_REGION;
   const dailyName = dailyScreeningOutputFilename(options.runDate);
   const dailyPath = path.join(options.dateFolder, "screening", dailyName);
   const excelPath =
@@ -489,8 +533,10 @@ export async function upsertScreenedTendersForDate(options: {
   );
   options.logger.info(`AI_SUMMARY_PIPELINE_UPSERT_EXCEL=${excelPath}`);
   options.logger.info(`AI_SUMMARY_PIPELINE_UPSERT_ROWS=${rows.length}`);
+  options.logger.info(`AI_SUMMARY_PIPELINE_UPSERT_REGION=${sourceRegion}`);
   console.log(`AI_SUMMARY_PIPELINE_UPSERT_EXCEL=${excelPath}`);
   console.log(`AI_SUMMARY_PIPELINE_UPSERT_ROWS=${rows.length}`);
+  console.log(`AI_SUMMARY_PIPELINE_UPSERT_REGION=${sourceRegion}`);
 
   const result = await persistGptScreenedWorkbookToDatabase({
     rows,
@@ -504,6 +550,7 @@ export async function upsertScreenedTendersForDate(options: {
     // Never overwrite scheduler/ChatGPT qualification_status / category on re-ingest.
     // Only brand-new same-day rows get VERIFY (or Excel status).
     preserveExistingQualificationStatus: true,
+    sourceRegion,
   });
   // Tender rows are what the AI crawl needs. Qual verify can fail for
   // historical re-listings (same T247 ID across scraped_dates) — do not abort
@@ -547,6 +594,7 @@ export async function downloadAndUpsertDailyExcelForAiSummary(options: {
   dateFolder: string;
   logger: Logger;
   companyId: string;
+  sourceRegion?: Tender247SourceRegion;
 }): Promise<{
   attempted: boolean;
   stored: number;
@@ -555,17 +603,19 @@ export async function downloadAndUpsertDailyExcelForAiSummary(options: {
   excelPath: string | null;
   excelDownloaded: boolean;
 }> {
+  const sourceRegion = options.sourceRegion || DEFAULT_TENDER247_SOURCE_REGION;
   options.logger.info(
-    `AI_SUMMARY_PIPELINE_EXCEL_DOWNLOAD_START date=${options.runDate}`,
+    `AI_SUMMARY_PIPELINE_EXCEL_DOWNLOAD_START date=${options.runDate} region=${sourceRegion}`,
   );
   console.log(
-    `AI_SUMMARY_PIPELINE_EXCEL_DOWNLOAD_START date=${options.runDate}`,
+    `AI_SUMMARY_PIPELINE_EXCEL_DOWNLOAD_START date=${options.runDate} region=${sourceRegion}`,
   );
 
   const excelPath = await downloadTodayExcel({
     dateFolder: options.dateFolder,
     logger: options.logger,
     dateIso: options.runDate,
+    region: sourceRegion,
   });
 
   options.logger.info(`AI_SUMMARY_PIPELINE_EXCEL_DOWNLOADED=${excelPath}`);
@@ -577,6 +627,7 @@ export async function downloadAndUpsertDailyExcelForAiSummary(options: {
     logger: options.logger,
     companyId: options.companyId,
     excelPath,
+    sourceRegion,
   });
 
   return {
@@ -588,6 +639,9 @@ export async function downloadAndUpsertDailyExcelForAiSummary(options: {
 export async function listAiSummaryQueueForDate(options: {
   scrapedDate: string;
   force?: boolean;
+  sourceRegion?: Tender247SourceRegion;
+  /** When false (Global), queue only tenders missing documents_zip_url. */
+  aiSummaryRequired?: boolean;
 }): Promise<AiSummaryQueueRow[]> {
   if (!isSupabaseConfigured()) {
     throw new AutomationError(
@@ -595,6 +649,8 @@ export async function listAiSummaryQueueForDate(options: {
       "Supabase is not configured — cannot build AI summary queue",
     );
   }
+  const sourceRegion = options.sourceRegion || DEFAULT_TENDER247_SOURCE_REGION;
+  const aiSummaryRequired = options.aiSummaryRequired !== false;
   const client = getSupabaseAdminClient();
   // All statuses for scraped_date (including NO_GO). Paginate past PostgREST max rows.
   const pageSize = 1000;
@@ -607,6 +663,7 @@ export async function listAiSummaryQueueForDate(options: {
         "id, source_tender_id, qualification_status, title, documents_zip_url, ai_summary_url",
       )
       .eq("source_portal", "TENDER247")
+      .eq("source_region", sourceRegion)
       .eq("scraped_date", options.scrapedDate)
       .order("source_tender_id", { ascending: true })
       .range(from, to);
@@ -639,11 +696,12 @@ export async function listAiSummaryQueueForDate(options: {
       ? String(row.ai_summary_url).trim() || null
       : null;
 
-    // Supabase URLs are canonical — skip only when both are present.
+    // Supabase URLs are canonical — Global skips when docs exist (AI optional).
     const mode = resolveAiSummaryArtifactMode({
       documentsZipUrl,
       aiSummaryUrl,
       force: options.force,
+      aiSummaryRequired,
     });
     if (mode === "SKIP_ALREADY_COMPLETE") {
       continue;
@@ -707,12 +765,15 @@ export async function runAiSummaryFirstDocumentPipeline(
     `AI_SUMMARY_PIPELINE_ACCOUNT_RESOLVED accountId=${account.accountId} label=${account.accountLabel || account.accountShort} companyId=${account.companyId}`,
   );
   console.log(`AI_SUMMARY_PIPELINE_DATE=${dateIso}`);
+  console.log(`AI_SUMMARY_PIPELINE_REGION=${args.region}`);
+  logger.info(`AI_SUMMARY_PIPELINE_REGION=${args.region}`);
 
   const dateFolder = runContext.downloadRoot;
   ensureTender247DateScopedDir(dateFolder, dateIso);
 
   const summary: AiSummaryPipelineSummary = {
     date: dateIso,
+    region: args.region,
     excelDownloaded: false,
     excelPath: null,
     upsertAttempted: false,
@@ -738,6 +799,7 @@ export async function runAiSummaryFirstDocumentPipeline(
       dateFolder,
       logger,
       companyId: account.companyId,
+      sourceRegion: args.region,
     });
     summary.excelDownloaded = upsert.excelDownloaded;
     summary.excelPath = upsert.excelPath;
@@ -771,6 +833,7 @@ export async function runAiSummaryFirstDocumentPipeline(
       dateFolder,
       runDate: dateIso,
       excelPath: summary.excelPath,
+      sourceRegion: args.region,
     });
     autoResumeMode = resume.mode;
     if (resume.ids?.length) {
@@ -794,15 +857,27 @@ export async function runAiSummaryFirstDocumentPipeline(
     );
   }
 
+  const aiSummaryRequired = args.region !== "GLOBAL";
+  console.log(
+    `AI_SUMMARY_PIPELINE_AI_REQUIRED=${aiSummaryRequired} (GLOBAL=documents-first)`,
+  );
+  logger.info(
+    `AI_SUMMARY_PIPELINE_AI_REQUIRED=${aiSummaryRequired} region=${args.region}`,
+  );
+
   const allCandidates = await listAiSummaryQueueForDate({
     scrapedDate: dateIso,
     force: true,
+    sourceRegion: args.region,
+    aiSummaryRequired,
   });
   const pending = await listAiSummaryQueueForDate({
     scrapedDate: dateIso,
     // When retrying explicit failed IDs, always include them even if an AI URL
     // was partially written; otherwise --force is required for missing-AI resume.
     force: args.force || Boolean(idFilter?.length),
+    sourceRegion: args.region,
+    aiSummaryRequired,
   });
   const skippedExistingAi = Math.max(0, allCandidates.length - pending.length);
   summary.selected = allCandidates.length;
@@ -826,12 +901,14 @@ export async function runAiSummaryFirstDocumentPipeline(
 
   // Resume/skip is decided only from Supabase documents_zip_url / ai_summary_url.
   // Local downloads/ folders are cache and must not remove tenders from the queue.
+  // Global: documents_zip_url alone is enough (AI Summary optional).
   const skippedCompleteIds: string[] = [];
   if (!args.force && !idFilter?.length) {
     for (const row of allCandidates) {
       const mode = resolveAiSummaryArtifactMode({
         documentsZipUrl: row.documentsZipUrl,
         aiSummaryUrl: row.aiSummaryUrl,
+        aiSummaryRequired,
       });
       if (mode === "SKIP_ALREADY_COMPLETE") {
         skippedCompleteIds.push(row.sourceTenderId);
@@ -845,6 +922,7 @@ export async function runAiSummaryFirstDocumentPipeline(
       documentsZipUrl: row.documentsZipUrl,
       aiSummaryUrl: row.aiSummaryUrl,
       force: args.force,
+      aiSummaryRequired,
     });
     logger.info(`${mode}=T247-${row.sourceTenderId}`);
     console.log(`${mode}=T247-${row.sourceTenderId}`);
@@ -859,8 +937,10 @@ export async function runAiSummaryFirstDocumentPipeline(
 
   const queuePath = writeQueueArtifact(dateFolder, {
     runDate: dateIso,
-    mode: "ai-summary-first",
+    mode: aiSummaryRequired ? "ai-summary-first" : "global-documents-first",
     source: "agenttender_tenders (all statuses including NO_GO)",
+    sourceRegion: args.region,
+    aiSummaryRequired,
     statuses: [...QUEUE_STATUSES, "*"],
     force: args.force,
     dryRun: args.dryRun,
@@ -989,7 +1069,7 @@ export async function runAiSummaryFirstDocumentPipeline(
         );
         console.log(`AI_SUMMARY_PIPELINE_CRAWL_START count=${survivorIds.length}`);
         logger.info(
-          `AI_SUMMARY_PIPELINE_CRAWL_START count=${survivorIds.length} documentsOnlyIfAiMissing=false`,
+          `AI_SUMMARY_PIPELINE_CRAWL_START count=${survivorIds.length} documentsOnlyIfAiMissing=false aiSummaryRequired=${aiSummaryRequired}`,
         );
 
         const parallel = await processSurvivorsInParallel({
@@ -1003,10 +1083,12 @@ export async function runAiSummaryFirstDocumentPipeline(
           force: args.force,
           documentsOnlyIfAiMissing: false,
           allowNoBidDetailOpen: true,
+          aiSummaryRequired,
           phase1ScreeningAuthoritative: true,
           screeningStatusById,
           excelValueById,
           existingArtifactUrlsById,
+          sourceRegion: args.region,
         });
 
         summary.attempted = parallel.attemptedIds.length;
@@ -1017,16 +1099,29 @@ export async function runAiSummaryFirstDocumentPipeline(
           console.log(`FAILED=T247-${id}`);
         }
 
-        // AI complete = full success for this pipeline.
-        // Docs-only fallback (no AI) = partial.
+        // Indian: AI complete = full success; docs-only = partial.
+        // Global: documents complete = full success (AI optional).
         for (const result of parallel.results) {
           if (summary.failedIds.includes(result.t247Id)) continue;
-          if (result.aiSummaryStatus === "complete") {
-            summary.fullSuccess += 1;
+          if (aiSummaryRequired) {
+            if (result.aiSummaryStatus === "complete") {
+              summary.fullSuccess += 1;
+            } else if (
+              result.allDocumentsStatus === "complete" ||
+              result.allDocumentsStatus === "partial" ||
+              result.status === "completed" ||
+              result.status === "partial"
+            ) {
+              summary.partialSuccess += 1;
+            }
           } else if (
             result.allDocumentsStatus === "complete" ||
+            result.artifactComplete ||
+            result.status === "completed"
+          ) {
+            summary.fullSuccess += 1;
+          } else if (
             result.allDocumentsStatus === "partial" ||
-            result.status === "completed" ||
             result.status === "partial"
           ) {
             summary.partialSuccess += 1;

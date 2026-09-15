@@ -39,10 +39,17 @@ const commandActions: CommandAction[] = [
   },
   {
     id: "tenders",
-    label: "Tenders",
-    href: "/tenders",
+    label: "Indian Tenders",
+    href: "/tenders/indian",
     icon: FileText,
-    keywords: ["bids", "rfp", "procurement"],
+    keywords: ["bids", "rfp", "procurement", "indian", "tenders"],
+  },
+  {
+    id: "tenders-global",
+    label: "Global Tenders",
+    href: "/tenders/global",
+    icon: FileText,
+    keywords: ["global", "international", "bids"],
   },
   {
     id: "won-tenders",
@@ -110,10 +117,10 @@ export function CommandPalette({
     const q = query.trim();
     setOpen(false);
     if (!q) {
-      router.push("/tenders");
+      router.push("/tenders/indian");
       return;
     }
-    router.push(`/tenders?q=${encodeURIComponent(q)}`);
+    router.push(`/tenders/indian?q=${encodeURIComponent(q)}`);
   };
 
   return (

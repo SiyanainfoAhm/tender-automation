@@ -50,7 +50,9 @@ import {
   WON_MILESTONE_STATUS_OPTIONS,
   WON_PAYMENT_MODE_OPTIONS,
   WON_PBG_STATUS_OPTIONS,
+  displayMilestoneStatus,
   parseExecutionStatus,
+  parseMilestoneStatus,
   parsePbgStatus,
   type WonDocumentCategory,
   type WonExecutionStatus,
@@ -314,7 +316,7 @@ export function WonProjectDetailClient({
         milestoneValue:
           milestone.milestoneValue != null ? String(milestone.milestoneValue) : "",
         paymentLinked: milestone.paymentLinked,
-        status: milestone.status,
+        status: parseMilestoneStatus(milestone.status) ?? "not_started",
         ownerId: milestone.ownerId || "",
         completedAt: milestone.completedAt || "",
         notes: milestone.notes || "",
@@ -341,6 +343,11 @@ export function WonProjectDetailClient({
       toast.error("Title and due date are required.");
       return;
     }
+    const status = parseMilestoneStatus(milestoneForm.status);
+    if (!status) {
+      toast.error("Please select a valid status.");
+      return;
+    }
     startTransition(async () => {
       const result = await saveWonMilestoneAction({
         projectId: project.id,
@@ -352,9 +359,12 @@ export function WonProjectDetailClient({
           ? Number(milestoneForm.milestoneValue)
           : null,
         paymentLinked: milestoneForm.paymentLinked,
-        status: milestoneForm.status,
+        status,
         ownerId: milestoneForm.ownerId || null,
-        completedAt: milestoneForm.completedAt || null,
+        completedAt:
+          status === "completed"
+            ? milestoneForm.completedAt || new Date().toISOString().slice(0, 10)
+            : null,
         notes: milestoneForm.notes.trim() || null,
       });
       if (!result.ok) {
@@ -572,8 +582,8 @@ export function WonProjectDetailClient({
               {project.tenderTitle}
             </h1>
             <p className="text-sm text-foreground-500">
-              {project.organization || "â€”"}
-              {project.referenceNo ? ` Â· ${project.referenceNo}` : ""}
+              {project.organization || "—"}
+              {project.referenceNo ? ` · ${project.referenceNo}` : ""}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -1009,13 +1019,18 @@ export function WonProjectDetailClient({
                       <td className="px-3 py-2 font-medium">{m.title}</td>
                       <td className="px-3 py-2">{formatDate(m.dueDate)}</td>
                       <td className="px-3 py-2">
-                        <MilestoneStatusBadge status={m.status} />
+                        <MilestoneStatusBadge
+                          status={displayMilestoneStatus({
+                            status: m.status,
+                            dueDate: m.dueDate,
+                          })}
+                        />
                       </td>
-                      <td className="px-3 py-2">{m.ownerName || "â€”"}</td>
+                      <td className="px-3 py-2">{m.ownerName || "—"}</td>
                       <td className="px-3 py-2">
                         {m.milestoneValue != null
                           ? formatIndianCurrency(m.milestoneValue)
-                          : "â€”"}
+                          : "—"}
                       </td>
                       {canEdit ? (
                         <td className="px-3 py-2">
@@ -1269,7 +1284,7 @@ export function WonProjectDetailClient({
                         {formatDate(doc.documentDate)}
                       </td>
                       <td className="px-3 py-2 text-xs text-foreground-500">
-                        {doc.createdByName || "â€”"} Â·{" "}
+                        {doc.createdByName || "—"} ·{" "}
                         {formatDate(doc.createdAt)}
                       </td>
                       <td className="px-3 py-2">
@@ -1335,15 +1350,21 @@ export function WonProjectDetailClient({
               <Label>Status</Label>
               <Select
                 value={milestoneForm.status}
-                onValueChange={(v) =>
+                onValueChange={(v) => {
+                  const parsed = parseMilestoneStatus(v);
+                  if (!parsed) return;
                   setMilestoneForm((f) => ({
                     ...f,
-                    status: v as WonMilestoneStatus,
-                  }))
-                }
+                    status: parsed,
+                    completedAt:
+                      parsed === "completed"
+                        ? f.completedAt || new Date().toISOString().slice(0, 10)
+                        : "",
+                  }));
+                }}
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue placeholder="Select status" />
                 </SelectTrigger>
                 <SelectContent>
                   {WON_MILESTONE_STATUS_OPTIONS.map((option) => (

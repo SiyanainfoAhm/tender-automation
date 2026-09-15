@@ -12,6 +12,7 @@
 export const TENDER_STATUS_COUNT_PARAM_KEYS = [
   "q",
   "source",
+  "region",
   "downloadStatus",
   "dateType",
   "from",
@@ -88,11 +89,16 @@ export function buildTenderStatusCountSearchParams(
     const value = readParam(input, key);
     if (!value) continue;
     if (key === "source" && value === "ALL") continue;
+    if (key === "region" && value === "ALL") continue;
     params.set(key, value);
   }
   // Mirror list default only when the user explicitly chose a scraped date.
   if (!hasExplicitScrapedDate(input)) {
     params.set("date", "all");
+  }
+  // List default region is INDIAN when omitted from the URL.
+  if (!params.has("region") && !readParam(input, "region")) {
+    params.set("region", "INDIAN");
   }
   return params;
 }
@@ -119,10 +125,14 @@ export function searchParamsForStatusCounts(
     const value = readParam(raw, key);
     if (!value) continue;
     if (key === "source" && value === "ALL") continue;
+    if (key === "region" && value === "ALL") continue;
     out[key] = value;
   }
   if (!hasExplicitScrapedDate(raw)) {
     out.date = "all";
+  }
+  if (!out.region) {
+    out.region = "INDIAN";
   }
   return out;
 }

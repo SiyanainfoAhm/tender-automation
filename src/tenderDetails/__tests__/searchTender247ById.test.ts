@@ -118,9 +118,8 @@ test("processSurvivors recovers list UI between tenders after failure", () => {
   );
   assert.match(src, /recoverListPageBetweenTenders/);
   assert.match(src, /T247_LIST_RECOVER/);
-  assert.match(src, /T247_LIST_RECOVER_MAIL_DATE_OK/);
-  assert.match(src, /T247_LIST_RECOVER_RETURN_DASHBOARD/);
-  assert.match(src, /T247_LIST_RECOVER_RELOGIN/);
+  assert.match(src, /T247_LIST_RECOVER_WRONG_REGION/);
+  assert.match(src, /urlMatchesTender247Region/);
   assert.match(src, /waitForSelectMailDateCard/);
   assert.match(src, /continuing to next tender/);
 });

@@ -241,14 +241,17 @@ async function findSameDayTender(options: {
   sourceTenderId: string;
   scrapedDate: string;
   references: string[];
+  sourceRegion?: "INDIAN" | "GLOBAL";
 }): Promise<ExistingTenderRow | null> {
   const { client, sourcePortal, sourceTenderId, scrapedDate, references } =
     options;
+  const sourceRegion = options.sourceRegion || "INDIAN";
 
   const byId = await client
     .from("agenttender_tenders")
     .select(EXISTING_TENDER_SELECT)
     .eq("source_portal", sourcePortal)
+    .eq("source_region", sourceRegion)
     .eq("source_tender_id", sourceTenderId)
     .eq("scraped_date", scrapedDate)
     .maybeSingle();
@@ -260,6 +263,7 @@ async function findSameDayTender(options: {
       .from("agenttender_tenders")
       .select(EXISTING_TENDER_SELECT)
       .eq("source_portal", sourcePortal)
+      .eq("source_region", sourceRegion)
       .eq("folder_id", reference)
       .eq("scraped_date", scrapedDate)
       .maybeSingle();
@@ -269,6 +273,7 @@ async function findSameDayTender(options: {
       .from("agenttender_tenders")
       .select(EXISTING_TENDER_SELECT)
       .eq("source_portal", sourcePortal)
+      .eq("source_region", sourceRegion)
       .eq("source_tender_id", reference)
       .eq("scraped_date", scrapedDate)
       .maybeSingle();
@@ -368,6 +373,8 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
    * may set status. Scheduler owns decisions on existing rows.
    */
   preserveExistingQualificationStatus?: boolean;
+  /** Tender247 list region — defaults INDIAN. */
+  sourceRegion?: "INDIAN" | "GLOBAL";
 }): Promise<Phase1PersistResult> {
   const workbookLabel =
     options.screenedWorkbookPath ||
@@ -377,6 +384,7 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
 
   const screeningSource =
     options.screeningSource || "CHATGPT_RUN_EXCEL";
+  const sourceRegion = options.sourceRegion || "INDIAN";
   /** Non-ChatGPT ingest must not wipe statuses ChatGPT / scheduler already wrote. */
   const protectExistingScreeningFields =
     options.preserveExistingQualificationStatus === true ||
@@ -385,6 +393,7 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
 
   options.logger?.info(`GPT_SCREENED_WORKBOOK=${workbookLabel}`);
   options.logger?.info(`GPT_ROWS_FOUND=${options.rows.length}`);
+  options.logger?.info(`GPT_SOURCE_REGION=${sourceRegion}`);
   if (protectExistingScreeningFields) {
     options.logger?.info(
       "GPT_EXCEL_PROTECT_EXISTING_STATUS=true (existing rows: never set qualification_status/category; inserts only)",
@@ -476,6 +485,7 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
         sourceTenderId: id,
         scrapedDate: options.runDate,
         references,
+        sourceRegion,
       });
 
       // AI-summary ingest: skip rewrite only when BOTH artifact URLs exist.
@@ -649,6 +659,7 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
 
       const incoming = {
         source_portal: sourcePortal,
+        source_region: sourceRegion,
         source_tender_id: existing?.source_tender_id || id,
         folder_id: existing?.folder_id || row.tender247Id || row.bidAssistId || null,
         reference_no: referenceNoForWorkbookRow(row),
@@ -803,6 +814,7 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
           sourceTenderId: id,
           scrapedDate: options.runDate,
           references,
+          sourceRegion,
         });
         if (raced) {
           statusAlreadyInDb = Boolean(
@@ -839,6 +851,7 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
             .from("agenttender_tenders")
             .insert({
               source_portal: sourcePortal,
+              source_region: sourceRegion,
               source_tender_id: id,
               folder_id: row.tender247Id || row.bidAssistId || null,
               reference_no: referenceNoForWorkbookRow(row),
@@ -881,6 +894,7 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
               sourceTenderId: id,
               scrapedDate: options.runDate,
               references,
+              sourceRegion,
             });
             if (afterConflict) {
               statusAlreadyInDb = Boolean(

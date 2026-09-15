@@ -10,6 +10,7 @@ import type { AppConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import { dismissTender247BlockingOverlays } from "./dismissPromotionalPopups.js";
 import { dismissTender247SupportChat } from "./dismissSupportChat.js";
+import { isTender247AuthListUrl } from "../tender247/sourceRegion.js";
 
 const HOME_URL = "https://www.tender247.com/";
 const DASHBOARD_URL = "https://www.tender247.com/auth/tender";
@@ -181,7 +182,7 @@ async function ensureOnDashboardAndFinish(
   dashboardUrl: string,
 ): Promise<void> {
   if (!(await isTender247DashboardAuthenticated(page))) {
-    if (!page.url().includes("/auth/tender")) {
+    if (!isTender247AuthListUrl(page.url())) {
       logger.info(`Navigating to authenticated dashboard: ${dashboardUrl}`);
       await page.goto(dashboardUrl, {
         waitUntil: "domcontentloaded",
@@ -351,7 +352,7 @@ async function waitForAuthAfterSubmit(
     }
 
     const url = page.url();
-    if (url.includes("/auth/tender")) {
+    if (isTender247AuthListUrl(url)) {
       await page.waitForTimeout(500);
       if (await isTender247DashboardAuthenticated(page)) {
         return;
@@ -367,7 +368,7 @@ async function waitForAuthAfterSubmit(
     // Form gone and still on homepage — navigate to dashboard once
     if (
       !passwordStillVisible &&
-      !url.includes("/auth/tender") &&
+      !isTender247AuthListUrl(url) &&
       !navigatedToDashboard
     ) {
       navigatedToDashboard = true;
@@ -399,7 +400,7 @@ async function waitForAuthAfterSubmit(
 
   // Final navigation attempt if still not authenticated
   if (!(await isTender247DashboardAuthenticated(page))) {
-    if (!page.url().includes("/auth/tender")) {
+    if (!isTender247AuthListUrl(page.url())) {
       logger.info(`Navigating to authenticated dashboard: ${dashboardUrl}`);
       await page.goto(dashboardUrl, {
         waitUntil: "domcontentloaded",
@@ -596,12 +597,18 @@ export async function isTender247DashboardAuthenticated(
     return false;
   }
 
-  if (!page.url().includes("/auth/tender")) {
+  if (
+    !isTender247AuthListUrl(page.url())
+  ) {
     return false;
   }
   const markers = await collectDashboardMarkers(page);
-  const count = Object.values(markers).filter(Boolean).length;
-  return count >= 2;
+  // Region nav (Indian or Global) counts as one authenticated marker.
+  const regionMarker = markers.indianTender || markers.globalTender;
+  const otherCount = Object.entries(markers)
+    .filter(([key]) => key !== "indianTender" && key !== "globalTender")
+    .filter(([, value]) => value).length;
+  return regionMarker && otherCount >= 1;
 }
 
 /** @deprecated Prefer isTender247DashboardAuthenticated */
@@ -622,7 +629,7 @@ async function logAuthFailureDiagnostics(page: Page, logger: Logger): Promise<vo
   logger.error(`Auth failure diagnostics: url=${page.url()}`);
   logger.error(`popup B2B visible=${b2b}; Free Sample visible=${freeSample}`);
   logger.error(
-    `markers: indianTender=${markers.indianTender} todayTenders=${markers.todayTenders} tenderFilters=${markers.tenderFilters} fresh=${markers.fresh} t247Id=${markers.t247Id} xls=${markers.xls}`,
+    `markers: indianTender=${markers.indianTender} globalTender=${markers.globalTender} todayTenders=${markers.todayTenders} tenderFilters=${markers.tenderFilters} fresh=${markers.fresh} t247Id=${markers.t247Id} xls=${markers.xls}`,
   );
 }
 
@@ -630,6 +637,11 @@ async function collectDashboardMarkers(page: Page): Promise<Record<string, boole
   return {
     indianTender: await page
       .getByText("Indian Tender", { exact: true })
+      .first()
+      .isVisible()
+      .catch(() => false),
+    globalTender: await page
+      .getByText("Global Tender", { exact: true })
       .first()
       .isVisible()
       .catch(() => false),

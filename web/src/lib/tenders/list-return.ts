@@ -10,14 +10,20 @@ const SCROLL_KEY = "tenderflow:tenders-list-scroll";
 export const TENDERS_LIST_RETURN_CHANGED_EVENT =
   "tenderflow:tenders-list-return";
 
+const SAFE_TENDERS_LIST_PATHS = new Set([
+  "/tenders",
+  "/tenders/indian",
+  "/tenders/global",
+]);
+
 /** Only allow returning to the list route (never open redirects). */
 export function isSafeTendersListReturnPath(path: string): boolean {
   if (!path.startsWith("/")) return false;
   if (path.startsWith("//")) return false;
   if (path.includes("://")) return false;
   const pathOnly = path.split("?")[0]?.split("#")[0] || "";
-  // Exact list page — not /tenders/[id] or nested routes.
-  return pathOnly === "/tenders";
+  // Exact list pages — not /tenders/[id] or import/workspace.
+  return SAFE_TENDERS_LIST_PATHS.has(pathOnly);
 }
 
 function notifyReturnChanged() {
@@ -82,6 +88,8 @@ export function tendersListHrefFromParts(
   pathname: string,
   queryKey: string,
 ): string {
-  if (pathname !== "/tenders") return "/tenders";
-  return queryKey ? `/tenders?${queryKey}` : "/tenders";
+  const base = SAFE_TENDERS_LIST_PATHS.has(pathname)
+    ? pathname
+    : "/tenders/indian";
+  return queryKey ? `${base}?${queryKey}` : base;
 }

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { BidassistMetadata } from "../bidassist/bidassistTypes.js";
 import { ensureDir } from "../fileUtils.js";
 import type { CompleteTenderMetadata } from "../tender247Batch/extractCompleteMetadata.js";
+import type { Tender247SourceRegion } from "../tender247/sourceRegion.js";
 import { getSupabaseAdminClient, isSupabaseConfigured } from "./client.js";
 import {
   buildBidassistSupabaseRow,
@@ -15,6 +16,9 @@ import { validateBidAssistUpsertPayload } from "../bidassist/bidassistDocumentMe
 
 const TABLE = "agenttender_tenders";
 const SOURCE = "TENDER247";
+/** Matches agenttender_tenders_source_date_unique (includes source_region). */
+const TENDER247_DAILY_ON_CONFLICT =
+  "source_portal,source_region,source_tender_id,scraped_date";
 
 export type SourcePortal = "TENDER247" | "BIDASSIST";
 
@@ -62,6 +66,7 @@ export async function upsertTender247Metadata(options: {
   scrapedDate?: string | null;
   aiSummaryAvailable?: boolean;
   documentArchiveAvailable?: boolean;
+  sourceRegion?: Tender247SourceRegion;
   logger?: {
     info: (msg: string) => void;
     error?: (msg: string) => void;
@@ -98,6 +103,7 @@ export async function upsertTender247Metadata(options: {
       scrapedDate: options.scrapedDate,
       aiSummaryAvailable: options.aiSummaryAvailable,
       documentArchiveAvailable: options.documentArchiveAvailable,
+      sourceRegion: options.sourceRegion || "INDIAN",
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -117,6 +123,7 @@ export async function upsertTender247Metadata(options: {
       .from(TABLE)
       .select("*")
       .eq("source_portal", SOURCE)
+      .eq("source_region", options.sourceRegion || row.source_region || "INDIAN")
       .eq("source_tender_id", resolvedId);
     if (scrapedDate && /^\d{4}-\d{2}-\d{2}$/.test(scrapedDate)) {
       existingQuery = existingQuery.eq("scraped_date", scrapedDate);
@@ -200,7 +207,7 @@ export async function upsertTender247Metadata(options: {
           ...row,
         } satisfies AgenttenderTenderRow,
         {
-          onConflict: "source_portal,source_tender_id,scraped_date",
+          onConflict: "source_portal,source_region,source_tender_id,scraped_date",
           ignoreDuplicates: false,
         },
       )
@@ -215,7 +222,7 @@ export async function upsertTender247Metadata(options: {
             ...row,
             download_status: "DB_SYNC_FAILED",
           },
-          { onConflict: "source_portal,source_tender_id,scraped_date" },
+          { onConflict: TENDER247_DAILY_ON_CONFLICT },
         );
       } catch {
         // ignore secondary failure
@@ -360,7 +367,7 @@ export async function upsertBidassistMetadata(options: {
           ...row,
         } satisfies AgenttenderTenderRow,
         {
-          onConflict: "source_portal,source_tender_id,scraped_date",
+          onConflict: "source_portal,source_region,source_tender_id,scraped_date",
           ignoreDuplicates: false,
         },
       )

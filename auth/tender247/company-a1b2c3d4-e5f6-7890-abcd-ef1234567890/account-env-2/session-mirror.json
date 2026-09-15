@@ -65,7 +65,7 @@
       "value": "1YmohJhudxTDR6Y",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1820985017,
+      "expires": 1820997230,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -135,27 +135,7 @@
       "value": "GA1.2.424064101.1789209342",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1789529663,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "CLID",
-      "value": "61d97370639341c2b0cee41879f65b8b.20260731.20270914",
-      "domain": "www.clarity.ms",
-      "path": "/",
-      "expires": 1820892459.181219,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "_clck",
-      "value": "mzjoox%5E2%5Eg9g%5E0%5E2402",
-      "domain": ".tender247.com",
-      "path": "/",
-      "expires": 1820892459,
+      "expires": 1789542535,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -171,11 +151,21 @@
       "sameSite": "None"
     },
     {
-      "name": "_clsk",
-      "value": "135j1zk%5E1789410685806%5E1%5E1%5Eo.clarity.ms%2Fcollect",
+      "name": "CLID",
+      "value": "61d97370639341c2b0cee41879f65b8b.20260731.20270915",
+      "domain": "www.clarity.ms",
+      "path": "/",
+      "expires": 1820990373.735172,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_clck",
+      "value": "mzjoox%5E2%5Eg9h%5E0%5E2402",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1789497085,
+      "expires": 1820990374,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -185,27 +175,37 @@
       "value": "GA1.2.1744748255.1785411924",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1824003263.240895,
+      "expires": 1824016135.035697,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_clsk",
+      "value": "1ajf03f%5E1789456136690%5E3%5E1%5Ef.clarity.ms%2Fcollect",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1789542536,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
     },
     {
       "name": "_ga_3FYV8W34LF",
-      "value": "GS2.1.s1789443262$o47$g0$t1789443264$j58$l0$h1349395460",
+      "value": "GS2.1.s1789454373$o48$g1$t1789456138$j56$l0$h787059790",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1824003264.204546,
+      "expires": 1824016138.29201,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
     },
     {
       "name": "AWSALBCORS",
-      "value": "Y1qYyxOPj2nQxF2VvqRkoW9K/CGkF3WBCKk4pAfDm++hXPN5w/acKgsUEaYxBUqIlqVkGby+pHjzhq359ss50JNNFLDIKqjlgxzeATlmqNtoPY5wrk0+XhK1T4xPtNLML5SpFKyVCG9ThV+kMR1V4JKfZKs6PoL8YtKt6TGiosHny0oIusvIWWf/jHAl5g==",
+      "value": "N6ri86OGpnuFO8DV3OXQ7/RU0FRHq5y2OEonEqIV1hGrn/beVJoM4PLCsi1uMft6wJv2BVnwV+TsEsfovRK+bcT8QUIcXqf4dp7NGRiUKYWh2bmebrYCgW8P4+sNCAJocXnhmvQdy4bEz4UdRGB80PfEpflCa+PSwB/DExqjq8b7ZOa+/2x1/8lLpjzdeg==",
       "domain": "widget-mediator.zopim.com",
       "path": "/",
-      "expires": 1790053817.433066,
+      "expires": 1790066029.901238,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
@@ -221,11 +221,11 @@
         },
         {
           "name": "ZD-suid",
-          "value": "{\"id\":\"17835171e8384c919c51c4207f50b901\",\"expiry\":1789449917030,\"tabs\":{\"count\":1,\"expiry\":0}}"
+          "value": "{\"id\":\"9526701f7eff494ca3051aeed1cd5f00\",\"expiry\":1789462129525,\"tabs\":{\"count\":1,\"expiry\":0}}"
         },
         {
           "name": "userData",
-          "value": "{\"person_name\":\"Jaimin Shah\",\"user_id\":1582623,\"company_service_id\":\"1,2\",\"email_id\":\"Jaimin.Shah@thinfo.in\",\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJVc2VyU3RhdXMiOjEsIlBlcnNvbk5hbWUiOiJKYWltaW4gU2hhaCIsIlVzZXJJZCI6MTU4MjYyMywiQ29tcGFueVNlcnZpY2VpZHMiOiIxLDIiLCJXb3JkSGlnaGxpZ2h0IjoiQ29tcHV0ZXIgSGFyZHdhcmUiLCJiaWRkZXJfbmFtZSI6IlNpeWFuYSBJbmZvIFNvbHV0aW9ucyIsImlzX2JpZGRlcl9leGlzdHMiOnRydWUsImlhdCI6MTc4OTQxMDcwOCwiZXhwIjoxNzg5NDk2OTk5fQ.2PM5ccvtxXJGAoRvh5nxuBrmGlB1Az-Rme7JrpddMyA\",\"encryptKey\":\"\",\"mail_date\":\"2026-09-15\",\"user_query_id\":0,\"tab\":0,\"isChange\":0,\"grace_period_status\":false,\"bidder_name\":\"Siyana Info Solutions\",\"is_bidder_exists\":true}"
+          "value": "{\"person_name\":\"Jaimin Shah\",\"user_id\":1582623,\"company_service_id\":\"1,2\",\"email_id\":\"Jaimin.Shah@thinfo.in\",\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJVc2VyU3RhdXMiOjEsIlBlcnNvbk5hbWUiOiJKYWltaW4gU2hhaCIsIlVzZXJJZCI6MTU4MjYyMywiQ29tcGFueVNlcnZpY2VpZHMiOiIxLDIiLCJXb3JkSGlnaGxpZ2h0IjoiQ29tcHV0ZXIgSGFyZHdhcmUiLCJiaWRkZXJfbmFtZSI6IlNpeWFuYSBJbmZvIFNvbHV0aW9ucyIsImlzX2JpZGRlcl9leGlzdHMiOnRydWUsImlhdCI6MTc4OTQ1NjEzNywiZXhwIjoxNzg5NDk2OTk5fQ.Ojs1UsCH38cszJt5JOa04mKvf2o6Lt2tdOaTQhxKtkY\",\"encryptKey\":\"\",\"mail_date\":\"2026-09-15\",\"user_query_id\":0,\"tab\":0,\"isChange\":0,\"grace_period_status\":false,\"bidder_name\":\"Siyana Info Solutions\",\"is_bidder_exists\":true}"
         },
         {
           "name": "ZD-buid",
@@ -233,7 +233,7 @@
         },
         {
           "name": "_gcl_ls",
-          "value": "{\"schema\":\"gcl\",\"version\":1,\"gsid_dc\":{\"value\":{\"joinId\":\"uivZtswgwn87Rnb8jBAG03VrS-ACuwUNOQ\",\"lastJoinedTimeMs\":1789443262926},\"expires\":1789443562926},\"gcl_ctr\":{\"value\":{\"value\":0,\"timeouts\":0,\"errors\":0,\"eopCount\":0,\"creationTimeMs\":1785411924387},\"expires\":1793187924387},\"last_convs\":{\"value\":[],\"expires\":1796007710160}}"
+          "value": "{\"schema\":\"gcl\",\"version\":1,\"gsid_dc\":{\"value\":{\"joinId\":\"g97kAKv7UjDntHQAMR9IiBymGkG7NbNyPw\",\"lastJoinedTimeMs\":1789456134378},\"expires\":1789456434378},\"gcl_ctr\":{\"value\":{\"value\":0,\"timeouts\":0,\"errors\":0,\"eopCount\":0,\"creationTimeMs\":1785411924387},\"expires\":1793187924387},\"last_convs\":{\"value\":[],\"expires\":1796007710160}}"
         },
         {
           "name": "popup_settings",
@@ -241,11 +241,11 @@
         },
         {
           "name": "user_query_id",
-          "value": "336722"
+          "value": "340481"
         },
         {
           "name": "__zlcstore",
-          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1789449017675,\"account_status\":\"online\"}}"
+          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1789461230103,\"account_status\":\"online\"}}"
         }
       ],
       "indexedDB": []

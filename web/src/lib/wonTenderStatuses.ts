@@ -1,12 +1,18 @@
 /**
  * Single source of truth for Won Tenders / Project Execution statuses.
- * Values MUST match public.agenttender_won_projects CHECK constraints:
+ * Values MUST match public CHECK constraints:
  *
- * execution_status IN (
+ * agenttender_won_projects.execution_status IN (
  *   'awarded', 'in_execution', 'on_hold', 'completed', 'cancelled'
  * )
- * pbg_status IS NULL OR IN (
+ * agenttender_won_projects.pbg_status IS NULL OR IN (
  *   'pending', 'active', 'released', 'expired', 'invoked'
+ * )
+ * agenttender_won_project_milestones.status IN (
+ *   'not_started', 'in_progress', 'completed', 'delayed', 'on_hold'
+ * )
+ * agenttender_won_project_payments.status IN (
+ *   'pending', 'partially_received', 'received', 'overdue', 'cancelled'
  * )
  */
 
@@ -219,6 +225,38 @@ export function parsePbgStatus(
   return byLabel ?? null;
 }
 
+export function parseMilestoneStatus(
+  input: string | null | undefined,
+): MilestoneStatus | null {
+  if (input == null) return null;
+  const raw = String(input).trim();
+  if (!raw) return null;
+  if (isMilestoneStatus(raw)) return raw;
+  const token = normalizeToken(raw);
+  if (isMilestoneStatus(token)) return token;
+  const byLabel = MILESTONE_STATUSES.find(
+    (status) =>
+      MILESTONE_STATUS_LABELS[status].toLowerCase() === raw.toLowerCase(),
+  );
+  return byLabel ?? null;
+}
+
+export function parsePaymentStatus(
+  input: string | null | undefined,
+): PaymentStatus | null {
+  if (input == null) return null;
+  const raw = String(input).trim();
+  if (!raw) return null;
+  if (isPaymentStatus(raw)) return raw;
+  const token = normalizeToken(raw);
+  if (isPaymentStatus(token)) return token;
+  const byLabel = PAYMENT_STATUSES.find(
+    (status) =>
+      PAYMENT_STATUS_LABELS[status].toLowerCase() === raw.toLowerCase(),
+  );
+  return byLabel ?? null;
+}
+
 /** Normalize optional PBG status for persistence. Empty → null. */
 export function normalizePbgStatus(
   value: string | null | undefined,
@@ -231,6 +269,38 @@ export function normalizePbgStatus(
     throw new Error("Please select a valid status.");
   }
   return parsed;
+}
+
+/** Normalize milestone status for persistence. Invalid → error. */
+export function normalizeMilestoneStatus(
+  value: string | null | undefined,
+  fallback: MilestoneStatus = "not_started",
+): MilestoneStatus {
+  if (value == null || !String(value).trim()) return fallback;
+  const parsed = parseMilestoneStatus(value);
+  if (!parsed) {
+    throw new Error("Please select a valid status.");
+  }
+  return parsed;
+}
+
+/**
+ * Badge/display status: overdue incomplete milestones read as Delayed
+ * even if stored status is still in_progress / not_started.
+ */
+export function displayMilestoneStatus(options: {
+  status: string | null | undefined;
+  dueDate: string | null | undefined;
+  today?: string;
+}): MilestoneStatus {
+  const stored = parseMilestoneStatus(options.status) ?? "not_started";
+  if (stored === "completed" || stored === "on_hold" || stored === "delayed") {
+    return stored;
+  }
+  const due = String(options.dueDate || "").slice(0, 10);
+  if (!due) return stored;
+  const today = options.today || new Date().toISOString().slice(0, 10);
+  return due < today ? "delayed" : stored;
 }
 
 /**

@@ -22,13 +22,19 @@ test("persistPhase1Results uses same-day + historical duplicate flow", () => {
   assert.match(src, /findSameDayTender/);
   assert.match(src, /findHistoricalPriorTender/);
   assert.match(src, /HISTORICAL_DUPLICATE/);
-  assert.match(src, /onConflict:\s*"source_portal,source_tender_id,scraped_date"/);
-  assert.doesNotMatch(
-    src,
-    /onConflict:\s*"source_portal,source_tender_id"\s*[,}]/,
-  );
+  assert.match(src, /source_region/);
   assert.match(src, /Duplicate Tender247 ID – previously seen on/);
-  assert.doesNotMatch(src, /alwaysUpdate[\s\S]*"scraped_date"/);
+});
+
+test("tender metadata store uniqueness includes source_region", () => {
+  const src = fs.readFileSync(
+    path.join(root, "src/supabase/tenderMetadataStore.ts"),
+    "utf8",
+  );
+  assert.match(
+    src,
+    /onConflict:\s*"source_portal,source_region,source_tender_id,scraped_date"/,
+  );
 });
 
 test("migration defines composite daily uniqueness", () => {

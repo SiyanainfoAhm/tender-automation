@@ -29,6 +29,8 @@ export type AgenttenderDownloadStatus =
 
 export interface AgenttenderTenderRow {
   source_portal: AgenttenderSourcePortal;
+  /** Tender247 list region — INDIAN (default) or GLOBAL. */
+  source_region?: "INDIAN" | "GLOBAL";
   source_tender_id: string;
   folder_id: string | null;
   title: string;
@@ -259,6 +261,7 @@ export function buildTender247SupabaseRow(options: {
   /** Optional overrides from on-disk artifact detection (backfill). */
   aiSummaryAvailable?: boolean;
   documentArchiveAvailable?: boolean;
+  sourceRegion?: "INDIAN" | "GLOBAL";
 }): AgenttenderTenderRow {
   const { localFolderPath } = options;
   const t247Id = resolveTender247SourceId({
@@ -325,6 +328,7 @@ export function buildTender247SupabaseRow(options: {
 
   return {
     source_portal: "TENDER247",
+    source_region: options.sourceRegion || "INDIAN",
     source_tender_id: t247Id,
     folder_id: `T247-${t247Id}`,
     title,

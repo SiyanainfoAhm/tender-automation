@@ -126,21 +126,34 @@ async function findDetailHrefControl(
   row: Locator,
   t247Id: string,
 ): Promise<Locator | null> {
-  const hrefRe = new RegExp(`/auth/tender/${t247Id}(?:/|\\?|$)`, "i");
+  const hrefRe = new RegExp(
+    `/auth/(?:global)?tender/${t247Id}(?:/|\\?|$)`,
+    "i",
+  );
   // Include hidden anchors — Tender247 sometimes keeps the portal link off-screen.
-  const links = row.locator('a[href*="/auth/tender/"]');
+  const links = row.locator(
+    'a[href*="/auth/tender/"], a[href*="/auth/globaltender/"]',
+  );
   const count = await links.count().catch(() => 0);
   for (let i = 0; i < count; i += 1) {
     const link = links.nth(i);
     const href = (await link.getAttribute("href").catch(() => null)) || "";
-    if (!hrefRe.test(href) && !href.toLowerCase().includes(`/auth/tender/${t247Id}`)) {
+    if (
+      !hrefRe.test(href) &&
+      !href.toLowerCase().includes(`/auth/tender/${t247Id}`) &&
+      !href.toLowerCase().includes(`/auth/globaltender/${t247Id}`)
+    ) {
       continue;
     }
     if (await isBlacklistedExpansionControl(link)) continue;
     return link;
   }
 
-  const loose = row.locator(`a[href*="/auth/tender/${t247Id}"]`).first();
+  const loose = row
+    .locator(
+      `a[href*="/auth/tender/${t247Id}"], a[href*="/auth/globaltender/${t247Id}"]`,
+    )
+    .first();
   if (
     (await loose.count().catch(() => 0)) > 0 &&
     !(await isBlacklistedExpansionControl(loose))
@@ -159,21 +172,21 @@ async function findDetailUrlInRow(
   t247Id: string,
 ): Promise<string | null> {
   const hrefRe = new RegExp(
-    `(?:https?:\\/\\/[^"'\\s]+)?\\/auth\\/tender\\/${t247Id}\\/([0-9a-f-]{8,})`,
+    `(?:https?:\\/\\/[^"'\\s]+)?(\\/auth\\/(?:global)?tender)\\/${t247Id}\\/([0-9a-f-]{8,})`,
     "i",
   );
 
   const html = (await row.innerHTML().catch(() => "")) || "";
   const htmlMatch = html.match(hrefRe);
-  if (htmlMatch?.[1]) {
-    return `https://www.tender247.com/auth/tender/${t247Id}/${htmlMatch[1]}`;
+  if (htmlMatch?.[1] && htmlMatch?.[2]) {
+    return `https://www.tender247.com${htmlMatch[1]}/${t247Id}/${htmlMatch[2]}`;
   }
 
   const fromAttrs = await row
     .evaluate(
       (el, id) => {
         const re = new RegExp(
-          `(?:https?:\\/\\/[^"'\\s]+)?\\/auth\\/tender\\/${id}\\/([0-9a-f-]{8,})`,
+          `(?:https?:\\/\\/[^"'\\s]+)?(\\/auth\\/(?:global)?tender)\\/${id}\\/([0-9a-f-]{8,})`,
           "i",
         );
         const attrs = [
@@ -193,11 +206,15 @@ async function findDetailUrlInRow(
               /security/i.test(attr) &&
               /^[0-9a-f-]{8,}$/i.test(val.trim())
             ) {
-              return `https://www.tender247.com/auth/tender/${id}/${val.trim()}`;
+              const onGlobal =
+                typeof location !== "undefined" &&
+                /globaltender/i.test(location.pathname || "");
+              const prefix = onGlobal ? "/auth/globaltender" : "/auth/tender";
+              return `https://www.tender247.com${prefix}/${id}/${val.trim()}`;
             }
             const m = val.match(re);
-            if (m?.[1]) {
-              return `https://www.tender247.com/auth/tender/${id}/${m[1]}`;
+            if (m?.[1] && m?.[2]) {
+              return `https://www.tender247.com${m[1]}/${id}/${m[2]}`;
             }
           }
           for (const child of Array.from(node.children)) {

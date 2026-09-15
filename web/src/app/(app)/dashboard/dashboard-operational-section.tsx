@@ -13,14 +13,14 @@ const LIST_CONFIG: {
   {
     key: "closingSoon",
     title: "Closing soon",
-    href: "/tenders?quickDate=closing_7",
+    href: "/tenders/indian?quickDate=closing_7",
     emptyTitle: "No closing tenders",
     emptyDescription: "No tenders are closing in the next 7 days.",
   },
   {
     key: "recentlyQualified",
     title: "Recently qualified",
-    href: "/tenders?status=GO",
+    href: "/tenders/indian?status=GO",
     emptyTitle: "No recently qualified tenders",
     emptyDescription:
       "Tenders marked GO will appear here after qualification.",
@@ -28,7 +28,7 @@ const LIST_CONFIG: {
   {
     key: "recentlyActionable",
     title: "Recently actionable",
-    href: "/tenders?status=GO",
+    href: "/tenders/indian?status=GO",
     emptyTitle: "No recently actionable tenders",
     emptyDescription:
       "Tenders marked GO, CONDITIONAL GO or PARTNER BID will appear here.",
@@ -36,7 +36,7 @@ const LIST_CONFIG: {
   {
     key: "manualReview",
     title: "Needs verification",
-    href: "/tenders?status=VERIFY",
+    href: "/tenders/indian?status=VERIFY",
     emptyTitle: "Nothing to verify",
     emptyDescription: "Tenders with VERIFY status will show here.",
   },

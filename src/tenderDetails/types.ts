@@ -31,6 +31,17 @@ export interface DownloadedFileRecord {
   error?: string;
   publishedDate?: string | null;
   corrigendumType?: string | null;
+  /** Classified download failure (Global + Indian Download All). */
+  failureKind?:
+    | "DOCUMENT_NOT_AVAILABLE"
+    | "TEMPORARY_FAILURE"
+    | "AUTH_SESSION"
+    | "NO_DOWNLOAD_EVENT"
+    | "EMPTY_FILE"
+    | "PORTAL_ALERT";
+  portalAlert?: string | null;
+  downloadEndpoint?: string | null;
+  responseStatus?: number | null;
 }
 
 export interface TenderExtractedFields {

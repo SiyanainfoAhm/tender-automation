@@ -39,7 +39,28 @@ describe("tender status-count filter params", () => {
     );
     expect(params.get("date")).toBe("all");
     expect(params.get("city")).toBe("Delhi");
-    expect(searchParamsForStatusCounts({})).toEqual({ date: "all" });
+    expect(searchParamsForStatusCounts({})).toEqual({
+      date: "all",
+      region: "INDIAN",
+    });
+  });
+
+  it("includes region so Global tab status cards stay scoped", () => {
+    const params = buildTenderStatusCountSearchParams(
+      new URLSearchParams({
+        region: "GLOBAL",
+        date: "today",
+      }),
+    );
+    expect(params.get("region")).toBe("GLOBAL");
+    expect(params.get("date")).toBe("today");
+  });
+
+  it("defaults omitted region to INDIAN for status counts", () => {
+    const params = buildTenderStatusCountSearchParams(
+      new URLSearchParams({ date: "today" }),
+    );
+    expect(params.get("region")).toBe("INDIAN");
   });
 
   it("keeps the same query key when only status changes", () => {
@@ -72,6 +93,7 @@ describe("tender status-count filter params", () => {
     expect(flat).toEqual({
       date: "today",
       city: "Mumbai",
+      region: "INDIAN",
     });
   });
 

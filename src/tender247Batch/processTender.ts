@@ -31,6 +31,10 @@ import { findVisibleLiveTenderCards } from "./liveListCards.js";
 import { openTenderFromLiveCard } from "./openTenderFromCard.js";
 import { resolveTender247Tender } from "./resolveTender247Tender.js";
 import {
+  DEFAULT_TENDER247_SOURCE_REGION,
+  getTender247Source,
+} from "../tender247/sourceRegion.js";
+import {
   consolidateAllDocumentsDuplicates,
   inspectTenderResumeState,
   isValidArtifact,
@@ -134,6 +138,13 @@ export interface ProcessLiveTenderOptions {
    * Allow opening NO_GO / No Bid tenders (AI Summary downloads for every row).
    */
   allowNoBidDetailOpen?: boolean;
+  /**
+   * When false (Global documents-first), do not capture portal AI Summary;
+   * documents ZIP alone completes the tender.
+   */
+  aiSummaryRequired?: boolean;
+  /** Indian vs Global list — detail open / list recover must stay on this feed. */
+  sourceRegion?: "INDIAN" | "GLOBAL";
   recoveryBudgetMs?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -265,6 +276,9 @@ export async function processLiveTender(
     logger.info(`[T247 ${t247Id}] DETAIL_SCRAPE_ALLOWED=true`);
   }
 
+  const aiSummaryRequired = options.aiSummaryRequired !== false;
+  const sourceRegion =
+    options.sourceRegion || DEFAULT_TENDER247_SOURCE_REGION;
   // -------- LEVEL A: skip reopen when artifacts already satisfy the run --------
   let resume = inspectTenderResumeState(dateFolder, t247Id);
   const localArtifacts = inspectTenderArtifactState(resume.tenderFolder, t247Id);
@@ -291,12 +305,15 @@ export async function processLiveTender(
     options.documentsOnlyIfAiMissing === true &&
     (localArtifacts.aiSummaryValid || localArtifacts.documentsZipValid);
   // AI+docs pipeline: completeness is Supabase URLs when provided; else local.
+  // Global (aiSummaryRequired=false): documents URL alone is enough.
   const aiSummaryPipelineFullLocalDone =
     options.documentsOnlyIfAiMissing !== true &&
     options.allowNoBidDetailOpen === true &&
     (aiSummaryPipelineUsesSupabaseUrls
-      ? hasSupabaseDocs && hasSupabaseSummary
-      : localArtifacts.complete);
+      ? hasSupabaseDocs && (aiSummaryRequired ? hasSupabaseSummary : true)
+      : aiSummaryRequired
+        ? localArtifacts.complete
+        : localArtifacts.documentsZipValid);
   // Document pipeline: skip when core docs+metadata are ready (AI optional).
   const classicCoreDone =
     options.documentsOnlyIfAiMissing !== true &&
@@ -617,16 +634,20 @@ export async function processLiveTender(
         dateFolder,
         phase1ScreeningStatus: resolvedPhase1Status,
         allowNoBidDetailOpen: options.allowNoBidDetailOpen === true,
+        sourceRegion,
       });
       detailPage = resolved.detailPage;
       titleHint = options.titleHint ?? resolved.item.listTitle;
       const fromUrl = detailPage.url().match(
-        /\/auth\/tender\/\d+\/([0-9a-f-]{8,})/i,
+        /\/auth\/(globaltender|tender)\/\d+\/([0-9a-f-]{8,})/i,
       );
-      if (fromUrl?.[1]) {
-        securityCode = fromUrl[1];
+      if (fromUrl?.[2]) {
+        securityCode = fromUrl[2];
         securityCodeCaptured = true;
         logger.info("SECURITY_CODE_CAPTURED");
+        logger.info(
+          `T247_DETAIL_ROUTE region=${/globaltender/i.test(fromUrl[1] || "") ? "GLOBAL" : "INDIAN"} code=${securityCode}`,
+        );
       }
     } else {
       const cards = await findVisibleLiveTenderCards(listPage, logger);
@@ -648,8 +669,9 @@ export async function processLiveTender(
         }
       } else if (options.securityCodeOverride?.trim()) {
         securityCode = options.securityCodeOverride.trim();
-        const url = buildDetailPageUrl(t247Id, securityCode, null);
-        logger.info(`TENDER247_OPEN_DETAIL_BY_SECURITY_CODE=T247-${t247Id}`);
+        const region = sourceRegion;
+        const url = buildDetailPageUrl(t247Id, securityCode, null, region);
+        logger.info(`TENDER247_OPEN_DETAIL_BY_SECURITY_CODE=T247-${t247Id} region=${region}`);
         detailPage = await context.newPage();
         await detailPage.goto(url, {
           waitUntil: "domcontentloaded",
@@ -680,10 +702,10 @@ export async function processLiveTender(
 
     if (!securityCode) {
       const fromUrl = detailPage.url().match(
-        /\/auth\/tender\/\d+\/([0-9a-f-]{8,})/i,
+        /\/auth\/(globaltender|tender)\/\d+\/([0-9a-f-]{8,})/i,
       );
-      if (fromUrl?.[1]) {
-        securityCode = fromUrl[1];
+      if (fromUrl?.[2]) {
+        securityCode = fromUrl[2];
         securityCodeCaptured = true;
         logger.info("SECURITY_CODE_CAPTURED");
       }
@@ -698,7 +720,12 @@ export async function processLiveTender(
     assertSingleTender247DetailPage(context, listPage, logger);
 
     const portalUrl = securityCode
-      ? buildDetailPageUrl(t247Id, securityCode, null)
+      ? buildDetailPageUrl(
+          t247Id,
+          securityCode,
+          null,
+          sourceRegion,
+        )
       : detailPage.url();
 
     await verifyCurrentTenderId(detailPage, t247Id, logger);
@@ -855,7 +882,14 @@ export async function processLiveTender(
     }
 
     // ---- Sequential artifacts: AI Summary then documents (concurrency=1) ----
-    logger.info("AI_SUMMARY_CAPTURE_START");
+    if (!aiSummaryRequired) {
+      logger.info(
+        `AI_SUMMARY_SKIPPED_REGION_OPTIONAL=T247-${t247Id} reason=global_documents_first`,
+      );
+    }
+    logger.info(
+      aiSummaryRequired ? "AI_SUMMARY_CAPTURE_START" : "DOCUMENTS_CAPTURE_START",
+    );
     try {
       const skipAiFromSupabase =
         aiSummaryPipelineUsesSupabaseUrls &&
@@ -875,6 +909,16 @@ export async function processLiveTender(
           `RESUME_SUMMARY_ONLY=T247-${t247Id} reason=supabase_documents_zip_url`,
         );
       }
+      const skipAiSummary =
+        !aiSummaryRequired ||
+        skipAiFromSupabase ||
+        shouldSkipAiSummaryRetry(
+          resume.aiSummaryValid,
+          resolveAiSummaryStage({
+            tenderDir: resume.tenderFolder,
+            aiSummaryValid: resume.aiSummaryValid,
+          }),
+        );
       const downloads = await downloadRequiredTenderFiles({
         detailPage,
         context,
@@ -888,16 +932,9 @@ export async function processLiveTender(
         ),
         maxRetries: Math.min(1, config.documentDownloadMaxRetries),
         logger,
-        skipAiSummary:
-          skipAiFromSupabase ||
-          shouldSkipAiSummaryRetry(
-            resume.aiSummaryValid,
-            resolveAiSummaryStage({
-              tenderDir: resume.tenderFolder,
-              aiSummaryValid: resume.aiSummaryValid,
-            }),
-          ),
-        skipAiSummaryAssumeComplete: skipAiFromSupabase,
+        skipAiSummary,
+        skipAiSummaryAssumeComplete:
+          !aiSummaryRequired || skipAiFromSupabase,
         skipAllDocuments: skipDocsFromSupabase || resume.allDocumentsValid,
         documentsOnlyIfAiMissing: options.documentsOnlyIfAiMissing === true,
         keepDebugFiles: config.keepDebugFiles,
@@ -907,12 +944,13 @@ export async function processLiveTender(
       aiSummaryPath = downloads.aiSummaryPath;
       allDocumentsPath = downloads.allDocumentsPath;
       aiSummaryStatus = downloads.aiSummaryStatus;
-      allDocumentsStatus =
-        downloads.documentsStatus === "unavailable"
+      const docsTerminalUnavailable =
+        downloads.documentsStatus === "unavailable";
+      allDocumentsStatus = docsTerminalUnavailable
+        ? "unavailable"
+        : downloads.documentsStatus === "missing"
           ? "failed"
-          : downloads.documentsStatus === "missing"
-            ? "failed"
-            : downloads.documentsStatus;
+          : downloads.documentsStatus;
       downloadAllAttempted = downloads.downloadAllAttempted;
       downloadAllSuccess = downloads.downloadAllSuccess;
       individualFallbackUsed = downloads.individualFallbackUsed;
@@ -1057,12 +1095,30 @@ export async function processLiveTender(
           });
         };
         const preGate = inspectTenderArtifactState(resume.tenderFolder, t247Id);
+        const docsTerminalUnavailable = allDocumentsStatus === "unavailable";
         if (
           options.documentsOnlyIfAiMissing === true &&
           preGate.aiSummaryValid
         ) {
           logger.info("FINAL_GATE_SKIPPED_AI_SUMMARY_PRESENT=true");
           terminalKind = "complete";
+        } else if (docsTerminalUnavailable) {
+          // Portal said documents unavailable (e.g. Global HTTP 500 + alert).
+          // Do not burn the recovery budget retrying Download All.
+          logger.info(
+            `FINAL_GATE_SKIPPED_DOCUMENTS_UNAVAILABLE=true id=${t247Id}`,
+          );
+          lastGate = {
+            ready: false,
+            pendingTimeout: false,
+            pendingReason: null,
+            pendingMessage: null,
+            state: preGate,
+            safeToAdvance: true,
+            safeToClose: true,
+          };
+          terminalKind = "none";
+          assertCanCloseAfterFinalGate(t247Id, lastGate);
         } else {
           lastGate = await runFinalTenderAdvanceGate({
             tenderDir: resume.tenderFolder,
@@ -1088,16 +1144,16 @@ export async function processLiveTender(
         logger.info("DETAIL_CLOSE_START");
         if (detailPage === listPage) {
           // Same-tab open: never close the list page; return to the tender list.
-          const listUrl =
-            config.tender247Url?.trim() ||
-            "https://www.tender247.com/auth/tender";
+          const listUrl = getTender247Source(sourceRegion).url;
           await listPage
             .goto(listUrl, {
               waitUntil: "domcontentloaded",
               timeout: config.pageTimeoutMs,
             })
             .catch(() => undefined);
-          logger.info(`DETAIL_SAME_TAB_RETURNED_TO_LIST T247-${t247Id}`);
+          logger.info(
+            `DETAIL_SAME_TAB_RETURNED_TO_LIST T247-${t247Id} region=${sourceRegion}`,
+          );
         } else {
           await detailPage.close({ runBeforeUnload: false });
           logger.info(`DETAIL_TAB_CLOSED T247-${t247Id}`);
@@ -1320,11 +1376,13 @@ export async function processLiveTender(
       documentsStatus:
         allDocumentsStatus === "partial"
           ? "partial"
-          : allDocsOk
-            ? "complete"
-            : docsAttempted
-              ? "failed"
-              : "not_attempted",
+          : allDocumentsStatus === "unavailable"
+            ? "unavailable"
+            : allDocsOk
+              ? "complete"
+              : docsAttempted
+                ? "failed"
+                : "not_attempted",
       documentsPath: allDocumentsPath || resume.allDocumentsPath,
       downloadAllAttempted,
       downloadAllSuccess,
@@ -1360,18 +1418,25 @@ export async function processLiveTender(
       !aiOk &&
       isAiSummaryTerminalFailure(aiStageFinal));
   const gateComplete =
-    ((lastGate?.ready === true || artifactsAfterGate.complete) &&
+    ((lastGate?.ready === true ||
+      artifactsAfterGate.complete ||
+      !aiSummaryRequired) &&
       metadataOk &&
-      aiOk &&
+      (aiSummaryRequired ? aiOk : true) &&
       allDocsOk) ||
-    completeWithAiMissing;
+    (aiSummaryRequired && completeWithAiMissing);
 
   if (gateComplete && (!allDocsOk || !metadataOk)) {
     throw new Error(
       `T247_COMPLETED_WITHOUT_REQUIRED_ARTIFACTS: ${t247Id}`,
     );
   }
-  if (gateComplete && !aiOk && !completeWithAiMissing) {
+  if (
+    gateComplete &&
+    aiSummaryRequired &&
+    !aiOk &&
+    !completeWithAiMissing
+  ) {
     throw new Error(
       `T247_COMPLETED_WITHOUT_REQUIRED_ARTIFACTS: ${t247Id}`,
     );
@@ -1382,7 +1447,17 @@ export async function processLiveTender(
   let artifactComplete = false;
   let chatgptSkipped = false;
 
-  if (completeWithAiMissing && metadataOk && allDocsOk) {
+  if (!aiSummaryRequired && metadataOk && allDocsOk) {
+    status = "completed";
+    artifactComplete = true;
+    chatgptSkipped = false;
+    metadataStatus = "complete";
+    aiSummaryStatus = aiOk ? "complete" : "unavailable";
+    allDocumentsStatus = "complete";
+    if (!aiOk) {
+      t247Event(logger, t247Id, "AI_SUMMARY_OPTIONAL_SKIPPED=true");
+    }
+  } else if (completeWithAiMissing && metadataOk && allDocsOk) {
     status = "completed";
     artifactComplete = false;
     chatgptSkipped = false;
@@ -1398,6 +1473,12 @@ export async function processLiveTender(
     metadataStatus = "complete";
     aiSummaryStatus = "complete";
     allDocumentsStatus = "complete";
+  } else if (allDocumentsStatus === "unavailable") {
+    // Portal permanently cannot serve documents — close detail and advance.
+    status = "failed";
+    artifactComplete = false;
+    chatgptSkipped = true;
+    logger.info(`[T247 ${t247Id}] STATUS=DOCUMENTS_UNAVAILABLE`);
   } else if (pendingTimeout) {
     status = "pending";
     pendingReason =
@@ -1421,7 +1502,12 @@ export async function processLiveTender(
       `T247_COMPLETED_WITHOUT_REQUIRED_ARTIFACTS: ${t247Id}`,
     );
   }
-  if (status === "completed" && !aiOk && !completeWithAiMissing) {
+  if (
+    status === "completed" &&
+    aiSummaryRequired &&
+    !aiOk &&
+    !completeWithAiMissing
+  ) {
     throw new Error(
       `T247_COMPLETED_WITHOUT_REQUIRED_ARTIFACTS: ${t247Id}`,
     );

@@ -188,6 +188,8 @@ export const tenderFiltersSchema = z
   .object({
     q: z.string().optional(),
     source: z.string().optional().default("ALL"),
+    /** Tender247 list region — INDIAN (default) or GLOBAL. */
+    region: z.enum(["INDIAN", "GLOBAL", "ALL"]).optional().default("INDIAN"),
     status: z.string().optional().default("ALL"),
     downloadStatus: z.string().optional(),
     dateType: z.enum(DATE_TYPES).optional().default("closing_date"),
