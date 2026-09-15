@@ -4,15 +4,20 @@ import { revalidatePath } from "next/cache";
 
 import {
   WON_DOCUMENT_CATEGORIES,
-  WON_EXECUTION_STATUSES,
-  WON_MILESTONE_STATUSES,
-  WON_PAYMENT_MODES,
   type MarkTenderWonInput,
   type WonDocumentCategory,
   type WonExecutionStatus,
   type WonMilestoneStatus,
   type WonPaymentMode,
+  type WonPbgStatus,
 } from "@/lib/won-projects";
+import {
+  friendlyWonStatusConstraintError,
+  isExecutionStatus,
+  isMilestoneStatus,
+  isPaymentMode,
+  isPbgStatus,
+} from "@/lib/wonTenderStatuses";
 import { CompanyAccessError } from "@/server/auth/company-access";
 import { requirePermissionStrict } from "@/server/auth/permissions";
 import { getTenderDocumentById } from "@/server/repositories/bidFeeRepository";
@@ -57,22 +62,15 @@ function accessError(error: unknown): WonActionResult {
   if (error instanceof CompanyAccessError) {
     return { ok: false, error: error.message };
   }
+  const friendly = friendlyWonStatusConstraintError(error);
+  if (friendly) {
+    console.error("[won-projects] status constraint violation", error);
+    return { ok: false, error: friendly };
+  }
   return {
     ok: false,
     error: error instanceof Error ? error.message : "Unexpected error.",
   };
-}
-
-function isExecutionStatus(value: string): value is WonExecutionStatus {
-  return (WON_EXECUTION_STATUSES as readonly string[]).includes(value);
-}
-
-function isMilestoneStatus(value: string): value is WonMilestoneStatus {
-  return (WON_MILESTONE_STATUSES as readonly string[]).includes(value);
-}
-
-function isPaymentMode(value: string): value is WonPaymentMode {
-  return (WON_PAYMENT_MODES as readonly string[]).includes(value);
 }
 
 function isDocumentCategory(value: string): value is WonDocumentCategory {
@@ -129,7 +127,7 @@ export type UpdateWonProjectPayload = {
   pbgIssueDate?: string | null;
   pbgExpiryDate?: string | null;
   pbgBank?: string | null;
-  pbgStatus?: string | null;
+  pbgStatus?: WonPbgStatus | null;
   jiraProjectKey?: string | null;
   jiraUrl?: string | null;
   repositoryUrl?: string | null;
@@ -151,7 +149,10 @@ export async function updateWonProjectAction(
     const patch: Record<string, unknown> = {};
     if (payload.executionStatus !== undefined) {
       if (!isExecutionStatus(payload.executionStatus)) {
-        return { ok: false, error: "Invalid execution status." };
+        return {
+          ok: false,
+          error: "Invalid status selected. Please choose a valid option.",
+        };
       }
       patch.execution_status = payload.executionStatus;
     }
@@ -178,6 +179,14 @@ export async function updateWonProjectAction(
     }
     if (payload.pbgApplicable !== undefined) {
       patch.pbg_applicable = payload.pbgApplicable;
+      if (payload.pbgApplicable === false) {
+        patch.pbg_number = null;
+        patch.pbg_amount = null;
+        patch.pbg_issue_date = null;
+        patch.pbg_expiry_date = null;
+        patch.pbg_bank = null;
+        patch.pbg_status = null;
+      }
     }
     if (payload.pbgNumber !== undefined) patch.pbg_number = payload.pbgNumber;
     if (payload.pbgAmount !== undefined) patch.pbg_amount = payload.pbgAmount;
@@ -188,7 +197,25 @@ export async function updateWonProjectAction(
       patch.pbg_expiry_date = payload.pbgExpiryDate || null;
     }
     if (payload.pbgBank !== undefined) patch.pbg_bank = payload.pbgBank;
-    if (payload.pbgStatus !== undefined) patch.pbg_status = payload.pbgStatus;
+    if (payload.pbgStatus !== undefined) {
+      if (payload.pbgStatus == null) {
+        patch.pbg_status = null;
+      } else if (!isPbgStatus(payload.pbgStatus)) {
+        return {
+          ok: false,
+          error: "Invalid status selected. Please choose a valid option.",
+        };
+      } else {
+        patch.pbg_status = payload.pbgStatus;
+      }
+    }
+    if (
+      payload.pbgApplicable === true &&
+      (patch.pbg_status === null || patch.pbg_status === undefined) &&
+      payload.pbgStatus === undefined
+    ) {
+      patch.pbg_status = "pending";
+    }
     if (payload.jiraProjectKey !== undefined) {
       patch.jira_project_key = payload.jiraProjectKey;
     }
@@ -248,7 +275,10 @@ export async function saveWonMilestoneAction(
     if (!title) return { ok: false, error: "Milestone title is required." };
     if (!payload.dueDate) return { ok: false, error: "Due date is required." };
     if (payload.status && !isMilestoneStatus(payload.status)) {
-      return { ok: false, error: "Invalid milestone status." };
+      return {
+        ok: false,
+        error: "Invalid status selected. Please choose a valid option.",
+      };
     }
 
     if (payload.milestoneId) {

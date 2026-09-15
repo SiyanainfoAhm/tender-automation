@@ -52,10 +52,13 @@ import {
   WON_MILESTONE_STATUS_LABELS,
   WON_PAYMENT_MODES,
   WON_PAYMENT_MODE_LABELS,
+  WON_PBG_STATUSES,
+  WON_PBG_STATUS_LABELS,
   type WonDocumentCategory,
   type WonExecutionStatus,
   type WonMilestoneStatus,
   type WonPaymentMode,
+  type WonPbgStatus,
   type WonProjectDetail,
   type WonProjectMilestone,
   type WonProjectPayment,
@@ -129,7 +132,7 @@ export function WonProjectDetailClient({
     pbgIssueDate: project.pbgIssueDate || "",
     pbgExpiryDate: project.pbgExpiryDate || "",
     pbgBank: project.pbgBank || "",
-    pbgStatus: project.pbgStatus || "",
+    pbgStatus: (project.pbgStatus || "pending") as WonPbgStatus,
     notes: project.notes || "",
   });
 
@@ -224,12 +227,23 @@ export function WonProjectDetailClient({
         clientDepartment: overview.clientDepartment.trim() || null,
         projectManagerId: overview.projectManagerId || null,
         pbgApplicable: overview.pbgApplicable,
-        pbgNumber: overview.pbgNumber.trim() || null,
-        pbgAmount: overview.pbgAmount ? Number(overview.pbgAmount) : null,
-        pbgIssueDate: overview.pbgIssueDate || null,
-        pbgExpiryDate: overview.pbgExpiryDate || null,
-        pbgBank: overview.pbgBank.trim() || null,
-        pbgStatus: overview.pbgStatus.trim() || null,
+        pbgNumber: overview.pbgApplicable
+          ? overview.pbgNumber.trim() || null
+          : null,
+        pbgAmount:
+          overview.pbgApplicable && overview.pbgAmount
+            ? Number(overview.pbgAmount)
+            : null,
+        pbgIssueDate: overview.pbgApplicable
+          ? overview.pbgIssueDate || null
+          : null,
+        pbgExpiryDate: overview.pbgApplicable
+          ? overview.pbgExpiryDate || null
+          : null,
+        pbgBank: overview.pbgApplicable
+          ? overview.pbgBank.trim() || null
+          : null,
+        pbgStatus: overview.pbgApplicable ? overview.pbgStatus : null,
         notes: overview.notes.trim() || null,
       });
       if (!result.ok) {
@@ -599,6 +613,14 @@ export function WonProjectDetailClient({
 
         <TabsContent value="overview" className="mt-4 space-y-4">
           <div className="rounded-lg border border-border bg-card p-4 space-y-3">
+            <FieldRow label="Health Status">
+              <div className="flex flex-wrap items-center gap-2">
+                <HealthStatusBadge health={project.health} size="md" />
+                <span className="text-xs text-foreground-500">
+                  Calculated from milestones and payments (read-only)
+                </span>
+              </div>
+            </FieldRow>
             <FieldRow label="Execution Status">
               <Select
                 value={overview.executionStatus}
@@ -732,72 +754,152 @@ export function WonProjectDetailClient({
               </Select>
             </FieldRow>
             <div className="rounded-md border border-border p-3 space-y-3">
-              <label className="flex items-center gap-2 text-sm">
-                <Checkbox
-                  checked={overview.pbgApplicable}
-                  onCheckedChange={(v) =>
-                    setOverview((o) => ({ ...o, pbgApplicable: Boolean(v) }))
-                  }
-                  disabled={!canEdit}
-                />
-                PBG Applicable
-              </label>
+              <div className="space-y-2">
+                <Label className="text-sm font-medium">PBG Applicable</Label>
+                <div className="flex flex-wrap gap-4">
+                  <label className="inline-flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="pbgApplicable"
+                      className="size-4 accent-blue-600"
+                      checked={overview.pbgApplicable === true}
+                      onChange={() =>
+                        setOverview((o) => ({
+                          ...o,
+                          pbgApplicable: true,
+                          pbgStatus: o.pbgStatus || "pending",
+                        }))
+                      }
+                      disabled={!canEdit}
+                    />
+                    Yes
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-sm">
+                    <input
+                      type="radio"
+                      name="pbgApplicable"
+                      className="size-4 accent-blue-600"
+                      checked={overview.pbgApplicable === false}
+                      onChange={() =>
+                        setOverview((o) => ({
+                          ...o,
+                          pbgApplicable: false,
+                          pbgNumber: "",
+                          pbgAmount: "",
+                          pbgIssueDate: "",
+                          pbgExpiryDate: "",
+                          pbgBank: "",
+                          pbgStatus: "pending",
+                        }))
+                      }
+                      disabled={!canEdit}
+                    />
+                    No
+                  </label>
+                </div>
+              </div>
               {overview.pbgApplicable ? (
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <Input
-                    placeholder="PBG Number"
-                    value={overview.pbgNumber}
-                    onChange={(e) =>
-                      setOverview((o) => ({ ...o, pbgNumber: e.target.value }))
-                    }
-                    disabled={!canEdit}
-                  />
-                  <Input
-                    placeholder="PBG Amount"
-                    value={overview.pbgAmount}
-                    onChange={(e) =>
-                      setOverview((o) => ({ ...o, pbgAmount: e.target.value }))
-                    }
-                    disabled={!canEdit}
-                  />
-                  <Input
-                    type="date"
-                    value={overview.pbgIssueDate}
-                    onChange={(e) =>
-                      setOverview((o) => ({
-                        ...o,
-                        pbgIssueDate: e.target.value,
-                      }))
-                    }
-                    disabled={!canEdit}
-                  />
-                  <Input
-                    type="date"
-                    value={overview.pbgExpiryDate}
-                    onChange={(e) =>
-                      setOverview((o) => ({
-                        ...o,
-                        pbgExpiryDate: e.target.value,
-                      }))
-                    }
-                    disabled={!canEdit}
-                  />
-                  <Input
-                    placeholder="PBG Bank"
-                    value={overview.pbgBank}
-                    onChange={(e) =>
-                      setOverview((o) => ({ ...o, pbgBank: e.target.value }))
-                    }
-                    disabled={!canEdit}
-                  />
-                  <Input
-                    placeholder="PBG Status"
-                    value={overview.pbgStatus}
-                    onChange={(e) =>
-                      setOverview((o) => ({ ...o, pbgStatus: e.target.value }))
-                    }
-                    disabled={!canEdit}
-                  />
+                  <div className="grid gap-1.5">
+                    <Label className="text-xs text-foreground-500">
+                      PBG Number
+                    </Label>
+                    <Input
+                      value={overview.pbgNumber}
+                      onChange={(e) =>
+                        setOverview((o) => ({
+                          ...o,
+                          pbgNumber: e.target.value,
+                        }))
+                      }
+                      disabled={!canEdit}
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label className="text-xs text-foreground-500">
+                      PBG Amount
+                    </Label>
+                    <Input
+                      value={overview.pbgAmount}
+                      onChange={(e) =>
+                        setOverview((o) => ({
+                          ...o,
+                          pbgAmount: e.target.value,
+                        }))
+                      }
+                      disabled={!canEdit}
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label className="text-xs text-foreground-500">
+                      PBG Issue Date
+                    </Label>
+                    <Input
+                      type="date"
+                      value={overview.pbgIssueDate}
+                      onChange={(e) =>
+                        setOverview((o) => ({
+                          ...o,
+                          pbgIssueDate: e.target.value,
+                        }))
+                      }
+                      disabled={!canEdit}
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label className="text-xs text-foreground-500">
+                      PBG Expiry Date
+                    </Label>
+                    <Input
+                      type="date"
+                      value={overview.pbgExpiryDate}
+                      onChange={(e) =>
+                        setOverview((o) => ({
+                          ...o,
+                          pbgExpiryDate: e.target.value,
+                        }))
+                      }
+                      disabled={!canEdit}
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label className="text-xs text-foreground-500">
+                      PBG Bank
+                    </Label>
+                    <Input
+                      value={overview.pbgBank}
+                      onChange={(e) =>
+                        setOverview((o) => ({ ...o, pbgBank: e.target.value }))
+                      }
+                      disabled={!canEdit}
+                    />
+                  </div>
+                  <div className="grid gap-1.5">
+                    <Label className="text-xs text-foreground-500">
+                      PBG Status
+                    </Label>
+                    <Select
+                      value={overview.pbgStatus}
+                      onValueChange={(v) =>
+                        setOverview((o) => ({
+                          ...o,
+                          pbgStatus: v as WonPbgStatus,
+                        }))
+                      }
+                      disabled={!canEdit}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Select status" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {WON_PBG_STATUSES.map((status) => (
+                          <SelectItem key={status} value={status}>
+                            {WON_PBG_STATUS_LABELS[status]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -1326,17 +1428,33 @@ export function WonProjectDetailClient({
                   }
                 />
               </div>
-              <div className="grid gap-2">
-                <Label>Due Date *</Label>
-                <Input
-                  type="date"
-                  value={paymentForm.dueDate}
-                  onChange={(e) =>
-                    setPaymentForm((f) => ({ ...f, dueDate: e.target.value }))
-                  }
-                />
-              </div>
+            <div className="grid gap-2">
+              <Label>Due Date *</Label>
+              <Input
+                type="date"
+                value={paymentForm.dueDate}
+                onChange={(e) =>
+                  setPaymentForm((f) => ({ ...f, dueDate: e.target.value }))
+                }
+              />
             </div>
+            </div>
+            {editingPayment ? (
+              <div className="grid gap-2">
+                <Label>Payment Status</Label>
+                <div className="flex flex-wrap items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2">
+                  <PaymentStatusBadge status={editingPayment.derivedStatus} />
+                  <span className="text-xs text-foreground-500">
+                    Calculated from received amount and due date (read-only)
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-foreground-500">
+                Status starts as Pending and updates automatically when receipts
+                are recorded.
+              </p>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-2">
                 <Label>Invoice #</Label>

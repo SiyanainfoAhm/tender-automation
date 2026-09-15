@@ -1,78 +1,34 @@
 /** Won Tenders / Project Execution domain types and pure helpers. */
 
-export const WON_EXECUTION_STATUSES = [
-  "awarded",
-  "in_execution",
-  "on_hold",
-  "completed",
-  "cancelled",
-] as const;
+export {
+  EXECUTION_STATUSES as WON_EXECUTION_STATUSES,
+  EXECUTION_STATUS_LABELS as WON_EXECUTION_STATUS_LABELS,
+  MILESTONE_STATUSES as WON_MILESTONE_STATUSES,
+  MILESTONE_STATUS_LABELS as WON_MILESTONE_STATUS_LABELS,
+  PAYMENT_MODES as WON_PAYMENT_MODES,
+  PAYMENT_MODE_LABELS as WON_PAYMENT_MODE_LABELS,
+  PAYMENT_STATUSES as WON_PAYMENT_STATUSES,
+  PAYMENT_STATUS_LABELS as WON_PAYMENT_STATUS_LABELS,
+  PBG_STATUSES as WON_PBG_STATUSES,
+  PBG_STATUS_LABELS as WON_PBG_STATUS_LABELS,
+  HEALTH_STATUSES as WON_HEALTH_STATUSES,
+  HEALTH_STATUS_LABELS as WON_HEALTH_STATUS_LABELS,
+  type ExecutionStatus as WonExecutionStatus,
+  type MilestoneStatus as WonMilestoneStatus,
+  type PaymentMode as WonPaymentMode,
+  type PaymentStatus as WonPaymentStatus,
+  type PbgStatus as WonPbgStatus,
+  type HealthStatus as WonHealthStatus,
+} from "@/lib/wonTenderStatuses";
 
-export type WonExecutionStatus = (typeof WON_EXECUTION_STATUSES)[number];
-
-export const WON_EXECUTION_STATUS_LABELS: Record<WonExecutionStatus, string> = {
-  awarded: "Awarded",
-  in_execution: "In Execution",
-  on_hold: "On Hold",
-  completed: "Completed",
-  cancelled: "Cancelled",
-};
-
-export const WON_MILESTONE_STATUSES = [
-  "not_started",
-  "in_progress",
-  "completed",
-  "delayed",
-  "on_hold",
-] as const;
-
-export type WonMilestoneStatus = (typeof WON_MILESTONE_STATUSES)[number];
-
-export const WON_MILESTONE_STATUS_LABELS: Record<WonMilestoneStatus, string> = {
-  not_started: "Not Started",
-  in_progress: "In Progress",
-  completed: "Completed",
-  delayed: "Delayed",
-  on_hold: "On Hold",
-};
-
-export const WON_PAYMENT_MODES = [
-  "bank_transfer",
-  "cheque",
-  "neft",
-  "rtgs",
-  "upi",
-  "other",
-] as const;
-
-export type WonPaymentMode = (typeof WON_PAYMENT_MODES)[number];
-
-export const WON_PAYMENT_MODE_LABELS: Record<WonPaymentMode, string> = {
-  bank_transfer: "Bank Transfer",
-  cheque: "Cheque",
-  neft: "NEFT",
-  rtgs: "RTGS",
-  upi: "UPI",
-  other: "Other",
-};
-
-export const WON_PAYMENT_STATUSES = [
-  "pending",
-  "partially_received",
-  "received",
-  "overdue",
-  "cancelled",
-] as const;
-
-export type WonPaymentStatus = (typeof WON_PAYMENT_STATUSES)[number];
-
-export const WON_PAYMENT_STATUS_LABELS: Record<WonPaymentStatus, string> = {
-  pending: "Pending",
-  partially_received: "Partially Received",
-  received: "Received",
-  overdue: "Overdue",
-  cancelled: "Cancelled",
-};
+import type {
+  ExecutionStatus as WonExecutionStatus,
+  HealthStatus as WonHealthStatus,
+  MilestoneStatus as WonMilestoneStatus,
+  PaymentMode as WonPaymentMode,
+  PaymentStatus as WonPaymentStatus,
+  PbgStatus as WonPbgStatus,
+} from "@/lib/wonTenderStatuses";
 
 export const WON_DOCUMENT_CATEGORIES = [
   "purchase_order",
@@ -106,22 +62,6 @@ export const WON_DOCUMENT_CATEGORY_LABELS: Record<WonDocumentCategory, string> =
     technical_document: "Technical Document",
     other: "Other",
   };
-
-export const WON_HEALTH_STATUSES = [
-  "on_track",
-  "delayed",
-  "payment_overdue",
-  "completed",
-] as const;
-
-export type WonHealthStatus = (typeof WON_HEALTH_STATUSES)[number];
-
-export const WON_HEALTH_STATUS_LABELS: Record<WonHealthStatus, string> = {
-  on_track: "On Track",
-  delayed: "Delayed",
-  payment_overdue: "Payment Overdue",
-  completed: "Completed",
-};
 
 export type WonProjectMilestone = {
   id: string;
@@ -213,7 +153,7 @@ export type WonProject = {
   pbgIssueDate: string | null;
   pbgExpiryDate: string | null;
   pbgBank: string | null;
-  pbgStatus: string | null;
+  pbgStatus: WonPbgStatus | null;
   jiraProjectKey: string | null;
   jiraUrl: string | null;
   repositoryUrl: string | null;

@@ -6,7 +6,6 @@ import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -260,16 +259,38 @@ export function MarkAsWonDialog({
               </Select>
             </div>
           ) : null}
-          <div className="rounded-lg border border-border p-3">
-            <label className="flex items-center gap-2 text-sm font-medium">
-              <Checkbox
-                checked={pbgApplicable}
-                onCheckedChange={(v) => setPbgApplicable(Boolean(v))}
-              />
-              PBG Applicable
-            </label>
+          <div className="rounded-lg border border-border p-3 space-y-3">
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">PBG Applicable</Label>
+              <div className="flex flex-wrap gap-4">
+                <label className="inline-flex items-center gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="markWonPbgApplicable"
+                    className="size-4 accent-blue-600"
+                    checked={pbgApplicable === true}
+                    onChange={() => setPbgApplicable(true)}
+                  />
+                  Yes
+                </label>
+                <label className="inline-flex items-center gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="markWonPbgApplicable"
+                    className="size-4 accent-blue-600"
+                    checked={pbgApplicable === false}
+                    onChange={() => {
+                      setPbgApplicable(false);
+                      setPbgAmount("");
+                      setPbgExpiryDate("");
+                    }}
+                  />
+                  No
+                </label>
+              </div>
+            </div>
             {pbgApplicable ? (
-              <div className="mt-3 grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div className="grid gap-2">
                   <Label htmlFor="pbgAmount">PBG Amount</Label>
                   <Input
@@ -288,6 +309,10 @@ export function MarkAsWonDialog({
                     onChange={(e) => setPbgExpiryDate(e.target.value)}
                   />
                 </div>
+                <p className="col-span-2 text-xs text-foreground-500">
+                  PBG status defaults to Pending. Update it on the project
+                  overview after creation.
+                </p>
               </div>
             ) : null}
           </div>

@@ -155,7 +155,7 @@
       "value": "GA1.2.424064101.1789209342",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1789497105,
+      "expires": 1789529663,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -201,26 +201,6 @@
       "sameSite": "Lax"
     },
     {
-      "name": "_ga",
-      "value": "GA1.2.1744748255.1785411924",
-      "domain": ".tender247.com",
-      "path": "/",
-      "expires": 1823970705.915529,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "_ga_3FYV8W34LF",
-      "value": "GS2.1.s1789410683$o46$g1$t1789410707$j36$l0$h1076670773",
-      "domain": ".tender247.com",
-      "path": "/",
-      "expires": 1823970707.054796,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
       "name": "AWSALBCORS",
       "value": "3UENuZGvidWDfmQXetiXs5liKnA1vcqx8jZluSbSJWOs/jZjU/hQnNuht4AuersbGGvxpQLP7kw3MwpSwlJndCN3sNl1Q6z0gXstHpKx8tgFfKF3Rg20gV4hUWLHLNY0kQHemw8VA0wcNj6Xf7KuVth+9PWyo+tTbGSmxHDHKZ8IfyT3mmP9EDXGOysxpg==",
       "domain": "widget-mediator.zopim.com",
@@ -229,6 +209,36 @@
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
+    },
+    {
+      "name": "_ga",
+      "value": "GA1.2.1744748255.1785411924",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1824003263.240895,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_gat",
+      "value": "1",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1789443323,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga_3FYV8W34LF",
+      "value": "GS2.1.s1789443262$o47$g0$t1789443264$j58$l0$h1349395460",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1824003264.204546,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
     }
   ],
   "origins": [
@@ -253,7 +263,7 @@
         },
         {
           "name": "_gcl_ls",
-          "value": "{\"schema\":\"gcl\",\"version\":1,\"gsid_dc\":{\"value\":{\"joinId\":\"dle1vPP7DPEq8s8QSY6maUwmjYDma_JqDw\",\"lastJoinedTimeMs\":1789410683663},\"expires\":1789410983663},\"gcl_ctr\":{\"value\":{\"value\":0,\"timeouts\":0,\"errors\":0,\"eopCount\":0,\"creationTimeMs\":1785411924387},\"expires\":1793187924387},\"last_convs\":{\"value\":[],\"expires\":1796007710160}}"
+          "value": "{\"schema\":\"gcl\",\"version\":1,\"gsid_dc\":{\"value\":{\"joinId\":\"uivZtswgwn87Rnb8jBAG03VrS-ACuwUNOQ\",\"lastJoinedTimeMs\":1789443262926},\"expires\":1789443562926},\"gcl_ctr\":{\"value\":{\"value\":0,\"timeouts\":0,\"errors\":0,\"eopCount\":0,\"creationTimeMs\":1785411924387},\"expires\":1793187924387},\"last_convs\":{\"value\":[],\"expires\":1796007710160}}"
         },
         {
           "name": "popup_settings",

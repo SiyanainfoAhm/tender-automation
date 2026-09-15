@@ -20,6 +20,7 @@ import {
   type WonProjectPaymentReceipt,
   type WonProjectSummary,
 } from "@/lib/won-projects";
+import { isPbgStatus } from "@/lib/wonTenderStatuses";
 
 function num(value: unknown): number {
   const n = Number(value);
@@ -71,7 +72,10 @@ function mapProject(row: Record<string, unknown>): WonProject {
       ? String(row.pbg_expiry_date).slice(0, 10)
       : null,
     pbgBank: str(row.pbg_bank),
-    pbgStatus: str(row.pbg_status),
+    pbgStatus: (() => {
+      const raw = str(row.pbg_status);
+      return raw && isPbgStatus(raw) ? raw : null;
+    })(),
     jiraProjectKey: str(row.jira_project_key),
     jiraUrl: str(row.jira_url),
     repositoryUrl: str(row.repository_url),
