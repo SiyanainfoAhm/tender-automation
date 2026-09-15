@@ -47,15 +47,25 @@ export type WonActionResult =
     }
   | { ok: false; error: string };
 
-function revalidateWonPaths(projectId?: string, tenderId?: string) {
-  revalidatePath("/won-tenders");
-  revalidatePath("/", "layout");
+/**
+ * Keep overview/PBG saves fast: only invalidate the project (+ list).
+ * Use includeNav for mark-as-won where sidebar/dashboard counts change.
+ */
+function revalidateWonPaths(
+  projectId?: string,
+  tenderId?: string,
+  options?: { includeNav?: boolean },
+) {
   if (projectId) revalidatePath(`/won-tenders/${projectId}`);
+  revalidatePath("/won-tenders");
   if (tenderId) {
     revalidatePath(`/tenders/${tenderId}`);
-    revalidatePath("/tenders", "layout");
   }
-  revalidatePath("/dashboard");
+  if (options?.includeNav) {
+    revalidatePath("/", "layout");
+    revalidatePath("/dashboard");
+    if (tenderId) revalidatePath("/tenders", "layout");
+  }
 }
 
 function accessError(error: unknown): WonActionResult {
@@ -94,7 +104,7 @@ export async function markTenderAsWonAction(
       userId: session.user.id,
       input: { ...input, tenderId },
     });
-    revalidateWonPaths(result.wonProjectId, tenderId);
+    revalidateWonPaths(result.wonProjectId, tenderId, { includeNav: true });
 
     return {
       ok: true,

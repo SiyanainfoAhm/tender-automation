@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -202,8 +202,10 @@ export function WonProjectDetailClient({
     [project.milestones],
   );
 
-  function refresh() {
-    router.refresh();
+  function refresh(options?: { force?: boolean }) {
+    // Overview/PBG fields are already in local state; skip full RSC refresh
+    // unless caller needs server-derived badges (health) updated.
+    if (options?.force) router.refresh();
   }
 
   function saveOverview() {
@@ -237,6 +239,8 @@ export function WonProjectDetailClient({
         return;
       }
     }
+
+    const executionChanged = executionStatus !== project.executionStatus;
 
     startTransition(async () => {
       const result = await updateWonProjectAction({
@@ -273,8 +277,9 @@ export function WonProjectDetailClient({
         toast.error(result.error);
         return;
       }
-      toast.success(result.message);
-      refresh();
+      toast.success(result.message || "Project updated.");
+      // PBG-only saves stay instant; refresh only when header health/status badges need it.
+      if (executionChanged) refresh({ force: true });
     });
   }
 
@@ -295,7 +300,7 @@ export function WonProjectDetailClient({
         return;
       }
       toast.success(result.message);
-      refresh();
+      refresh({ force: true });
     });
   }
 
@@ -358,7 +363,7 @@ export function WonProjectDetailClient({
       }
       toast.success(result.message);
       setMilestoneDialogOpen(false);
-      refresh();
+      refresh({ force: true });
     });
   }
 
@@ -374,7 +379,7 @@ export function WonProjectDetailClient({
         return;
       }
       toast.success(result.message);
-      refresh();
+      refresh({ force: true });
     });
   }
 
@@ -439,7 +444,7 @@ export function WonProjectDetailClient({
       }
       toast.success(result.message);
       setPaymentDialogOpen(false);
-      refresh();
+      refresh({ force: true });
     });
   }
 
@@ -455,7 +460,7 @@ export function WonProjectDetailClient({
         return;
       }
       toast.success(result.message);
-      refresh();
+      refresh({ force: true });
     });
   }
 
@@ -493,7 +498,7 @@ export function WonProjectDetailClient({
       }
       toast.success(result.message);
       setReceiptDialogOpen(false);
-      refresh();
+      refresh({ force: true });
     });
   }
 
@@ -530,7 +535,7 @@ export function WonProjectDetailClient({
       toast.success(result.message);
       setDocDialogOpen(false);
       setDocFile(null);
-      refresh();
+      refresh({ force: true });
     });
   }
 
@@ -546,7 +551,7 @@ export function WonProjectDetailClient({
         return;
       }
       toast.success(result.message);
-      refresh();
+      refresh({ force: true });
     });
   }
 
@@ -567,8 +572,8 @@ export function WonProjectDetailClient({
               {project.tenderTitle}
             </h1>
             <p className="text-sm text-foreground-500">
-              {project.organization || "—"}
-              {project.referenceNo ? ` · ${project.referenceNo}` : ""}
+              {project.organization || "â€”"}
+              {project.referenceNo ? ` Â· ${project.referenceNo}` : ""}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -963,7 +968,7 @@ export function WonProjectDetailClient({
             </FieldRow>
             {canEdit ? (
               <Button size="sm" onClick={saveOverview} disabled={pending}>
-                {pending ? "Saving…" : "Save Overview"}
+                {pending ? "Savingâ€¦" : "Save Overview"}
               </Button>
             ) : null}
           </div>
@@ -1006,11 +1011,11 @@ export function WonProjectDetailClient({
                       <td className="px-3 py-2">
                         <MilestoneStatusBadge status={m.status} />
                       </td>
-                      <td className="px-3 py-2">{m.ownerName || "—"}</td>
+                      <td className="px-3 py-2">{m.ownerName || "â€”"}</td>
                       <td className="px-3 py-2">
                         {m.milestoneValue != null
                           ? formatIndianCurrency(m.milestoneValue)
-                          : "—"}
+                          : "â€”"}
                       </td>
                       {canEdit ? (
                         <td className="px-3 py-2">
@@ -1205,7 +1210,7 @@ export function WonProjectDetailClient({
             </FieldRow>
             {canEdit ? (
               <Button size="sm" onClick={saveDevelopment} disabled={pending}>
-                {pending ? "Saving…" : "Save Development"}
+                {pending ? "Savingâ€¦" : "Save Development"}
               </Button>
             ) : null}
           </div>
@@ -1264,7 +1269,7 @@ export function WonProjectDetailClient({
                         {formatDate(doc.documentDate)}
                       </td>
                       <td className="px-3 py-2 text-xs text-foreground-500">
-                        {doc.createdByName || "—"} ·{" "}
+                        {doc.createdByName || "â€”"} Â·{" "}
                         {formatDate(doc.createdAt)}
                       </td>
                       <td className="px-3 py-2">
@@ -1419,7 +1424,7 @@ export function WonProjectDetailClient({
               Cancel
             </Button>
             <Button onClick={saveMilestone} disabled={pending}>
-              {pending ? "Saving…" : "Save"}
+              {pending ? "Savingâ€¦" : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1549,7 +1554,7 @@ export function WonProjectDetailClient({
               Cancel
             </Button>
             <Button onClick={savePayment} disabled={pending}>
-              {pending ? "Saving…" : "Save"}
+              {pending ? "Savingâ€¦" : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1627,7 +1632,7 @@ export function WonProjectDetailClient({
               Cancel
             </Button>
             <Button onClick={saveReceipt} disabled={pending}>
-              {pending ? "Saving…" : "Record"}
+              {pending ? "Savingâ€¦" : "Record"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1698,7 +1703,7 @@ export function WonProjectDetailClient({
               {pending ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
-                  Uploading…
+                  Uploadingâ€¦
                 </>
               ) : (
                 "Upload"
