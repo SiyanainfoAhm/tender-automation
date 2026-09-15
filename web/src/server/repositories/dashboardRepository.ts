@@ -43,12 +43,13 @@ import type {
   DashboardPipelineStageRow,
   DashboardSourcePill,
   DashboardVolumePoint,
-  DashboardWonPortfolio,
 } from "@/lib/dashboard/types";
 import {
   filterRowsForDashboardPeriod,
+  resolveDashboardPeriodBounds,
   tenderBasisDate,
 } from "@/lib/dashboard/period-filter";
+import { buildWonPortfolioFromProjects } from "@/lib/dashboard/won-portfolio";
 import { fetchAllSupabaseRows } from "@/lib/db/fetchAllRows";
 import { getServerSupabase } from "@/lib/db/server";
 import { formatIndianCurrency } from "@/lib/format";
@@ -57,8 +58,8 @@ import {
   TENDER_UI_STATUS_LABELS,
 } from "@/lib/tender-status";
 import { listExpiringDocuments } from "@/server/repositories/documentRepository";
-import { listCompanyExperience } from "@/server/repositories/experienceRepository";
 import { listBidFees } from "@/server/repositories/bidFeeRepository";
+import { listWonProjects } from "@/server/repositories/wonProjectRepository";
 
 type TenderRow = {
   id: string;
@@ -297,86 +298,6 @@ function buildCategories(rows: TenderRow[]): {
   return { categories, total, sources };
 }
 
-function buildWonPortfolio(
-  rows: TenderRow[],
-  experiences: Awaited<ReturnType<typeof listCompanyExperience>>,
-): DashboardWonPortfolio {
-  const wonRows = rows.filter((row) =>
-    isWonQualificationStatus(row.effective_qualification_status),
-  );
-  const wonValue = wonRows.reduce(
-    (sum, row) => sum + toNumber(row.tender_value),
-    0,
-  );
-
-  const ongoing = experiences.filter((e) => e.projectStatus === "ongoing");
-  const completed = experiences.filter((e) => e.projectStatus === "completed");
-  const experienceValue = experiences.reduce(
-    (sum, e) => sum + (Number(e.projectValueInr) || 0),
-    0,
-  );
-  const inExecutionValue = ongoing.reduce(
-    (sum, e) => sum + (Number(e.projectValueInr) || 0),
-    0,
-  );
-
-  const statusBuckets = [
-    {
-      key: "won",
-      label: "Won",
-      count: wonRows.length,
-      totalValue: wonValue,
-      color: "#16a34a",
-    },
-    {
-      key: "awarded",
-      label: "Past experience",
-      count: experiences.length,
-      totalValue: experienceValue,
-      color: "#059669",
-    },
-    {
-      key: "in_execution",
-      label: "In Execution",
-      count: ongoing.length,
-      totalValue: inExecutionValue,
-      color: "#0ea5e9",
-    },
-    {
-      key: "completed",
-      label: "Completed",
-      count: completed.length,
-      totalValue: completed.reduce(
-        (sum, e) => sum + (Number(e.projectValueInr) || 0),
-        0,
-      ),
-      color: "#64748b",
-    },
-    {
-      key: "terminated",
-      label: "Terminated",
-      count: 0,
-      totalValue: 0,
-      color: "#dc2626",
-    },
-  ];
-  const maxValue = Math.max(1, ...statusBuckets.map((b) => b.totalValue));
-
-  return {
-    activeProjects: ongoing.length,
-    inExecutionValue,
-    inExecutionValueLabel: moneyLabel(inExecutionValue || wonValue),
-    completed: completed.length,
-    milestonesDone: completed.length,
-    milestonesTotal: Math.max(experiences.length, wonRows.length),
-    byStatus: statusBuckets.map((b) => ({
-      ...b,
-      valueLabel: moneyLabel(b.totalValue),
-      progress: Math.round((b.totalValue / maxValue) * 100),
-    })),
-  };
-}
-
 function buildUpcomingDeadlines(
   rows: TenderRow[],
   _submittedIds: Set<string>,
@@ -426,9 +347,9 @@ function buildUpcomingDeadlines(
  * - scraped → scraped_date (fallback first_seen_at / crawled_at / created_at)
  * - created → created_at (fallback first_seen_at / crawled_at / scraped_date)
  *
- * Won Projects KPI: tenders with qualification_status WON/AWARDED only.
- * Execution portfolio separately shows company past experience
- * (agenttender_company_experience) — that must not inflate the Won KPI.
+ * Won Projects KPI + execution portfolio: agenttender_won_projects for the
+ * active company (all-time portfolio, not intake period).
+ * Contracts awarded summary: won projects whose award_date falls in period.
  * Financial exposure: persisted Add Bid Fee records only (agenttender_bid_fees).
  */
 export async function getDashboardOverview(options: {
@@ -450,7 +371,7 @@ export async function getDashboardOverview(options: {
     allRows,
     submittedIds,
     expiringDocuments,
-    experiences,
+    wonProjects,
     bidFees,
   ] = await Promise.all([
     fetchAllSupabaseRows<TenderRow>(supabase, {
@@ -461,7 +382,7 @@ export async function getDashboardOverview(options: {
     loadSubmittedWorkspaces(options.companyId),
     loadExpiringDocuments(options.companyId),
     options.companyId
-      ? listCompanyExperience(options.companyId).catch(() => [])
+      ? listWonProjects(options.companyId).catch(() => [])
       : Promise.resolve([]),
     options.companyId
       ? listBidFees({ companyId: options.companyId }).catch(() => [])
@@ -482,12 +403,15 @@ export async function getDashboardOverview(options: {
       row.effective_qualification_status === "NO_GO" ||
       row.effective_qualification_status === "NO_BID",
   ).length;
-  const wonInPeriod = periodRows.filter((row) =>
-    isWonQualificationStatus(row.effective_qualification_status),
-  );
-  const contractsAwarded = wonInPeriod.length;
-  const contractsAwardedValue = wonInPeriod.reduce(
-    (sum, row) => sum + toNumber(row.tender_value),
+
+  const { fromYmd, toYmd } = resolveDashboardPeriodBounds(period, now);
+  const awardedInPeriod = wonProjects.filter((project) => {
+    const awardYmd = String(project.awardDate || "").slice(0, 10);
+    return awardYmd >= fromYmd && awardYmd <= toYmd;
+  });
+  const contractsAwarded = awardedInPeriod.length;
+  const contractsAwardedValue = awardedInPeriod.reduce(
+    (sum, project) => sum + toNumber(project.finalAwardValue),
     0,
   );
 
@@ -515,7 +439,8 @@ export async function getDashboardOverview(options: {
   const emdCommitted = getEmdCommitted(bidFees);
 
   const financialExposure = buildFinancialExposureFromBidFees(bidFees);
-  const wonPortfolio = buildWonPortfolio(scopedRows, experiences);
+  const wonPortfolio = buildWonPortfolioFromProjects(wonProjects);
+  const wonProjectCount = wonProjects.length;
   const { categories, total: categoryTotal, sources } =
     buildCategories(scopedRows);
   const volumeTrend = buildVolumeTrend(allRows, dateBasis, now);
@@ -585,13 +510,11 @@ export async function getDashboardOverview(options: {
       {
         key: "wonProjects",
         label: "Won Projects",
-        value: wonAll.length.toLocaleString("en-IN"),
+        value: wonProjectCount.toLocaleString("en-IN"),
         supporting:
-          wonAll.length > 0
+          wonProjectCount > 0
             ? wonPortfolio.inExecutionValueLabel
-            : experiences.length > 0
-              ? `${experiences.length} past experience on file (not tender wins)`
-              : "No won tenders yet",
+            : "No won projects yet",
         tone: "green",
       },
       {

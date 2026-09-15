@@ -612,7 +612,7 @@ export function DashboardOverviewClient({ data }: DashboardOverviewProps) {
               Won Projects — Execution Portfolio
             </h2>
             <p className="mt-0.5 text-sm text-slate-500">
-              Tender wins plus company past experience on file
+              Active company project execution from Won Tenders
             </p>
           </div>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
