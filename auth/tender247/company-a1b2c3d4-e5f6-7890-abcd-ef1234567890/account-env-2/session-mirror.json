@@ -65,7 +65,7 @@
       "value": "1YmohJhudxTDR6Y",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1820997230,
+      "expires": 1821000906,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -202,10 +202,10 @@
     },
     {
       "name": "AWSALBCORS",
-      "value": "N6ri86OGpnuFO8DV3OXQ7/RU0FRHq5y2OEonEqIV1hGrn/beVJoM4PLCsi1uMft6wJv2BVnwV+TsEsfovRK+bcT8QUIcXqf4dp7NGRiUKYWh2bmebrYCgW8P4+sNCAJocXnhmvQdy4bEz4UdRGB80PfEpflCa+PSwB/DExqjq8b7ZOa+/2x1/8lLpjzdeg==",
+      "value": "kVeZ+F+qxHWlAIoL870LGM28YiWiNIVLfsC7MVj3i4LraxVm32vvtqvw7s1DGA8FFwz+D5x6WpshRN3b3SmZ86wMNfoBcQAkUEThE8RjIXxiwWDmcEWK80cDZjJWEexHz70oGBftQ01Jq/pPik7dkYPKgUi2cN5DZG47ofBITCqvP4ajMVnsh4J/+OPr2g==",
       "domain": "widget-mediator.zopim.com",
       "path": "/",
-      "expires": 1790066029.901238,
+      "expires": 1790069705.942558,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
@@ -221,7 +221,7 @@
         },
         {
           "name": "ZD-suid",
-          "value": "{\"id\":\"9526701f7eff494ca3051aeed1cd5f00\",\"expiry\":1789462129525,\"tabs\":{\"count\":1,\"expiry\":0}}"
+          "value": "{\"id\":\"0c3eafe2bbea4a838f6796733b089e41\",\"expiry\":1789465805186,\"tabs\":{\"count\":1,\"expiry\":0}}"
         },
         {
           "name": "userData",
@@ -241,11 +241,11 @@
         },
         {
           "name": "user_query_id",
-          "value": "340481"
+          "value": "336722"
         },
         {
           "name": "__zlcstore",
-          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1789461230103,\"account_status\":\"online\"}}"
+          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1789464906794,\"account_status\":\"online\"}}"
         }
       ],
       "indexedDB": []
