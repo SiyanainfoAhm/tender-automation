@@ -53,6 +53,7 @@ function mapProject(row: Record<string, unknown>): WonProject {
     poNumber: str(row.po_number),
     poDate: row.po_date ? String(row.po_date).slice(0, 10) : null,
     contractNumber: str(row.contract_number),
+    contractDescription: str(row.contract_description),
     contractStartDate: row.contract_start_date
       ? String(row.contract_start_date).slice(0, 10)
       : null,

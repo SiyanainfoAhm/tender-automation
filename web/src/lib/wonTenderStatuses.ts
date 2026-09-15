@@ -1,7 +1,13 @@
 /**
- * Controlled status values for Won Tenders / Project Execution.
- * Stored values match database CHECK constraints (snake_case).
- * Labels are for UI only — never submit label text to the API/DB.
+ * Single source of truth for Won Tenders / Project Execution statuses.
+ * Values MUST match public.agenttender_won_projects CHECK constraints:
+ *
+ * execution_status IN (
+ *   'awarded', 'in_execution', 'on_hold', 'completed', 'cancelled'
+ * )
+ * pbg_status IS NULL OR IN (
+ *   'pending', 'active', 'released', 'expired', 'invoked'
+ * )
  */
 
 export const EXECUTION_STATUSES = [
@@ -22,6 +28,12 @@ export const EXECUTION_STATUS_LABELS: Record<ExecutionStatus, string> = {
   cancelled: "Cancelled",
 };
 
+/** Dropdown options: value = DB, label = UI. */
+export const EXECUTION_STATUS_OPTIONS = EXECUTION_STATUSES.map((value) => ({
+  value,
+  label: EXECUTION_STATUS_LABELS[value],
+}));
+
 export const PBG_STATUSES = [
   "pending",
   "active",
@@ -39,6 +51,11 @@ export const PBG_STATUS_LABELS: Record<PbgStatus, string> = {
   expired: "Expired",
   invoked: "Invoked",
 };
+
+export const PBG_STATUS_OPTIONS = PBG_STATUSES.map((value) => ({
+  value,
+  label: PBG_STATUS_LABELS[value],
+}));
 
 export const PAYMENT_STATUSES = [
   "pending",
@@ -58,6 +75,11 @@ export const PAYMENT_STATUS_LABELS: Record<PaymentStatus, string> = {
   cancelled: "Cancelled",
 };
 
+export const PAYMENT_STATUS_OPTIONS = PAYMENT_STATUSES.map((value) => ({
+  value,
+  label: PAYMENT_STATUS_LABELS[value],
+}));
+
 export const MILESTONE_STATUSES = [
   "not_started",
   "in_progress",
@@ -76,6 +98,11 @@ export const MILESTONE_STATUS_LABELS: Record<MilestoneStatus, string> = {
   on_hold: "On Hold",
 };
 
+export const MILESTONE_STATUS_OPTIONS = MILESTONE_STATUSES.map((value) => ({
+  value,
+  label: MILESTONE_STATUS_LABELS[value],
+}));
+
 export const HEALTH_STATUSES = [
   "on_track",
   "delayed",
@@ -91,6 +118,11 @@ export const HEALTH_STATUS_LABELS: Record<HealthStatus, string> = {
   payment_overdue: "Payment Overdue",
   completed: "Completed",
 };
+
+export const HEALTH_STATUS_OPTIONS = HEALTH_STATUSES.map((value) => ({
+  value,
+  label: HEALTH_STATUS_LABELS[value],
+}));
 
 export const PAYMENT_MODES = [
   "bank_transfer",
@@ -112,11 +144,20 @@ export const PAYMENT_MODE_LABELS: Record<PaymentMode, string> = {
   other: "Other",
 };
 
+export const PAYMENT_MODE_OPTIONS = PAYMENT_MODES.map((value) => ({
+  value,
+  label: PAYMENT_MODE_LABELS[value],
+}));
+
 function includesValue<T extends string>(
   list: readonly T[],
   value: string,
 ): value is T {
   return (list as readonly string[]).includes(value);
+}
+
+function normalizeToken(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s-]+/g, "_");
 }
 
 export function isExecutionStatus(value: string): value is ExecutionStatus {
@@ -143,6 +184,41 @@ export function isPaymentMode(value: string): value is PaymentMode {
   return includesValue(PAYMENT_MODES, value);
 }
 
+/**
+ * Accept DB value or UI label and return the exact DB value.
+ * Examples: "awarded" | "Awarded" | "IN_EXECUTION" | "In Execution" → DB token.
+ */
+export function parseExecutionStatus(
+  input: string | null | undefined,
+): ExecutionStatus | null {
+  if (input == null) return null;
+  const raw = String(input).trim();
+  if (!raw) return null;
+  if (isExecutionStatus(raw)) return raw;
+  const token = normalizeToken(raw);
+  if (isExecutionStatus(token)) return token;
+  const byLabel = EXECUTION_STATUSES.find(
+    (status) =>
+      EXECUTION_STATUS_LABELS[status].toLowerCase() === raw.toLowerCase(),
+  );
+  return byLabel ?? null;
+}
+
+export function parsePbgStatus(
+  input: string | null | undefined,
+): PbgStatus | null {
+  if (input == null) return null;
+  const raw = String(input).trim();
+  if (!raw) return null;
+  if (isPbgStatus(raw)) return raw;
+  const token = normalizeToken(raw);
+  if (isPbgStatus(token)) return token;
+  const byLabel = PBG_STATUSES.find(
+    (status) => PBG_STATUS_LABELS[status].toLowerCase() === raw.toLowerCase(),
+  );
+  return byLabel ?? null;
+}
+
 /** Normalize optional PBG status for persistence. Empty → null. */
 export function normalizePbgStatus(
   value: string | null | undefined,
@@ -150,15 +226,16 @@ export function normalizePbgStatus(
   if (value == null) return null;
   const trimmed = String(value).trim();
   if (!trimmed) return null;
-  if (!isPbgStatus(trimmed)) {
-    throw new Error("Invalid status selected. Please choose a valid option.");
+  const parsed = parsePbgStatus(trimmed);
+  if (!parsed) {
+    throw new Error("Please select a valid status.");
   }
-  return trimmed;
+  return parsed;
 }
 
 /**
- * Map DB / PostgREST check-constraint failures to a user-facing message.
- * Technical details should be logged by the caller.
+ * Map only real status CHECK failures to a user-facing message.
+ * Do not treat unrelated check constraints / column mentions as status errors.
  */
 export function friendlyWonStatusConstraintError(
   error: unknown,
@@ -171,14 +248,17 @@ export function friendlyWonStatusConstraintError(
         : "";
   if (!message) return null;
   const lower = message.toLowerCase();
+  const isStatusConstraint =
+    lower.includes("execution_status_check") ||
+    lower.includes("pbg_status_check") ||
+    (lower.includes("won_project_milestones") && lower.includes("status")) ||
+    (lower.includes("won_project_payments") && lower.includes("status"));
   if (
-    lower.includes("check constraint") ||
-    lower.includes("violates check") ||
-    /pbg_status|execution_status|payment.*status|milestone.*status/i.test(
-      message,
-    )
+    isStatusConstraint ||
+    ((lower.includes("violates check") || lower.includes("check constraint")) &&
+      (lower.includes("execution_status") || lower.includes("pbg_status")))
   ) {
-    return "Invalid status selected. Please choose a valid option.";
+    return "Please select a valid status.";
   }
   return null;
 }

@@ -23,12 +23,8 @@ import {
 } from "@/components/ui/select";
 import { formatIndianCurrency } from "@/lib/format";
 import {
-  WON_EXECUTION_STATUSES,
-  WON_EXECUTION_STATUS_LABELS,
-  WON_HEALTH_STATUSES,
-  WON_HEALTH_STATUS_LABELS,
-  type WonExecutionStatus,
-  type WonHealthStatus,
+  WON_EXECUTION_STATUS_OPTIONS,
+  WON_HEALTH_STATUS_OPTIONS,
   type WonProjectListItem,
   type WonProjectSummary,
 } from "@/lib/won-projects";
@@ -142,9 +138,9 @@ export function WonTendersClient({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All statuses</SelectItem>
-            {WON_EXECUTION_STATUSES.map((status) => (
-              <SelectItem key={status} value={status}>
-                {WON_EXECUTION_STATUS_LABELS[status as WonExecutionStatus]}
+            {WON_EXECUTION_STATUS_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
               </SelectItem>
             ))}
           </SelectContent>
@@ -155,9 +151,9 @@ export function WonTendersClient({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All health</SelectItem>
-            {WON_HEALTH_STATUSES.map((health) => (
-              <SelectItem key={health} value={health}>
-                {WON_HEALTH_STATUS_LABELS[health as WonHealthStatus]}
+            {WON_HEALTH_STATUS_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
               </SelectItem>
             ))}
           </SelectContent>

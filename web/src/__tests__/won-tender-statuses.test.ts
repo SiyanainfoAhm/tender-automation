@@ -1,62 +1,63 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  EXECUTION_STATUSES,
-  EXECUTION_STATUS_LABELS,
-  MILESTONE_STATUSES,
-  PBG_STATUSES,
-  PBG_STATUS_LABELS,
-  PAYMENT_STATUSES,
+  EXECUTION_STATUS_OPTIONS,
+  PBG_STATUS_OPTIONS,
   friendlyWonStatusConstraintError,
-  isExecutionStatus,
-  isMilestoneStatus,
-  isPbgStatus,
-  isPaymentStatus,
-  normalizePbgStatus,
+  parseExecutionStatus,
+  parsePbgStatus,
 } from "@/lib/wonTenderStatuses";
 
-describe("wonTenderStatuses", () => {
-  it("rejects free-text status values", () => {
-    expect(isPbgStatus("Active")).toBe(false);
-    expect(isPbgStatus("pending")).toBe(true);
-    expect(isExecutionStatus("In Execution")).toBe(false);
-    expect(isExecutionStatus("in_execution")).toBe(true);
-    expect(isPaymentStatus("Partially Received")).toBe(false);
-    expect(isPaymentStatus("partially_received")).toBe(true);
-    expect(isMilestoneStatus("Not Started")).toBe(false);
-    expect(isMilestoneStatus("not_started")).toBe(true);
+describe("won status option mapping", () => {
+  it("maps UI labels and mixed case to exact DB values", () => {
+    expect(parseExecutionStatus("Awarded")).toBe("awarded");
+    expect(parseExecutionStatus("awarded")).toBe("awarded");
+    expect(parseExecutionStatus("In Execution")).toBe("in_execution");
+    expect(parseExecutionStatus("IN_EXECUTION")).toBe("in_execution");
+    expect(parsePbgStatus("Active")).toBe("active");
+    expect(parsePbgStatus("active")).toBe("active");
+    expect(parsePbgStatus("Pending")).toBe("pending");
+    expect(parseExecutionStatus("Nope")).toBeNull();
+    expect(parsePbgStatus("Nope")).toBeNull();
   });
 
-  it("exposes labels for every controlled status value", () => {
-    for (const status of PBG_STATUSES) {
-      expect(PBG_STATUS_LABELS[status]).toBeTruthy();
-    }
-    for (const status of EXECUTION_STATUSES) {
-      expect(EXECUTION_STATUS_LABELS[status]).toBeTruthy();
-    }
-    expect(PAYMENT_STATUSES).toHaveLength(5);
-    expect(MILESTONE_STATUSES).toHaveLength(5);
-  });
-
-  it("normalizes optional PBG status for persistence", () => {
-    expect(normalizePbgStatus(null)).toBeNull();
-    expect(normalizePbgStatus("")).toBeNull();
-    expect(normalizePbgStatus("active")).toBe("active");
-    expect(() => normalizePbgStatus("bogus")).toThrow(
-      /Invalid status selected/,
+  it("dropdown option values match DB CHECK values exactly", () => {
+    expect(EXECUTION_STATUS_OPTIONS.map((o) => o.value)).toEqual([
+      "awarded",
+      "in_execution",
+      "on_hold",
+      "completed",
+      "cancelled",
+    ]);
+    expect(PBG_STATUS_OPTIONS.map((o) => o.value)).toEqual([
+      "pending",
+      "active",
+      "released",
+      "expired",
+      "invoked",
+    ]);
+    expect(
+      EXECUTION_STATUS_OPTIONS.find((o) => o.value === "awarded")?.label,
+    ).toBe("Awarded");
+    expect(PBG_STATUS_OPTIONS.find((o) => o.value === "active")?.label).toBe(
+      "Active",
     );
   });
 
-  it("maps check-constraint errors to a friendly message", () => {
+  it("does not treat unrelated check failures as status errors", () => {
     expect(
       friendlyWonStatusConstraintError(
         new Error(
-          'new row for relation "agenttender_won_projects" violates check constraint "agenttender_won_projects_pbg_status_check"',
+          'new row violates check constraint "agenttender_won_projects_pbg_amount_check"',
         ),
       ),
-    ).toBe("Invalid status selected. Please choose a valid option.");
-    expect(friendlyWonStatusConstraintError(new Error("Network failed"))).toBe(
-      null,
-    );
+    ).toBeNull();
+    expect(
+      friendlyWonStatusConstraintError(
+        new Error(
+          'violates check constraint "agenttender_won_projects_pbg_status_check"',
+        ),
+      ),
+    ).toBe("Please select a valid status.");
   });
 });

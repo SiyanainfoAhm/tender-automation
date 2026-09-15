@@ -13,10 +13,10 @@ import {
 } from "@/lib/won-projects";
 import {
   friendlyWonStatusConstraintError,
-  isExecutionStatus,
   isMilestoneStatus,
   isPaymentMode,
-  isPbgStatus,
+  parseExecutionStatus,
+  parsePbgStatus,
 } from "@/lib/wonTenderStatuses";
 import { CompanyAccessError } from "@/server/auth/company-access";
 import { requirePermissionStrict } from "@/server/auth/permissions";
@@ -117,6 +117,7 @@ export type UpdateWonProjectPayload = {
   poNumber?: string | null;
   poDate?: string | null;
   contractNumber?: string | null;
+  contractDescription?: string | null;
   contractStartDate?: string | null;
   contractEndDate?: string | null;
   clientDepartment?: string | null;
@@ -148,13 +149,11 @@ export async function updateWonProjectAction(
 
     const patch: Record<string, unknown> = {};
     if (payload.executionStatus !== undefined) {
-      if (!isExecutionStatus(payload.executionStatus)) {
-        return {
-          ok: false,
-          error: "Invalid status selected. Please choose a valid option.",
-        };
+      const executionStatus = parseExecutionStatus(payload.executionStatus);
+      if (!executionStatus) {
+        return { ok: false, error: "Please select a valid status." };
       }
-      patch.execution_status = payload.executionStatus;
+      patch.execution_status = executionStatus;
     }
     if (payload.awardDate !== undefined) patch.award_date = payload.awardDate;
     if (payload.finalAwardValue !== undefined) {
@@ -164,6 +163,9 @@ export async function updateWonProjectAction(
     if (payload.poDate !== undefined) patch.po_date = payload.poDate || null;
     if (payload.contractNumber !== undefined) {
       patch.contract_number = payload.contractNumber;
+    }
+    if (payload.contractDescription !== undefined) {
+      patch.contract_description = payload.contractDescription;
     }
     if (payload.contractStartDate !== undefined) {
       patch.contract_start_date = payload.contractStartDate || null;
@@ -177,44 +179,71 @@ export async function updateWonProjectAction(
     if (payload.projectManagerId !== undefined) {
       patch.project_manager_id = payload.projectManagerId || null;
     }
-    if (payload.pbgApplicable !== undefined) {
-      patch.pbg_applicable = payload.pbgApplicable;
-      if (payload.pbgApplicable === false) {
-        patch.pbg_number = null;
-        patch.pbg_amount = null;
-        patch.pbg_issue_date = null;
-        patch.pbg_expiry_date = null;
-        patch.pbg_bank = null;
-        patch.pbg_status = null;
-      }
-    }
-    if (payload.pbgNumber !== undefined) patch.pbg_number = payload.pbgNumber;
-    if (payload.pbgAmount !== undefined) patch.pbg_amount = payload.pbgAmount;
-    if (payload.pbgIssueDate !== undefined) {
-      patch.pbg_issue_date = payload.pbgIssueDate || null;
-    }
-    if (payload.pbgExpiryDate !== undefined) {
-      patch.pbg_expiry_date = payload.pbgExpiryDate || null;
-    }
-    if (payload.pbgBank !== undefined) patch.pbg_bank = payload.pbgBank;
-    if (payload.pbgStatus !== undefined) {
-      if (payload.pbgStatus == null) {
-        patch.pbg_status = null;
-      } else if (!isPbgStatus(payload.pbgStatus)) {
-        return {
-          ok: false,
-          error: "Invalid status selected. Please choose a valid option.",
-        };
+
+    const pbgApplicable = payload.pbgApplicable;
+    if (pbgApplicable === false) {
+      patch.pbg_applicable = false;
+      patch.pbg_number = null;
+      patch.pbg_amount = null;
+      patch.pbg_issue_date = null;
+      patch.pbg_expiry_date = null;
+      patch.pbg_bank = null;
+      patch.pbg_status = null;
+    } else if (pbgApplicable === true) {
+      patch.pbg_applicable = true;
+      if (payload.pbgNumber !== undefined) patch.pbg_number = payload.pbgNumber;
+      if (payload.pbgAmount !== undefined) {
+        if (
+          payload.pbgAmount == null ||
+          !Number.isFinite(payload.pbgAmount) ||
+          payload.pbgAmount < 0
+        ) {
+          return { ok: false, error: "PBG Amount is required." };
+        }
+        patch.pbg_amount = payload.pbgAmount;
       } else {
-        patch.pbg_status = payload.pbgStatus;
+        return { ok: false, error: "PBG Amount is required." };
       }
-    }
-    if (
-      payload.pbgApplicable === true &&
-      (patch.pbg_status === null || patch.pbg_status === undefined) &&
-      payload.pbgStatus === undefined
-    ) {
-      patch.pbg_status = "pending";
+      if (payload.pbgIssueDate !== undefined) {
+        patch.pbg_issue_date = payload.pbgIssueDate || null;
+      }
+      if (payload.pbgExpiryDate !== undefined) {
+        if (!payload.pbgExpiryDate) {
+          return { ok: false, error: "PBG Expiry Date is required." };
+        }
+        patch.pbg_expiry_date = payload.pbgExpiryDate;
+      } else {
+        return { ok: false, error: "PBG Expiry Date is required." };
+      }
+      if (payload.pbgBank !== undefined) patch.pbg_bank = payload.pbgBank;
+
+      const pbgStatus = parsePbgStatus(payload.pbgStatus);
+      if (!pbgStatus) {
+        return { ok: false, error: "Please select a valid status." };
+      }
+      patch.pbg_status = pbgStatus;
+    } else {
+      // pbgApplicable not in this payload — still allow partial pbg field updates
+      if (payload.pbgNumber !== undefined) patch.pbg_number = payload.pbgNumber;
+      if (payload.pbgAmount !== undefined) patch.pbg_amount = payload.pbgAmount;
+      if (payload.pbgIssueDate !== undefined) {
+        patch.pbg_issue_date = payload.pbgIssueDate || null;
+      }
+      if (payload.pbgExpiryDate !== undefined) {
+        patch.pbg_expiry_date = payload.pbgExpiryDate || null;
+      }
+      if (payload.pbgBank !== undefined) patch.pbg_bank = payload.pbgBank;
+      if (payload.pbgStatus !== undefined) {
+        if (payload.pbgStatus == null) {
+          patch.pbg_status = null;
+        } else {
+          const pbgStatus = parsePbgStatus(payload.pbgStatus);
+          if (!pbgStatus) {
+            return { ok: false, error: "Please select a valid status." };
+          }
+          patch.pbg_status = pbgStatus;
+        }
+      }
     }
     if (payload.jiraProjectKey !== undefined) {
       patch.jira_project_key = payload.jiraProjectKey;
@@ -275,10 +304,7 @@ export async function saveWonMilestoneAction(
     if (!title) return { ok: false, error: "Milestone title is required." };
     if (!payload.dueDate) return { ok: false, error: "Due date is required." };
     if (payload.status && !isMilestoneStatus(payload.status)) {
-      return {
-        ok: false,
-        error: "Invalid status selected. Please choose a valid option.",
-      };
+      return { ok: false, error: "Please select a valid status." };
     }
 
     if (payload.milestoneId) {

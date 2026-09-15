@@ -46,14 +46,12 @@ import { formatDate, formatIndianCurrency } from "@/lib/format";
 import {
   WON_DOCUMENT_CATEGORIES,
   WON_DOCUMENT_CATEGORY_LABELS,
-  WON_EXECUTION_STATUSES,
-  WON_EXECUTION_STATUS_LABELS,
-  WON_MILESTONE_STATUSES,
-  WON_MILESTONE_STATUS_LABELS,
-  WON_PAYMENT_MODES,
-  WON_PAYMENT_MODE_LABELS,
-  WON_PBG_STATUSES,
-  WON_PBG_STATUS_LABELS,
+  WON_EXECUTION_STATUS_OPTIONS,
+  WON_MILESTONE_STATUS_OPTIONS,
+  WON_PAYMENT_MODE_OPTIONS,
+  WON_PBG_STATUS_OPTIONS,
+  parseExecutionStatus,
+  parsePbgStatus,
   type WonDocumentCategory,
   type WonExecutionStatus,
   type WonMilestoneStatus,
@@ -122,6 +120,7 @@ export function WonProjectDetailClient({
     poNumber: project.poNumber || "",
     poDate: project.poDate || "",
     contractNumber: project.contractNumber || "",
+    contractDescription: project.contractDescription || "",
     contractStartDate: project.contractStartDate || "",
     contractEndDate: project.contractEndDate || "",
     clientDepartment: project.clientDepartment || "",
@@ -213,15 +212,42 @@ export function WonProjectDetailClient({
       toast.error("Invalid award value.");
       return;
     }
+
+    const executionStatus = parseExecutionStatus(overview.executionStatus);
+    if (!executionStatus) {
+      toast.error("Please select a valid status.");
+      return;
+    }
+
+    let pbgStatus: WonPbgStatus | null = null;
+    let pbgAmount: number | null = null;
+    if (overview.pbgApplicable) {
+      pbgStatus = parsePbgStatus(overview.pbgStatus);
+      if (!pbgStatus) {
+        toast.error("Please select a valid status.");
+        return;
+      }
+      pbgAmount = Number(String(overview.pbgAmount).replace(/,/g, ""));
+      if (!Number.isFinite(pbgAmount) || pbgAmount < 0) {
+        toast.error("PBG Amount is required.");
+        return;
+      }
+      if (!overview.pbgExpiryDate) {
+        toast.error("PBG Expiry Date is required.");
+        return;
+      }
+    }
+
     startTransition(async () => {
       const result = await updateWonProjectAction({
         projectId: project.id,
-        executionStatus: overview.executionStatus,
+        executionStatus,
         awardDate: overview.awardDate,
         finalAwardValue: value,
         poNumber: overview.poNumber.trim() || null,
         poDate: overview.poDate || null,
         contractNumber: overview.contractNumber.trim() || null,
+        contractDescription: overview.contractDescription.trim() || null,
         contractStartDate: overview.contractStartDate || null,
         contractEndDate: overview.contractEndDate || null,
         clientDepartment: overview.clientDepartment.trim() || null,
@@ -230,10 +256,7 @@ export function WonProjectDetailClient({
         pbgNumber: overview.pbgApplicable
           ? overview.pbgNumber.trim() || null
           : null,
-        pbgAmount:
-          overview.pbgApplicable && overview.pbgAmount
-            ? Number(overview.pbgAmount)
-            : null,
+        pbgAmount: overview.pbgApplicable ? pbgAmount : null,
         pbgIssueDate: overview.pbgApplicable
           ? overview.pbgIssueDate || null
           : null,
@@ -243,7 +266,7 @@ export function WonProjectDetailClient({
         pbgBank: overview.pbgApplicable
           ? overview.pbgBank.trim() || null
           : null,
-        pbgStatus: overview.pbgApplicable ? overview.pbgStatus : null,
+        pbgStatus: overview.pbgApplicable ? pbgStatus : null,
         notes: overview.notes.trim() || null,
       });
       if (!result.ok) {
@@ -624,21 +647,26 @@ export function WonProjectDetailClient({
             <FieldRow label="Execution Status">
               <Select
                 value={overview.executionStatus}
-                onValueChange={(v) =>
+                onValueChange={(v) => {
+                  const parsed = parseExecutionStatus(v);
+                  if (!parsed) {
+                    toast.error("Please select a valid status.");
+                    return;
+                  }
                   setOverview((o) => ({
                     ...o,
-                    executionStatus: v as WonExecutionStatus,
-                  }))
-                }
+                    executionStatus: parsed,
+                  }));
+                }}
                 disabled={!canEdit}
               >
                 <SelectTrigger>
-                  <SelectValue />
+                  <SelectValue placeholder="Select status" />
                 </SelectTrigger>
                 <SelectContent>
-                  {WON_EXECUTION_STATUSES.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {WON_EXECUTION_STATUS_LABELS[s]}
+                  {WON_EXECUTION_STATUS_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -682,13 +710,28 @@ export function WonProjectDetailClient({
                 disabled={!canEdit}
               />
             </FieldRow>
-            <FieldRow label="Contract #">
+            <FieldRow label="Contract Number">
               <Input
                 value={overview.contractNumber}
                 onChange={(e) =>
                   setOverview((o) => ({ ...o, contractNumber: e.target.value }))
                 }
                 disabled={!canEdit}
+                placeholder="Contract / agreement number"
+              />
+            </FieldRow>
+            <FieldRow label="Contract Description">
+              <Textarea
+                rows={3}
+                value={overview.contractDescription}
+                onChange={(e) =>
+                  setOverview((o) => ({
+                    ...o,
+                    contractDescription: e.target.value,
+                  }))
+                }
+                disabled={!canEdit}
+                placeholder="Short description of the contract scope"
               />
             </FieldRow>
             <FieldRow label="Contract Period">
@@ -880,21 +923,26 @@ export function WonProjectDetailClient({
                     </Label>
                     <Select
                       value={overview.pbgStatus}
-                      onValueChange={(v) =>
+                      onValueChange={(v) => {
+                        const parsed = parsePbgStatus(v);
+                        if (!parsed) {
+                          toast.error("Please select a valid status.");
+                          return;
+                        }
                         setOverview((o) => ({
                           ...o,
-                          pbgStatus: v as WonPbgStatus,
-                        }))
-                      }
+                          pbgStatus: parsed,
+                        }));
+                      }}
                       disabled={!canEdit}
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Select status" />
                       </SelectTrigger>
                       <SelectContent>
-                        {WON_PBG_STATUSES.map((status) => (
-                          <SelectItem key={status} value={status}>
-                            {WON_PBG_STATUS_LABELS[status]}
+                        {WON_PBG_STATUS_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -1293,9 +1341,9 @@ export function WonProjectDetailClient({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {WON_MILESTONE_STATUSES.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      {WON_MILESTONE_STATUS_LABELS[s]}
+                  {WON_MILESTONE_STATUS_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1550,9 +1598,9 @@ export function WonProjectDetailClient({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {WON_PAYMENT_MODES.map((m) => (
-                    <SelectItem key={m} value={m}>
-                      {WON_PAYMENT_MODE_LABELS[m]}
+                  {WON_PAYMENT_MODE_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
