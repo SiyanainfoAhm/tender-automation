@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 
-import { isAzureBlobUrl } from "@/lib/storage/accessible-storage-url";
+import {
+  isAzureBlobUrl,
+  isSharePointUrl,
+} from "@/lib/storage/accessible-storage-url";
 import {
   tryParseAzureBlobUrl,
   unwrapStoredDocumentReference,
@@ -35,7 +38,7 @@ export async function GET(request: Request) {
       {
         success: false,
         code: "DOCUMENT_URL_MISSING",
-        error: "A valid Azure blob url is required.",
+        error: "A valid document storage URL is required.",
       },
       { status: 400 },
     );
@@ -48,19 +51,19 @@ export async function GET(request: Request) {
     defaultContainer,
   });
 
-  // Relative blob paths are allowed; full non-Azure URLs are rejected.
-  if (!parsed && !isAzureBlobUrl(storageUrl)) {
+  // Relative Azure paths and full SharePoint URLs are supported.
+  if (!isSharePointUrl(storageUrl) && !parsed && !isAzureBlobUrl(storageUrl)) {
     return NextResponse.json(
       {
         success: false,
-        code: "AZURE_PATH_RESOLUTION_FAILED",
-        error: "The stored document path could not be resolved in Azure.",
+        code: "DOCUMENT_PATH_RESOLUTION_FAILED",
+        error: "The stored document path could not be resolved.",
       },
       { status: 400 },
     );
   }
 
-  console.log("[Azure Document Resolve]", {
+  console.log("[Document Storage Resolve]", {
     tenderId: null,
     sourcePortal: null,
     storedDocumentUrl: storageUrl,
@@ -70,7 +73,10 @@ export async function GET(request: Request) {
 
   try {
     const upstream = await invokeBlobRead({
-      storageUrl: isAzureBlobUrl(storageUrl) ? storageUrl : undefined,
+      storageUrl:
+        isAzureBlobUrl(storageUrl) || isSharePointUrl(storageUrl)
+          ? storageUrl
+          : undefined,
       blobName: parsed?.blobName,
       disposition: download ? "attachment" : "inline",
       fileName,
@@ -78,7 +84,7 @@ export async function GET(request: Request) {
 
     if (!upstream.ok) {
       const contentType = upstream.headers.get("content-type") || "";
-      let message = "Unable to load file from Azure storage.";
+      let message = "Unable to load file from document storage.";
       let code: string | undefined;
       if (contentType.includes("application/json")) {
         const body = (await upstream.json().catch(() => null)) as {
@@ -88,9 +94,10 @@ export async function GET(request: Request) {
         if (body?.error) message = body.error;
         if (body?.code) code = body.code;
       } else if (upstream.status === 404) {
-        code = "AZURE_BLOB_NOT_FOUND";
-        message =
-          "File not found in Azure storage at the resolved path. Re-upload the document only if this blob was never uploaded.";
+        code = isSharePointUrl(storageUrl)
+          ? "SHAREPOINT_FILE_NOT_FOUND"
+          : "AZURE_BLOB_NOT_FOUND";
+        message = "File not found in document storage.";
       }
       return NextResponse.json(
         { success: false, ...(code ? { code } : {}), error: message },
@@ -118,7 +125,7 @@ export async function GET(request: Request) {
     return NextResponse.json(
       {
         success: false,
-        code: "AZURE_DOWNLOAD_FAILED",
+        code: "DOCUMENT_DOWNLOAD_FAILED",
         error: "Unable to load file.",
       },
       { status: 500 },

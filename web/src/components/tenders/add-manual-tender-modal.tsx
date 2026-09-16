@@ -28,7 +28,7 @@ import { formatFileSize } from "@/lib/bid-fees";
 import { PROJECT_CATEGORIES } from "@/lib/project-category";
 import { STATUS_DISPLAY_LABELS, TENDER_STATUSES } from "@/lib/tender-status";
 import { MAX_DOCUMENT_UPLOAD_BYTES } from "@/lib/uploads/config";
-import { uploadTenderDocumentDirectToAzure } from "@/lib/uploads/directAzureUpload";
+import { uploadTenderDocumentDirectToSharePoint } from "@/lib/uploads/directSharePointUpload";
 import {
   documentUploadAcceptAttr,
   documentUploadHint,
@@ -219,7 +219,7 @@ export function AddManualTenderModal({
         let uploaded = 0;
         const failed: string[] = [];
         for (const file of documents) {
-          const upload = await uploadTenderDocumentDirectToAzure({
+          const upload = await uploadTenderDocumentDirectToSharePoint({
             tenderId: result.id,
             section: "tender",
             file,
@@ -670,7 +670,7 @@ export function AddManualTenderModal({
               <div className="space-y-2">
                 <Label>Tender documents</Label>
                 <p className="text-[11px] text-foreground-400">
-                  Optional. Files upload directly to Azure (not through Vercel).{" "}
+                  Optional. Files upload directly to SharePoint (not through Vercel).{" "}
                   {documentUploadHint(MAX_DOCUMENT_UPLOAD_BYTES)}
                 </p>
                 <input

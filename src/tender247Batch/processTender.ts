@@ -384,6 +384,7 @@ export async function processLiveTender(
           requestedDateFromDateFolder(dateFolder);
         const artifactUpload = await uploadTenderArtifactsAndPersistUrls({
           sourcePortal: "TENDER247",
+          sourceRegion,
           sourceTenderId: t247Id,
           tenderFolder: resume.tenderFolder,
           runDate,
@@ -544,6 +545,7 @@ export async function processLiveTender(
             requestedDateFromDateFolder(dateFolder);
           const artifactUpload = await uploadTenderArtifactsAndPersistUrls({
             sourcePortal: "TENDER247",
+            sourceRegion,
             sourceTenderId: t247Id,
             tenderFolder: resume.tenderFolder,
             runDate,
@@ -1240,6 +1242,7 @@ export async function processLiveTender(
           requestedDateFromDateFolder(dateFolder);
         const artifactUpload = await uploadTenderArtifactsAndPersistUrls({
           sourcePortal: "TENDER247",
+          sourceRegion,
           sourceTenderId: t247Id,
           tenderFolder: resume.tenderFolder,
           runDate,

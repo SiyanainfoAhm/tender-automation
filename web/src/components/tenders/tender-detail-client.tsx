@@ -110,7 +110,7 @@ import {
   formatDuplicateReference,
 } from "@/lib/duplicate-reference";
 import { MAX_DOCUMENT_UPLOAD_BYTES } from "@/lib/uploads/config";
-import { uploadTenderDocumentDirectToAzure } from "@/lib/uploads/directAzureUpload";
+import { uploadTenderDocumentDirectToSharePoint } from "@/lib/uploads/directSharePointUpload";
 import {
   documentUploadAcceptAttr,
   documentUploadHint,
@@ -890,8 +890,8 @@ export function TenderDetailClient({
     }
 
     startUploadTransition(async () => {
-      // Direct-to-Azure: file bytes never pass through Vercel Server Actions.
-      const result = await uploadTenderDocumentDirectToAzure({
+      // Direct-to-SharePoint: file bytes never pass through Vercel Server Actions.
+      const result = await uploadTenderDocumentDirectToSharePoint({
         tenderId: tender.id,
         section,
         file,

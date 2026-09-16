@@ -12,6 +12,15 @@ export function isAzureBlobUrl(url: string | null | undefined): boolean {
   }
 }
 
+export function isSharePointUrl(url: string | null | undefined): boolean {
+  if (!url) return false;
+  try {
+    return new URL(url).hostname.toLowerCase().endsWith(".sharepoint.com");
+  } catch {
+    return false;
+  }
+}
+
 export function toAccessibleStorageUrl(
   storageUrl: string | null | undefined,
   options?: { download?: boolean; fileName?: string | null },
@@ -22,7 +31,7 @@ export function toAccessibleStorageUrl(
   // Already an app proxy / relative API path.
   if (raw.startsWith("/api/")) return raw;
 
-  if (!isAzureBlobUrl(raw)) return raw;
+  if (!isAzureBlobUrl(raw) && !isSharePointUrl(raw)) return raw;
 
   const params = new URLSearchParams();
   params.set("url", raw);

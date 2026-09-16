@@ -1,15 +1,15 @@
 /**
- * Upload tender crawl artifacts via the existing Azure Edge Function.
+ * Upload tender crawl artifacts to SharePoint via the document Edge Function.
  * AI_Summary.pdf is optional — missing summary does not fail the tender.
  *
  * Local layout (canonical):
  *   T247-{id}/documents/Tender_All_Documents.zip
  *   T247-{id}/AI_Summary.pdf
- * metadata.json stays in DB only (never uploaded to Azure).
+ * metadata.json stays in DB only (never uploaded to SharePoint).
  *
- * Azure layout:
- *   {companyName}_{companyId}/tender-artifacts/{portal}/{date}/{id}/…
- *   (sibling of companydocs/General|Certificate|Other under the same root)
+ * SharePoint TenderDocs layout:
+ *   companies/siyana-info-solutions-pvt-ltd_{companyId}/
+ *     tender-artifacts/{manual|tender247}/{date}/{id}/…
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -20,6 +20,8 @@ const FUNCTION_NAME = "tender-automation-company-documents";
 const ARTIFACT_MARKER = "artifact-upload.json";
 const DEFAULT_COMPANY_ID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
 const DEFAULT_COMPANY_NAME = "Siyana Info Solutions Pvt. Ltd.";
+const SHAREPOINT_COMPANY_SEGMENT =
+  "siyana-info-solutions-pvt-ltd_a1b2c3d4-e5f6-7890-abcd-ef1234567890";
 
 export type TenderArtifactKind = "documents_zip" | "ai_summary";
 
@@ -102,26 +104,7 @@ export function buildTenderArtifactBlobName(options: {
     : "undated";
   const file = sanitizeBlobFileName(options.fileName);
 
-  // Manual tenders keep the historical Storage Explorer layout:
-  // companies/{key}/tender-artifacts/manual/{date}/{id}/{file}
-  if (portal === "manual") {
-    const envKey = String(process.env.COMPANY_BLOB_KEY || "")
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "");
-    const key =
-      envKey ||
-      slugifyBlobSegment(String(options.companyName || "siyana")).split("-")[0] ||
-      "siyana";
-    return `companies/${key}/tender-artifacts/manual/${date}/${id}/${file}`;
-  }
-
-  const companyRoot = resolveCompanyBlobRoot({
-    companyName: options.companyName,
-    companyId: options.companyId,
-  });
-  return `${companyRoot}/tender-artifacts/${portal}/${date}/${id}/${file}`;
+  return `companies/${SHAREPOINT_COMPANY_SEGMENT}/tender-artifacts/${portal}/${date}/${id}/${file}`;
 }
 
 /** Resolve local file path for an artifact kind (canonical Tender247 layout). */
@@ -258,9 +241,20 @@ function readExistingUrls(
     const parsed = JSON.parse(fs.readFileSync(markerPath, "utf8")) as {
       urls?: TenderArtifactUploadResult["urls"];
     };
+    const sharePointOnly = (value: string | null | undefined): string | null => {
+      const raw = String(value || "").trim();
+      if (!raw) return null;
+      try {
+        return new URL(raw).hostname.toLowerCase().endsWith(".sharepoint.com")
+          ? raw
+          : null;
+      } catch {
+        return null;
+      }
+    };
     return {
-      documents_zip_url: parsed.urls?.documents_zip_url ?? null,
-      ai_summary_url: parsed.urls?.ai_summary_url ?? null,
+      documents_zip_url: sharePointOnly(parsed.urls?.documents_zip_url),
+      ai_summary_url: sharePointOnly(parsed.urls?.ai_summary_url),
     };
   } catch {
     return {
@@ -289,7 +283,7 @@ function writeMarker(
 }
 
 /**
- * Seed Azure URL marker from Supabase so re-uploads are skipped and
+ * Seed SharePoint URL marker from Supabase so re-uploads are skipped and
  * existing non-empty URLs are never overwritten.
  */
 export function seedArtifactUploadUrlsFromSupabase(
@@ -303,11 +297,21 @@ export function seedArtifactUploadUrlsFromSupabase(
     fs.mkdirSync(tenderFolder, { recursive: true });
   }
   const existing = readExistingUrls(tenderFolder);
+  const sharePointOnly = (value: string | null | undefined): string => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    try {
+      return new URL(raw).hostname.toLowerCase().endsWith(".sharepoint.com")
+        ? raw
+        : "";
+    } catch {
+      return "";
+    }
+  };
   const docs =
-    String(urls.documents_zip_url || "").trim() ||
-    existing.documents_zip_url;
+    sharePointOnly(urls.documents_zip_url) || existing.documents_zip_url;
   const summary =
-    String(urls.ai_summary_url || "").trim() || existing.ai_summary_url;
+    sharePointOnly(urls.ai_summary_url) || existing.ai_summary_url;
   writeMarker(tenderFolder, {
     documents_zip_url: docs || null,
     ai_summary_url: summary || null,
@@ -321,6 +325,7 @@ export function seedArtifactUploadUrlsFromSupabase(
  */
 export async function uploadTenderArtifactsAndPersistUrls(options: {
   sourcePortal: "TENDER247" | "BIDASSIST" | "MANUAL";
+  sourceRegion?: "INDIAN" | "GLOBAL";
   sourceTenderId: string;
   tenderFolder: string;
   runDate: string;
@@ -423,12 +428,16 @@ export async function uploadTenderArtifactsAndPersistUrls(options: {
           "ARTIFACT_URL_DB_UPDATE_REFUSED=missing_scraped_date",
         );
       } else {
-        const { error } = await client
+        let update = client
           .from("agenttender_tenders")
           .update(patch)
           .eq("source_portal", options.sourcePortal)
           .eq("source_tender_id", options.sourceTenderId)
           .eq("scraped_date", scrapedDate);
+        if (options.sourcePortal === "TENDER247" && options.sourceRegion) {
+          update = update.eq("source_region", options.sourceRegion);
+        }
+        const { error } = await update;
         if (error) {
           result.errors.push(`db_url_persist: ${error.message}`);
           options.logger?.warn?.(

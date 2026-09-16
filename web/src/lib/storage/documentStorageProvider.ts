@@ -1,6 +1,7 @@
 /**
  * Document storage provider boundary.
- * Physical files: Azure Blob. Metadata: Supabase.
+ * Physical files: SharePoint for tender/manual uploads; legacy Azure remains
+ * supported for existing company documents. Metadata: Supabase.
  */
 
 import {
@@ -9,7 +10,7 @@ import {
 } from "@/lib/storage/blobPath";
 
 export type StoredDocumentRef = {
-  storageProvider: "none" | "azure" | "local";
+  storageProvider: "none" | "azure" | "sharepoint" | "local";
   storageContainer: string | null;
   storageBlobName: string | null;
   storageUrl: string | null;

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
 
 import type { TenderDocumentSection } from "@/lib/bid-fees";
+import { getServerSupabase } from "@/lib/db/server";
 import { MAX_DOCUMENT_UPLOAD_BYTES } from "@/lib/uploads/config";
 import { validateDocumentFile } from "@/lib/uploads/validation";
 import { CompanyAccessError } from "@/server/auth/company-access";
@@ -24,13 +25,13 @@ function jsonError(message: string, status = 400) {
   return NextResponse.json({ success: false, error: message }, { status });
 }
 
-function applyManualArtifactFields(
+function applyTenderArtifactFields(
   payload: Record<string, unknown>,
   tender: Record<string, unknown> | null | undefined,
 ) {
   if (!tender) return;
   const portal = String(tender.source_portal || "").toUpperCase();
-  if (portal !== "MANUAL") return;
+  if (!["MANUAL", "TENDER247", "BIDASSIST"].includes(portal)) return;
   const sourceId = String(tender.source_tender_id || tender.id || "").trim();
   if (!sourceId) return;
   const createdRaw = String(
@@ -51,7 +52,45 @@ function revalidate(tenderId: string) {
   revalidatePath("/dashboard");
 }
 
-/** Issue a short-lived write-only Azure SAS URL (JSON only — no file bytes). */
+async function persistManualArtifactUrl(options: {
+  tenderId: string;
+  companyId: string;
+  fileName: string;
+  storageUrl: string | null;
+}) {
+  if (!options.storageUrl) return;
+  const supabase = getServerSupabase();
+  const { data: tender } = await supabase
+    .from("agenttender_tenders")
+    .select("source_portal")
+    .eq("id", options.tenderId)
+    .eq("company_id", options.companyId)
+    .maybeSingle();
+  if (String(tender?.source_portal || "").toUpperCase() !== "MANUAL") return;
+
+  const lower = options.fileName.toLowerCase();
+  const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (lower.endsWith(".zip")) {
+    patch.documents_zip_url = options.storageUrl;
+    patch.document_archive_available = true;
+  }
+  if (
+    lower.endsWith(".pdf") &&
+    /ai[\s_-]*(summary|tender[\s_-]*summary)|summary[\s_-]*ai/i.test(lower)
+  ) {
+    patch.ai_summary_url = options.storageUrl;
+    patch.ai_summary_available = true;
+  }
+  if (Object.keys(patch).length === 1) return;
+  const { error } = await supabase
+    .from("agenttender_tenders")
+    .update(patch)
+    .eq("id", options.tenderId)
+    .eq("company_id", options.companyId);
+  if (error) throw new Error(error.message);
+}
+
+/** Create a short-lived Microsoft Graph upload session (no file bytes). */
 export async function POST(request: Request, context: RouteContext) {
   try {
     const session = await requirePermissionStrict("tenders.edit");
@@ -105,17 +144,21 @@ export async function POST(request: Request, context: RouteContext) {
       fileSizeBytes,
       notes: `tender:${tenderId}|section:${section}${feeId ? `|fee:${feeId}` : ""}`,
     };
-    applyManualArtifactFields(payload, tenderLookup.tender);
+    applyTenderArtifactFields(payload, tenderLookup.tender);
 
     const created = await invokeCreateDirectUpload(payload);
-    if (!created.success || !created.documentId || !created.uploadUrl) {
+    if (
+      !created.success ||
+      !created.documentId ||
+      (!created.uploadUrl && !created.duplicate)
+    ) {
       return jsonError(
         created.error || "Unable to start direct upload.",
         created.status || 500,
       );
     }
 
-    console.info("[tenders/direct-upload] SAS issued", {
+    console.info("[tenders/direct-upload] SharePoint upload prepared", {
       documentId: created.documentId,
       serverUtcNow: new Date().toISOString(),
       startsOn: created.startsAt ?? null,
@@ -123,6 +166,7 @@ export async function POST(request: Request, context: RouteContext) {
       sasSt: created.sasSt ?? null,
       sasSe: created.sasSe ?? null,
       sasSp: created.sasSp ?? null,
+      duplicate: created.duplicate === true,
     });
 
     return NextResponse.json({
@@ -137,8 +181,8 @@ export async function POST(request: Request, context: RouteContext) {
       sasSt: created.sasSt,
       sasSe: created.sasSe,
       sasSp: created.sasSp,
+      duplicate: created.duplicate === true,
       headers: created.headers || {
-        "x-ms-blob-type": "BlockBlob",
         "Content-Type": mimeType || "application/octet-stream",
       },
       maxBytes: MAX_DOCUMENT_UPLOAD_BYTES,
@@ -184,7 +228,7 @@ async function completeDirectUpload(
   });
 
   if (!completed.success || !completed.documentId) {
-    // Metadata failed after Azure put — attempt cleanup of pending row/blob.
+    // Metadata failed after SharePoint upload — attempt cleanup of pending row/file.
     console.error("[tenders/direct-upload] metadata save failed", {
       tenderId,
       documentId,
@@ -204,7 +248,7 @@ async function completeDirectUpload(
     });
     return jsonError(
       completed.error ||
-        "The file reached Azure but could not be saved. Please try again.",
+        "The file reached SharePoint but could not be saved. Please try again.",
       completed.status || 500,
     );
   }
@@ -222,10 +266,17 @@ async function completeDirectUpload(
       originalName: fileName,
       mimeType: mimeType || null,
       fileSizeBytes: Number.isFinite(fileSizeBytes) ? fileSizeBytes : null,
-      storageProvider: "azure",
+      storageProvider: "sharepoint",
       storageUrl:
         typeof completed.storageUrl === "string" ? completed.storageUrl : null,
       userId: session.user.id,
+    });
+    await persistManualArtifactUrl({
+      tenderId,
+      companyId: session.companyId,
+      fileName,
+      storageUrl:
+        typeof completed.storageUrl === "string" ? completed.storageUrl : null,
     });
   } catch (error) {
     console.error("[tenders/direct-upload] tender document insert failed", {

@@ -10,7 +10,7 @@ const root = path.resolve(
   "../../..",
 );
 
-test("ai-summary pipeline always downloads documents and uploads Azure artifacts", () => {
+test("ai-summary pipeline always downloads documents and uploads SharePoint artifacts", () => {
   const src = fs.readFileSync(
     path.join(root, "src/pipeline/runAiSummaryFirstDocumentPipeline.ts"),
     "utf8",
@@ -72,7 +72,7 @@ test("ai-summary protect mode only sets status on insert", () => {
   );
 });
 
-test("processTender uploads Azure artifacts even when docs zip is incomplete", () => {
+test("processTender uploads SharePoint artifacts even when docs zip is incomplete", () => {
   const src = fs.readFileSync(
     path.join(root, "src/tender247Batch/processTender.ts"),
     "utf8",
@@ -194,23 +194,27 @@ test("computeAiSummaryResumeIdFilter retries failed only when Excel and DB count
 
 test("resolveAiSummaryArtifactMode uses Supabase URLs only", async () => {
   const mod = await import("../runAiSummaryFirstDocumentPipeline.js");
+  const docs =
+    "https://it1stop.sharepoint.com/sites/SiyanaTenderDocumentRepository/TenderDocs/docs.zip";
+  const summary =
+    "https://it1stop.sharepoint.com/sites/SiyanaTenderDocumentRepository/TenderDocs/ai.pdf";
   assert.equal(
     mod.resolveAiSummaryArtifactMode({
-      documentsZipUrl: "https://blob/docs.zip",
-      aiSummaryUrl: "https://blob/ai.pdf",
+      documentsZipUrl: docs,
+      aiSummaryUrl: summary,
     }),
     "SKIP_ALREADY_COMPLETE",
   );
   assert.equal(
     mod.resolveAiSummaryArtifactMode({
-      documentsZipUrl: "https://blob/docs.zip",
+      documentsZipUrl: docs,
       aiSummaryUrl: null,
     }),
     "RESUME_SUMMARY_ONLY",
   );
   assert.equal(
     mod.resolveAiSummaryArtifactMode({
-      documentsZipUrl: "https://blob/docs.zip",
+      documentsZipUrl: docs,
       aiSummaryUrl: null,
       aiSummaryRequired: false,
     }),
@@ -227,7 +231,7 @@ test("resolveAiSummaryArtifactMode uses Supabase URLs only", async () => {
   assert.equal(
     mod.resolveAiSummaryArtifactMode({
       documentsZipUrl: "  ",
-      aiSummaryUrl: "https://blob/ai.pdf",
+      aiSummaryUrl: summary,
     }),
     "RESUME_DOCUMENTS_ONLY",
   );
@@ -240,9 +244,18 @@ test("resolveAiSummaryArtifactMode uses Supabase URLs only", async () => {
   );
   assert.equal(
     mod.resolveAiSummaryArtifactMode({
-      documentsZipUrl: "https://blob/docs.zip",
-      aiSummaryUrl: "https://blob/ai.pdf",
+      documentsZipUrl: docs,
+      aiSummaryUrl: summary,
       force: true,
+    }),
+    "PROCESS_FULL",
+  );
+  assert.equal(
+    mod.resolveAiSummaryArtifactMode({
+      documentsZipUrl:
+        "https://legacy.blob.core.windows.net/companydocuments/docs.zip",
+      aiSummaryUrl:
+        "https://legacy.blob.core.windows.net/companydocuments/ai.pdf",
     }),
     "PROCESS_FULL",
   );

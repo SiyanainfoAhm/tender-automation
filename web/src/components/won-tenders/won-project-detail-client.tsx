@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -63,7 +63,7 @@ import {
   type WonProjectMilestone,
   type WonProjectPayment,
 } from "@/lib/won-projects";
-import { uploadTenderDocumentDirectToAzure } from "@/lib/uploads/directAzureUpload";
+import { uploadTenderDocumentDirectToSharePoint } from "@/lib/uploads/directSharePointUpload";
 import { documentUploadAcceptAttr } from "@/lib/uploads/validation";
 import { cn } from "@/lib/utils";
 import {
@@ -518,7 +518,7 @@ export function WonProjectDetailClient({
       return;
     }
     startTransition(async () => {
-      const uploaded = await uploadTenderDocumentDirectToAzure({
+      const uploaded = await uploadTenderDocumentDirectToSharePoint({
         tenderId: project.tenderId,
         section: "deliverable",
         file: docFile,

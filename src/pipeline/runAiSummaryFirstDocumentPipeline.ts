@@ -134,8 +134,18 @@ export function resolveAiSummaryArtifactMode(options: {
   aiSummaryRequired?: boolean;
 }): AiSummaryArtifactMode {
   if (options.force) return "PROCESS_FULL";
-  const hasDocs = Boolean(String(options.documentsZipUrl || "").trim());
-  const hasSummary = Boolean(String(options.aiSummaryUrl || "").trim());
+  const isSharePoint = (value: string | null | undefined): boolean => {
+    const raw = String(value || "").trim();
+    if (!raw) return false;
+    try {
+      return new URL(raw).hostname.toLowerCase().endsWith(".sharepoint.com");
+    } catch {
+      return false;
+    }
+  };
+  // Azure URLs are legacy and must not suppress migration to SharePoint.
+  const hasDocs = isSharePoint(options.documentsZipUrl);
+  const hasSummary = isSharePoint(options.aiSummaryUrl);
   const aiRequired = options.aiSummaryRequired !== false;
   if (aiRequired) {
     if (hasDocs && hasSummary) return "SKIP_ALREADY_COMPLETE";

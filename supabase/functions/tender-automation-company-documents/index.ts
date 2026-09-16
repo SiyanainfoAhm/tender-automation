@@ -3,6 +3,15 @@ import {
   createReadOnlyBlobUrl,
   createWriteOnlyBlobUploadUrl,
 } from "./directUploadSas.ts";
+import {
+  createSharePointUploadSession,
+  deleteSharePointFile,
+  getSharePointItemByPath,
+  readSharePointFile,
+  requireSharePointConfig,
+  tenderArtifactPath,
+  uploadSharePointFile,
+} from "./sharePointStorage.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -906,7 +915,6 @@ async function handleBlobRead(
     prefix?: string;
   },
 ) {
-  const azure = requireAzureConfig();
   await authenticate(req);
 
   const explicitBlob = String(body.blobName || "").trim();
@@ -915,6 +923,42 @@ async function handleBlobRead(
   const sourcePortal = String(body.sourcePortal || "").trim() || null;
   const prefix = String(body.prefix || "").trim();
   const fileNameHint = String(body.fileName || "").trim();
+  const dispositionMode =
+    String(body.disposition || "inline").trim() === "attachment"
+      ? "attachment"
+      : "inline";
+
+  if (storageUrl.includes(".sharepoint.com/")) {
+    try {
+      const downloaded = await readSharePointFile({
+        storageUrl: storageUrl || null,
+        path: explicitBlob || null,
+      });
+      const fileName =
+        fileNameHint || downloaded.item.name || "document";
+      const headers = new Headers({
+        ...corsHeaders,
+        "Content-Type":
+          downloaded.response.headers.get("content-type") ||
+          "application/octet-stream",
+        "Cache-Control": "private, max-age=300",
+        "Content-Disposition": `${dispositionMode}; filename="${fileName.replace(/"/g, "")}"`,
+      });
+      const contentLength =
+        downloaded.response.headers.get("content-length");
+      if (contentLength) headers.set("Content-Length", contentLength);
+      return new Response(downloaded.response.body, { status: 200, headers });
+    } catch (error) {
+      throw new HttpError(
+        404,
+        error instanceof Error ? error.message : "File not found in SharePoint.",
+        "SHAREPOINT_FILE_NOT_FOUND",
+      );
+    }
+  }
+
+  // Legacy Azure artifact URLs remain readable during migration.
+  const azure = requireAzureConfig();
 
   let blobName = explicitBlob || blobNameFromUrl(azure, storageUrl || null);
   if (!blobName && prefix) {
@@ -1005,10 +1049,6 @@ async function handleBlobRead(
     );
   }
 
-  const dispositionMode =
-    String(body.disposition || "inline").trim() === "attachment"
-      ? "attachment"
-      : "inline";
   const fileName =
     fileNameHint || blobName.split("/").pop() || "document";
 
@@ -1919,7 +1959,6 @@ async function handleDocumentRead(
   req: Request,
   body: { documentId?: string; disposition?: string },
 ) {
-  const azure = requireAzureConfig();
   const user = await authenticate(req);
 
   const documentId = String(body.documentId || "").trim();
@@ -1942,13 +1981,6 @@ async function handleDocumentRead(
     throw new HttpError(403, "You do not have permission to view this document.");
   }
 
-  const blobName =
-    (doc.storage_blob_name as string | null) ||
-    blobNameFromUrl(azure, doc.storage_url ? String(doc.storage_url) : null);
-  if (!blobName) {
-    throw new HttpError(404, "File not found.");
-  }
-
   const fileName =
     (doc.original_file_name as string | null) ||
     (doc.name as string | null) ||
@@ -1964,24 +1996,38 @@ async function handleDocumentRead(
     disposition: dispositionMode,
   });
 
-  const azureResponse = await readAzureBlob(azure, blobName);
+  let storageResponse: Response;
+  if (doc.storage_provider === "sharepoint") {
+    const downloaded = await readSharePointFile({
+      storageUrl: doc.storage_url ? String(doc.storage_url) : null,
+      path: doc.storage_blob_name ? String(doc.storage_blob_name) : null,
+    });
+    storageResponse = downloaded.response;
+  } else {
+    // Legacy Azure records remain readable during migration.
+    const azure = requireAzureConfig();
+    const blobName =
+      (doc.storage_blob_name as string | null) ||
+      blobNameFromUrl(azure, doc.storage_url ? String(doc.storage_url) : null);
+    if (!blobName) throw new HttpError(404, "File not found.");
+    storageResponse = await readAzureBlob(azure, blobName);
+  }
   const headers = new Headers({
     ...corsHeaders,
     "Content-Type":
-      azureResponse.headers.get("content-type") ||
+      storageResponse.headers.get("content-type") ||
       String(doc.mime_type || "application/octet-stream"),
     "Cache-Control": "private, max-age=300",
     "Content-Disposition": `${dispositionMode}; filename="${String(fileName).replace(/"/g, "")}"`,
   });
-  const contentLength = azureResponse.headers.get("content-length");
+  const contentLength = storageResponse.headers.get("content-length");
   if (contentLength) headers.set("Content-Length", contentLength);
 
   console.info("[tender-automation-documents] read complete", { documentId });
-  return new Response(azureResponse.body, { status: 200, headers });
+  return new Response(storageResponse.body, { status: 200, headers });
 }
 
 async function handleDelete(req: Request, body: { documentId?: string }) {
-  const azure = requireAzureConfig();
   const user = await authenticate(req);
   if (!DELETE_ROLES.has(user.role)) {
     throw new HttpError(403, "You do not have permission to delete documents.");
@@ -2001,12 +2047,26 @@ async function handleDelete(req: Request, body: { documentId?: string }) {
   if (error) throw new Error(error.message);
   if (!doc) throw new HttpError(404, "Document not found.");
 
-  let blobName = doc.storage_blob_name ? String(doc.storage_blob_name) : null;
-  if (!blobName) {
-    blobName = blobNameFromUrl(azure, doc.storage_url ? String(doc.storage_url) : null);
-  }
+  const storagePath = doc.storage_blob_name
+    ? String(doc.storage_blob_name)
+    : null;
+  const storageUrl = doc.storage_url ? String(doc.storage_url) : null;
 
-  if (doc.storage_provider === "azure" && blobName) {
+  if (doc.storage_provider === "sharepoint") {
+    try {
+      await deleteSharePointFile({ storageUrl, path: storagePath });
+    } catch (error) {
+      throw new HttpError(
+        500,
+        error instanceof Error
+          ? error.message
+          : "Unable to delete the SharePoint file.",
+      );
+    }
+  } else if (doc.storage_provider === "azure") {
+    const azure = requireAzureConfig();
+    const blobName = storagePath || blobNameFromUrl(azure, storageUrl);
+    if (!blobName) throw new HttpError(404, "File not found.");
     try {
       await deleteAzureBlob(azure, blobName);
     } catch (error) {
@@ -2957,7 +3017,7 @@ async function handleCreateDirectUpload(
   req: Request,
   body: Record<string, unknown>,
 ) {
-  const azure = requireAzureConfig();
+  const sharePoint = requireSharePointConfig();
   const user = await authenticate(req);
   if (!UPLOAD_ROLES.has(user.role)) {
     throw new HttpError(403, "You do not have permission to upload documents.");
@@ -2983,52 +3043,25 @@ async function handleCreateDirectUpload(
   if (!documentName) throw new HttpError(400, "Document name is required");
   validateCompanyDocumentFile(fileName, mimeType, fileSizeBytes);
 
-  const category: Category =
-    section === "financial" ? "Financial" : "General";
+  const category: Category = section === "financial" ? "Financial" : "General";
   const documentId = crypto.randomUUID();
 
   const artifactPortal = String(body.tenderArtifactPortal || "").trim().toUpperCase();
   const artifactId = String(body.tenderArtifactId || "").trim();
   const artifactDate = String(body.tenderArtifactDate || "").trim();
-  const useManualArtifactPath =
-    artifactPortal === "MANUAL" && Boolean(artifactId);
-
-  const blobName = useManualArtifactPath
-    ? buildTenderArtifactBlobName({
-        sourcePortal: "MANUAL",
-        sourceTenderId: artifactId,
-        runDate: artifactDate,
-        fileName: `${documentId.slice(0, 8)}_${fileName}`,
-        companyName: user.companyName,
-        companyId: user.companyId,
-      })
-    : buildCompanyDocumentBlobName({
-        companyName: user.companyName,
-        companyId: user.companyId,
-        documentName,
-        documentId,
-        category,
-        fileName,
-      });
-
-  let sas;
-  try {
-    sas = createWriteOnlyBlobUploadUrl({
-      azure,
-      blobName,
-      contentType: mimeType || null,
-    });
-  } catch (error) {
-    console.error("[tender-automation-documents] direct-upload SAS failed", {
-      message: error instanceof Error ? error.message : String(error),
-    });
-    throw new HttpError(
-      503,
-      error instanceof Error
-        ? error.message
-        : "Direct upload is not configured. Set TENDER_AUTOMATION_AZURE_STORAGE_ACCOUNT_KEY.",
-    );
-  }
+  const portal =
+    artifactPortal === "TENDER247"
+      ? "tender247"
+      : artifactPortal === "BIDASSIST"
+        ? "bidassist"
+        : "manual";
+  const storagePath = tenderArtifactPath(sharePoint, {
+    portal,
+    date: artifactDate,
+    tenderId: artifactId || tenderId,
+    fileName,
+  });
+  const upload = await createSharePointUploadSession(storagePath, sharePoint);
 
   const supabase = serviceSupabase();
   const { error: insertDocError } = await supabase
@@ -3045,10 +3078,10 @@ async function handleCreateDirectUpload(
         `tender:${tenderId}|section:${section}${feeId ? `|fee:${feeId}` : ""}`,
       mime_type: mimeType || null,
       file_size_bytes: fileSizeBytes,
-      storage_provider: "azure",
-      storage_container: azure.containerName,
-      storage_blob_name: blobName,
-      storage_url: null,
+      storage_provider: "sharepoint",
+      storage_container: sharePoint.libraryName,
+      storage_blob_name: storagePath,
+      storage_url: upload.existed ? upload.item.webUrl : null,
       content_hash: null,
       verification_status: "pending",
       status: "uploading",
@@ -3063,36 +3096,24 @@ async function handleCreateDirectUpload(
     throw new HttpError(500, "Unable to start direct upload.");
   }
 
-  console.info("[tender-automation-documents] direct-upload SAS issued", {
+  console.info("[tender-automation-documents] SharePoint upload prepared", {
     documentId,
     tenderId,
     section,
-    blobName,
-    serverUtcNow: new Date().toISOString(),
-    startsOn: sas.startsAt,
-    expiresOn: sas.expiresAt,
-    validityDurationMs: sas.validityDurationMs,
-    sasSt: sas.sasSt,
-    sasSe: sas.sasSe,
-    sasSp: sas.sasSp,
+    storagePath,
+    duplicate: upload.existed,
   });
 
   return json({
     success: true,
     documentId,
-    blobPath: blobName,
-    blobName,
-    storageUrl: sas.storageUrl,
-    uploadUrl: sas.uploadUrl,
-    startsAt: sas.startsAt,
-    expiresAt: sas.expiresAt,
-    sasSt: sas.sasSt,
-    sasSe: sas.sasSe,
-    sasSp: sas.sasSp,
-    headers: {
-      "x-ms-blob-type": "BlockBlob",
-      "Content-Type": mimeType || "application/octet-stream",
-    },
+    blobPath: storagePath,
+    blobName: storagePath,
+    storageUrl: upload.existed ? upload.item.webUrl : null,
+    uploadUrl: upload.existed ? null : upload.session.uploadUrl,
+    expiresAt: upload.existed ? null : upload.session.expirationDateTime,
+    duplicate: upload.existed,
+    headers: {},
   });
 }
 
@@ -3100,14 +3121,14 @@ async function handleCompleteDirectUpload(
   req: Request,
   body: Record<string, unknown>,
 ) {
-  const azure = requireAzureConfig();
+  const sharePoint = requireSharePointConfig();
   const user = await authenticate(req);
   if (!UPLOAD_ROLES.has(user.role)) {
     throw new HttpError(403, "You do not have permission to upload documents.");
   }
 
   const documentId = String(body.documentId || "").trim();
-  const blobName = String(body.blobPath || body.blobName || "").trim();
+  const storagePath = String(body.blobPath || body.blobName || "").trim();
   const mimeType = String(body.mimeType || "application/octet-stream");
   const fileSizeBytes = Number(body.fileSizeBytes);
   const originalFileName = String(
@@ -3116,7 +3137,7 @@ async function handleCompleteDirectUpload(
 
   if (!documentId) throw new HttpError(400, "documentId is required");
   assertSafeId(documentId, "documentId");
-  if (!blobName || blobName.includes("..")) {
+  if (!storagePath || storagePath.includes("..")) {
     throw new HttpError(400, "blobPath is required");
   }
 
@@ -3136,40 +3157,23 @@ async function handleCompleteDirectUpload(
   if (doc.status !== "uploading") {
     throw new HttpError(409, "Upload is not awaiting completion.");
   }
-  if (String(doc.storage_blob_name || "") !== blobName) {
+  if (String(doc.storage_blob_name || "") !== storagePath) {
     throw new HttpError(400, "blobPath does not match the upload session.");
   }
 
-  // Verify the browser actually wrote the blob before activating the row.
-  let head = await fetch(
-    `${azureBaseUrl(azure)}/${encodeBlobPath(blobName)}${normalizeSas(azure.sasToken)}`,
-    { method: "HEAD", headers: { "x-ms-version": "2020-10-02" } },
-  );
-  if (!head.ok) {
-    try {
-      const keyedUrl = createReadOnlyBlobUrl({ azure, blobName });
-      head = await fetch(keyedUrl, {
-        method: "HEAD",
-        headers: { "x-ms-version": "2020-10-02" },
-      });
-    } catch {
-      // fall through to missing-blob error below
-    }
-  }
-  if (!head.ok) {
-    console.error("[tender-automation-documents] direct-upload blob missing", {
+  const item = await getSharePointItemByPath(storagePath, sharePoint);
+  if (!item) {
+    console.error("[tender-automation-documents] SharePoint upload missing", {
       documentId,
-      blobName,
-      status: head.status,
-      errorCode: head.headers.get("x-ms-error-code"),
+      storagePath,
     });
     throw new HttpError(
       400,
-      "Azure upload was not found. Upload the file again before saving metadata.",
+      "SharePoint upload was not found. Upload the file again before saving metadata.",
     );
   }
 
-  const storageUrl = `${azureBaseUrl(azure)}/${encodeBlobPath(blobName)}`;
+  const storageUrl = item.webUrl;
   const { data: updated, error: updateError } = await supabase
     .from("agenttender_company_documents")
     .update({
@@ -3192,11 +3196,11 @@ async function handleCompleteDirectUpload(
     console.error("[tender-automation-documents] direct-upload complete failed", {
       message: updateError.message,
       documentId,
-      blobName,
+      storagePath,
     });
     throw new HttpError(
       500,
-      "The file reached Azure but metadata could not be saved. Support has been notified.",
+      "The file reached SharePoint but metadata could not be saved. Support has been notified.",
     );
   }
   if (!updated) {
@@ -3205,16 +3209,22 @@ async function handleCompleteDirectUpload(
 
   console.info("[tender-automation-documents] direct-upload complete", {
     documentId,
-    blobName,
+    storagePath,
   });
-  return json({ success: true, documentId, document: updated, storageUrl });
+  return json({
+    success: true,
+    documentId,
+    document: updated,
+    storageUrl,
+    storagePath,
+  });
 }
 
 async function handleAbortDirectUpload(
   req: Request,
   body: Record<string, unknown>,
 ) {
-  const azure = requireAzureConfig();
+  const sharePoint = requireSharePointConfig();
   const user = await authenticate(req);
   if (!UPLOAD_ROLES.has(user.role)) {
     throw new HttpError(403, "You do not have permission to upload documents.");
@@ -3236,9 +3246,7 @@ async function handleAbortDirectUpload(
     throw new HttpError(403, "You cannot access another company's document.");
   }
 
-  const blobName =
-    (doc.storage_blob_name as string | null) ||
-    blobNameFromUrl(azure, doc.storage_url as string | null);
+  const storagePath = doc.storage_blob_name as string | null;
 
   await supabase
     .from("agenttender_company_documents")
@@ -3246,13 +3254,13 @@ async function handleAbortDirectUpload(
     .eq("id", documentId)
     .eq("company_id", user.companyId);
 
-  if (blobName) {
+  if (storagePath && !doc.storage_url) {
     try {
-      await deleteAzureBlob(azure, blobName);
+      await deleteSharePointFile({ path: storagePath }, sharePoint);
     } catch (cleanupError) {
-      console.error("[tender-automation-documents] orphaned blob cleanup failed", {
+      console.error("[tender-automation-documents] SharePoint cleanup failed", {
         documentId,
-        blobName,
+        storagePath,
         message:
           cleanupError instanceof Error
             ? cleanupError.message
@@ -3365,7 +3373,7 @@ function isAllowedProvidedArtifactBlobName(blobName: string): boolean {
 /** Pipeline upload for Tender_All_Documents.zip / AI_Summary.pdf (metadata stays in DB). */
 async function handleUploadTenderArtifact(req: Request, formData: FormData) {
   requireServiceRole(req);
-  const azure = requireAzureConfig();
+  const sharePoint = requireSharePointConfig();
 
   const sourcePortal = String(formData.get("sourcePortal") ?? "").trim().toUpperCase();
   const sourceTenderId = String(formData.get("sourceTenderId") ?? "").trim();
@@ -3394,36 +3402,31 @@ async function handleUploadTenderArtifact(req: Request, formData: FormData) {
     throw new HttpError(400, "Invalid artifactKind.");
   }
 
-  const companyFolder = resolvePipelineCompanyFolder({
-    companyFolder: String(formData.get("companyFolder") ?? "").trim(),
-    companyName: String(formData.get("companyName") ?? "").trim(),
-    companyId: String(formData.get("companyId") ?? "").trim(),
+  // Ignore legacy caller-provided Azure names. SharePoint has one canonical
+  // company root for both agent Tender247 and manual tender artifacts.
+  void providedBlobName;
+  const storagePath = tenderArtifactPath(sharePoint, {
+    portal: sourcePortal.toLowerCase(),
+    date: runDate,
+    tenderId: sourceTenderId,
+    fileName: file.name || `${artifactKind}.bin`,
   });
-  const blobName =
-    providedBlobName && isAllowedProvidedArtifactBlobName(providedBlobName)
-      ? providedBlobName
-      : `${companyFolder}/tender-artifacts/${sourcePortal.toLowerCase()}/${
-          /^\d{4}-\d{2}-\d{2}$/.test(runDate) ? runDate : "undated"
-        }/${sourceTenderId.replace(/[^a-zA-Z0-9_-]/g, "") || "unknown"}/${
-          sanitizeTenderArtifactFileName(file.name || `${artifactKind}.bin`)
-        }`;
+  const uploaded = await uploadSharePointFile(storagePath, file, sharePoint);
 
-  const uploaded = await uploadAzureBlob(azure, blobName, file, {
-    contentType: file.type || "application/octet-stream",
-    contentDisposition: "attachment",
-  });
-
-  console.info("[tender-automation-tender-artifacts] upload complete", {
+  console.info("[tender-automation-tender-artifacts] SharePoint upload complete", {
     sourcePortal,
     sourceTenderId,
     artifactKind,
-    blobName: uploaded.blobName,
+    storagePath,
+    duplicate: uploaded.existed,
   });
 
   return json({
     success: true,
-    storageUrl: uploaded.storageUrl,
-    blobName: uploaded.blobName,
+    storageUrl: uploaded.item.webUrl,
+    blobName: storagePath,
+    storagePath,
+    duplicate: uploaded.existed,
     artifactKind,
   });
 }

@@ -37,6 +37,7 @@ type EdgeJson = {
   sasSe?: string | null;
   sasSp?: string | null;
   headers?: Record<string, string>;
+  duplicate?: boolean;
 };
 
 type EdgeResult = EdgeJson & { status: number };

@@ -48,6 +48,7 @@ async function main(): Promise<void> {
     logger.info(`ARTIFACT_BACKFILL_START=${name}`);
     const result = await uploadTenderArtifactsAndPersistUrls({
       sourcePortal: "TENDER247",
+      sourceRegion: "INDIAN",
       sourceTenderId: t247Id,
       tenderFolder,
       runDate: dateIso,

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getServerSupabase } from "@/lib/db/server";
+import { isSharePointUrl } from "@/lib/storage/accessible-storage-url";
 import {
   artifactRunDate,
   buildTenderArtifactPrefix,
@@ -84,6 +85,19 @@ export async function GET(request: Request, context: RouteContext) {
         String(doc.company_document_id),
         disposition,
       );
+    } else if (
+      doc.storage_url &&
+      isSharePointUrl(String(doc.storage_url))
+    ) {
+      upstream = await invokeBlobRead({
+        storageUrl: String(doc.storage_url),
+        disposition,
+        fileName,
+        tenderId: String(doc.tender_id),
+        sourcePortal: tender?.source_portal
+          ? String(tender.source_portal)
+          : null,
+      });
     } else {
       const companyName =
         process.env.COMPANY_NAME?.trim() || "Siyana Info Solutions Pvt. Ltd.";

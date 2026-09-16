@@ -1,8 +1,10 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { computeDirectUploadSasWindow } from "@/lib/uploads/sasTimeWindow";
 import { MAX_DOCUMENT_UPLOAD_BYTES } from "@/lib/uploads/config";
-import { uploadTenderDocumentDirectToAzure } from "@/lib/uploads/directAzureUpload";
+import {
+  SHAREPOINT_UPLOAD_CHUNK_BYTES,
+  uploadTenderDocumentDirectToSharePoint,
+} from "@/lib/uploads/directSharePointUpload";
 import { validateDocumentFile } from "@/lib/uploads/validation";
 
 afterEach(() => {
@@ -17,11 +19,11 @@ function makeFile(sizeBytes: number, name = "pack.pdf") {
   return file;
 }
 
-describe("tender direct Azure upload", () => {
+describe("tender direct SharePoint upload", () => {
   it("rejects oversize files before any network call", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    const result = await uploadTenderDocumentDirectToAzure({
+    const result = await uploadTenderDocumentDirectToSharePoint({
       tenderId: "tender-1",
       section: "tender",
       file: makeFile(MAX_DOCUMENT_UPLOAD_BYTES + 1),
@@ -33,22 +35,18 @@ describe("tender direct Azure upload", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("uploads bytes only to the Azure SAS URL, not via FormData to Vercel actions", async () => {
+  it("uploads bytes to a Graph session, not via Vercel", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/documents/direct-upload") && !url.includes("blob.core")) {
+      if (url.includes("/documents/direct-upload")) {
         const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
         if (body.intent === "create" || body.intent == null) {
           return new Response(
             JSON.stringify({
               success: true,
               documentId: "doc-1",
-              blobPath: "co/doc/General/pack.pdf",
-              uploadUrl: "https://acct.blob.core.windows.net/container/co/doc/General/pack.pdf?sig=test",
-              headers: {
-                "x-ms-blob-type": "BlockBlob",
-                "Content-Type": "application/pdf",
-              },
+              blobPath: "companies/siyana-info-solutions-pvt-ltd_id/tender-artifacts/manual/date/id/pack.pdf",
+              uploadUrl: "https://it1stop.sharepoint.com/upload-session",
             }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           );
@@ -64,42 +62,41 @@ describe("tender direct Azure upload", () => {
           );
         }
       }
-      if (url.includes("blob.core.windows.net")) {
+      if (url.includes("sharepoint.com/upload-session")) {
         expect(init?.method).toBe("PUT");
-        expect(init?.body).toBeInstanceOf(File);
+        expect(new Headers(init?.headers).get("Content-Range")).toBe(
+          "bytes 0-1023/1024",
+        );
         return new Response(null, { status: 201 });
       }
       return new Response(JSON.stringify({ success: false }), { status: 500 });
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await uploadTenderDocumentDirectToAzure({
+    const result = await uploadTenderDocumentDirectToSharePoint({
       tenderId: "tender-1",
       section: "tender",
       file: makeFile(1024),
     });
     expect(result.ok).toBe(true);
     const urls = fetchMock.mock.calls.map((call) => String(call[0]));
-    expect(urls.some((u) => u.includes("blob.core.windows.net"))).toBe(true);
+    expect(urls.some((u) => u.includes("sharepoint.com/upload-session"))).toBe(true);
     expect(urls.filter((u) => u.includes("/documents/direct-upload")).length).toBe(2);
   });
 
-  it("uses BlockBlob + Content-Type from /direct-upload and does not add x-ms-version", async () => {
+  it("links an existing SharePoint file without uploading duplicate bytes", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.includes("/documents/direct-upload") && !url.includes("blob.core")) {
+      if (url.includes("/documents/direct-upload")) {
         const body = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
         if (body.intent === "create" || body.intent == null) {
           return new Response(
             JSON.stringify({
               success: true,
               documentId: "doc-1",
-              blobPath: "co/doc/General/pack.pdf",
-              uploadUrl: "https://acct.blob.core.windows.net/container/co/doc/General/pack.pdf?sig=test",
-              headers: {
-                "x-ms-blob-type": "BlockBlob",
-                "Content-Type": "application/pdf",
-              },
+              blobPath: "companies/company/tender-artifacts/manual/date/id/pack.pdf",
+              storageUrl: "https://it1stop.sharepoint.com/sites/site/TenderDocs/pack.pdf",
+              duplicate: true,
             }),
             { status: 200, headers: { "Content-Type": "application/json" } },
           );
@@ -109,30 +106,25 @@ describe("tender direct Azure upload", () => {
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
-      if (url.includes("blob.core.windows.net")) {
-        const headers = new Headers(init?.headers);
-        expect(headers.get("x-ms-blob-type")).toBe("BlockBlob");
-        expect(headers.get("Content-Type")).toBe("application/pdf");
-        expect(headers.has("x-ms-version")).toBe(false);
-        return new Response(null, { status: 201 });
-      }
       return new Response(JSON.stringify({ success: false }), { status: 500 });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const result = await uploadTenderDocumentDirectToAzure({
+    const result = await uploadTenderDocumentDirectToSharePoint({
       tenderId: "tender-1",
       section: "tender",
       file: makeFile(1024),
     });
     expect(result.ok).toBe(true);
+    expect(
+      fetchMock.mock.calls.some((call) =>
+        String(call[0]).includes("sharepoint.com/upload-session"),
+      ),
+    ).toBe(false);
   });
 
-  it("uses a UTC SAS window of -5 minutes to +30 minutes", () => {
-    const now = Date.parse("2026-09-03T06:56:00.000Z");
-    const window = computeDirectUploadSasWindow(now);
-    expect(window.startsOn.toISOString()).toBe("2026-09-03T06:51:00.000Z");
-    expect(window.expiresOn.toISOString()).toBe("2026-09-03T07:26:00.000Z");
-    expect(window.validityDurationMs).toBe(35 * 60 * 1000);
+  it("uses Graph-compatible 320 KiB chunk multiples", () => {
+    expect(SHAREPOINT_UPLOAD_CHUNK_BYTES % (320 * 1024)).toBe(0);
+    expect(SHAREPOINT_UPLOAD_CHUNK_BYTES).toBeLessThan(60 * 1024 * 1024);
   });
 
   it("validates common size thresholds used in QA", () => {
