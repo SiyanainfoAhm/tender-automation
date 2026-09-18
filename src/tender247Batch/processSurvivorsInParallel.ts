@@ -298,6 +298,11 @@ export async function processSurvivorsInParallel(options: {
   >;
   /** Tender247 Indian vs Global list context for detail opens. */
   sourceRegion?: "INDIAN" | "GLOBAL";
+  /**
+   * Per-tender region from upsert (`agenttender_tenders.source_region`).
+   * When set, opens the correct feed first instead of always using batch sourceRegion.
+   */
+  sourceRegionById?: Map<string, "INDIAN" | "GLOBAL">;
 }): Promise<{
   results: ProcessTenderResult[];
   attemptedIds: string[];
@@ -308,6 +313,11 @@ export async function processSurvivorsInParallel(options: {
   const pending = options.survivorIds.filter(
     (id) => !options.alreadyCompleted.has(id),
   );
+
+  const resolveTenderRegion = (t247Id: string): "INDIAN" | "GLOBAL" =>
+    options.sourceRegionById?.get(t247Id) ||
+    options.sourceRegion ||
+    DEFAULT_TENDER247_SOURCE_REGION;
 
   if (options.sourceRegion) {
     const { ensureTender247Region } = await import(
@@ -367,13 +377,17 @@ export async function processSurvivorsInParallel(options: {
       );
 
       // Preflight: do not start a tender while Select Mail Date is missing.
+      const tenderRegion = resolveTenderRegion(t247Id);
+      options.logger.info(
+        `T247_OPEN_USING_STORED_REGION id=${t247Id} region=${tenderRegion}`,
+      );
       await recoverListPageBetweenTenders(
         options.listPage,
         options.context,
         options.config,
         options.logger,
         options.dateFolder,
-        options.sourceRegion || DEFAULT_TENDER247_SOURCE_REGION,
+        tenderRegion,
       );
 
       const excel = options.excelValueById.get(t247Id);
@@ -395,9 +409,11 @@ export async function processSurvivorsInParallel(options: {
         force: options.force === true,
         documentsOnlyIfAiMissing: options.documentsOnlyIfAiMissing === true,
         allowNoBidDetailOpen: options.allowNoBidDetailOpen === true,
-        aiSummaryRequired: options.aiSummaryRequired !== false,
-        sourceRegion:
-          options.sourceRegion || DEFAULT_TENDER247_SOURCE_REGION,
+        aiSummaryRequired:
+          tenderRegion === "GLOBAL"
+            ? false
+            : options.aiSummaryRequired !== false,
+        sourceRegion: tenderRegion,
         phase1ScreeningAuthoritative: options.phase1ScreeningAuthoritative,
         phase1ScreeningStatusOverride:
           options.screeningStatusById?.get(t247Id) ?? null,
@@ -419,7 +435,7 @@ export async function processSurvivorsInParallel(options: {
         options.config,
         options.logger,
         options.dateFolder,
-        options.sourceRegion || DEFAULT_TENDER247_SOURCE_REGION,
+        tenderRegion,
       );
 
       if (

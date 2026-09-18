@@ -25,6 +25,12 @@ test("parses GLOBAL aliases", () => {
   assert.equal(parseTender247SourceRegion("international"), "GLOBAL");
 });
 
+test("alternateTender247Region switches feeds", async () => {
+  const { alternateTender247Region } = await import("../sourceRegion.js");
+  assert.equal(alternateTender247Region("INDIAN"), "GLOBAL");
+  assert.equal(alternateTender247Region("GLOBAL"), "INDIAN");
+});
+
 test("rejects unknown region", () => {
   assert.throws(
     () => parseTender247SourceRegion("EU"),

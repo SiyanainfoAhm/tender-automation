@@ -10,7 +10,7 @@ const root = path.resolve(
   "../../..",
 );
 
-test("openSingleTenderDirectly uses search-by-ID instead of Fresh-list scrolling", () => {
+test("openSingleTenderDirectly probes Indian/Global before scrape", () => {
   const src = fs.readFileSync(
     path.join(root, "src/tenderDetails/openSingleTenderDirectly.ts"),
     "utf8",
@@ -22,6 +22,17 @@ test("openSingleTenderDirectly uses search-by-ID instead of Fresh-list scrolling
   assert.match(src, /DETAIL_OPENED/);
   assert.match(src, /waitForEvent\("page"/);
   assert.match(src, /\.catch\(\(\) => null\)/);
+  assert.match(src, /TENDER247_REGION_PROBE/);
+  assert.match(src, /TENDER247_REGION_CROSS_CHECK/);
+  assert.match(src, /TENDER247_REGION_RESOLVED/);
+  assert.match(src, /alternateTender247Region/);
+  assert.match(src, /resolvedRegion/);
+});
+
+test("alternateTender247Region flips Indian and Global", async () => {
+  const mod = await import("../../tender247/sourceRegion.js");
+  assert.equal(mod.alternateTender247Region("INDIAN"), "GLOBAL");
+  assert.equal(mod.alternateTender247Region("GLOBAL"), "INDIAN");
 });
 
 test("searchTender247ById targets SEARCH not ADVANCE SEARCH", () => {

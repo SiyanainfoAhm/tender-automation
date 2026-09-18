@@ -114,6 +114,8 @@ export type AiSummaryQueueRow = {
   title: string | null;
   documentsZipUrl: string | null;
   aiSummaryUrl: string | null;
+  /** Region stored at upsert — drives which Tender247 feed to open. */
+  sourceRegion: Tender247SourceRegion;
 };
 
 /** Supabase URL–driven resume mode (local downloads/ are cache only). */
@@ -670,7 +672,7 @@ export async function listAiSummaryQueueForDate(options: {
     const { data, error } = await client
       .from("agenttender_tenders")
       .select(
-        "id, source_tender_id, qualification_status, title, documents_zip_url, ai_summary_url",
+        "id, source_tender_id, source_region, qualification_status, title, documents_zip_url, ai_summary_url",
       )
       .eq("source_portal", "TENDER247")
       .eq("source_region", sourceRegion)
@@ -724,9 +726,101 @@ export async function listAiSummaryQueueForDate(options: {
       title: row.title ? String(row.title) : null,
       documentsZipUrl,
       aiSummaryUrl,
+      sourceRegion: parseTender247SourceRegion(
+        String(row.source_region || sourceRegion),
+      ),
     });
   }
   return rows;
+}
+
+/**
+ * Load queue rows for explicit --ids across INDIAN and GLOBAL for the scraped date.
+ * Prefer the row matching preferredRegion when the same id exists in both.
+ */
+export async function listAiSummaryQueueRowsForIds(options: {
+  scrapedDate: string;
+  ids: string[];
+  preferredRegion?: Tender247SourceRegion;
+  force?: boolean;
+  aiSummaryRequired?: boolean;
+}): Promise<AiSummaryQueueRow[]> {
+  if (!isSupabaseConfigured()) {
+    throw new AutomationError(
+      "SUPABASE_NOT_CONFIGURED",
+      "Supabase is not configured — cannot build AI summary queue",
+    );
+  }
+  const wanted = [
+    ...new Set(
+      options.ids
+        .map((id) => String(id || "").replace(/^T247-/i, "").replace(/\D/g, ""))
+        .filter(Boolean),
+    ),
+  ];
+  if (!wanted.length) return [];
+
+  const preferred = options.preferredRegion || DEFAULT_TENDER247_SOURCE_REGION;
+  const aiSummaryRequired = options.aiSummaryRequired !== false;
+  const client = getSupabaseAdminClient();
+  const { data, error } = await client
+    .from("agenttender_tenders")
+    .select(
+      "id, source_tender_id, source_region, qualification_status, title, documents_zip_url, ai_summary_url",
+    )
+    .eq("source_portal", "TENDER247")
+    .eq("scraped_date", options.scrapedDate)
+    .in("source_tender_id", wanted);
+
+  if (error) {
+    throw new AutomationError(
+      "AI_SUMMARY_QUEUE_IDS_QUERY_FAILED",
+      `Failed to load AI summary ids: ${error.message}`,
+    );
+  }
+
+  const byId = new Map<string, AiSummaryQueueRow>();
+  for (const row of data || []) {
+    const sourceTenderId = String(row.source_tender_id || "")
+      .replace(/^T247-/i, "")
+      .replace(/\D/g, "");
+    if (!sourceTenderId) continue;
+    const rowRegion = parseTender247SourceRegion(
+      String(row.source_region || preferred),
+    );
+    const documentsZipUrl = row.documents_zip_url
+      ? String(row.documents_zip_url).trim() || null
+      : null;
+    const aiSummaryUrl = row.ai_summary_url
+      ? String(row.ai_summary_url).trim() || null
+      : null;
+    const mode = resolveAiSummaryArtifactMode({
+      documentsZipUrl,
+      aiSummaryUrl,
+      force: options.force,
+      aiSummaryRequired: rowRegion === "GLOBAL" ? false : aiSummaryRequired,
+    });
+    if (mode === "SKIP_ALREADY_COMPLETE") continue;
+
+    const mapped: AiSummaryQueueRow = {
+      id: String(row.id),
+      sourceTenderId,
+      qualificationStatus:
+        String(row.qualification_status || "").trim().toUpperCase() ||
+        "UNKNOWN",
+      title: row.title ? String(row.title) : null,
+      documentsZipUrl,
+      aiSummaryUrl,
+      sourceRegion: rowRegion,
+    };
+    const existing = byId.get(sourceTenderId);
+    if (!existing || rowRegion === preferred) {
+      byId.set(sourceTenderId, mapped);
+    }
+  }
+  return wanted
+    .map((id) => byId.get(id))
+    .filter((row): row is AiSummaryQueueRow => Boolean(row));
 }
 
 function writeQueueArtifact(
@@ -895,8 +989,15 @@ export async function runAiSummaryFirstDocumentPipeline(
 
   let queue = pending;
   if (idFilter?.length) {
-    const wanted = new Set(idFilter);
-    queue = pending.filter((row) => wanted.has(row.sourceTenderId));
+    // Explicit IDs: resolve each row's stored source_region (INDIAN or GLOBAL),
+    // not only the pipeline --region filter.
+    queue = await listAiSummaryQueueRowsForIds({
+      scrapedDate: dateIso,
+      ids: idFilter,
+      preferredRegion: args.region,
+      force: args.force || true,
+      aiSummaryRequired,
+    });
     const found = new Set(queue.map((row) => row.sourceTenderId));
     const missing = idFilter.filter((id) => !found.has(id));
     if (missing.length) {
@@ -905,6 +1006,14 @@ export async function runAiSummaryFirstDocumentPipeline(
       );
       console.log(
         `AI_SUMMARY_PIPELINE_IDS_NOT_IN_QUEUE=${missing.join(",")}`,
+      );
+    }
+    for (const row of queue) {
+      logger.info(
+        `AI_SUMMARY_PIPELINE_ID_REGION id=${row.sourceTenderId} source_region=${row.sourceRegion}`,
+      );
+      console.log(
+        `AI_SUMMARY_PIPELINE_ID_REGION id=${row.sourceTenderId} source_region=${row.sourceRegion}`,
       );
     }
   }
@@ -1068,6 +1177,9 @@ export async function runAiSummaryFirstDocumentPipeline(
         }
 
         const survivorIds = queue.map((r) => r.sourceTenderId);
+        const sourceRegionById = new Map<string, Tender247SourceRegion>(
+          queue.map((row) => [row.sourceTenderId, row.sourceRegion]),
+        );
         const existingArtifactUrlsById = new Map(
           queue.map((row) => [
             row.sourceTenderId,
@@ -1081,6 +1193,9 @@ export async function runAiSummaryFirstDocumentPipeline(
         logger.info(
           `AI_SUMMARY_PIPELINE_CRAWL_START count=${survivorIds.length} documentsOnlyIfAiMissing=false aiSummaryRequired=${aiSummaryRequired}`,
         );
+        for (const [id, region] of sourceRegionById) {
+          logger.info(`AI_SUMMARY_PIPELINE_OPEN_REGION id=${id} region=${region}`);
+        }
 
         const parallel = await processSurvivorsInParallel({
           listPage,
@@ -1099,6 +1214,7 @@ export async function runAiSummaryFirstDocumentPipeline(
           excelValueById,
           existingArtifactUrlsById,
           sourceRegion: args.region,
+          sourceRegionById,
         });
 
         summary.attempted = parallel.attemptedIds.length;

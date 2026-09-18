@@ -15,11 +15,13 @@ export type ResolvedTender247Detail = {
   detailPage: Page;
   item: TenderListItem;
   detailUrl: string;
+  resolvedRegion?: Tender247SourceRegion;
 };
 
 /**
  * Authenticated browser list page → locate T247 ID → open detail tab.
  * Same path as `npm run crawl:tender247:one`.
+ * Probes Indian/Global feeds when the preferred region search misses.
  */
 export async function resolveTender247Tender(options: {
   listPage: Page;
@@ -56,5 +58,6 @@ export async function resolveTender247Tender(options: {
     detailPage: opened.page,
     item: opened.item,
     detailUrl: opened.item.detailUrl || opened.page.url(),
+    resolvedRegion: opened.resolvedRegion,
   };
 }

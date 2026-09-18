@@ -277,7 +277,7 @@ export async function processLiveTender(
   }
 
   const aiSummaryRequired = options.aiSummaryRequired !== false;
-  const sourceRegion =
+  let sourceRegion: "INDIAN" | "GLOBAL" =
     options.sourceRegion || DEFAULT_TENDER247_SOURCE_REGION;
   // -------- LEVEL A: skip reopen when artifacts already satisfy the run --------
   let resume = inspectTenderResumeState(dateFolder, t247Id);
@@ -640,6 +640,15 @@ export async function processLiveTender(
       });
       detailPage = resolved.detailPage;
       titleHint = options.titleHint ?? resolved.item.listTitle;
+      if (
+        resolved.resolvedRegion &&
+        resolved.resolvedRegion !== sourceRegion
+      ) {
+        logger.info(
+          `T247_SOURCE_REGION_CORRECTED id=${t247Id} from=${sourceRegion} to=${resolved.resolvedRegion}`,
+        );
+        sourceRegion = resolved.resolvedRegion;
+      }
       const fromUrl = detailPage.url().match(
         /\/auth\/(globaltender|tender)\/\d+\/([0-9a-f-]{8,})/i,
       );
@@ -647,8 +656,17 @@ export async function processLiveTender(
         securityCode = fromUrl[2];
         securityCodeCaptured = true;
         logger.info("SECURITY_CODE_CAPTURED");
+        const urlRegion = /globaltender/i.test(fromUrl[1] || "")
+          ? "GLOBAL"
+          : "INDIAN";
+        if (urlRegion !== sourceRegion) {
+          logger.info(
+            `T247_SOURCE_REGION_FROM_DETAIL_URL id=${t247Id} from=${sourceRegion} to=${urlRegion}`,
+          );
+          sourceRegion = urlRegion;
+        }
         logger.info(
-          `T247_DETAIL_ROUTE region=${/globaltender/i.test(fromUrl[1] || "") ? "GLOBAL" : "INDIAN"} code=${securityCode}`,
+          `T247_DETAIL_ROUTE region=${sourceRegion} code=${securityCode}`,
         );
       }
     } else {

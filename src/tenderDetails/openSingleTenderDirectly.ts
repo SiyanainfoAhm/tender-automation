@@ -42,9 +42,11 @@ import {
   resolveSessionContext,
 } from "../tender247Batch/apiClient.js";
 import {
+  alternateTender247Region,
   DEFAULT_TENDER247_SOURCE_REGION,
   getTender247Source,
   tender247RegionFromUrl,
+  tender247RegionLabel,
   urlMatchesTender247Region,
   type Tender247SourceRegion,
 } from "../tender247/sourceRegion.js";
@@ -158,6 +160,8 @@ export interface OpenSingleTenderResult {
   page: Page;
   item: TenderListItem;
   openedVia: "popup" | "same_tab" | "same_context_page";
+  /** Feed where the T247 ID was actually found (may differ from preferred). */
+  resolvedRegion?: Tender247SourceRegion;
 }
 
 async function ensureListMailDateForDetailOpen(
@@ -490,10 +494,11 @@ export async function openSingleTenderDirectly(
     );
   }
 
-  const sourceRegion =
+  const preferredRegion =
     screening?.sourceRegion ||
     tender247RegionFromUrl(page.url()) ||
     DEFAULT_TENDER247_SOURCE_REGION;
+  let sourceRegion: Tender247SourceRegion = preferredRegion;
 
   let status = screening?.phase1ScreeningStatus;
   if (!status && screening?.dateFolder) {
@@ -510,76 +515,126 @@ export async function openSingleTenderDirectly(
     assertOpenSingleTenderDetailsAllowed(status, id);
   }
 
-  await dismissTender247BlockingOverlays(page, logger, config);
-  await dismissTender247SupportChat(page, logger);
-  await ensureTender247Region(
-    page,
-    sourceRegion,
-    logger,
-    config.pageTimeoutMs,
-  ).catch((error) => {
-    const msg = error instanceof Error ? error.message : String(error);
-    logger.warn(
-      `TENDER247_REGION_ENSURE_SOFT_FAIL region=${sourceRegion} msg=${msg.slice(0, 160)}`,
+  const prepareRegionForSearch = async (
+    region: Tender247SourceRegion,
+  ): Promise<void> => {
+    await dismissTender247BlockingOverlays(page, logger, config);
+    await dismissTender247SupportChat(page, logger);
+    await ensureTender247Region(
+      page,
+      region,
+      logger,
+      config.pageTimeoutMs,
+    ).catch((error) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      logger.warn(
+        `TENDER247_REGION_ENSURE_SOFT_FAIL region=${region} msg=${msg.slice(0, 160)}`,
+      );
+    });
+    await ensureListMailDateForDetailOpen(
+      page,
+      context,
+      config,
+      logger,
+      screening?.dateFolder,
+      region,
     );
-  });
-  await ensureListMailDateForDetailOpen(
-    page,
-    context,
-    config,
-    logger,
-    screening?.dateFolder,
-    sourceRegion,
-  );
+  };
 
-  let idLocator: Locator;
-  let securityCodeFromSearch: string | null = null;
-  try {
-    const searched = await searchTender247ListById({
+  const searchOnRegion = async (
+    region: Tender247SourceRegion,
+  ): Promise<{ locator: Locator; securityCode: string | null }> => {
+    await prepareRegionForSearch(region);
+    logger.info(
+      `TENDER247_REGION_SEARCH id=${id} region=${region} label=${tender247RegionLabel(region)}`,
+    );
+    console.log(`TENDER247_REGION_SEARCH id=${id} region=${region}`);
+    return searchTender247ListById({
       page,
       t247Id: id,
       logger,
       pageTimeoutMs: config.pageTimeoutMs,
     });
+  };
+
+  logger.info(
+    `TENDER247_REGION_PROBE id=${id} preferred=${preferredRegion} (check Indian/Global before scrape)`,
+  );
+  console.log(
+    `TENDER247_REGION_PROBE id=${id} preferred=${preferredRegion}`,
+  );
+
+  let idLocator: Locator;
+  let securityCodeFromSearch: string | null = null;
+  try {
+    const searched = await searchOnRegion(preferredRegion);
     idLocator = searched.locator;
     securityCodeFromSearch = searched.securityCode;
+    sourceRegion = preferredRegion;
   } catch (firstError) {
     const firstMsg =
       firstError instanceof Error ? firstError.message : String(firstError);
     logger.warn(
-      `SEARCH_FAILED id=${id} stage=search attempt=1 reason=${firstMsg}`,
+      `SEARCH_FAILED id=${id} stage=search region=${preferredRegion} reason=${firstMsg}`,
     );
-    logger.info(`SEARCH_RETRY id=${id} restoring list and mail date`);
+
+    // Same-region soft retry (flaky UI), then cross-region check.
+    logger.info(
+      `SEARCH_RETRY id=${id} region=${preferredRegion} restoring list and mail date`,
+    );
     await restoreListAndMailDate(
       page,
       context,
       config,
       logger,
       screening?.dateFolder,
-      sourceRegion,
+      preferredRegion,
     );
-    await dismissTender247BlockingOverlays(page, logger, config);
-    await dismissTender247SupportChat(page, logger);
     try {
-      const searched = await searchTender247ListById({
-        page,
-        t247Id: id,
-        logger,
-        pageTimeoutMs: config.pageTimeoutMs,
-      });
+      const searched = await searchOnRegion(preferredRegion);
       idLocator = searched.locator;
       securityCodeFromSearch = searched.securityCode;
+      sourceRegion = preferredRegion;
     } catch (retryError) {
       const retryMsg =
         retryError instanceof Error ? retryError.message : String(retryError);
-      throw new AutomationError(
-        "TENDER247_SEARCH_FAILED",
-        `Search-by-T247-ID failed for ${id} after retry: ${retryMsg}`,
+      const otherRegion = alternateTender247Region(preferredRegion);
+      logger.warn(
+        `SEARCH_FAILED id=${id} region=${preferredRegion} after retry — cross-checking ${otherRegion}`,
       );
+      logger.info(
+        `TENDER247_REGION_CROSS_CHECK id=${id} from=${preferredRegion} to=${otherRegion}`,
+      );
+      console.log(
+        `TENDER247_REGION_CROSS_CHECK id=${id} trying=${otherRegion}`,
+      );
+      try {
+        const searched = await searchOnRegion(otherRegion);
+        idLocator = searched.locator;
+        securityCodeFromSearch = searched.securityCode;
+        sourceRegion = otherRegion;
+        logger.info(
+          `TENDER247_REGION_RESOLVED id=${id} region=${otherRegion} (was preferred=${preferredRegion})`,
+        );
+        console.log(`TENDER247_REGION_RESOLVED id=${id} region=${otherRegion}`);
+      } catch (crossError) {
+        const crossMsg =
+          crossError instanceof Error ? crossError.message : String(crossError);
+        throw new AutomationError(
+          "TENDER247_SEARCH_FAILED",
+          `Search-by-T247-ID failed for ${id} on ${preferredRegion} and ${otherRegion}: ${crossMsg || retryMsg}`,
+        );
+      }
     }
   }
 
-  logger.info(`TENDER247_REQUESTED_TENDER_FOUND=${id}`);
+  if (sourceRegion === preferredRegion) {
+    logger.info(
+      `TENDER247_REGION_RESOLVED id=${id} region=${sourceRegion} (preferred)`,
+    );
+  }
+
+  logger.info(`TENDER247_REQUESTED_TENDER_FOUND=${id} region=${sourceRegion}`);
 
   let completeTenderRow = await resolveCompleteTenderRow(idLocator, id, logger);
 
@@ -627,6 +682,7 @@ export async function openSingleTenderDirectly(
     return {
       page,
       openedVia: "same_tab",
+      resolvedRegion: sourceRegion,
       item: {
         t247Id: id,
         detailUrl: page.url(),
@@ -839,6 +895,7 @@ export async function openSingleTenderDirectly(
   return {
     page: detailPage,
     openedVia,
+    resolvedRegion: sourceRegion,
     item: {
       t247Id: id,
       detailUrl: detailPage.url(),

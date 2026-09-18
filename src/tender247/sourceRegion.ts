@@ -66,6 +66,13 @@ export function tender247RegionLabel(region: Tender247SourceRegion): string {
   return region === "GLOBAL" ? "Global" : "Indian";
 }
 
+/** Opposite feed — used when an ID is missing from the preferred list. */
+export function alternateTender247Region(
+  region: Tender247SourceRegion,
+): Tender247SourceRegion {
+  return region === "GLOBAL" ? "INDIAN" : "GLOBAL";
+}
+
 /** True when URL is either authenticated list feed (Indian or Global). */
 export function isTender247AuthListUrl(url: string): boolean {
   const lower = String(url || "").toLowerCase();
