@@ -16,6 +16,7 @@ export type SharePointItem = {
   webUrl: string;
   size?: number;
   parentReference?: { driveId?: string; path?: string };
+  "@microsoft.graph.downloadUrl"?: string;
 };
 
 export type SharePointUploadSession = {
@@ -192,9 +193,12 @@ export async function getSharePointItemByPath(
   config = requireSharePointConfig(),
 ): Promise<SharePointItem | null> {
   const driveId = await resolveSharePointDriveId(config);
+  const select = encodeURIComponent(
+    "id,name,webUrl,size,parentReference,@microsoft.graph.downloadUrl",
+  );
   const response = await graph(
     config,
-    `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(cleanPath(path))}?$select=id,name,webUrl,size,parentReference`,
+    `${GRAPH_BASE}/drives/${driveId}/root:/${encodePath(cleanPath(path))}?$select=${select}`,
   );
   if (response.status === 404) return null;
   const body = await response.json().catch(() => ({})) as SharePointItem & {
@@ -344,12 +348,72 @@ function relativePathFromWebUrl(
     const url = new URL(storageUrl);
     if (url.hostname.toLowerCase() !== config.hostname.toLowerCase()) return null;
     const marker = `/${config.libraryName}/`;
-    const decoded = decodeURIComponent(url.pathname);
-    const index = decoded.toLowerCase().indexOf(marker.toLowerCase());
-    return index >= 0 ? cleanPath(decoded.slice(index + marker.length)) : null;
+    const candidates = [
+      decodeURIComponent(url.pathname),
+      decodeURIComponent(url.searchParams.get("id") || ""),
+      decodeURIComponent(url.searchParams.get("RootFolder") || ""),
+    ].filter(Boolean);
+    for (const candidate of candidates) {
+      const index = candidate.toLowerCase().indexOf(marker.toLowerCase());
+      if (index >= 0) {
+        return cleanPath(candidate.slice(index + marker.length));
+      }
+    }
+    // Already a library-relative path (no host prefix).
+    const raw = String(storageUrl || "").trim().replace(/^\/+/, "");
+    if (
+      raw &&
+      !raw.includes("://") &&
+      !raw.includes("?") &&
+      raw.toLowerCase().startsWith("companies/")
+    ) {
+      return cleanPath(raw);
+    }
+    return null;
   } catch {
     return null;
   }
+}
+
+async function fetchSharePointDownload(
+  item: SharePointItem,
+  config: SharePointConfig,
+): Promise<Response> {
+  // Prefer the short-lived preauthenticated download URL (no bearer token).
+  const directUrl = item["@microsoft.graph.downloadUrl"]?.trim();
+  if (directUrl) {
+    const direct = await fetch(directUrl, { redirect: "follow" });
+    if (direct.ok) return direct;
+  }
+
+  const driveId =
+    item.parentReference?.driveId || (await resolveSharePointDriveId(config));
+  // Graph /content returns a 302 to a preauthenticated CDN URL. Do NOT forward
+  // the Graph bearer token on that hop — SharePoint rejects it.
+  const response = await graph(
+    config,
+    `${GRAPH_BASE}/drives/${driveId}/items/${item.id}/content`,
+    { redirect: "manual" },
+  );
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get("Location");
+    if (!location) {
+      throw new Error("SharePoint download redirect was missing.");
+    }
+    const absolute =
+      location.startsWith("http://") || location.startsWith("https://")
+        ? location
+        : new URL(location, GRAPH_BASE).toString();
+    const redirected = await fetch(absolute, { redirect: "follow" });
+    if (!redirected.ok) {
+      throw new Error(`SharePoint download failed (${redirected.status}).`);
+    }
+    return redirected;
+  }
+  if (!response.ok) {
+    throw new Error(`SharePoint download failed (${response.status}).`);
+  }
+  return response;
 }
 
 export async function resolveSharePointItem(
@@ -369,15 +433,7 @@ export async function readSharePointFile(
 ): Promise<{ response: Response; item: SharePointItem }> {
   const item = await resolveSharePointItem(options, config);
   if (!item) throw new Error("File not found in SharePoint.");
-  const driveId =
-    item.parentReference?.driveId || (await resolveSharePointDriveId(config));
-  const response = await graph(
-    config,
-    `${GRAPH_BASE}/drives/${driveId}/items/${item.id}/content`,
-  );
-  if (!response.ok) {
-    throw new Error(`SharePoint download failed (${response.status}).`);
-  }
+  const response = await fetchSharePointDownload(item, config);
   return { response, item };
 }
 

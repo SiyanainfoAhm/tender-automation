@@ -129,6 +129,14 @@ export function tryParseAzureBlobUrl(
   options?: { defaultContainer?: string | null },
 ): ParsedAzureBlobRef | null {
   if (!value?.trim()) return null;
+  // SharePoint URLs must never be treated as Azure blob paths.
+  try {
+    const host = new URL(value.trim()).hostname.toLowerCase();
+    if (host.endsWith(".sharepoint.com")) return null;
+  } catch {
+    // Relative paths fall through to Azure parsing.
+  }
+  if (value.toLowerCase().includes(".sharepoint.com")) return null;
   try {
     return parseAzureBlobUrl(value, options);
   } catch {

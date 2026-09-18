@@ -18,7 +18,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatDate } from "@/lib/format";
-import { toAccessibleStorageUrl } from "@/lib/storage/accessible-storage-url";
+import {
+  toAccessibleStorageUrl,
+  toProxiedStorageUrl,
+} from "@/lib/storage/accessible-storage-url";
 import { cn } from "@/lib/utils";
 
 export type AiSummaryTenderMeta = {
@@ -42,14 +45,19 @@ type AiSummaryDialogProps = {
 const pdfObjectUrlCache = new Map<string, string>();
 const pdfFetchInFlight = new Map<string, Promise<string>>();
 
+/**
+ * Same-origin Graph proxy stream — required for iframe preview because
+ * SharePoint blocks embedding (X-Frame-Options / CSP frame-ancestors).
+ */
 export function resolveAiSummaryViewerUrl(
   rawUrl: string | null | undefined,
 ): string | null {
-  return toAccessibleStorageUrl(rawUrl, {
+  return toProxiedStorageUrl(rawUrl, {
     fileName: "AI_Tender_Summary.pdf",
   });
 }
 
+/** Direct SharePoint column URL for the Download button. */
 export function resolveAiSummaryDownloadUrl(
   rawUrl: string | null | undefined,
 ): string | null {
@@ -60,9 +68,8 @@ export function resolveAiSummaryDownloadUrl(
 }
 
 /**
- * Fetch the authenticated PDF and expose it as a blob: URL.
- * Required because app CSP uses frame-ancestors 'none' / X-Frame-Options DENY,
- * which blocks iframes pointing at /api/storage/blob on the same origin.
+ * Fetch the PDF via the authenticated SharePoint proxy and expose a Blob URL
+ * for the iframe (same pattern as the previous Azure blob viewer).
  */
 async function fetchPdfObjectUrl(proxyUrl: string): Promise<string> {
   const cached = pdfObjectUrlCache.get(proxyUrl);
@@ -77,19 +84,37 @@ async function fetchPdfObjectUrl(proxyUrl: string): Promise<string> {
       credentials: "same-origin",
     });
     if (!response.ok) {
-      throw new Error(
-        response.status === 404
-          ? "AI summary file was not found."
-          : "Unable to load AI summary.",
-      );
+      let detail = "";
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const body = (await response.json().catch(() => null)) as {
+          error?: string;
+          code?: string;
+        } | null;
+        detail = body?.error || body?.code || "";
+      }
+      if (response.status === 401) {
+        throw new Error("Sign in again to view the AI summary.");
+      }
+      if (response.status === 404) {
+        throw new Error(
+          detail || "AI summary file was not found in SharePoint.",
+        );
+      }
+      throw new Error(detail || "Unable to load AI summary from SharePoint.");
     }
     const blob = await response.blob();
+    if (!blob.size) {
+      throw new Error("AI summary file was empty.");
+    }
     const type =
       blob.type && blob.type !== "application/octet-stream"
         ? blob.type
         : "application/pdf";
     const pdfBlob =
-      type === "application/pdf" ? blob : new Blob([blob], { type: "application/pdf" });
+      type === "application/pdf"
+        ? blob
+        : new Blob([blob], { type: "application/pdf" });
     const objectUrl = URL.createObjectURL(pdfBlob);
     pdfObjectUrlCache.set(proxyUrl, objectUrl);
     return objectUrl;
@@ -266,7 +291,7 @@ export function AiSummaryDialog({
                   </p>
                   <p className="text-xs text-foreground-500">
                     {loading
-                      ? "Loading tender summary…"
+                      ? "Fetching PDF from SharePoint…"
                       : "Opening PDF viewer…"}
                   </p>
                 </div>
@@ -303,9 +328,14 @@ export function AiSummaryDialog({
             )}
             {expanded ? "Exit full screen" : "Open full screen"}
           </Button>
-          {downloadUrl ? (
+          {downloadUrl || objectUrl ? (
             <Button type="button" size="sm" className="gap-1.5" asChild>
-              <a href={downloadUrl} download target="_blank" rel="noreferrer">
+              <a
+                href={objectUrl || downloadUrl || "#"}
+                download="AI_Tender_Summary.pdf"
+                target="_blank"
+                rel="noreferrer"
+              >
                 <Download className="size-3.5" />
                 Download
               </a>

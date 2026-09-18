@@ -1,3 +1,4 @@
+import { resolveTenderArtifactUrls } from "@/lib/tenders/resolve-document-urls";
 import type { WebTenderListRow } from "@/server/repositories/tenderRepository";
 
 /**
@@ -12,16 +13,34 @@ export function tenderListDecisionReason(row: WebTenderListRow): string {
   return tenderListPrescreenReason(row);
 }
 
-/** Metadata-only: do not HEAD Azure from the list. */
-export function tenderListHasDocuments(row: WebTenderListRow): boolean {
-  if (row.document_archive_available === true) return true;
-  return Boolean(String(row.documents_zip_url || "").trim());
+function listArtifactUrls(row: WebTenderListRow) {
+  return resolveTenderArtifactUrls({
+    document_urls: (row as WebTenderListRow & { document_urls?: unknown })
+      .document_urls,
+    documents_zip_url: row.documents_zip_url,
+    ai_summary_url: row.ai_summary_url,
+  });
 }
 
-/** Metadata-only: AI summary path or availability flag. */
+/**
+ * Show documents icon only when a real SharePoint zip URL exists.
+ * Do not trust document_archive_available alone (can be stale).
+ */
+export function tenderListHasDocuments(row: WebTenderListRow): boolean {
+  return Boolean(listArtifactUrls(row).documentsZipUrl);
+}
+
+/**
+ * Show AI summary icon only when a real SharePoint AI summary URL exists.
+ * Do not trust ai_summary_available alone (can be true with no file).
+ */
 export function tenderListHasAiSummary(row: WebTenderListRow): boolean {
-  if (row.ai_summary_available === true) return true;
-  return Boolean(String(row.ai_summary_url || "").trim());
+  return Boolean(listArtifactUrls(row).aiSummaryUrl);
+}
+
+/** Prefer document_urls / SharePoint column values for AI summary viewer. */
+export function tenderListAiSummaryUrl(row: WebTenderListRow): string | null {
+  return listArtifactUrls(row).aiSummaryUrl;
 }
 
 export function tenderDocumentsDetailHref(tenderId: string): string {

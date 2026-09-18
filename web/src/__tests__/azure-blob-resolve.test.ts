@@ -71,6 +71,14 @@ describe("parseAzureBlobUrl", () => {
     expect(tryParseAzureBlobUrl("not a url")).toBeNull();
     expect(tryParseAzureBlobUrl("")).toBeNull();
   });
+
+  it("never treats SharePoint URLs as Azure blobs", () => {
+    expect(
+      tryParseAzureBlobUrl(
+        "https://it1stop.sharepoint.com/sites/SiyanaTenderDocumentRepository/TenderDocs/companies/x/file.zip",
+      ),
+    ).toBeNull();
+  });
 });
 
 describe("manual vs tender247 artifact prefixes", () => {

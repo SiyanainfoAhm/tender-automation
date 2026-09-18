@@ -1,5 +1,6 @@
 import "server-only";
 
+import { isSharePointUrl } from "@/lib/storage/accessible-storage-url";
 import {
   tryParseAzureBlobUrl,
   type AzureBlobResolveCode,
@@ -45,6 +46,21 @@ export async function resolveAzureDocumentReference(options: {
   documentId?: string | null;
   companyDocumentId?: string | null;
 }): Promise<ResolveAzureDocumentSuccess | ResolveAzureDocumentFailure> {
+  const storedDocumentUrl = String(options.storedDocumentUrl || "").trim();
+
+  // SharePoint artifact URLs — never resolve via Azure.
+  if (isSharePointUrl(storedDocumentUrl)) {
+    return {
+      ok: true,
+      resolved: {
+        storageUrl: storedDocumentUrl,
+        blobName: "",
+        containerName: null,
+        source: "persisted_url",
+      },
+    };
+  }
+
   const defaultContainer =
     process.env.TENDER_AUTOMATION_AZURE_STORAGE_CONTAINER_NAME?.trim() ||
     "companydocuments";
@@ -54,7 +70,6 @@ export async function resolveAzureDocumentReference(options: {
   ).trim();
   const runDate = artifactRunDate(options.createdAt);
   const fileName = String(options.fileName || "").trim();
-  const storedDocumentUrl = String(options.storedDocumentUrl || "").trim();
 
   const companyName =
     String(options.companyName || "").trim() ||
@@ -157,7 +172,7 @@ export async function readResolvedAzureDocument(options: {
 }): Promise<Response> {
   return invokeBlobRead({
     storageUrl: options.resolved.storageUrl,
-    blobName: options.resolved.blobName,
+    blobName: options.resolved.blobName || undefined,
     disposition: options.disposition,
     fileName: options.fileName,
     tenderId: options.tenderId,

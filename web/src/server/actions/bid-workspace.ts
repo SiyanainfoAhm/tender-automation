@@ -16,6 +16,7 @@ import {
 } from "@/lib/bid-ai-prompts";
 import { MAX_SINGLE_SHOT_UPLOAD_BYTES } from "@/lib/company/types";
 import { getServerSupabase } from "@/lib/db/server";
+import { resolveTenderArtifactUrls } from "@/lib/tenders/resolve-document-urls";
 import { CompanyAccessError } from "@/server/auth/company-access";
 import { requirePermissionStrict } from "@/server/auth/permissions";
 import { insertTenderActivity } from "@/server/repositories/tenderActivityRepository";
@@ -591,10 +592,10 @@ export async function ingestTenderDocumentsAction(
       tenderId,
       companyId: session.companyId,
       workspaceId: workspace.id,
-      documentsZipUrl:
-        typeof data.tender.documents_zip_url === "string"
-          ? data.tender.documents_zip_url
-          : null,
+      documentsZipUrl: resolveTenderArtifactUrls({
+        document_urls: data.tender.document_urls,
+        documents_zip_url: data.tender.documents_zip_url,
+      }).documentsZipUrl,
     });
 
     if (!sources.length) {

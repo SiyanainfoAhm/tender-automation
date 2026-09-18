@@ -9,6 +9,7 @@ import {
   getSharePointItemByPath,
   readSharePointFile,
   requireSharePointConfig,
+  resolveSharePointItem,
   tenderArtifactPath,
   uploadSharePointFile,
 } from "./sharePointStorage.ts";
@@ -902,7 +903,28 @@ async function resolveBlobFromPrefix(
   return { blobName: picked, restored: false };
 }
 
-/** Authenticated blob stream — Azure account disallows anonymous/public access. */
+function decodeStorageRef(value: string): string {
+  let current = String(value || "").trim();
+  for (let i = 0; i < 2; i += 1) {
+    if (!/%[0-9a-f]{2}/i.test(current)) break;
+    try {
+      const decoded = decodeURIComponent(current);
+      if (decoded === current) break;
+      current = decoded;
+    } catch {
+      break;
+    }
+  }
+  return current;
+}
+
+function isSharePointStorageRef(storageUrl: string, blobName = ""): boolean {
+  const url = decodeStorageRef(storageUrl).toLowerCase();
+  const path = decodeStorageRef(blobName).toLowerCase();
+  return url.includes(".sharepoint.com") || path.includes(".sharepoint.com");
+}
+
+/** Authenticated stream for tender artifacts — SharePoint only (no Azure). */
 async function handleBlobRead(
   req: Request,
   body: {
@@ -918,155 +940,61 @@ async function handleBlobRead(
   await authenticate(req);
 
   const explicitBlob = String(body.blobName || "").trim();
-  const storageUrl = String(body.storageUrl || "").trim();
-  const tenderId = String(body.tenderId || "").trim() || null;
-  const sourcePortal = String(body.sourcePortal || "").trim() || null;
-  const prefix = String(body.prefix || "").trim();
+  const storageUrl = decodeStorageRef(String(body.storageUrl || "").trim());
   const fileNameHint = String(body.fileName || "").trim();
   const dispositionMode =
     String(body.disposition || "inline").trim() === "attachment"
       ? "attachment"
       : "inline";
 
-  if (storageUrl.includes(".sharepoint.com/")) {
-    try {
-      const downloaded = await readSharePointFile({
-        storageUrl: storageUrl || null,
-        path: explicitBlob || null,
-      });
-      const fileName =
-        fileNameHint || downloaded.item.name || "document";
-      const headers = new Headers({
-        ...corsHeaders,
-        "Content-Type":
-          downloaded.response.headers.get("content-type") ||
-          "application/octet-stream",
-        "Cache-Control": "private, max-age=300",
-        "Content-Disposition": `${dispositionMode}; filename="${fileName.replace(/"/g, "")}"`,
-      });
-      const contentLength =
-        downloaded.response.headers.get("content-length");
-      if (contentLength) headers.set("Content-Length", contentLength);
-      return new Response(downloaded.response.body, { status: 200, headers });
-    } catch (error) {
-      throw new HttpError(
-        404,
-        error instanceof Error ? error.message : "File not found in SharePoint.",
-        "SHAREPOINT_FILE_NOT_FOUND",
-      );
-    }
-  }
+  const pathCandidate =
+    explicitBlob ||
+    (!storageUrl.includes("://") && storageUrl ? storageUrl : "");
 
-  // Legacy Azure artifact URLs remain readable during migration.
-  const azure = requireAzureConfig();
-
-  let blobName = explicitBlob || blobNameFromUrl(azure, storageUrl || null);
-  if (!blobName && prefix) {
-    const resolved = await resolveBlobFromPrefix(
-      azure,
-      prefix,
-      fileNameHint,
+  const useSharePoint =
+    isSharePointStorageRef(storageUrl, explicitBlob) ||
+    Boolean(
+      pathCandidate &&
+        (pathCandidate.includes("/tender-artifacts/") ||
+          pathCandidate.startsWith("companies/")),
     );
-    blobName = resolved?.blobName || "";
-  }
 
-  console.log("[Azure Document Resolve]", {
-    tenderId,
-    sourcePortal,
-    storedDocumentUrl: storageUrl || null,
-    containerName: azure.containerName,
-    blobName: blobName || null,
-    prefix: prefix || null,
-  });
-
-  if (!blobName) {
+  if (!useSharePoint) {
     throw new HttpError(
       400,
-      storageUrl
-        ? "The stored document path could not be resolved in Azure."
-        : "No document URL or blob path is available for this file.",
-      storageUrl ? "AZURE_PATH_RESOLUTION_FAILED" : "DOCUMENT_URL_MISSING",
-    );
-  }
-  // Prevent path escape outside the configured container namespace space.
-  if (blobName.includes("..")) {
-    throw new HttpError(
-      400,
-      "The stored document path could not be resolved in Azure.",
-      "AZURE_PATH_RESOLUTION_FAILED",
+      "Tender document downloads use SharePoint only. Set documents_zip_url / document_urls to a SharePoint URL.",
+      "SHAREPOINT_URL_REQUIRED",
     );
   }
 
-  let exists = await azureBlobExists(azure, blobName);
-  console.log("[Azure Blob Exists]", {
-    tenderId,
-    containerName: azure.containerName,
-    blobName,
-    exists,
-  });
-
-  // Soft-deleted blobs return 404 on HEAD/GET until undeleted.
-  if (!exists) {
-    const undeleted = await undeleteAzureBlob(azure, blobName);
-    if (undeleted) {
-      exists = await azureBlobExists(azure, blobName);
-      console.log("[Azure Blob Exists]", {
-        tenderId,
-        containerName: azure.containerName,
-        blobName,
-        exists,
-        restored: true,
-      });
-    }
-  }
-
-  // If the exact path is missing but we know the folder, list (incl. deleted) and rematch.
-  if (!exists && prefix) {
-    const rematched = await resolveBlobFromPrefix(
-      azure,
-      prefix,
-      fileNameHint,
-      blobName,
-    );
-    if (rematched) {
-      blobName = rematched.blobName;
-      exists = await azureBlobExists(azure, blobName);
-      console.log("[Azure Blob Exists]", {
-        tenderId,
-        containerName: azure.containerName,
-        blobName,
-        exists,
-        restored: rematched.restored,
-      });
-    }
-  }
-
-  if (!exists) {
+  try {
+    const downloaded = await readSharePointFile({
+      storageUrl: storageUrl.includes(".sharepoint.com") ? storageUrl : null,
+      path: pathCandidate || null,
+    });
+    const fileName = fileNameHint || downloaded.item.name || "document";
+    const headers = new Headers({
+      ...corsHeaders,
+      "Content-Type":
+        downloaded.response.headers.get("content-type") ||
+        "application/octet-stream",
+      "Cache-Control": "private, max-age=300",
+      "Content-Disposition": `${dispositionMode}; filename="${fileName.replace(/"/g, "")}"`,
+    });
+    const contentLength = downloaded.response.headers.get("content-length");
+    if (contentLength) headers.set("Content-Length", contentLength);
+    return new Response(downloaded.response.body, { status: 200, headers });
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
     throw new HttpError(
       404,
-      "File not found in Azure storage at the resolved path. Re-upload the document only if this blob was never uploaded.",
-      "AZURE_BLOB_NOT_FOUND",
+      error instanceof Error ? error.message : "File not found in SharePoint.",
+      "SHAREPOINT_FILE_NOT_FOUND",
     );
   }
-
-  const fileName =
-    fileNameHint || blobName.split("/").pop() || "document";
-
-  const azureResponse = await readAzureBlob(azure, blobName);
-  const headers = new Headers({
-    ...corsHeaders,
-    "Content-Type":
-      azureResponse.headers.get("content-type") || "application/octet-stream",
-    "Cache-Control": "private, max-age=300",
-    "Content-Disposition": `${dispositionMode}; filename="${fileName.replace(/"/g, "")}"`,
-  });
-  const contentLength = azureResponse.headers.get("content-length");
-  if (contentLength) headers.set("Content-Length", contentLength);
-
-  return new Response(azureResponse.body, { status: 200, headers });
 }
 
-/** Resolve the exact Azure blob for a stored URL / relative path / folder prefix. */
+/** Resolve the exact storage object for a stored URL / relative path / folder prefix. */
 async function handleBlobResolve(
   req: Request,
   body: {
@@ -1079,172 +1007,54 @@ async function handleBlobResolve(
     candidateBlobNames?: string[];
   },
 ) {
-  const azure = requireAzureConfig();
   await authenticate(req);
 
-  const storageUrl = String(body.storageUrl || "").trim();
+  const storageUrl = decodeStorageRef(String(body.storageUrl || "").trim());
   const explicitBlob = String(body.blobName || "").trim();
-  const prefix = String(body.prefix || "").trim();
-  const fileNameHint = String(body.fileName || "").trim();
-  const tenderId = String(body.tenderId || "").trim() || null;
-  const sourcePortal = String(body.sourcePortal || "").trim() || null;
-  const candidates = Array.isArray(body.candidateBlobNames)
-    ? body.candidateBlobNames.map((v) => String(v || "").trim()).filter(Boolean)
-    : [];
 
-  let blobName = explicitBlob || blobNameFromUrl(azure, storageUrl || null);
-
-  console.log("[Azure Document Resolve]", {
-    tenderId,
-    sourcePortal,
-    storedDocumentUrl: storageUrl || null,
-    containerName: azure.containerName,
-    blobName: blobName || null,
-    prefix: prefix || null,
-  });
-
-  if (blobName) {
-    let exists = await azureBlobExists(azure, blobName);
-    console.log("[Azure Blob Exists]", {
-      tenderId,
-      containerName: azure.containerName,
-      blobName,
-      exists,
-    });
-    if (!exists) {
-      const undeleted = await undeleteAzureBlob(azure, blobName);
-      if (undeleted) {
-        exists = await azureBlobExists(azure, blobName);
-        console.log("[Azure Blob Exists]", {
-          tenderId,
-          containerName: azure.containerName,
-          blobName,
-          exists,
-          restored: true,
-        });
-      }
-    }
-    if (exists) {
-      return json({
-        success: true,
-        containerName: azure.containerName,
-        blobName,
-        storageUrl: `${azureBaseUrl(azure)}/${encodeBlobPath(blobName)}`,
-        exists: true,
-      });
-    }
+  if (
+    !isSharePointStorageRef(storageUrl, explicitBlob) &&
+    !(
+      explicitBlob &&
+      (explicitBlob.includes("/tender-artifacts/") ||
+        explicitBlob.startsWith("companies/"))
+    )
+  ) {
+    throw new HttpError(
+      400,
+      "Tender document downloads use SharePoint only. Set documents_zip_url / document_urls to a SharePoint URL.",
+      "SHAREPOINT_URL_REQUIRED",
+    );
   }
 
-  for (const candidate of candidates) {
-    if (candidate.includes("..")) continue;
-    let exists = await azureBlobExists(azure, candidate);
-    console.log("[Azure Blob Exists]", {
-      tenderId,
-      containerName: azure.containerName,
-      blobName: candidate,
-      exists,
+  try {
+    const item = await resolveSharePointItem({
+      storageUrl: storageUrl.includes(".sharepoint.com") ? storageUrl : null,
+      path: explicitBlob || null,
     });
-    if (!exists) {
-      const undeleted = await undeleteAzureBlob(azure, candidate);
-      if (undeleted) exists = await azureBlobExists(azure, candidate);
-    }
-    if (exists) {
-      return json({
-        success: true,
-        containerName: azure.containerName,
-        blobName: candidate,
-        storageUrl: `${azureBaseUrl(azure)}/${encodeBlobPath(candidate)}`,
-        exists: true,
-      });
-    }
-  }
-
-  if (prefix) {
-    if (prefix.includes("..")) {
+    if (!item) {
       throw new HttpError(
-        400,
-        "The stored document path could not be resolved in Azure.",
-        "AZURE_PATH_RESOLUTION_FAILED",
+        404,
+        "File not found in SharePoint.",
+        "SHAREPOINT_FILE_NOT_FOUND",
       );
     }
-    const picked = await resolveBlobFromPrefix(
-      azure,
-      prefix,
-      fileNameHint,
-      blobName,
-    );
-    if (picked) {
-      const exists = await azureBlobExists(azure, picked.blobName);
-      console.log("[Azure Blob Exists]", {
-        tenderId,
-        containerName: azure.containerName,
-        blobName: picked.blobName,
-        exists,
-        restored: picked.restored,
-      });
-      if (exists) {
-        return json({
-          success: true,
-          containerName: azure.containerName,
-          blobName: picked.blobName,
-          storageUrl: `${azureBaseUrl(azure)}/${encodeBlobPath(picked.blobName)}`,
-          exists: true,
-          restored: picked.restored,
-        });
-      }
-    }
-
-    return json(
-      {
-        success: false,
-        code: "AZURE_BLOB_NOT_FOUND",
-        error:
-          "File not found in Azure storage at the resolved path. Re-upload the document only if this blob was never uploaded.",
-        containerName: azure.containerName,
-        blobName: blobName || null,
-        prefix,
-        exists: false,
-      },
+    return json({
+      success: true,
+      containerName: null,
+      blobName: explicitBlob || item.name,
+      storageUrl: item.webUrl || storageUrl,
+      exists: true,
+      provider: "sharepoint",
+    });
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(
       404,
+      error instanceof Error ? error.message : "File not found in SharePoint.",
+      "SHAREPOINT_FILE_NOT_FOUND",
     );
   }
-
-  if (!storageUrl && !explicitBlob) {
-    return json(
-      {
-        success: false,
-        code: "DOCUMENT_URL_MISSING",
-        error: "No document URL or blob path is available for this file.",
-        exists: false,
-      },
-      404,
-    );
-  }
-
-  if (!blobName) {
-    return json(
-      {
-        success: false,
-        code: "AZURE_PATH_RESOLUTION_FAILED",
-        error: "The stored document path could not be resolved in Azure.",
-        exists: false,
-      },
-      400,
-    );
-  }
-
-  return json(
-    {
-      success: false,
-      code: "AZURE_BLOB_NOT_FOUND",
-      error:
-        "File not found in Azure storage at the resolved path. Re-upload the document only if this blob was never uploaded.",
-      containerName: azure.containerName,
-      blobName,
-      exists: false,
-    },
-    404,
-  );
 }
 
 function serviceSupabase() {

@@ -1,22 +1,17 @@
 import { NextResponse } from "next/server";
 
 import {
-  isAzureBlobUrl,
   isSharePointUrl,
+  sharePointRelativePathFromUrl,
 } from "@/lib/storage/accessible-storage-url";
-import {
-  tryParseAzureBlobUrl,
-  unwrapStoredDocumentReference,
-} from "@/lib/storage/parseAzureBlobUrl";
+import { unwrapStoredDocumentReference } from "@/lib/storage/parseAzureBlobUrl";
 import { getSession } from "@/server/auth/session";
 import { invokeBlobRead } from "@/server/storage/tenderAutomationDocumentFunctions";
 
 /**
- * Authenticated proxy for Azure blobs.
- * Required because the storage account disallows anonymous/public access.
- *
- * Prefer `/api/tender-documents/{id}` or `/api/documents/{id}` for app documents.
- * This route remains for portal archive URLs (documents_zip_url / ai_summary_url).
+ * Authenticated proxy for tender artifact downloads (SharePoint only).
+ * documents_zip_url / ai_summary_url / document_urls point at SharePoint;
+ * Azure is not used for these artifacts.
  */
 export async function GET(request: Request) {
   const session = await getSession();
@@ -44,48 +39,38 @@ export async function GET(request: Request) {
     );
   }
 
-  const defaultContainer =
-    process.env.TENDER_AUTOMATION_AZURE_STORAGE_CONTAINER_NAME?.trim() ||
-    "companydocuments";
-  const parsed = tryParseAzureBlobUrl(storageUrl, {
-    defaultContainer,
-  });
-
-  // Relative Azure paths and full SharePoint URLs are supported.
-  if (!isSharePointUrl(storageUrl) && !parsed && !isAzureBlobUrl(storageUrl)) {
+  if (!isSharePointUrl(storageUrl)) {
     return NextResponse.json(
       {
         success: false,
-        code: "DOCUMENT_PATH_RESOLUTION_FAILED",
-        error: "The stored document path could not be resolved.",
+        code: "SHAREPOINT_URL_REQUIRED",
+        error:
+          "Tender document downloads use SharePoint only. Update documents_zip_url / document_urls to a SharePoint URL.",
       },
       { status: 400 },
     );
   }
 
+  const sharePointPath = sharePointRelativePathFromUrl(storageUrl);
+
   console.log("[Document Storage Resolve]", {
-    tenderId: null,
-    sourcePortal: null,
     storedDocumentUrl: storageUrl,
-    containerName: parsed?.containerName || defaultContainer,
-    blobName: parsed?.blobName || null,
+    blobName: sharePointPath,
+    provider: "sharepoint",
   });
 
   try {
     const upstream = await invokeBlobRead({
-      storageUrl:
-        isAzureBlobUrl(storageUrl) || isSharePointUrl(storageUrl)
-          ? storageUrl
-          : undefined,
-      blobName: parsed?.blobName,
+      storageUrl,
+      blobName: sharePointPath || undefined,
       disposition: download ? "attachment" : "inline",
       fileName,
     });
 
     if (!upstream.ok) {
       const contentType = upstream.headers.get("content-type") || "";
-      let message = "Unable to load file from document storage.";
-      let code: string | undefined;
+      let message = "Unable to load file from SharePoint.";
+      let code = "SHAREPOINT_FILE_NOT_FOUND";
       if (contentType.includes("application/json")) {
         const body = (await upstream.json().catch(() => null)) as {
           error?: string;
@@ -93,14 +78,9 @@ export async function GET(request: Request) {
         } | null;
         if (body?.error) message = body.error;
         if (body?.code) code = body.code;
-      } else if (upstream.status === 404) {
-        code = isSharePointUrl(storageUrl)
-          ? "SHAREPOINT_FILE_NOT_FOUND"
-          : "AZURE_BLOB_NOT_FOUND";
-        message = "File not found in document storage.";
       }
       return NextResponse.json(
-        { success: false, ...(code ? { code } : {}), error: message },
+        { success: false, code, error: message },
         { status: upstream.status === 404 ? 404 : 502 },
       );
     }
@@ -113,20 +93,22 @@ export async function GET(request: Request) {
     const contentDisposition = upstream.headers.get("content-disposition");
     if (contentDisposition) {
       headers.set("Content-Disposition", contentDisposition);
+    } else if (download && fileName) {
+      headers.set(
+        "Content-Disposition",
+        `attachment; filename="${fileName.replace(/"/g, "")}"`,
+      );
     }
     headers.set("Cache-Control", "private, max-age=300");
 
-    return new Response(upstream.body, {
-      status: 200,
-      headers,
-    });
+    return new Response(upstream.body, { status: 200, headers });
   } catch (error) {
-    console.error("[storage/blob] proxy failed", error);
+    console.error("[storage/blob] SharePoint proxy failed", error);
     return NextResponse.json(
       {
         success: false,
         code: "DOCUMENT_DOWNLOAD_FAILED",
-        error: "Unable to load file.",
+        error: "Unable to load file from SharePoint.",
       },
       { status: 500 },
     );

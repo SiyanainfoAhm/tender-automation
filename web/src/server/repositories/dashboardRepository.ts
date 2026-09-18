@@ -303,6 +303,7 @@ function buildUpcomingDeadlines(
   _submittedIds: Set<string>,
 ): DashboardDeadlineItem[] {
   const today = startOfDay(new Date());
+  const seenIds = new Set<string>();
   return rows
     .filter((row) => {
       if (!row.closing_date) return false;
@@ -318,6 +319,12 @@ function buildUpcomingDeadlines(
     })
     .filter((item) => isUpcomingDeadlineDue(item.daysLeft))
     .sort((a, b) => a.daysLeft - b.daysLeft)
+    .filter((item) => {
+      // agenttender_web_tender_list can surface the same tender more than once.
+      if (seenIds.has(item.row.id)) return false;
+      seenIds.add(item.row.id);
+      return true;
+    })
     .slice(0, 8)
     .map(({ row, closing, daysLeft, urgency }) => ({
       id: row.id,

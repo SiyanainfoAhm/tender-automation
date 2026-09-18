@@ -85,23 +85,39 @@ describe("tender list row meta", () => {
     expect(tenderListPrescreenReason(row({}))).toBe("");
   });
 
-  it("detects documents from url or archive flag", () => {
+  it("detects documents only from a SharePoint zip URL (not stale flags)", () => {
     expect(tenderListHasDocuments(row({}))).toBe(false);
     expect(
       tenderListHasDocuments(row({ documents_zip_url: "https://blob/x.zip" })),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       tenderListHasDocuments(row({ document_archive_available: true })),
+    ).toBe(false);
+    expect(
+      tenderListHasDocuments(
+        row({
+          documents_zip_url:
+            "https://it1stop.sharepoint.com/sites/SiyanaTenderDocumentRepository/TenderDocs/companies/x/file.zip",
+        }),
+      ),
     ).toBe(true);
   });
 
-  it("detects AI summary from url or availability flag", () => {
+  it("detects AI summary only from a SharePoint URL (not stale flags)", () => {
     expect(tenderListHasAiSummary(row({}))).toBe(false);
     expect(
       tenderListHasAiSummary(row({ ai_summary_url: "https://blob/AI.pdf" })),
-    ).toBe(true);
+    ).toBe(false);
     expect(tenderListHasAiSummary(row({ ai_summary_available: true }))).toBe(
-      true,
+      false,
     );
+    expect(
+      tenderListHasAiSummary(
+        row({
+          ai_summary_url:
+            "https://it1stop.sharepoint.com/sites/SiyanaTenderDocumentRepository/TenderDocs/companies/x/AI_Summary.pdf",
+        }),
+      ),
+    ).toBe(true);
   });
 });

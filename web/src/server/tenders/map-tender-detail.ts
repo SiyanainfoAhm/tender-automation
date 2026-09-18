@@ -8,6 +8,7 @@ import {
   stripLocationDecorators,
 } from "@/lib/normalize-tender-city";
 import { toAccessibleStorageUrl } from "@/lib/storage/accessible-storage-url";
+import { resolveTenderArtifactUrls } from "@/lib/tenders/resolve-document-urls";
 import type {
   ExtractedRequirement,
   TenderArchiveDocument,
@@ -98,8 +99,11 @@ export function mapArchiveDocuments(
   tender?: Record<string, unknown> | null,
 ): TenderArchiveDocument[] {
   const files: TenderArchiveDocument[] = [];
-  const documentsZipUrl = asString(tender?.documents_zip_url);
-  const aiSummaryUrl = asString(tender?.ai_summary_url);
+  const { documentsZipUrl, aiSummaryUrl } = resolveTenderArtifactUrls({
+    document_urls: tender?.document_urls,
+    documents_zip_url: tender?.documents_zip_url,
+    ai_summary_url: tender?.ai_summary_url,
+  });
 
   if (documentsZipUrl) {
     files.push({
@@ -107,10 +111,8 @@ export function mapArchiveDocuments(
       kind: "Tender Documents",
       sizeLabel: null,
       downloadable: true,
-      url: toAccessibleStorageUrl(documentsZipUrl, {
-        download: true,
-        fileName: "Tender_All_Documents.zip",
-      }),
+      // Direct SharePoint URL from document_urls / documents_zip_url.
+      url: toAccessibleStorageUrl(documentsZipUrl),
     });
   }
   if (aiSummaryUrl) {
@@ -119,9 +121,7 @@ export function mapArchiveDocuments(
       kind: "AI Summary PDF",
       sizeLabel: null,
       downloadable: true,
-      url: toAccessibleStorageUrl(aiSummaryUrl, {
-        fileName: "AI_Summary.pdf",
-      }),
+      url: toAccessibleStorageUrl(aiSummaryUrl),
     });
   }
 

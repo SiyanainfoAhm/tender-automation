@@ -183,7 +183,7 @@ export async function buildGenerationContext(options: {
   const { data: tender, error: tenderError } = await supabase
     .from("agenttender_tenders")
     .select(
-      "id, title, source_tender_id, reference_no, organization, authority, description, closing_date, tender_value, emd_amount, documents_zip_url",
+      "id, title, source_tender_id, reference_no, organization, authority, description, closing_date, tender_value, emd_amount, documents_zip_url, document_urls",
     )
     .eq("id", options.tenderId)
     .maybeSingle();
@@ -216,14 +216,18 @@ export async function buildGenerationContext(options: {
   let rfpContextText = "";
   const sourceDocumentNames: string[] = [];
   try {
+    const { resolveTenderArtifactUrls } = await import(
+      "@/lib/tenders/resolve-document-urls"
+    );
+    const artifacts = resolveTenderArtifactUrls({
+      document_urls: tender.document_urls,
+      documents_zip_url: tender.documents_zip_url,
+    });
     const sources = await resolveTenderSourceDocuments({
       tenderId: options.tenderId,
       companyId: options.companyId,
       workspaceId: options.workspaceId,
-      documentsZipUrl:
-        typeof tender.documents_zip_url === "string"
-          ? tender.documents_zip_url
-          : null,
+      documentsZipUrl: artifacts.documentsZipUrl,
     });
     const texts: string[] = [];
     for (const source of sources.slice(0, 4)) {

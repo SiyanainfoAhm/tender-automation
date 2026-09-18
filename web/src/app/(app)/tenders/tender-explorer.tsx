@@ -33,6 +33,7 @@ import {
 } from "@/lib/tender-export";
 import {
   tenderDocumentsDetailHref,
+  tenderListAiSummaryUrl,
   tenderListHasAiSummary,
   tenderListHasDocuments,
   tenderListPrescreenReason,
@@ -597,7 +598,7 @@ export function TenderExplorer({
       referenceNo: row.reference_no,
       organisationName: row.organization || row.authority,
       closingDate: row.closing_date,
-      aiSummaryUrl: row.ai_summary_url || null,
+      aiSummaryUrl: tenderListAiSummaryUrl(row),
     });
     setAiSummaryOpen(true);
   }, []);
@@ -607,7 +608,7 @@ export function TenderExplorer({
       if (aiSummaryHoverTimer.current != null) {
         window.clearTimeout(aiSummaryHoverTimer.current);
       }
-      preloadAiSummaryUrl(row.ai_summary_url);
+      preloadAiSummaryUrl(tenderListAiSummaryUrl(row));
       aiSummaryHoverTimer.current = window.setTimeout(() => {
         aiSummaryHoverTimer.current = null;
         openAiSummary(row);
@@ -1695,7 +1696,7 @@ export function TenderExplorer({
                                 onMouseEnter={() => scheduleAiSummaryOpen(row)}
                                 onMouseLeave={cancelAiSummaryOpen}
                                 onFocus={() =>
-                                  preloadAiSummaryUrl(row.ai_summary_url)
+                                  preloadAiSummaryUrl(tenderListAiSummaryUrl(row))
                                 }
                                 onKeyDown={(event) => {
                                   if (
