@@ -85,6 +85,7 @@ import { downloadTodayExcel } from "../tender247Excel/testTender247ExcelFilter.j
 import {
   DEFAULT_TENDER247_SOURCE_REGION,
   parseTender247SourceRegion,
+  tender247RegionFromUrl,
   type Tender247SourceRegion,
 } from "../tender247/sourceRegion.js";
 import {
@@ -114,9 +115,127 @@ export type AiSummaryQueueRow = {
   title: string | null;
   documentsZipUrl: string | null;
   aiSummaryUrl: string | null;
-  /** Region stored at upsert — drives which Tender247 feed to open. */
+  /**
+   * Feed to open first. Prefer detailUrl region over the DB `source_region`
+   * column when the same id was wrongly upserted into both INDIAN and GLOBAL.
+   */
   sourceRegion: Tender247SourceRegion;
 };
+
+type AiSummaryDbRow = {
+  id: string;
+  source_tender_id: string;
+  source_region?: string | null;
+  qualification_status?: string | null;
+  title?: string | null;
+  documents_zip_url?: string | null;
+  ai_summary_url?: string | null;
+  raw_metadata?: unknown;
+};
+
+function detailUrlFromRawMetadata(raw: unknown): string | null {
+  if (!raw || typeof raw !== "object") return null;
+  const detailUrl = (raw as Record<string, unknown>).detailUrl;
+  const value = detailUrl == null ? "" : String(detailUrl).trim();
+  return value || null;
+}
+
+/**
+ * Open feed for a row: detail URL wins when present (fixes Global tenders
+ * stored under source_region=INDIAN).
+ */
+export function resolveQueueOpenRegion(
+  row: AiSummaryDbRow,
+  fallback: Tender247SourceRegion = DEFAULT_TENDER247_SOURCE_REGION,
+): Tender247SourceRegion {
+  const detailUrl = detailUrlFromRawMetadata(row.raw_metadata);
+  if (detailUrl && /\/auth\/(globaltender|tender)\//i.test(detailUrl)) {
+    return tender247RegionFromUrl(detailUrl);
+  }
+  try {
+    return parseTender247SourceRegion(String(row.source_region || fallback));
+  } catch {
+    return fallback;
+  }
+}
+
+function mapDbRowToQueueRow(
+  row: AiSummaryDbRow,
+  fallbackRegion: Tender247SourceRegion,
+): AiSummaryQueueRow | null {
+  const sourceTenderId = normalizeTenderIdDigits(String(row.source_tender_id || ""));
+  if (!sourceTenderId) return null;
+  const documentsZipUrl = row.documents_zip_url
+    ? String(row.documents_zip_url).trim() || null
+    : null;
+  const aiSummaryUrl = row.ai_summary_url
+    ? String(row.ai_summary_url).trim() || null
+    : null;
+  return {
+    id: String(row.id),
+    sourceTenderId,
+    qualificationStatus:
+      String(row.qualification_status || "").trim().toUpperCase() || "UNKNOWN",
+    title: row.title ? String(row.title) : null,
+    documentsZipUrl,
+    aiSummaryUrl,
+    sourceRegion: resolveQueueOpenRegion(row, fallbackRegion),
+  };
+}
+
+function artifactCompletenessScore(row: AiSummaryQueueRow): number {
+  return (row.documentsZipUrl ? 2 : 0) + (row.aiSummaryUrl ? 1 : 0);
+}
+
+/**
+ * When the same T247 id exists as INDIAN and GLOBAL, prefer the row that
+ * matches the real detail feed / has artifacts — not merely --region.
+ */
+export function pickPreferredQueueRow(
+  candidates: AiSummaryQueueRow[],
+  preferredRegion: Tender247SourceRegion,
+): AiSummaryQueueRow | null {
+  if (!candidates.length) return null;
+  const ranked = [...candidates].sort((a, b) => {
+    const scoreDiff =
+      artifactCompletenessScore(b) - artifactCompletenessScore(a);
+    if (scoreDiff !== 0) return scoreDiff;
+    if (a.sourceRegion !== b.sourceRegion) {
+      if (a.sourceRegion === preferredRegion) return -1;
+      if (b.sourceRegion === preferredRegion) return 1;
+    }
+    return 0;
+  });
+  const best = ranked[0]!;
+  // Merge artifact URLs from siblings so resume uses the GLOBAL zip even if
+  // the open-region row is the incomplete INDIAN duplicate.
+  let documentsZipUrl = best.documentsZipUrl;
+  let aiSummaryUrl = best.aiSummaryUrl;
+  for (const row of candidates) {
+    if (!documentsZipUrl && row.documentsZipUrl) {
+      documentsZipUrl = row.documentsZipUrl;
+    }
+    if (!aiSummaryUrl && row.aiSummaryUrl) {
+      aiSummaryUrl = row.aiSummaryUrl;
+    }
+  }
+  return { ...best, documentsZipUrl, aiSummaryUrl };
+}
+
+function isQueueRowAlreadyComplete(
+  row: AiSummaryQueueRow,
+  force: boolean | undefined,
+  aiSummaryRequiredDefault: boolean,
+): boolean {
+  const mode = resolveAiSummaryArtifactMode({
+    documentsZipUrl: row.documentsZipUrl,
+    aiSummaryUrl: row.aiSummaryUrl,
+    force,
+    aiSummaryRequired:
+      row.sourceRegion === "GLOBAL" ? false : aiSummaryRequiredDefault,
+  });
+  return mode === "SKIP_ALREADY_COMPLETE";
+}
 
 /** Supabase URL–driven resume mode (local downloads/ are cache only). */
 export type AiSummaryArtifactMode =
@@ -648,6 +767,14 @@ export async function downloadAndUpsertDailyExcelForAiSummary(options: {
   };
 }
 
+const AI_SUMMARY_QUEUE_SELECT =
+  "id, source_tender_id, source_region, qualification_status, title, documents_zip_url, ai_summary_url, raw_metadata";
+
+/**
+ * Load both INDIAN and GLOBAL rows for the date, then collapse duplicates.
+ * Skips an id when *any* region sibling already has the required artifacts.
+ * Open region comes from detailUrl when present (Global mis-tagged as INDIAN).
+ */
 export async function listAiSummaryQueueForDate(options: {
   scrapedDate: string;
   force?: boolean;
@@ -661,21 +788,19 @@ export async function listAiSummaryQueueForDate(options: {
       "Supabase is not configured — cannot build AI summary queue",
     );
   }
-  const sourceRegion = options.sourceRegion || DEFAULT_TENDER247_SOURCE_REGION;
+  const preferredRegion =
+    options.sourceRegion || DEFAULT_TENDER247_SOURCE_REGION;
   const aiSummaryRequired = options.aiSummaryRequired !== false;
   const client = getSupabaseAdminClient();
-  // All statuses for scraped_date (including NO_GO). Paginate past PostgREST max rows.
+  // Both regions for scraped_date (including NO_GO). Paginate past PostgREST max.
   const pageSize = 1000;
-  const rawRows: Array<Record<string, unknown>> = [];
+  const rawRows: AiSummaryDbRow[] = [];
   for (let from = 0; ; from += pageSize) {
     const to = from + pageSize - 1;
     const { data, error } = await client
       .from("agenttender_tenders")
-      .select(
-        "id, source_tender_id, source_region, qualification_status, title, documents_zip_url, ai_summary_url",
-      )
+      .select(AI_SUMMARY_QUEUE_SELECT)
       .eq("source_portal", "TENDER247")
-      .eq("source_region", sourceRegion)
       .eq("scraped_date", options.scrapedDate)
       .order("source_tender_id", { ascending: true })
       .range(from, to);
@@ -686,57 +811,51 @@ export async function listAiSummaryQueueForDate(options: {
         `Failed to load AI summary queue: ${error.message}`,
       );
     }
-    const batch = data || [];
+    const batch = (data || []) as AiSummaryDbRow[];
     rawRows.push(...batch);
     if (batch.length < pageSize) {
       break;
     }
   }
 
-  const rows: AiSummaryQueueRow[] = [];
+  const byId = new Map<string, AiSummaryQueueRow[]>();
   for (const row of rawRows) {
-    const sourceTenderId = String(row.source_tender_id || "")
-      .replace(/^T247-/i, "")
-      .replace(/\D/g, "");
-    if (!sourceTenderId) continue;
-    const status = String(row.qualification_status || "").trim().toUpperCase();
+    const mapped = mapDbRowToQueueRow(row, preferredRegion);
+    if (!mapped) continue;
+    const list = byId.get(mapped.sourceTenderId) || [];
+    list.push(mapped);
+    byId.set(mapped.sourceTenderId, list);
+  }
 
-    const documentsZipUrl = row.documents_zip_url
-      ? String(row.documents_zip_url).trim() || null
-      : null;
-    const aiSummaryUrl = row.ai_summary_url
-      ? String(row.ai_summary_url).trim() || null
-      : null;
-
-    // Supabase URLs are canonical — Global skips when docs exist (AI optional).
-    const mode = resolveAiSummaryArtifactMode({
-      documentsZipUrl,
-      aiSummaryUrl,
-      force: options.force,
-      aiSummaryRequired,
-    });
-    if (mode === "SKIP_ALREADY_COMPLETE") {
+  const rows: AiSummaryQueueRow[] = [];
+  const orderedIds = [...byId.keys()].sort();
+  for (const id of orderedIds) {
+    const candidates = byId.get(id) || [];
+    // Done on GLOBAL (docs) or INDIAN (docs+AI) → do not re-open the other feed.
+    if (
+      candidates.some((row) =>
+        isQueueRowAlreadyComplete(row, options.force, aiSummaryRequired),
+      )
+    ) {
       continue;
     }
-
-    rows.push({
-      id: String(row.id),
-      sourceTenderId,
-      qualificationStatus: status || "UNKNOWN",
-      title: row.title ? String(row.title) : null,
-      documentsZipUrl,
-      aiSummaryUrl,
-      sourceRegion: parseTender247SourceRegion(
-        String(row.source_region || sourceRegion),
-      ),
-    });
+    const incomplete = candidates.filter(
+      (row) =>
+        !isQueueRowAlreadyComplete(row, options.force, aiSummaryRequired),
+    );
+    const picked = pickPreferredQueueRow(
+      incomplete.length ? incomplete : candidates,
+      preferredRegion,
+    );
+    if (!picked) continue;
+    rows.push(picked);
   }
   return rows;
 }
 
 /**
  * Load queue rows for explicit --ids across INDIAN and GLOBAL for the scraped date.
- * Prefer the row matching preferredRegion when the same id exists in both.
+ * Prefer detailUrl / artifact-complete sibling over --region when both exist.
  */
 export async function listAiSummaryQueueRowsForIds(options: {
   scrapedDate: string;
@@ -765,9 +884,7 @@ export async function listAiSummaryQueueRowsForIds(options: {
   const client = getSupabaseAdminClient();
   const { data, error } = await client
     .from("agenttender_tenders")
-    .select(
-      "id, source_tender_id, source_region, qualification_status, title, documents_zip_url, ai_summary_url",
-    )
+    .select(AI_SUMMARY_QUEUE_SELECT)
     .eq("source_portal", "TENDER247")
     .eq("scraped_date", options.scrapedDate)
     .in("source_tender_id", wanted);
@@ -779,47 +896,34 @@ export async function listAiSummaryQueueRowsForIds(options: {
     );
   }
 
-  const byId = new Map<string, AiSummaryQueueRow>();
-  for (const row of data || []) {
-    const sourceTenderId = String(row.source_tender_id || "")
-      .replace(/^T247-/i, "")
-      .replace(/\D/g, "");
-    if (!sourceTenderId) continue;
-    const rowRegion = parseTender247SourceRegion(
-      String(row.source_region || preferred),
-    );
-    const documentsZipUrl = row.documents_zip_url
-      ? String(row.documents_zip_url).trim() || null
-      : null;
-    const aiSummaryUrl = row.ai_summary_url
-      ? String(row.ai_summary_url).trim() || null
-      : null;
-    const mode = resolveAiSummaryArtifactMode({
-      documentsZipUrl,
-      aiSummaryUrl,
-      force: options.force,
-      aiSummaryRequired: rowRegion === "GLOBAL" ? false : aiSummaryRequired,
-    });
-    if (mode === "SKIP_ALREADY_COMPLETE") continue;
-
-    const mapped: AiSummaryQueueRow = {
-      id: String(row.id),
-      sourceTenderId,
-      qualificationStatus:
-        String(row.qualification_status || "").trim().toUpperCase() ||
-        "UNKNOWN",
-      title: row.title ? String(row.title) : null,
-      documentsZipUrl,
-      aiSummaryUrl,
-      sourceRegion: rowRegion,
-    };
-    const existing = byId.get(sourceTenderId);
-    if (!existing || rowRegion === preferred) {
-      byId.set(sourceTenderId, mapped);
-    }
+  const byId = new Map<string, AiSummaryQueueRow[]>();
+  for (const row of (data || []) as AiSummaryDbRow[]) {
+    const mapped = mapDbRowToQueueRow(row, preferred);
+    if (!mapped) continue;
+    const list = byId.get(mapped.sourceTenderId) || [];
+    list.push(mapped);
+    byId.set(mapped.sourceTenderId, list);
   }
+
   return wanted
-    .map((id) => byId.get(id))
+    .map((id) => {
+      const candidates = byId.get(id) || [];
+      if (
+        candidates.some((row) =>
+          isQueueRowAlreadyComplete(row, options.force, aiSummaryRequired),
+        )
+      ) {
+        return null;
+      }
+      const incomplete = candidates.filter(
+        (row) =>
+          !isQueueRowAlreadyComplete(row, options.force, aiSummaryRequired),
+      );
+      return pickPreferredQueueRow(
+        incomplete.length ? incomplete : candidates,
+        preferred,
+      );
+    })
     .filter((row): row is AiSummaryQueueRow => Boolean(row));
 }
 
@@ -1180,6 +1284,33 @@ export async function runAiSummaryFirstDocumentPipeline(
         const sourceRegionById = new Map<string, Tender247SourceRegion>(
           queue.map((row) => [row.sourceTenderId, row.sourceRegion]),
         );
+        // Local metadata detailUrl overrides wrong DB region (resume path).
+        for (const id of survivorIds) {
+          const metaPath = path.join(dateFolder, `T247-${id}`, "metadata.json");
+          if (!fs.existsSync(metaPath)) continue;
+          try {
+            const meta = JSON.parse(fs.readFileSync(metaPath, "utf8")) as {
+              detailUrl?: string;
+            };
+            const detailUrl = String(meta.detailUrl || "").trim();
+            if (!detailUrl || !/\/auth\/(globaltender|tender)\//i.test(detailUrl)) {
+              continue;
+            }
+            const fromMeta = tender247RegionFromUrl(detailUrl);
+            const prior = sourceRegionById.get(id);
+            if (prior !== fromMeta) {
+              logger.info(
+                `AI_SUMMARY_PIPELINE_REGION_FROM_METADATA id=${id} from=${prior} to=${fromMeta}`,
+              );
+              console.log(
+                `AI_SUMMARY_PIPELINE_REGION_FROM_METADATA id=${id} region=${fromMeta}`,
+              );
+              sourceRegionById.set(id, fromMeta);
+            }
+          } catch {
+            // ignore corrupt local metadata
+          }
+        }
         const existingArtifactUrlsById = new Map(
           queue.map((row) => [
             row.sourceTenderId,

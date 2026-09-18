@@ -5,6 +5,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   IndianRupee,
+  LayoutGrid,
+  List,
   PlayCircle,
   Search,
   Trophy,
@@ -13,6 +15,8 @@ import {
 import { PageHeader } from "@/components/layout/page-header";
 import { CompactKpiCard } from "@/components/tenders/compact-kpi-card";
 import { WonProjectCard } from "@/components/won-tenders/won-project-card";
+import { WonProjectList } from "@/components/won-tenders/won-project-list";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -51,6 +55,7 @@ export function WonTendersClient({
   const [statusFilter, setStatusFilter] = useState<string>(ALL);
   const [healthFilter, setHealthFilter] = useState<string>(ALL);
   const [assigneeFilter, setAssigneeFilter] = useState<string>(ALL);
+  const [view, setView] = useState<"cards" | "list">("cards");
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -171,6 +176,30 @@ export function WonTendersClient({
             ))}
           </SelectContent>
         </Select>
+        <div className="flex rounded-md border border-border bg-card p-0.5 sm:ml-auto" role="group" aria-label="View options">
+          <Button
+            type="button"
+            variant={view === "cards" ? "secondary" : "ghost"}
+            size="sm"
+            className="gap-1.5"
+            aria-pressed={view === "cards"}
+            onClick={() => setView("cards")}
+          >
+            <LayoutGrid className="size-3.5" />
+            Cards
+          </Button>
+          <Button
+            type="button"
+            variant={view === "list" ? "secondary" : "ghost"}
+            size="sm"
+            className="gap-1.5"
+            aria-pressed={view === "list"}
+            onClick={() => setView("list")}
+          >
+            <List className="size-3.5" />
+            List
+          </Button>
+        </div>
       </div>
 
       {filtered.length === 0 ? (
@@ -184,12 +213,14 @@ export function WonTendersClient({
             tracking.
           </p>
         </div>
-      ) : (
+      ) : view === "cards" ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {filtered.map((project) => (
             <WonProjectCard key={project.id} project={project} />
           ))}
         </div>
+      ) : (
+        <WonProjectList projects={filtered} />
       )}
     </div>
   );
