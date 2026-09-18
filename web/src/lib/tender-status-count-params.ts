@@ -2,10 +2,9 @@
  * Status-card counts are a facet over the current tender population.
  * They must use every active list filter EXCEPT status (and pagination/sort).
  *
- * Scraped-date exception: the list defaults omitted `date` to "today", but
- * status KPIs (especially Won / Lost) would stay at 0 under that default.
- * When the URL has no scraped-date params, counts use `date=all`. An explicit
- * `date=today` (or other preset) in the URL still scopes the cards.
+ * Scraped-date: the list defaults omitted `date` to "today". Status cards
+ * use the same default so KPI numbers match the visible list. Explicit
+ * `date=all` / `date=yesterday` / range params in the URL still scope both.
  */
 
 /** URL/query keys that affect status-card counts (never includes `status`). */
@@ -92,9 +91,9 @@ export function buildTenderStatusCountSearchParams(
     if (key === "region" && value === "ALL") continue;
     params.set(key, value);
   }
-  // Mirror list default only when the user explicitly chose a scraped date.
+  // Match list default: omitted scraped date → today (not all-time).
   if (!hasExplicitScrapedDate(input)) {
-    params.set("date", "all");
+    params.set("date", "today");
   }
   // List default region is INDIAN when omitted from the URL.
   if (!params.has("region") && !readParam(input, "region")) {
@@ -129,7 +128,7 @@ export function searchParamsForStatusCounts(
     out[key] = value;
   }
   if (!hasExplicitScrapedDate(raw)) {
-    out.date = "all";
+    out.date = "today";
   }
   if (!out.region) {
     out.region = "INDIAN";

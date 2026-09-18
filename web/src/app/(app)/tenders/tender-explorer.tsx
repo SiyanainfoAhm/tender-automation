@@ -896,27 +896,11 @@ export function TenderExplorer({
             counts={statusCountsState}
             activeStatus={currentStatus}
             onSelectStatus={(status) => {
-              // Outcome statuses are rarely on "scraped today" — open All Dates
-              // so the list matches the KPI instead of an empty page.
-              const outcomeStatuses = new Set([
-                "won",
-                "lost",
-                "disqualified",
-                "cancelled",
-                "submitted",
-                "partnership",
-              ]);
-              const updates: Record<string, string | undefined> = {
+              // Keep the active scraped-date filter so the list matches card counts.
+              navigate({
                 status: status ?? undefined,
                 page: "1",
-              };
-              if (status && outcomeStatuses.has(status)) {
-                updates.date = "all";
-                updates.selectedDate = undefined;
-                updates.createdFrom = undefined;
-                updates.createdTo = undefined;
-              }
-              navigate(updates);
+              });
             }}
           />
         ) : null}

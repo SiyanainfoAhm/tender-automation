@@ -30,19 +30,26 @@ describe("tender status-count filter params", () => {
     expect(params.get("sortBy")).toBeNull();
   });
 
-  it("defaults missing scraped date to all so Won KPIs are not zeroed", () => {
+  it("defaults missing scraped date to today so cards match the list", () => {
     const params = buildTenderStatusCountSearchParams(
       new URLSearchParams({
         city: "Delhi",
         status: "won",
       }),
     );
-    expect(params.get("date")).toBe("all");
+    expect(params.get("date")).toBe("today");
     expect(params.get("city")).toBe("Delhi");
     expect(searchParamsForStatusCounts({})).toEqual({
-      date: "all",
+      date: "today",
       region: "INDIAN",
     });
+  });
+
+  it("keeps explicit All Dates on status cards", () => {
+    const params = buildTenderStatusCountSearchParams(
+      new URLSearchParams({ date: "all" }),
+    );
+    expect(params.get("date")).toBe("all");
   });
 
   it("includes region so Global tab status cards stay scoped", () => {
