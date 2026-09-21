@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  detailOriginLabel,
+  isSafeTenderDetailOriginPath,
   isSafeTendersListReturnPath,
   tendersListHrefFromParts,
 } from "@/lib/tenders/list-return";
@@ -13,6 +15,15 @@ describe("tenders list return paths", () => {
       true,
     );
     expect(isSafeTendersListReturnPath("/tenders/abc-uuid")).toBe(false);
+    expect(isSafeTendersListReturnPath("/submitted-tenders")).toBe(false);
+  });
+
+  it("allows submitted tenders as a detail back origin", () => {
+    expect(isSafeTenderDetailOriginPath("/submitted-tenders")).toBe(true);
+    expect(isSafeTenderDetailOriginPath("/tenders/indian?q=abc")).toBe(true);
+    expect(isSafeTenderDetailOriginPath("/tenders/abc-uuid")).toBe(false);
+    expect(detailOriginLabel("/submitted-tenders")).toBe("Submitted Tenders");
+    expect(detailOriginLabel("/tenders/global")).toBe("Tenders");
   });
 
   it("builds return href from region path", () => {

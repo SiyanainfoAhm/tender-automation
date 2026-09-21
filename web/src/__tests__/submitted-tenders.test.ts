@@ -20,6 +20,8 @@ function item(
     sourceRegion: null,
     location: null,
     closingDate: null,
+    tenderType: null,
+    scrapedDate: null,
     tenderValue: null,
     submittedAt: null,
     submissionReference: null,

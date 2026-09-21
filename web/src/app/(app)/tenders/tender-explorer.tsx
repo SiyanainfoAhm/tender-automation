@@ -107,6 +107,7 @@ import {
 } from "@/lib/tenders/list-cache";
 import {
   consumeTendersListScroll,
+  rememberTenderDetailOrigin,
   rememberTendersListFilters,
   rememberTendersListReturn,
   tendersListHrefFromParts,
@@ -650,6 +651,7 @@ export function TenderExplorer({
         returnParams.toString(),
       );
       rememberTendersListReturn(returnHref, window.scrollY);
+      rememberTenderDetailOrigin(returnHref);
       const params = new URLSearchParams();
       if (options?.tab === "documents") params.set("tab", "documents");
       if (options?.focus === "ai-summary") params.set("focus", "ai-summary");

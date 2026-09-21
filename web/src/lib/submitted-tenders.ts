@@ -19,6 +19,10 @@ export type SubmittedTenderListItem = {
   sourceRegion: "INDIAN" | "GLOBAL" | null;
   location: string | null;
   closingDate: string | null;
+  /** Project category or portal tender type, used by the type filter. */
+  tenderType: string | null;
+  /** Calendar date the tender was scraped (`scraped_date`). */
+  scrapedDate: string | null;
   tenderValue: number | null;
   /** Effective qualification status (SUBMITTED / WON / LOST, etc.). */
   qualificationStatus: TenderStatus | string;

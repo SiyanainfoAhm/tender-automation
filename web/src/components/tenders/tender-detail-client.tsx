@@ -1191,7 +1191,7 @@ export function TenderDetailClient({
               <button
                 type="button"
                 disabled
-                title="Bid Workspace is only available for Will Bid tenders"
+                title="Bid Workspace is available after Will Bid, including Submitted, Won, and Lost"
                 className="inline-flex h-9 w-full flex-none cursor-not-allowed items-center justify-center gap-2 rounded-md bg-emerald-600/40 px-3 text-xs font-semibold text-white"
               >
                 <Briefcase className="size-3.5 shrink-0" aria-hidden />

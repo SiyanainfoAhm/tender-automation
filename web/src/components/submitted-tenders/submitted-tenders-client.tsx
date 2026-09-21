@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import {
   CheckCircle2,
@@ -27,6 +28,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatDate, formatIndianCurrency } from "@/lib/format";
+import { rememberTenderDetailOrigin } from "@/lib/tenders/list-return";
+import {
+  CREATED_DATE_PRESET_LABELS,
+  CREATED_DATE_PRESETS,
+  resolveScrapedDateFilter,
+  type CreatedDatePreset,
+} from "@/lib/tender-date-filter";
 import type {
   SubmittedTenderListItem,
   SubmittedTenderSummary,
@@ -46,6 +54,31 @@ type SubmittedTendersClientProps = {
 };
 
 const ALL = "__all__";
+
+const STATUS_OPTIONS = [
+  { value: ALL, label: "All" },
+  { value: "SUBMITTED", label: "Submitted" },
+  { value: "WON", label: "Won" },
+  { value: "LOST", label: "Lost" },
+] as const;
+
+function matchesScrapedDate(
+  scrapedDate: string | null,
+  preset: string,
+  from: string,
+  to: string,
+): boolean {
+  if (preset === "all" && !from && !to) return true;
+  const filter = resolveScrapedDateFilter({
+    preset: preset === "all" ? null : preset,
+    from: from || null,
+    to: to || null,
+  });
+  if (!filter) return true;
+  if (!scrapedDate) return false;
+  if (filter.mode === "eq") return scrapedDate === filter.value;
+  return scrapedDate >= filter.gte && scrapedDate <= filter.lte;
+}
 
 function portalSource(portal: string | null): TenderSource {
   const upper = (portal || "").toUpperCase();
@@ -82,7 +115,11 @@ export function SubmittedTendersClient({
   canEdit,
 }: SubmittedTendersClientProps) {
   const [search, setSearch] = useState("");
-  const [outcomeFilter, setOutcomeFilter] = useState<string>(ALL);
+  const [statusFilter, setStatusFilter] = useState<string>(ALL);
+  const [typeFilter, setTypeFilter] = useState<string>(ALL);
+  const [scrapedPreset, setScrapedPreset] = useState<string>("all");
+  const [scrapedFrom, setScrapedFrom] = useState("");
+  const [scrapedTo, setScrapedTo] = useState("");
   const [wonTarget, setWonTarget] = useState<SubmittedTenderListItem | null>(
     null,
   );
@@ -92,14 +129,36 @@ export function SubmittedTendersClient({
   const [lostMode, setLostMode] = useState<"mark-lost" | "edit-reason">(
     "mark-lost",
   );
+  const router = useRouter();
+
+  function openTender(tenderId: string) {
+    rememberTenderDetailOrigin("/submitted-tenders");
+    router.push(`/tenders/${tenderId}`);
+  }
+
+  function selectStatus(next: string) {
+    setStatusFilter((current) => (current === next ? ALL : next));
+  }
+
+  const tenderTypes = useMemo(() => {
+    const values = new Set<string>();
+    for (const item of items) {
+      if (item.tenderType) values.add(item.tenderType);
+    }
+    return [...values].sort((a, b) => a.localeCompare(b));
+  }, [items]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter((item) => {
       const status = String(item.qualificationStatus || "").toUpperCase();
-      if (outcomeFilter === "SUBMITTED") {
+      if (statusFilter === "SUBMITTED") {
         if (status === "WON" || status === "LOST") return false;
-      } else if (outcomeFilter !== ALL && status !== outcomeFilter) {
+      } else if (statusFilter !== ALL && status !== statusFilter) {
+        return false;
+      }
+      if (typeFilter !== ALL && item.tenderType !== typeFilter) return false;
+      if (!matchesScrapedDate(item.scrapedDate, scrapedPreset, scrapedFrom, scrapedTo)) {
         return false;
       }
       if (!q) return true;
@@ -110,13 +169,22 @@ export function SubmittedTendersClient({
         item.submissionReference,
         item.lostReason,
         item.location,
+        item.tenderType,
       ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
       return haystack.includes(q);
     });
-  }, [items, search, outcomeFilter]);
+  }, [
+    items,
+    search,
+    statusFilter,
+    typeFilter,
+    scrapedPreset,
+    scrapedFrom,
+    scrapedTo,
+  ]);
 
   return (
     <div className="space-y-6">
@@ -131,48 +199,123 @@ export function SubmittedTendersClient({
           value={String(summary.total)}
           icon={FileCheck2}
           iconClassName="bg-sky-100 text-sky-700"
+          active={statusFilter === ALL}
+          onClick={() => setStatusFilter(ALL)}
         />
         <CompactKpiCard
           label="Awaiting outcome"
           value={String(summary.submitted)}
           icon={FileCheck2}
           iconClassName="bg-blue-100 text-blue-700"
+          active={statusFilter === "SUBMITTED"}
+          onClick={() => selectStatus("SUBMITTED")}
         />
         <CompactKpiCard
           label="Won"
           value={String(summary.won)}
           icon={Trophy}
           iconClassName="bg-amber-100 text-amber-700"
+          active={statusFilter === "WON"}
+          onClick={() => selectStatus("WON")}
         />
         <CompactKpiCard
           label="Lost"
           value={String(summary.lost)}
           icon={XCircle}
           iconClassName="bg-rose-100 text-rose-700"
+          active={statusFilter === "LOST"}
+          onClick={() => selectStatus("LOST")}
         />
       </div>
 
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-        <div className="relative flex-1">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="relative sm:col-span-2 xl:col-span-1">
           <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-foreground-400" />
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search title, org, reference, lost reason…"
+            placeholder="Search title, org, reference…"
             className="pl-9"
           />
         </div>
-        <Select value={outcomeFilter} onValueChange={setOutcomeFilter}>
-          <SelectTrigger className="w-full sm:w-48">
-            <SelectValue placeholder="Outcome" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>All outcomes</SelectItem>
-            <SelectItem value="SUBMITTED">Awaiting outcome</SelectItem>
-            <SelectItem value="WON">Won</SelectItem>
-            <SelectItem value="LOST">Lost</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="space-y-1.5">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
+            Status
+          </p>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="All" />
+            </SelectTrigger>
+            <SelectContent>
+              {STATUS_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
+            Tender Type
+          </p>
+          <Select value={typeFilter} onValueChange={setTypeFilter}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="All" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All</SelectItem>
+              {tenderTypes.map((type) => (
+                <SelectItem key={type} value={type}>
+                  {type}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
+            Scraped Date
+          </p>
+          <Select
+            value={scrapedPreset}
+            onValueChange={(value) => {
+              setScrapedPreset(value);
+              if (value !== "custom") {
+                setScrapedFrom("");
+                setScrapedTo("");
+              }
+            }}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="All Dates" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Dates</SelectItem>
+              {CREATED_DATE_PRESETS.map((preset) => (
+                <SelectItem key={preset} value={preset}>
+                  {CREATED_DATE_PRESET_LABELS[preset as CreatedDatePreset]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {scrapedPreset === "custom" ? (
+            <div className="grid grid-cols-2 gap-2">
+              <Input
+                type="date"
+                value={scrapedFrom}
+                aria-label="Scraped from"
+                onChange={(event) => setScrapedFrom(event.target.value)}
+              />
+              <Input
+                type="date"
+                value={scrapedTo}
+                aria-label="Scraped to"
+                onChange={(event) => setScrapedTo(event.target.value)}
+              />
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {filtered.length === 0 ? (
@@ -209,7 +352,19 @@ export function SubmittedTendersClient({
                   const awaiting = !isWon && !isLost;
 
                   return (
-                    <tr key={item.id} className="align-top hover:bg-background-50/80">
+                    <tr
+                      key={item.id}
+                      role="link"
+                      tabIndex={0}
+                      className="cursor-pointer align-top hover:bg-background-50/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500/30"
+                      onClick={() => openTender(item.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          openTender(item.id);
+                        }
+                      }}
+                    >
                       <td className="px-4 py-3">
                         <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
                           <SourceBadge
@@ -217,12 +372,9 @@ export function SubmittedTendersClient({
                             size="sm"
                           />
                         </div>
-                        <Link
-                          href={`/tenders/${item.id}`}
-                          className="font-medium text-foreground-900 hover:text-primary-700 hover:underline"
-                        >
+                        <p className="font-medium text-foreground-900 group-hover:text-primary-700">
                           {item.title}
-                        </Link>
+                        </p>
                         <p className="mt-0.5 text-xs text-foreground-500">
                           {[item.organization, item.referenceNo]
                             .filter(Boolean)
@@ -250,6 +402,7 @@ export function SubmittedTendersClient({
                         {isWon && item.wonProjectId ? (
                           <Link
                             href={`/won-tenders/${item.wonProjectId}`}
+                            onClick={(event) => event.stopPropagation()}
                             className="mt-1.5 block text-xs text-primary-700 hover:underline"
                           >
                             Open won project
@@ -269,10 +422,18 @@ export function SubmittedTendersClient({
                           <span className="text-foreground-400">—</span>
                         )}
                       </td>
-                      <td className="px-4 py-3">
+                      <td
+                        className="px-4 py-3"
+                        onClick={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => event.stopPropagation()}
+                      >
                         <div className="flex flex-col gap-1.5">
-                          <Button asChild variant="outline" size="sm">
-                            <Link href={`/tenders/${item.id}`}>View</Link>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openTender(item.id)}
+                          >
+                            View
                           </Button>
                           {canEdit && awaiting ? (
                             <>

@@ -92,7 +92,7 @@ export async function listSubmittedTenders(
     supabase
       .from("agenttender_tenders")
       .select(
-        "id, title, reference_no, organization, source_portal, source_region, city, location_text, closing_date, tender_value, qualification_status, raw_metadata, updated_at",
+        "id, title, reference_no, organization, source_portal, source_region, city, location_text, closing_date, tender_value, tender_type, category, project_category, scraped_date, qualification_status, raw_metadata, updated_at",
       )
       .in("id", ids),
     supabase
@@ -122,6 +122,10 @@ export async function listSubmittedTenders(
     location_text: string | null;
     closing_date: string | null;
     tender_value: number | null;
+    tender_type: string | null;
+    category: string | null;
+    project_category: string | null;
+    scraped_date: string | null;
     qualification_status: string | null;
     raw_metadata: unknown;
     updated_at: string | null;
@@ -171,6 +175,11 @@ export async function listSubmittedTenders(
             : null,
       location: asString(row.city) || asString(row.location_text) || null,
       closingDate: asString(row.closing_date),
+      tenderType:
+        asString(row.tender_type) ||
+        asString(row.project_category) ||
+        asString(row.category),
+      scrapedDate: asString(row.scraped_date)?.slice(0, 10) ?? null,
       tenderValue: asNumber(row.tender_value),
       qualificationStatus: status,
       submittedAt: workspace?.submittedAt ?? null,
