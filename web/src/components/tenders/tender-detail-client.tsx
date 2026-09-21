@@ -48,6 +48,7 @@ import {
   AddFeeWizard,
   type FeeEligibleTender,
 } from "@/components/bid-fees/add-fee-wizard";
+import { StatusChangeCommentDialog } from "@/components/tenders/status-change-comment-dialog";
 import { MarkAsWonDialog } from "@/components/won-tenders/mark-as-won-dialog";
 import {
   qualificationStatusStyles,
@@ -665,6 +666,8 @@ export function TenderDetailClient({
   const [feeWizardOpen, setFeeWizardOpen] = useState(false);
   const [markAsWonOpen, setMarkAsWonOpen] = useState(false);
   const [pendingWonFromEdit, setPendingWonFromEdit] = useState(false);
+  const [statusCommentOpen, setStatusCommentOpen] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<TenderStatus | null>(null);
 
   useEffect(() => {
     if (!editing) setDraft(buildDraft(tender));
@@ -740,15 +743,17 @@ export function TenderDetailClient({
     if (!(TENDER_STATUSES as readonly string[]).includes(next)) {
       return;
     }
+    if (next === (displayStatus || "UNDER_EVALUATION")) {
+      return;
+    }
 
     if (editing) {
       if (next === "WON") {
         openMarkAsWonFlow(true);
         return;
       }
-      patchDraft({
-        qualificationStatus: next as TenderStatus,
-      });
+      setPendingStatus(next as TenderStatus);
+      setStatusCommentOpen(true);
       return;
     }
 
@@ -759,10 +764,31 @@ export function TenderDetailClient({
       return;
     }
 
+    setPendingStatus(next as TenderStatus);
+    setStatusCommentOpen(true);
+  };
+
+  const confirmStatusComment = (comment: string) => {
+    const next = pendingStatus;
+    const trimmed = comment.trim();
+    if (!next || !trimmed) return;
+
+    if (editing) {
+      patchDraft({
+        qualificationStatus: next,
+        decisionReason: trimmed,
+        ...(next === "LOST" ? { lostReason: trimmed } : {}),
+        ...(next === "DISQUALIFIED"
+          ? { disqualificationReason: trimmed }
+          : {}),
+      });
+    }
+
     startStatusTransition(async () => {
       const result = await updateTenderStatusAction({
         tenderId: tender.id,
-        status: next as TenderStatus,
+        status: next,
+        reason: trimmed,
       });
 
       if (!result.ok) {
@@ -771,6 +797,8 @@ export function TenderDetailClient({
       }
 
       toast.success(result.message);
+      setStatusCommentOpen(false);
+      setPendingStatus(null);
       invalidateTenderListCaches("tender-status-updated");
       router.refresh();
     });
@@ -792,6 +820,24 @@ export function TenderDetailClient({
 
     startTransition(async () => {
       const showExemptions = draft.msmeExemption || draft.startupExemption;
+      const qualificationStatus = (pastSubmission
+        ? ((statusChoices as readonly string[]).includes(
+            draft.qualificationStatus,
+          )
+            ? draft.qualificationStatus
+            : savedDetailStatus) || "SUBMITTED"
+        : draft.qualificationStatus || "UNDER_EVALUATION") as TenderStatus;
+      const userChangedStatus =
+        (draft.qualificationStatus || "") !==
+        (tender.qualificationStatus || "");
+      const statusComment =
+        draft.decisionReason.trim() ||
+        draft.lostReason.trim() ||
+        draft.disqualificationReason.trim();
+      if (userChangedStatus && !statusComment) {
+        toast.error("A comment is required to change status.");
+        return;
+      }
       const result = await updateTenderDetailsAction({
         tenderId: tender.id,
         title: draft.title.trim(),
@@ -806,13 +852,7 @@ export function TenderDetailClient({
         closingDate: draft.closingDate || null,
         description: draft.description.trim() || null,
         notes: draft.notes.trim() || null,
-        qualificationStatus: pastSubmission
-          ? ((statusChoices as readonly string[]).includes(
-              draft.qualificationStatus,
-            )
-              ? draft.qualificationStatus
-              : savedDetailStatus) || "SUBMITTED"
-          : draft.qualificationStatus || "UNDER_EVALUATION",
+        ...(userChangedStatus ? { qualificationStatus } : {}),
         tenderValue: parseAmount(draft.tenderValue),
         tenderEstCost: parseAmount(draft.tenderEstCost),
         emdAmount: parseAmount(draft.emdAmount),
@@ -829,7 +869,7 @@ export function TenderDetailClient({
             mobile: c.mobile.trim(),
             email: c.email.trim() || null,
           })),
-        decisionReason: tender.decisionReason || null,
+        decisionReason: draft.decisionReason.trim() || null,
         lostReason: draft.lostReason.trim() || null,
         disqualificationReason: draft.disqualificationReason.trim() || null,
       });
@@ -1990,6 +2030,19 @@ export function TenderDetailClient({
           ) : null}
         </div>
       ) : null}
+
+      <StatusChangeCommentDialog
+        open={statusCommentOpen}
+        onOpenChange={(open) => {
+          setStatusCommentOpen(open);
+          if (!open) setPendingStatus(null);
+        }}
+        statusLabel={
+          pendingStatus ? STATUS_DISPLAY_LABELS[pendingStatus] : "this status"
+        }
+        pending={statusPending}
+        onConfirm={confirmStatusComment}
+      />
 
       <MarkAsWonDialog
         open={markAsWonOpen}

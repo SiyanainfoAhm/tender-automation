@@ -102,6 +102,10 @@ export function MarkAsWonDialog({
       toast.error("Award date is required.");
       return;
     }
+    if (!notes.trim()) {
+      toast.error("A comment is required to change status.");
+      return;
+    }
 
     startTransition(async () => {
       const result = await markTenderAsWonAction({
@@ -317,12 +321,16 @@ export function MarkAsWonDialog({
             ) : null}
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="wonNotes">Notes</Label>
+            <Label htmlFor="wonNotes">
+              Comment <span className="text-rose-600">*</span>
+            </Label>
             <Textarea
               id="wonNotes"
-              rows={2}
+              rows={3}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
+              placeholder="Why is this tender marked as won?"
+              disabled={pending}
             />
           </div>
         </div>
@@ -336,7 +344,11 @@ export function MarkAsWonDialog({
           >
             Cancel
           </Button>
-          <Button type="button" onClick={submit} disabled={pending}>
+          <Button
+            type="button"
+            onClick={submit}
+            disabled={pending || !notes.trim()}
+          >
             {pending ? (
               <>
                 <Loader2 className="size-4 animate-spin" />

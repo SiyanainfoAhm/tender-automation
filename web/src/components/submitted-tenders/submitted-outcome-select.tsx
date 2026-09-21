@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
+import { StatusChangeCommentDialog } from "@/components/tenders/status-change-comment-dialog";
 import { MarkAsLostDialog } from "@/components/submitted-tenders/mark-as-lost-dialog";
 import { MarkAsWonDialog } from "@/components/won-tenders/mark-as-won-dialog";
 import {
@@ -54,6 +55,7 @@ export function SubmittedOutcomeSelect({
   const [pending, startTransition] = useTransition();
   const [wonOpen, setWonOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
   const status = normalizeStatus(currentStatus);
   const locked = status === "WON" || status === "LOST" || status === "CANCELLED";
   const selectValue =
@@ -73,18 +75,7 @@ export function SubmittedOutcomeSelect({
       return;
     }
     if (next === "CANCELLED") {
-      startTransition(async () => {
-        const result = await updateTenderDetailsAction({
-          tenderId,
-          qualificationStatus: "CANCELLED",
-        });
-        if (!result.ok) {
-          toast.error(result.error);
-          return;
-        }
-        toast.success("Tender marked as cancelled.");
-        router.refresh();
-      });
+      setCancelOpen(true);
     }
   }
 
@@ -139,6 +130,28 @@ export function SubmittedOutcomeSelect({
         tenderId={tenderId}
         tenderTitle={tenderTitle}
         mode="mark-lost"
+      />
+      <StatusChangeCommentDialog
+        open={cancelOpen}
+        onOpenChange={setCancelOpen}
+        statusLabel={STATUS_DISPLAY_LABELS.CANCELLED}
+        pending={pending}
+        onConfirm={(comment) => {
+          startTransition(async () => {
+            const result = await updateTenderDetailsAction({
+              tenderId,
+              qualificationStatus: "CANCELLED",
+              decisionReason: comment,
+            });
+            if (!result.ok) {
+              toast.error(result.error);
+              return;
+            }
+            toast.success("Tender marked as cancelled.");
+            setCancelOpen(false);
+            router.refresh();
+          });
+        }}
       />
     </>
   );

@@ -186,6 +186,23 @@ export async function updateTenderDetailsAction(
       const previousStatus = String(
         existing.tender.qualification_status || "",
       ).toUpperCase();
+      const nextStatus = status == null ? "" : String(status).toUpperCase();
+      const statusChanging = nextStatus !== previousStatus;
+      const statusComment = [
+        payload.decisionReason,
+        payload.lostReason,
+        payload.disqualificationReason,
+      ]
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .find((value) => value.length > 0);
+
+      if (statusChanging && nextStatus && !statusComment) {
+        return {
+          ok: false,
+          error: "A comment is required to change status.",
+        };
+      }
+
       if (isPostSubmissionStatus(previousStatus)) {
         const allowed = tenderDetailStatusChoices({
           currentStatus: previousStatus,
@@ -283,9 +300,16 @@ export async function updateTenderStatusAction(input: {
   status: TenderStatus | null;
   reason?: string;
 }): Promise<UpdateTenderResult> {
+  const reason = input.reason?.trim() || "";
+  if (!reason) {
+    return { ok: false, error: "A comment is required to change status." };
+  }
   return updateTenderDetailsAction({
     tenderId: input.tenderId,
     qualificationStatus: input.status,
-    decisionReason: input.reason || null,
+    decisionReason: reason,
+    lostReason: input.status === "LOST" ? reason : undefined,
+    disqualificationReason:
+      input.status === "DISQUALIFIED" ? reason : undefined,
   });
 }

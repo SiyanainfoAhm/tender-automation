@@ -96,6 +96,10 @@ export async function markTenderAsWonAction(
     const tenderId = input.tenderId?.trim();
     if (!tenderId) return { ok: false, error: "Tender id is required." };
     if (!input.awardDate) return { ok: false, error: "Award date is required." };
+    const comment = input.notes?.trim() || "";
+    if (!comment) {
+      return { ok: false, error: "A comment is required to change status." };
+    }
     if (!(input.finalAwardValue >= 0) || !Number.isFinite(input.finalAwardValue)) {
       return { ok: false, error: "Final award value must be zero or greater." };
     }
@@ -103,7 +107,7 @@ export async function markTenderAsWonAction(
     const result = await markTenderWon({
       companyId: session.companyId,
       userId: session.user.id,
-      input: { ...input, tenderId },
+      input: { ...input, tenderId, notes: comment },
     });
     revalidateWonPaths(result.wonProjectId, tenderId, { includeNav: true });
 
