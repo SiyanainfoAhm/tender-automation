@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { AppSidebar } from "@/components/layout/sidebar";
+import { TENDER_SEARCH_DEBOUNCE_MS } from "@/lib/tender-search";
 import { Topbar } from "@/components/layout/topbar";
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { PageContainer } from "@/components/layout/page-container";
@@ -66,7 +67,7 @@ export function AppShell({
       if (!q) return;
       if (q.length < 3) return;
       router.push(`/tenders/indian?q=${encodeURIComponent(q)}`);
-    }, 450);
+    }, TENDER_SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(handle);
   }, [searchValue, router, commandOpen]);
 

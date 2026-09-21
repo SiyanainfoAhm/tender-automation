@@ -231,22 +231,27 @@ export function SubmittedTendersClient({
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <div className="relative sm:col-span-2 xl:col-span-1">
-          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-foreground-400" />
-          <Input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search title, org, reference…"
-            className="pl-9"
-          />
+      <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="space-y-1.5 sm:col-span-2 xl:col-span-1">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
+            Search
+          </p>
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-foreground-400" />
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search title, org, reference…"
+              className="h-9 pl-9"
+            />
+          </div>
         </div>
         <div className="space-y-1.5">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
             Status
           </p>
           <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-full">
+            <SelectTrigger className="h-9 w-full">
               <SelectValue placeholder="All" />
             </SelectTrigger>
             <SelectContent>
@@ -263,7 +268,7 @@ export function SubmittedTendersClient({
             Tender Type
           </p>
           <Select value={typeFilter} onValueChange={setTypeFilter}>
-            <SelectTrigger className="w-full">
+            <SelectTrigger className="h-9 w-full">
               <SelectValue placeholder="All" />
             </SelectTrigger>
             <SelectContent>
@@ -290,7 +295,7 @@ export function SubmittedTendersClient({
               }
             }}
           >
-            <SelectTrigger className="w-full">
+            <SelectTrigger className="h-9 w-full">
               <SelectValue placeholder="All Dates" />
             </SelectTrigger>
             <SelectContent>

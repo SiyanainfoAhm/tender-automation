@@ -53,9 +53,9 @@ describe("tender search helpers", () => {
     expect(tenderSearchHint("und")).toBeNull();
   });
 
-  it("uses a 400–500 ms debounce window", () => {
-    expect(TENDER_SEARCH_DEBOUNCE_MS).toBeGreaterThanOrEqual(400);
-    expect(TENDER_SEARCH_DEBOUNCE_MS).toBeLessThanOrEqual(500);
+  it("waits about a second before searching so typing can finish", () => {
+    expect(TENDER_SEARCH_DEBOUNCE_MS).toBeGreaterThanOrEqual(900);
+    expect(TENDER_SEARCH_DEBOUNCE_MS).toBeLessThanOrEqual(1200);
   });
 
   it("searches only useful indexed fields", () => {

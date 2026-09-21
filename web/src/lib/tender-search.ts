@@ -2,7 +2,7 @@
 export const MIN_TENDER_SEARCH_LENGTH = 3;
 
 /** Debounce before committing search text to the URL / API. */
-export const TENDER_SEARCH_DEBOUNCE_MS = 450;
+export const TENDER_SEARCH_DEBOUNCE_MS = 1000;
 
 /** Indexed / useful fields for list search — avoid large JSON / description. */
 export const TENDER_SEARCH_OR_FIELDS = [
