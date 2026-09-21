@@ -18,6 +18,8 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: process.cwd(),
   },
+  // Keep pdf-parse + native canvas out of the bundler (DOMMatrix / worker).
+  serverExternalPackages: ["pdf-parse", "@napi-rs/canvas"],
   experimental: {
     // Keep small: large files must use Azure direct upload, not Server Actions.
     // Raising this does NOT bypass Vercel's infrastructure FUNCTION_PAYLOAD_TOO_LARGE limit.

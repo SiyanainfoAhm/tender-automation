@@ -36,6 +36,11 @@ import {
 } from "@/lib/bid-checklist";
 import type { BidWorkspaceDTO } from "@/lib/bid-workspace";
 import {
+  isTransientChecklistPrepError,
+  lineTotal,
+  toUserFacingChecklistPrepError,
+} from "@/lib/bid-workspace";
+import {
   formatDate,
   formatEmdAmount,
   formatIndianCurrency,
@@ -59,7 +64,6 @@ import type {
   ChecklistProgress,
 } from "@/server/repositories/bidChecklistRepository";
 import type { CompanyDocument } from "@/server/repositories/documentRepository";
-import { lineTotal } from "@/lib/bid-workspace";
 
 type WorkspaceTab = "checklist" | "cost";
 
@@ -110,7 +114,7 @@ export function BidWorkspaceClient({
     workspace.checklistPreparationStatus,
   );
   const [prepError, setPrepError] = useState(
-    workspace.checklistPreparationError,
+    toUserFacingChecklistPrepError(workspace.checklistPreparationError),
   );
   const [prepStepIndex, setPrepStepIndex] = useState(0);
   const [autoInitStarted, setAutoInitStarted] = useState(false);
@@ -123,8 +127,19 @@ export function BidWorkspaceClient({
   useEffect(() => {
     setItems(checklistItems);
     setProgress(checklistProgress);
-    setPrepStatus(workspace.checklistPreparationStatus);
-    setPrepError(workspace.checklistPreparationError);
+    // Keep showing the generating loader while we auto-retry transient failures.
+    if (
+      workspace.checklistPreparationStatus === "FAILED" &&
+      isTransientChecklistPrepError(workspace.checklistPreparationError)
+    ) {
+      setPrepStatus("PROCESSING");
+      setPrepError(null);
+    } else {
+      setPrepStatus(workspace.checklistPreparationStatus);
+      setPrepError(
+        toUserFacingChecklistPrepError(workspace.checklistPreparationError),
+      );
+    }
   }, [
     checklistItems,
     checklistProgress,
@@ -139,29 +154,45 @@ export function BidWorkspaceClient({
     tender.qualificationStatus === "NO_GO";
 
   const isWillBid = tender.qualificationStatus === "GO";
+  const shouldAutoRetryFailed =
+    prepStatus === "FAILED" &&
+    isTransientChecklistPrepError(
+      workspace.checklistPreparationError || prepError,
+    );
   const showPrepLoader =
     isWillBid &&
+    !readOnly &&
     (prepStatus === "PROCESSING" ||
-      (prepStatus === "NOT_STARTED" && !readOnly));
-  const showPrepFailed = isWillBid && prepStatus === "FAILED";
+      prepStatus === "NOT_STARTED" ||
+      shouldAutoRetryFailed);
+  const showPrepFailed =
+    isWillBid && prepStatus === "FAILED" && !shouldAutoRetryFailed;
 
   // Auto-initialize WILL_BID workspaces that are not ready yet.
   useEffect(() => {
     if (!isWillBid || readOnly || autoInitStarted) return;
     if (prepStatus === "READY") return;
-    if (prepStatus === "FAILED") return;
+    const retryTransientFailure =
+      prepStatus === "FAILED" &&
+      isTransientChecklistPrepError(
+        workspace.checklistPreparationError || prepError,
+      );
+    if (prepStatus === "FAILED" && !retryTransientFailure) return;
 
     let cancelled = false;
     setAutoInitStarted(true);
 
     async function run() {
-      if (prepStatus === "NOT_STARTED") {
+      let transientRetried = false;
+      if (prepStatus === "NOT_STARTED" || retryTransientFailure) {
         setPrepStatus("PROCESSING");
+        setPrepError(null);
+        transientRetried = retryTransientFailure;
         const result = await ensureWillBidWorkspacePreparedAction(tender.id);
         if (cancelled) return;
         if (!result.ok) {
           setPrepStatus("FAILED");
-          setPrepError(result.error);
+          setPrepError(toUserFacingChecklistPrepError(result.error));
           return;
         }
         if (result.status === "READY" || result.status === "ALREADY_READY") {
@@ -178,8 +209,30 @@ export function BidWorkspaceClient({
         if (cancelled) return;
         const status = await getChecklistPreparationStatusAction(tender.id);
         if (!status.ok) continue;
+        if (
+          status.status === "FAILED" &&
+          isTransientChecklistPrepError(status.error) &&
+          !transientRetried
+        ) {
+          transientRetried = true;
+          setPrepStatus("PROCESSING");
+          setPrepError(null);
+          const retry = await ensureWillBidWorkspacePreparedAction(tender.id);
+          if (cancelled) return;
+          if (!retry.ok) {
+            setPrepStatus("FAILED");
+            setPrepError(toUserFacingChecklistPrepError(retry.error));
+            return;
+          }
+          if (retry.status === "READY" || retry.status === "ALREADY_READY") {
+            setPrepStatus("READY");
+            router.refresh();
+            return;
+          }
+          continue;
+        }
         setPrepStatus(status.status);
-        setPrepError(status.error);
+        setPrepError(toUserFacingChecklistPrepError(status.error));
         if (status.status === "READY") {
           router.refresh();
           return;
@@ -197,10 +250,12 @@ export function BidWorkspaceClient({
   }, [
     autoInitStarted,
     isWillBid,
+    prepError,
     prepStatus,
     readOnly,
     router,
     tender.id,
+    workspace.checklistPreparationError,
   ]);
 
   useEffect(() => {
@@ -220,9 +275,10 @@ export function BidWorkspaceClient({
         force: true,
       });
       if (!result.ok) {
+        const message = toUserFacingChecklistPrepError(result.error);
         setPrepStatus("FAILED");
-        setPrepError(result.error);
-        toast.error(result.error);
+        setPrepError(message);
+        toast.error(message);
         return;
       }
       const engineLabel =
@@ -249,10 +305,9 @@ export function BidWorkspaceClient({
       router.refresh();
     } catch (error) {
       setPrepStatus("FAILED");
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Document ingestion failed.";
+      const message = toUserFacingChecklistPrepError(
+        error instanceof Error ? error.message : "Document ingestion failed.",
+      );
       setPrepError(message);
       toast.error(message);
     } finally {
@@ -669,7 +724,7 @@ export function BidWorkspaceClient({
               We couldn&apos;t prepare the Bid Workspace.
             </h2>
             <p className="mt-2 text-sm text-foreground-600">
-              {prepError || "Automatic checklist extraction failed."}
+              {toUserFacingChecklistPrepError(prepError)}
             </p>
             <Button
               className="mt-5"

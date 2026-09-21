@@ -86,6 +86,36 @@ export type ChecklistPreparationStatus =
   | "READY"
   | "FAILED";
 
+/** Technical PDF/worker failures that should auto-retry on page open, not show raw. */
+export function isTransientChecklistPrepError(
+  error: string | null | undefined,
+): boolean {
+  if (!error) return false;
+  const lower = error.toLowerCase();
+  return (
+    lower.includes("dommatrix") ||
+    lower.includes("canvasfactory") ||
+    lower.includes("pdf-parse") ||
+    lower.includes("@napi-rs/canvas") ||
+    lower.includes("cannot find module") ||
+    lower.includes("worker is not defined") ||
+    lower.includes("temporary issue")
+  );
+}
+
+/** User-facing prep error — never expose raw DOMMatrix / canvas stack messages. */
+export function toUserFacingChecklistPrepError(
+  error: string | null | undefined,
+): string {
+  if (!error?.trim()) {
+    return "Automatic checklist extraction failed. Please retry.";
+  }
+  if (isTransientChecklistPrepError(error)) {
+    return "Document analysis hit a temporary issue. Retry to continue checklist generation.";
+  }
+  return error.trim();
+}
+
 export type BidWorkspaceDTO = {
   id: string;
   tenderId: string;

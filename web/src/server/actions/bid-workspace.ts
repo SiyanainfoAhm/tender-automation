@@ -6,6 +6,7 @@ import {
   BOQ_CATEGORIES,
   BOQ_UOMS,
   WORKSPACE_DOCUMENT_STATUSES,
+  toUserFacingChecklistPrepError,
   type WorkspaceDocumentStatus,
 } from "@/lib/bid-workspace";
 import {
@@ -666,15 +667,16 @@ export async function ingestTenderDocumentsAction(
       summary: result.structured.summary,
     };
   } catch (error) {
+    const rawMessage =
+      error instanceof Error
+        ? error.message
+        : "Unable to ingest tender documents.";
     if (claimed && workspaceId && companyId) {
       await setChecklistPreparationStatus({
         workspaceId,
         companyId,
         status: "FAILED",
-        error:
-          error instanceof Error
-            ? error.message
-            : "Unable to ingest tender documents.",
+        error: rawMessage,
       }).catch(() => undefined);
     }
     if (error instanceof CompanyAccessError) {
@@ -683,10 +685,7 @@ export async function ingestTenderDocumentsAction(
     console.error("[bid-workspace] document ingestion failed", error);
     return {
       ok: false,
-      error:
-        error instanceof Error
-          ? error.message
-          : "Unable to ingest tender documents.",
+      error: toUserFacingChecklistPrepError(rawMessage),
     };
   }
 }
@@ -740,7 +739,11 @@ export async function ensureWillBidWorkspacePreparedAction(
       alreadyClaimed: true,
     });
     if (!result.ok) {
-      return { ok: false, error: result.error, status: "FAILED" };
+      return {
+        ok: false,
+        error: toUserFacingChecklistPrepError(result.error),
+        status: "FAILED",
+      };
     }
     return { ok: true, status: "READY" };
   } catch (error) {
@@ -749,10 +752,11 @@ export async function ensureWillBidWorkspacePreparedAction(
     }
     return {
       ok: false,
-      error:
+      error: toUserFacingChecklistPrepError(
         error instanceof Error
           ? error.message
           : "Unable to prepare Bid Workspace.",
+      ),
       status: "FAILED",
     };
   }

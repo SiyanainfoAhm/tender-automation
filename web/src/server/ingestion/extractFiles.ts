@@ -1,5 +1,7 @@
 import JSZip from "jszip";
 import mammoth from "mammoth";
+// pdf-parse worker must load before PDFParse so Node has Canvas/DOMMatrix.
+import { CanvasFactory } from "pdf-parse/worker";
 import { PDFParse } from "pdf-parse";
 import ExcelJS from "exceljs";
 
@@ -20,7 +22,7 @@ function logIngest(...parts: unknown[]) {
 async function extractPdfText(
   bytes: Buffer,
 ): Promise<{ text: string; pageCount: number | null }> {
-  const parser = new PDFParse({ data: bytes });
+  const parser = new PDFParse({ data: bytes, CanvasFactory });
   try {
     const result = await parser.getText();
     const text = String(result?.text ?? "").trim();

@@ -65,7 +65,7 @@
       "value": "1YmohJhudxTDR6Y",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1821497478,
+      "expires": 1821508325,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -191,16 +191,6 @@
       "sameSite": "Lax"
     },
     {
-      "name": "_gat",
-      "value": "1",
-      "domain": ".tender247.com",
-      "path": "/",
-      "expires": 1789961497,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
       "name": "_clck",
       "value": "mzjoox%5E2%5Eg9n%5E0%5E2402",
       "domain": ".tender247.com",
@@ -232,10 +222,10 @@
     },
     {
       "name": "AWSALBCORS",
-      "value": "ZU/izLiQKnwaIdwP5sE/VQPjovkTBY5KkSR6uJ4X4UwUhHbTzez+FUz8jhE14V0cGnRInQGOnK1J4BNYw0daL1iHOfpFkLWV9pGrd6bq/x8uW7YYL3DdtPRk94VF4Wxjf+Ksfn6ZN0H8e0RBBgOkfDPbFKlgMCo2mtOf5kAgJ5gPnPrSYJ6+wcnE9i+wZw==",
+      "value": "UWTpfHcMF7qqFnO6E1kb20p7pYJGWTRv881cKEfQqmPsXxtMpDqjvHrYTO2sXP1pVEM2N+VEP4Zq3G9KApuJSLkh3oUsAHTLcEzmGPwLpi4FFvCZxlggM9PK73e+WYAsZE89BVxSZeM1RzNwY+RtKywiHl+tg88U4GJVHHKQFS9Ks97KPvWj2fkheUgmfQ==",
       "domain": "widget-mediator.zopim.com",
       "path": "/",
-      "expires": 1790566277.824701,
+      "expires": 1790577125.357497,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
@@ -251,7 +241,7 @@
         },
         {
           "name": "ZD-suid",
-          "value": "{\"id\":\"227bb18c64924d66982a3da31792596c\",\"expiry\":1789962377468,\"tabs\":{\"count\":1,\"expiry\":0}}"
+          "value": "{\"id\":\"5af8c95b7f4b4a4f837f83f1c414d0b9\",\"expiry\":1789973224992,\"tabs\":{\"count\":1,\"expiry\":0}}"
         },
         {
           "name": "userData",
@@ -275,7 +265,7 @@
         },
         {
           "name": "__zlcstore",
-          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1789961478063,\"account_status\":\"offline\"}}"
+          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1789972325670,\"account_status\":\"online\"}}"
         }
       ],
       "indexedDB": []
