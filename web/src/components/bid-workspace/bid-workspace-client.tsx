@@ -13,6 +13,7 @@ import { CategoryCapsule } from "@/components/tenders/category-capsule";
 import { TendersBackLink } from "@/components/tenders/tenders-back-link";
 import { SourceBadge } from "@/components/status/source-badge";
 import { StatusBadge } from "@/components/status/qualification-badge";
+import { SubmittedOutcomeSelect } from "@/components/submitted-tenders/submitted-outcome-select";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -75,6 +76,7 @@ type BidWorkspaceClientProps = {
   companyDocuments: CompanyDocument[];
   canEdit: boolean;
   canSubmit: boolean;
+  canUpdateStatus?: boolean;
 };
 
 const PREP_STEPS = [
@@ -95,6 +97,7 @@ export function BidWorkspaceClient({
   companyDocuments,
   canEdit,
   canSubmit,
+  canUpdateStatus = false,
 }: BidWorkspaceClientProps) {
   void companyDocuments;
   const router = useRouter();
@@ -595,10 +598,18 @@ export function BidWorkspaceClient({
                 {tender.qualificationStatus ? (
                   <StatusBadge status={tender.qualificationStatus} size="sm" />
                 ) : null}
-                {workspace.submissionStatus === "submitted" ? (
-                  <span className="rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
-                    Submitted
-                  </span>
+                {workspace.submissionStatus === "submitted" ||
+                tender.qualificationStatus === "SUBMITTED" ||
+                tender.qualificationStatus === "WON" ||
+                tender.qualificationStatus === "LOST" ||
+                tender.qualificationStatus === "CANCELLED" ? (
+                  <SubmittedOutcomeSelect
+                    tenderId={tender.id}
+                    tenderTitle={tender.title}
+                    currentStatus={tender.qualificationStatus}
+                    tenderValue={tender.tenderValue}
+                    canEdit={canUpdateStatus}
+                  />
                 ) : null}
               </div>
               <h1 className="text-lg font-semibold leading-snug md:text-xl">

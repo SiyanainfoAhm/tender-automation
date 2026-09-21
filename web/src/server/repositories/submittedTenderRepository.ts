@@ -34,7 +34,7 @@ async function resolveSubmittedTenderIds(
     supabase
       .from("agenttender_tenders")
       .select("id")
-      .in("qualification_status", ["SUBMITTED", "WON", "LOST"]),
+      .in("qualification_status", ["SUBMITTED", "WON", "LOST", "CANCELLED"]),
     supabase
       .from("agenttender_bid_workspaces")
       .select("tender_id")

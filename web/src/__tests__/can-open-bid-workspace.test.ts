@@ -8,6 +8,7 @@ describe("canOpenBidWorkspace", () => {
     expect(canOpenBidWorkspace("SUBMITTED")).toBe(true);
     expect(canOpenBidWorkspace("WON")).toBe(true);
     expect(canOpenBidWorkspace("LOST")).toBe(true);
+    expect(canOpenBidWorkspace("CANCELLED")).toBe(true);
     expect(canOpenBidWorkspace("CONDITIONAL_GO")).toBe(false);
     expect(canOpenBidWorkspace("VERIFY")).toBe(false);
     expect(canOpenBidWorkspace("NO_GO")).toBe(false);

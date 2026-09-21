@@ -16,6 +16,7 @@ import { SourceBadge } from "@/components/status/source-badge";
 import { StatusBadge } from "@/components/status/qualification-badge";
 import { CompactKpiCard } from "@/components/tenders/compact-kpi-card";
 import type { TenderSource } from "@/components/tenders/tender-status-styles";
+import type { QualificationStatus } from "@/components/tenders/tender-status-styles";
 import { MarkAsLostDialog } from "@/components/submitted-tenders/mark-as-lost-dialog";
 import { MarkAsWonDialog } from "@/components/won-tenders/mark-as-won-dialog";
 import { Button } from "@/components/ui/button";
@@ -27,7 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { formatDate, formatIndianCurrency } from "@/lib/format";
+import { formatIndianCurrency } from "@/lib/format";
 import { rememberTenderDetailOrigin } from "@/lib/tenders/list-return";
 import {
   CREATED_DATE_PRESET_LABELS,
@@ -39,7 +40,6 @@ import type {
   SubmittedTenderListItem,
   SubmittedTenderSummary,
 } from "@/lib/submitted-tenders";
-import type { QualificationStatus } from "@/components/tenders/tender-status-styles";
 
 type TeamMemberOption = {
   id: string;
@@ -60,6 +60,7 @@ const STATUS_OPTIONS = [
   { value: "SUBMITTED", label: "Submitted" },
   { value: "WON", label: "Won" },
   { value: "LOST", label: "Lost" },
+  { value: "CANCELLED", label: "Tender cancelled" },
 ] as const;
 
 function matchesScrapedDate(
@@ -78,13 +79,6 @@ function matchesScrapedDate(
   if (!scrapedDate) return false;
   if (filter.mode === "eq") return scrapedDate === filter.value;
   return scrapedDate >= filter.gte && scrapedDate <= filter.lte;
-}
-
-function portalSource(portal: string | null): TenderSource {
-  const upper = (portal || "").toUpperCase();
-  if (upper === "BIDASSIST") return "BIDASSIST";
-  if (upper === "MANUAL") return "MANUAL";
-  return "TENDER247";
 }
 
 function asBadgeStatus(status: string): QualificationStatus {
@@ -108,6 +102,13 @@ function asBadgeStatus(status: string): QualificationStatus {
   return "SUBMITTED";
 }
 
+function portalSource(portal: string | null): TenderSource {
+  const upper = (portal || "").toUpperCase();
+  if (upper === "BIDASSIST") return "BIDASSIST";
+  if (upper === "MANUAL") return "MANUAL";
+  return "TENDER247";
+}
+
 export function SubmittedTendersClient({
   items,
   summary,
@@ -127,7 +128,7 @@ export function SubmittedTendersClient({
     null,
   );
   const [lostMode, setLostMode] = useState<"mark-lost" | "edit-reason">(
-    "mark-lost",
+    "edit-reason",
   );
   const router = useRouter();
 
@@ -153,7 +154,9 @@ export function SubmittedTendersClient({
     return items.filter((item) => {
       const status = String(item.qualificationStatus || "").toUpperCase();
       if (statusFilter === "SUBMITTED") {
-        if (status === "WON" || status === "LOST") return false;
+        if (status === "WON" || status === "LOST" || status === "CANCELLED") {
+          return false;
+        }
       } else if (statusFilter !== ALL && status !== statusFilter) {
         return false;
       }
@@ -335,7 +338,6 @@ export function SubmittedTendersClient({
               <thead className="border-b border-border bg-background-50 text-xs uppercase tracking-wide text-foreground-500">
                 <tr>
                   <th className="px-4 py-3 font-medium">Tender</th>
-                  <th className="px-4 py-3 font-medium">Submitted</th>
                   <th className="px-4 py-3 font-medium">Value</th>
                   <th className="px-4 py-3 font-medium">Outcome</th>
                   <th className="px-4 py-3 font-medium">Lost reason</th>
@@ -349,7 +351,7 @@ export function SubmittedTendersClient({
                   ).toUpperCase();
                   const isWon = status === "WON";
                   const isLost = status === "LOST";
-                  const awaiting = !isWon && !isLost;
+                  const awaiting = !isWon && !isLost && status !== "CANCELLED";
 
                   return (
                     <tr
@@ -382,23 +384,12 @@ export function SubmittedTendersClient({
                         </p>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-foreground-700">
-                        <div>{formatDate(item.submittedAt) || "—"}</div>
-                        {item.submissionReference ? (
-                          <div className="mt-0.5 text-xs text-foreground-500">
-                            Ref: {item.submissionReference}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-foreground-700">
                         {item.tenderValue != null
                           ? formatIndianCurrency(item.tenderValue)
                           : "—"}
                       </td>
                       <td className="px-4 py-3">
-                        <StatusBadge
-                          status={asBadgeStatus(status)}
-                          size="sm"
-                        />
+                        <StatusBadge status={asBadgeStatus(status)} size="sm" />
                         {isWon && item.wonProjectId ? (
                           <Link
                             href={`/won-tenders/${item.wonProjectId}`}

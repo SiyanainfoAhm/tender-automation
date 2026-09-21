@@ -53,7 +53,9 @@ export function summarizeSubmittedTenders(
     const status = String(item.qualificationStatus || "").toUpperCase();
     if (status === "WON") won += 1;
     else if (status === "LOST") lost += 1;
-    else submitted += 1;
+    else if (status === "CANCELLED") {
+      // Cancelled stays in the list but is not "awaiting outcome".
+    } else submitted += 1;
   }
   return { total: items.length, submitted, won, lost };
 }

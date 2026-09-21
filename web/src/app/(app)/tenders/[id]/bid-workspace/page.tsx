@@ -121,6 +121,7 @@ export default async function BidWorkspacePage({
       companyDocuments={companyDocuments}
       canEdit={sessionHasPermission(session, "bids.edit")}
       canSubmit={sessionHasPermission(session, "bids.submit")}
+      canUpdateStatus={sessionHasPermission(session, "tenders.edit")}
     />
   );
 }

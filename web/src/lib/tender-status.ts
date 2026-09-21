@@ -245,7 +245,8 @@ export function canOpenBidWorkspace(
     value === "GO" ||
     value === "SUBMITTED" ||
     value === "WON" ||
-    value === "LOST"
+    value === "LOST" ||
+    value === "CANCELLED"
   );
 }
 
