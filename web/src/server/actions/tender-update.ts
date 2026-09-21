@@ -7,7 +7,7 @@ import {
   normalizeTenderCity,
   stripLocationDecorators,
 } from "@/lib/normalize-tender-city";
-import { TENDER_STATUSES, type TenderStatus } from "@/lib/tender-status";
+import { TENDER_STATUSES, isPostSubmissionStatus, tenderDetailStatusChoices, type TenderStatus } from "@/lib/tender-status";
 import { CompanyAccessError } from "@/server/auth/company-access";
 import { requirePermissionStrict } from "@/server/auth/permissions";
 import { getServerSupabase } from "@/lib/db/server";
@@ -181,6 +181,22 @@ export async function updateTenderDetailsAction(
         !(TENDER_STATUSES as readonly string[]).includes(status)
       ) {
         return { ok: false, error: "Invalid status." };
+      }
+
+      const previousStatus = String(
+        existing.tender.qualification_status || "",
+      ).toUpperCase();
+      if (isPostSubmissionStatus(previousStatus)) {
+        const allowed = tenderDetailStatusChoices({
+          currentStatus: previousStatus,
+          submitted: true,
+        });
+        if (status == null || !(allowed as readonly string[]).includes(status)) {
+          return {
+            ok: false,
+            error: "Status cannot move back after the bid is submitted.",
+          };
+        }
       }
     
       // Main tender status (UNDER_EVALUATION is a real DB value).

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { isTenderStatus } from "@/lib/tender-classification";
-import type { TenderStatus } from "@/lib/tender-status";
+import {
+  resolveDisplayedDetailStatus,
+  TENDER_STATUSES,
+  tenderDetailStatusChoices,
+  type TenderStatus,
+} from "@/lib/tender-status";
 
 /**
  * Mirrors mapTenderDetail status resolution — tender column wins over
@@ -60,5 +65,46 @@ describe("tender detail overview qualification status", () => {
         qualificationResultStatus: "NO_GO",
       }),
     ).toBe("VERIFY");
+  });
+});
+
+describe("tender detail status after submission", () => {
+  it("hides a leftover Will Bid status once the bid is submitted", () => {
+    expect(
+      resolveDisplayedDetailStatus({
+        qualificationStatus: "GO",
+        submitted: true,
+      }),
+    ).toBe("SUBMITTED");
+  });
+
+  it("keeps Won after submission", () => {
+    expect(
+      resolveDisplayedDetailStatus({
+        qualificationStatus: "WON",
+        submitted: true,
+      }),
+    ).toBe("WON");
+  });
+
+  it("offers only forward outcomes from Submitted", () => {
+    expect(
+      tenderDetailStatusChoices({
+        currentStatus: "SUBMITTED",
+        submitted: true,
+      }),
+    ).toEqual(["SUBMITTED", "WON", "LOST", "CANCELLED"]);
+  });
+
+  it("locks Won so earlier statuses are not offered", () => {
+    expect(
+      tenderDetailStatusChoices({ currentStatus: "WON", submitted: true }),
+    ).toEqual(["WON"]);
+  });
+
+  it("still lists the full pipeline before submission", () => {
+    expect(
+      tenderDetailStatusChoices({ currentStatus: "GO", submitted: false }),
+    ).toEqual(TENDER_STATUSES);
   });
 });

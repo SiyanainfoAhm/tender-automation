@@ -4,6 +4,7 @@ import { ExternalLink } from "lucide-react";
 import { StatusBadge } from "@/components/status/qualification-badge";
 import { formatConfidence, formatDate } from "@/lib/format";
 import type { TenderDetailDTO } from "@/lib/tender-detail";
+import { isPostSubmissionStatus } from "@/lib/tender-status";
 import { cn } from "@/lib/utils";
 
 function jsonArray(value: unknown): unknown[] {
@@ -129,7 +130,15 @@ export function TenderAnalyzerPanels({
             <div>
               <p className="text-xs text-foreground-500">Status</p>
               <div className="mt-1">
-                <StatusBadge status={qualification.status} size="sm" />
+                <StatusBadge
+                  status={
+                    isPostSubmissionStatus(tender.qualificationStatus) &&
+                    tender.qualificationStatus
+                      ? tender.qualificationStatus
+                      : qualification.status
+                  }
+                  size="sm"
+                />
               </div>
             </div>
             <div>

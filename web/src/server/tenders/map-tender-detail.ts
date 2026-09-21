@@ -15,7 +15,10 @@ import type {
   TenderDetailDTO,
   TenderQualificationDTO,
 } from "@/lib/tender-detail";
-import type { TenderStatus } from "@/lib/tender-status";
+import {
+  resolveDisplayedDetailStatus,
+  type TenderStatus,
+} from "@/lib/tender-status";
 import { parseDuplicateReferenceFromReason } from "@/lib/duplicate-reference";
 
 function asString(value: unknown): string | null {
@@ -240,7 +243,10 @@ export function mapTenderDetail(options: {
     (asString(tender.qualification_status) as TenderStatus | null) ??
     (asString(tender.effective_qualification_status) as TenderStatus | null) ??
     (asString(qualification?.status) as TenderStatus | null);
-  const qualificationStatus = isTenderStatus(qualStatus) ? qualStatus : null;
+  const qualificationStatus = resolveDisplayedDetailStatus({
+    qualificationStatus: isTenderStatus(qualStatus) ? qualStatus : null,
+    submitted: options.submitted,
+  });
   const city = normalizeTenderCity({
     city: asString(tender.city),
     state: asString(tender.state),

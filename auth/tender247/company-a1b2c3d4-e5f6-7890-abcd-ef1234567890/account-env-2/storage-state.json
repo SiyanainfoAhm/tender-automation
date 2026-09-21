@@ -65,7 +65,7 @@
       "value": "1YmohJhudxTDR6Y",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1821508325,
+      "expires": 1821523764,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -201,31 +201,11 @@
       "sameSite": "Lax"
     },
     {
-      "name": "AWSALBCORS",
-      "value": "UWTpfHcMF7qqFnO6E1kb20p7pYJGWTRv881cKEfQqmPsXxtMpDqjvHrYTO2sXP1pVEM2N+VEP4Zq3G9KApuJSLkh3oUsAHTLcEzmGPwLpi4FFvCZxlggM9PK73e+WYAsZE89BVxSZeM1RzNwY+RtKywiHl+tg88U4GJVHHKQFS9Ks97KPvWj2fkheUgmfQ==",
-      "domain": "widget-mediator.zopim.com",
-      "path": "/",
-      "expires": 1790577125.357497,
-      "httpOnly": false,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
       "name": "_ga",
       "value": "GA1.2.1744748255.1785411924",
       "domain": ".tender247.com",
       "path": "/",
       "expires": 1824543265.125946,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "_gat",
-      "value": "1",
-      "domain": ".tender247.com",
-      "path": "/",
-      "expires": 1789983325,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -239,6 +219,16 @@
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
+    },
+    {
+      "name": "AWSALBCORS",
+      "value": "iI/BvphTIRMc2fKTkRLy1XXvlsjYb/Jzz/lzUhqHkUTwHt3ooBrnqM069RGEJJPOr2KrXarFbouliJB6bCehfnaAylRNgMFpgt3VhI+rT+ysNlk0VsuiDDqAhUH55/iXiJbDGdPuByTZtuDhNMeHRkzyilzqB4yWJhZY7v0augQmKY8YBo4oIVDvWVgV+A==",
+      "domain": "widget-mediator.zopim.com",
+      "path": "/",
+      "expires": 1790592564.301742,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
     }
   ],
   "origins": [
@@ -247,11 +237,11 @@
       "localStorage": [
         {
           "name": "ZD-store",
-          "value": "{\"activeEmbed\":\"chat\",\"widgetShown\":false,\"is_chatting\":false}"
+          "value": "{\"activeEmbed\":\"chat\",\"widgetShown\":false,\"is_chatting\":true}"
         },
         {
           "name": "ZD-suid",
-          "value": "{\"id\":\"5af8c95b7f4b4a4f837f83f1c414d0b9\",\"expiry\":1789973224992,\"tabs\":{\"count\":1,\"expiry\":0}}"
+          "value": "{\"id\":\"c14c39a0040d42d88f6bf9eff103c48c\",\"expiry\":1789988663931,\"tabs\":{\"count\":1,\"expiry\":0}}"
         },
         {
           "name": "userData",
@@ -275,7 +265,7 @@
         },
         {
           "name": "__zlcstore",
-          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1789972325670,\"account_status\":\"online\"}}"
+          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1789987764476,\"account_status\":\"online\"}}"
         }
       ],
       "indexedDB": []

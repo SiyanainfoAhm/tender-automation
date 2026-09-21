@@ -17,6 +17,10 @@ import {
 } from "@/lib/bid-ai-prompts";
 import { MAX_SINGLE_SHOT_UPLOAD_BYTES } from "@/lib/company/types";
 import { getServerSupabase } from "@/lib/db/server";
+import {
+  CLASSIFICATION_DECISION_LABELS,
+  CLASSIFICATION_REQUIRED_ACTIONS,
+} from "@/lib/tender-classification";
 import { resolveTenderArtifactUrls } from "@/lib/tenders/resolve-document-urls";
 import { CompanyAccessError } from "@/server/auth/company-access";
 import { requirePermissionStrict } from "@/server/auth/permissions";
@@ -482,14 +486,26 @@ export async function markBidSubmittedAction(input: {
       notes: input.notes?.trim() || null,
     });
 
+    const supabase = getServerSupabase();
     // Keep list/dashboard Submitted counts in sync (not workspace-only).
-    await getServerSupabase()
+    await supabase
       .from("agenttender_tenders")
       .update({
         qualification_status: "SUBMITTED",
         updated_at: new Date().toISOString(),
       })
       .eq("id", input.tenderId);
+
+    // qualification_results can still hold Will Bid / GO. Detail and analysis
+    // read that row, so replace it once the bid is submitted.
+    await supabase
+      .from("agenttender_qualification_results")
+      .update({
+        status: "SUBMITTED",
+        decision_label: CLASSIFICATION_DECISION_LABELS.SUBMITTED,
+        required_action: CLASSIFICATION_REQUIRED_ACTIONS.SUBMITTED,
+      })
+      .eq("tender_id", input.tenderId);
 
     await insertTenderActivity({
       tenderId: input.tenderId,

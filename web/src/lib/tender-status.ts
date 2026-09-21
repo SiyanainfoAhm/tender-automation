@@ -234,6 +234,60 @@ export function isQualifiedStatus(
   return status === "GO";
 }
 
+/** Outcomes that replace the pre-submission pipeline after a bid is submitted. */
+export const POST_SUBMISSION_STATUSES = [
+  "SUBMITTED",
+  "WON",
+  "LOST",
+  "CANCELLED",
+] as const;
+
+export function isPostSubmissionStatus(
+  status: string | null | undefined,
+): boolean {
+  const value = String(status || "")
+    .trim()
+    .toUpperCase();
+  return (POST_SUBMISSION_STATUSES as readonly string[]).includes(value);
+}
+
+/**
+ * Status choices on tender details. After submission, earlier stages
+ * (Will Bid, Verify, and so on) are omitted. Won, Lost, and Cancelled stay put.
+ */
+export function tenderDetailStatusChoices(options: {
+  currentStatus: string | null | undefined;
+  submitted?: boolean;
+}): readonly TenderStatus[] {
+  const current = String(options.currentStatus || "")
+    .trim()
+    .toUpperCase();
+  const pastSubmission =
+    options.submitted === true || isPostSubmissionStatus(current);
+  if (!pastSubmission) return TENDER_STATUSES;
+  if (current === "WON" || current === "LOST" || current === "CANCELLED") {
+    return [current as TenderStatus];
+  }
+  return ["SUBMITTED", "WON", "LOST", "CANCELLED"];
+}
+
+/**
+ * Once the bid workspace is submitted, a leftover pre-submission status
+ * (for example Will Bid) must not be what tender details displays.
+ */
+export function resolveDisplayedDetailStatus(options: {
+  qualificationStatus: TenderStatus | null;
+  submitted: boolean;
+}): TenderStatus | null {
+  if (
+    options.submitted &&
+    !isPostSubmissionStatus(options.qualificationStatus)
+  ) {
+    return "SUBMITTED";
+  }
+  return options.qualificationStatus;
+}
+
 /** Bid Workspace stays available from Will Bid through later outcomes. */
 export function canOpenBidWorkspace(
   status: string | null | undefined,

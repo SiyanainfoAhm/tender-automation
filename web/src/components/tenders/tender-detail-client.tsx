@@ -101,7 +101,10 @@ import {
 } from "@/lib/tender-document-access";
 import {
   canOpenBidWorkspace,
+  isPostSubmissionStatus,
+  resolveDisplayedDetailStatus,
   STATUS_DISPLAY_LABELS,
+  tenderDetailStatusChoices,
   TENDER_STATUSES,
   type TenderStatus,
 } from "@/lib/tender-status";
@@ -674,9 +677,22 @@ export function TenderDetailClient({
   const urgent = days != null && days >= 0 && days <= 7;
 
   const breadcrumbId = tender.folderId || tender.sourceTenderId;
-  const displayStatus = editing
-    ? draft.qualificationStatus || null
-    : tender.qualificationStatus;
+  const pastSubmission =
+    tender.submitted || isPostSubmissionStatus(tender.qualificationStatus);
+  const savedDetailStatus = resolveDisplayedDetailStatus({
+    qualificationStatus: tender.qualificationStatus,
+    submitted: pastSubmission,
+  });
+  const displayStatus = resolveDisplayedDetailStatus({
+    qualificationStatus: editing
+      ? draft.qualificationStatus || null
+      : tender.qualificationStatus,
+    submitted: pastSubmission,
+  });
+  const statusChoices = tenderDetailStatusChoices({
+    currentStatus: savedDetailStatus,
+    submitted: pastSubmission,
+  });
   const statusBadge = toStatusBadge(displayStatus);
   const duplicateReference = formatDuplicateReference({
     duplicateOfSourceTenderId: tender.duplicateOfSourceTenderId,
@@ -718,6 +734,9 @@ export function TenderDetailClient({
   };
 
   const handleStatusChange = (next: string) => {
+    if (!(statusChoices as readonly string[]).includes(next)) {
+      return;
+    }
     if (!(TENDER_STATUSES as readonly string[]).includes(next)) {
       return;
     }
@@ -787,8 +806,13 @@ export function TenderDetailClient({
         closingDate: draft.closingDate || null,
         description: draft.description.trim() || null,
         notes: draft.notes.trim() || null,
-        qualificationStatus:
-          draft.qualificationStatus || "UNDER_EVALUATION",
+        qualificationStatus: pastSubmission
+          ? ((statusChoices as readonly string[]).includes(
+              draft.qualificationStatus,
+            )
+              ? draft.qualificationStatus
+              : savedDetailStatus) || "SUBMITTED"
+          : draft.qualificationStatus || "UNDER_EVALUATION",
         tenderValue: parseAmount(draft.tenderValue),
         tenderEstCost: parseAmount(draft.tenderEstCost),
         emdAmount: parseAmount(draft.emdAmount),
@@ -953,12 +977,9 @@ export function TenderDetailClient({
     });
   };
 
-  const currentQualificationStatus = editing
-    ? draft.qualificationStatus
-    : tender.qualificationStatus;
+  const currentQualificationStatus = displayStatus || "";
 
-  const statusSelectValue =
-    currentQualificationStatus || "UNDER_EVALUATION";
+  const statusSelectValue = currentQualificationStatus || "UNDER_EVALUATION";
 
   const statusStyle = (TENDER_STATUSES as readonly string[]).includes(
     statusSelectValue,
@@ -1092,7 +1113,12 @@ export function TenderDetailClient({
               <Select
                 value={statusSelectValue}
                 onValueChange={handleStatusChange}
-                disabled={(!canEdit && !editing) || statusPending || pending}
+                disabled={
+                  (!canEdit && !editing) ||
+                  statusPending ||
+                  pending ||
+                  (pastSubmission && statusChoices.length === 1)
+                }
               >
                 <SelectTrigger
                   className={cn(
@@ -1105,7 +1131,7 @@ export function TenderDetailClient({
                   <SelectValue placeholder="Set status" />
                 </SelectTrigger>
                 <SelectContent>
-                  {TENDER_STATUSES.map((status) => (
+                  {statusChoices.map((status) => (
                     <SelectItem key={status} value={status}>
                       {STATUS_DISPLAY_LABELS[status]}
                     </SelectItem>
