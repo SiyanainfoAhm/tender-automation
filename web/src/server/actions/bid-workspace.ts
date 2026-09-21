@@ -61,6 +61,7 @@ function revalidateWorkspace(tenderId: string) {
   revalidatePath(`/tenders/${tenderId}`);
   revalidatePath(`/tenders/${tenderId}/bid-workspace`);
   revalidatePath("/tenders", "layout");
+  revalidatePath("/submitted-tenders");
 }
 
 function parseNumber(value: string, label: string): number | { error: string } {

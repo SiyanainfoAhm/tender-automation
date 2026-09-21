@@ -4,6 +4,7 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { Command as CommandPrimitive } from "cmdk";
 import {
+  FileCheck2,
   FileText,
   LayoutDashboard,
   Search,
@@ -50,6 +51,13 @@ const commandActions: CommandAction[] = [
     href: "/tenders/global",
     icon: FileText,
     keywords: ["global", "international", "bids"],
+  },
+  {
+    id: "submitted-tenders",
+    label: "Submitted Tenders",
+    href: "/submitted-tenders",
+    icon: FileCheck2,
+    keywords: ["submitted", "won", "lost", "outcome", "bid"],
   },
   {
     id: "won-tenders",

@@ -29,6 +29,7 @@ type AppShellProps = {
   tenderCount?: number | null;
   indianTenderCount?: number | null;
   globalTenderCount?: number | null;
+  submittedTenderCount?: number | null;
   wonTenderCount?: number | null;
   children: React.ReactNode;
 };
@@ -41,6 +42,7 @@ export function AppShell({
   tenderCount = null,
   indianTenderCount = null,
   globalTenderCount = null,
+  submittedTenderCount = null,
   wonTenderCount = null,
   children,
 }: AppShellProps) {
@@ -85,6 +87,7 @@ export function AppShell({
             tenderCount={tenderCount}
             indianTenderCount={indianTenderCount}
             globalTenderCount={globalTenderCount}
+            submittedTenderCount={submittedTenderCount}
             wonTenderCount={wonTenderCount}
           />
         </div>
@@ -96,6 +99,7 @@ export function AppShell({
               tenderCount={tenderCount}
               indianTenderCount={indianTenderCount}
               globalTenderCount={globalTenderCount}
+              submittedTenderCount={submittedTenderCount}
               wonTenderCount={wonTenderCount}
             />
             <span className="font-heading text-sm font-semibold text-text-primary">

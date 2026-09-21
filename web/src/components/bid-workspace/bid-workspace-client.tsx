@@ -113,7 +113,7 @@ export function BidWorkspaceClient({
   const [prepStatus, setPrepStatus] = useState(
     workspace.checklistPreparationStatus,
   );
-  const [prepError, setPrepError] = useState(
+  const [prepError, setPrepError] = useState<string | null>(
     toUserFacingChecklistPrepError(workspace.checklistPreparationError),
   );
   const [prepStepIndex, setPrepStepIndex] = useState(0);

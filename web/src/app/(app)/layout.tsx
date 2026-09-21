@@ -9,6 +9,7 @@ import {
   countVisibleTenders,
   getTenderRegionCounts,
 } from "@/server/repositories/tenderRepository";
+import { countSubmittedTenders } from "@/server/repositories/submittedTenderRepository";
 import { countWonProjects } from "@/server/repositories/wonProjectRepository";
 
 /** Nav badges (tender / won counts) must not be served from a stale RSC cache. */
@@ -39,6 +40,7 @@ export default async function AppLayout({
     preferences,
     tenderCount,
     regionCounts,
+    submittedTenderCount,
     wonTenderCount,
     memberships,
     activeCompany,
@@ -62,6 +64,9 @@ export default async function AppLayout({
       }),
       countVisibleTenders().catch(() => null),
       getTenderRegionCounts().catch(() => null),
+      companyId
+        ? countSubmittedTenders(companyId).catch(() => null)
+        : Promise.resolve(null),
       companyId
         ? countWonProjects(companyId).catch(() => null)
         : Promise.resolve(null),
@@ -90,6 +95,7 @@ export default async function AppLayout({
       tenderCount={tenderCount}
       indianTenderCount={regionCounts?.indian ?? null}
       globalTenderCount={regionCounts?.global ?? null}
+      submittedTenderCount={submittedTenderCount}
       wonTenderCount={wonTenderCount}
     >
       {children}

@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Building2,
+  FileCheck2,
   FileStack,
   FileText,
   Globe2,
@@ -15,6 +16,7 @@ export type NavCountKey =
   | "tenders"
   | "indianTenders"
   | "globalTenders"
+  | "submittedTenders"
   | "wonTenders";
 
 export type AppNavChildItem = {
@@ -81,6 +83,15 @@ export const APP_MAIN_NAV: AppNavItem[] = [
     icon: Wallet,
     section: "main",
     permission: "bids.view",
+  },
+  {
+    href: "/submitted-tenders",
+    label: "Submitted Tenders",
+    icon: FileCheck2,
+    section: "main",
+    permission: "tenders.view",
+    showCount: true,
+    countKey: "submittedTenders",
   },
   {
     href: "/won-tenders",

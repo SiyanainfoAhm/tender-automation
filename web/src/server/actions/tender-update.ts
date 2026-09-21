@@ -59,6 +59,7 @@ function revalidateTender(tenderId: string) {
   revalidatePath(`/tenders/${tenderId}`);
   revalidatePath(`/tenders/${tenderId}/analyze`);
   revalidatePath(`/tenders/${tenderId}/bid-workspace`);
+  revalidatePath("/submitted-tenders");
   revalidatePath("/dashboard");
   revalidatePath("/bid-fees");
 }

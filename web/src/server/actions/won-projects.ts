@@ -64,6 +64,7 @@ function revalidateWonPaths(
   if (options?.includeNav) {
     revalidatePath("/", "layout");
     revalidatePath("/dashboard");
+    revalidatePath("/submitted-tenders");
     if (tenderId) revalidatePath("/tenders", "layout");
   }
 }

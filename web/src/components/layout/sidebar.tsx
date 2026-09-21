@@ -47,6 +47,7 @@ type AppSidebarProps = {
   tenderCount?: number | null;
   indianTenderCount?: number | null;
   globalTenderCount?: number | null;
+  submittedTenderCount?: number | null;
   wonTenderCount?: number | null;
 };
 
@@ -56,10 +57,12 @@ function navItemCount(
     tenders: number | null;
     indian: number | null;
     global: number | null;
+    submitted: number | null;
     won: number | null;
   },
 ): number | null {
   if (countKey === "wonTenders") return counts.won;
+  if (countKey === "submittedTenders") return counts.submitted;
   if (countKey === "indianTenders") return counts.indian;
   if (countKey === "globalTenders") return counts.global;
   return counts.tenders;
@@ -127,6 +130,7 @@ export function AppSidebar({
   tenderCount = null,
   indianTenderCount = null,
   globalTenderCount = null,
+  submittedTenderCount = null,
   wonTenderCount = null,
 }: AppSidebarProps) {
   const pathname = usePathname();
@@ -135,6 +139,7 @@ export function AppSidebar({
     tenders: tenderCount,
     indian: indianTenderCount,
     global: globalTenderCount,
+    submitted: submittedTenderCount,
     won: wonTenderCount,
   };
   const mainItems = APP_MAIN_NAV.filter((item) => {
