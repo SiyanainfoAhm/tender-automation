@@ -547,6 +547,13 @@ export function BidWorkspaceClient({
 
   const incomplete = workspace.readiness.incompleteRequired;
   const completedChecklist = items.filter((item) => item.isCompleted).length;
+  const qualification = String(tender.qualificationStatus || "").toUpperCase();
+  const alreadySubmitted =
+    workspace.submissionStatus === "submitted" ||
+    qualification === "SUBMITTED" ||
+    qualification === "WON" ||
+    qualification === "LOST" ||
+    qualification === "CANCELLED";
 
   const sharedPanelProps = {
     tenderId: tender.id,
@@ -656,23 +663,23 @@ export function BidWorkspaceClient({
                   ))}
                 </TooltipContent>
               </Tooltip>
-              <Button
-                className="mt-3 w-full"
-                disabled={!canSubmit || workspace.submissionStatus === "submitted"}
-                onClick={() => {
-                  if (incomplete > 0) {
-                    toast.error(
-                      `${incomplete} required item${incomplete === 1 ? " is" : "s are"} still incomplete.`,
-                    );
-                    return;
-                  }
-                  setSubmitOpen(true);
-                }}
-              >
-                {workspace.submissionStatus === "submitted"
-                  ? "Bid submitted"
-                  : "Mark Bid as Submitted"}
-              </Button>
+              {!alreadySubmitted ? (
+                <Button
+                  className="mt-3 w-full"
+                  disabled={!canSubmit}
+                  onClick={() => {
+                    if (incomplete > 0) {
+                      toast.error(
+                        `${incomplete} required item${incomplete === 1 ? " is" : "s are"} still incomplete.`,
+                      );
+                      return;
+                    }
+                    setSubmitOpen(true);
+                  }}
+                >
+                  Mark Bid as Submitted
+                </Button>
+              ) : null}
             </div>
           </div>
 

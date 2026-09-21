@@ -445,6 +445,21 @@ export async function markBidSubmittedAction(input: {
     if (workspace.submissionStatus === "submitted") {
       return { ok: false, error: "This bid is already marked submitted." };
     }
+    const tender = await getTenderById(input.tenderId);
+    const qualification = String(
+      tender?.tender.qualification_status || "",
+    ).toUpperCase();
+    if (
+      qualification === "SUBMITTED" ||
+      qualification === "WON" ||
+      qualification === "LOST" ||
+      qualification === "CANCELLED"
+    ) {
+      return {
+        ok: false,
+        error: "This tender is already submitted or has a later outcome.",
+      };
+    }
     if (workspace.readiness.incompleteRequired > 0) {
       return {
         ok: false,
