@@ -567,8 +567,12 @@ export function TenderExplorer({
 
   // Keep list filters in sessionStorage for Bid Workspace / sidebar return.
   React.useEffect(() => {
-    rememberTendersListFilters(tendersListHrefFromParts(pathname, queryKey));
-  }, [pathname, queryKey]);
+    const returnParams = new URLSearchParams(searchParams.toString());
+    returnParams.delete("region");
+    rememberTendersListFilters(
+      tendersListHrefFromParts(pathname, returnParams.toString()),
+    );
+  }, [pathname, searchParams]);
 
   // Restore scroll after returning from Tender Detail (sessionStorage).
   React.useEffect(() => {
@@ -637,15 +641,22 @@ export function TenderExplorer({
       tenderId: string,
       options?: { tab?: "documents"; focus?: "ai-summary" },
     ) => {
-      const href = tendersListHrefFromParts(pathname, queryKey);
-      rememberTendersListReturn(href, window.scrollY);
+      // Persist filters without embedding region= in the visible return URL —
+      // path (/tenders/indian|global) is the source of truth for region.
+      const returnParams = new URLSearchParams(searchParams.toString());
+      returnParams.delete("region");
+      const returnHref = tendersListHrefFromParts(
+        pathname,
+        returnParams.toString(),
+      );
+      rememberTendersListReturn(returnHref, window.scrollY);
       const params = new URLSearchParams();
       if (options?.tab === "documents") params.set("tab", "documents");
       if (options?.focus === "ai-summary") params.set("focus", "ai-summary");
       const qs = params.toString();
       router.push(qs ? `/tenders/${tenderId}?${qs}` : `/tenders/${tenderId}`);
     },
-    [pathname, queryKey, router],
+    [pathname, searchParams, router],
   );
 
   const prefetchTenderDetail = React.useCallback(

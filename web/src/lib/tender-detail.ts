@@ -64,6 +64,8 @@ export type TenderDetailDTO = {
   authority: string | null;
   department: string | null;
   sourcePortal: TenderSource;
+  /** Tender247 Indian vs Global feed — drives detail back-nav fallback. */
+  sourceRegion: "INDIAN" | "GLOBAL" | null;
   sourceTenderId: string;
   folderId: string | null;
   referenceNo: string | null;

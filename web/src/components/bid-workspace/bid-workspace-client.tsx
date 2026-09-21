@@ -507,7 +507,7 @@ export function BidWorkspaceClient({
     <TooltipProvider>
       <div className="space-y-6">
         <div className="flex min-w-0 items-center gap-2 text-sm">
-          <TendersBackLink />
+          <TendersBackLink fallbackRegion={tender.sourceRegion} />
           <ChevronRight className="size-3.5 shrink-0 text-foreground-400" />
           <Link
             href={`/tenders/${tender.id}`}

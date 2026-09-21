@@ -293,6 +293,14 @@ export function mapTenderDetail(options: {
     authority: asString(tender.authority) || asString(tender.organization),
     department: asString(tender.department),
     sourcePortal,
+    sourceRegion:
+      String(tender.source_region || "").toUpperCase() === "GLOBAL"
+        ? "GLOBAL"
+        : String(tender.source_region || "").toUpperCase() === "INDIAN"
+          ? "INDIAN"
+          : /\/auth\/globaltender/i.test(String(tender.source_url || ""))
+            ? "GLOBAL"
+            : null,
     sourceTenderId: asString(tender.source_tender_id) || String(tender.id),
     folderId: asString(tender.folder_id),
     referenceNo: asString(tender.reference_no),

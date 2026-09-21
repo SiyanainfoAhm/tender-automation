@@ -973,7 +973,7 @@ export function TenderDetailClient({
     <div className="min-w-0 space-y-5 overflow-x-hidden">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-1.5 text-sm">
-          <TendersBackLink />
+          <TendersBackLink fallbackRegion={tender.sourceRegion} />
           <ChevronRight className="size-3.5 shrink-0 text-foreground-400" />
           <span
             className="truncate font-medium text-foreground-900"

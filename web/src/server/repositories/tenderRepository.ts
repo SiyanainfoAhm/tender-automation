@@ -247,6 +247,54 @@ type CityFilterResolved =
 type CityFilterContext = CityFilterResolved | null | undefined;
 
 /**
+ * T247 Global feed IDs that also appear as INDIAN rows for the same scrape
+ * window. Used to keep Indian Tender Management counts aligned with the
+ * Indian portal (Global has its own /tenders/global page).
+ */
+export async function listGlobalSiblingSourceTenderIds(
+  scrapedFilter: ReturnType<typeof resolveScrapedDateFilter>,
+): Promise<string[]> {
+  const supabase = getServerSupabase();
+  const ids = new Set<string>();
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    let query = supabase
+      .from("agenttender_tenders")
+      .select("source_tender_id")
+      .eq("source_portal", "TENDER247")
+      .eq("source_region", "GLOBAL")
+      .not("source_tender_id", "is", null)
+      .range(from, from + pageSize - 1);
+    if (scrapedFilter?.mode === "eq") {
+      query = query.eq("scraped_date", scrapedFilter.value);
+    } else if (scrapedFilter?.mode === "range") {
+      query = query
+        .gte("scraped_date", scrapedFilter.gte)
+        .lte("scraped_date", scrapedFilter.lte);
+    }
+    const { data, error } = await query;
+    if (error) {
+      assertSupabaseOk(
+        { data, error },
+        {
+          queryName: "listGlobalSiblingSourceTenderIds",
+          selectedColumns: "source_tender_id",
+        },
+      );
+    }
+    const batch = data || [];
+    for (const row of batch) {
+      const id = String(row.source_tender_id || "")
+        .replace(/^T247-/i, "")
+        .replace(/\D/g, "");
+      if (id) ids.add(id);
+    }
+    if (batch.length < pageSize) break;
+  }
+  return [...ids];
+}
+
+/**
  * Shared non-status WHERE clauses for list + status-card counts.
  * Status / pagination / sort are applied by the caller.
  */
@@ -268,6 +316,24 @@ export async function applyTenderListNonStatusFilters(
 
   if (filters.region && filters.region !== "ALL") {
     q = q.eq("source_region", filters.region);
+  }
+
+  // Global tenders are sometimes also upserted as INDIAN for the same day.
+  // Indian list/KPI must match Tender247 Indian feed counts (exclude those
+  // sibling GLOBAL ids). Global tab already filters source_region=GLOBAL.
+  if (filters.region === "INDIAN") {
+    const scrapedFilter = resolveScrapedDateFilter({
+      preset: filters.date,
+      selectedDate: filters.selectedDate,
+      from: filters.createdFrom,
+      to: filters.createdTo,
+    });
+    const excludeIds = await listGlobalSiblingSourceTenderIds(scrapedFilter);
+    if (excludeIds.length > 0) {
+      // PostgREST `.not('col','in',...)` rejects very long URLs; chunk.
+      const chunk = excludeIds.slice(0, 800);
+      q = q.not("source_tender_id", "in", `(${chunk.join(",")})`);
+    }
   }
 
   if (filters.downloadStatus) {
@@ -662,11 +728,20 @@ export type TenderRegionCounts = {
 /** Absolute INDIAN / GLOBAL row counts for Tender Management tabs. */
 export async function getTenderRegionCounts(): Promise<TenderRegionCounts> {
   const supabase = getServerSupabase();
+  const globalSiblingIds = await listGlobalSiblingSourceTenderIds(null);
+  let indianQuery = supabase
+    .from("agenttender_tenders")
+    .select("id", { count: "exact", head: true })
+    .eq("source_region", "INDIAN");
+  if (globalSiblingIds.length > 0) {
+    indianQuery = indianQuery.not(
+      "source_tender_id",
+      "in",
+      `(${globalSiblingIds.slice(0, 800).join(",")})`,
+    );
+  }
   const [indianRes, globalRes] = await Promise.all([
-    supabase
-      .from("agenttender_tenders")
-      .select("id", { count: "exact", head: true })
-      .eq("source_region", "INDIAN"),
+    indianQuery,
     supabase
       .from("agenttender_tenders")
       .select("id", { count: "exact", head: true })

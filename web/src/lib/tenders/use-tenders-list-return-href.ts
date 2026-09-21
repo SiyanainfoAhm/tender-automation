@@ -8,7 +8,11 @@ import {
   TENDERS_LIST_RETURN_CHANGED_EVENT,
 } from "@/lib/tenders/list-return";
 
-const DEFAULT_TENDERS_HREF = "/tenders/indian";
+export type TendersListRegionFallback = "INDIAN" | "GLOBAL" | null | undefined;
+
+function defaultHrefForRegion(region?: TendersListRegionFallback): string {
+  return region === "GLOBAL" ? "/tenders/global" : "/tenders/indian";
+}
 
 function subscribe(onStoreChange: () => void) {
   if (typeof window === "undefined") return () => {};
@@ -20,31 +24,34 @@ function subscribe(onStoreChange: () => void) {
   };
 }
 
-function getClientSnapshot() {
-  return peekTendersListReturn() || DEFAULT_TENDERS_HREF;
+function getClientSnapshot(region?: TendersListRegionFallback) {
+  return peekTendersListReturn() || defaultHrefForRegion(region);
 }
 
-function getServerSnapshot() {
-  return DEFAULT_TENDERS_HREF;
+function getServerSnapshot(region?: TendersListRegionFallback) {
+  return defaultHrefForRegion(region);
 }
 
 /**
  * Hydration-safe return href for sidebar / back links.
- * Server + hydrate paint always `/tenders/indian`; client then adopts sessionStorage.
- * Re-reads on route changes so filters survive detail / workspace navigation.
+ * Prefers sessionStorage (filters intact). Falls back to Indian or Global list
+ * based on the open tender's source_region so Global detail Back doesn't land
+ * on /tenders/indian.
  */
-export function useTendersListReturnHref(): string {
+export function useTendersListReturnHref(
+  fallbackRegion?: TendersListRegionFallback,
+): string {
   const pathname = usePathname();
   const storeHref = useSyncExternalStore(
     subscribe,
-    getClientSnapshot,
-    getServerSnapshot,
+    () => getClientSnapshot(fallbackRegion),
+    () => getServerSnapshot(fallbackRegion),
   );
   const [href, setHref] = useState(storeHref);
 
   useEffect(() => {
-    setHref(peekTendersListReturn() || DEFAULT_TENDERS_HREF);
-  }, [pathname, storeHref]);
+    setHref(peekTendersListReturn() || defaultHrefForRegion(fallbackRegion));
+  }, [pathname, storeHref, fallbackRegion]);
 
   return href;
 }
