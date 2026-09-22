@@ -428,6 +428,7 @@ function DocumentSection({
   headerActions,
   showUpload = true,
   showDownloadAll = false,
+  allowMultipleUploads = false,
 }: {
   title: string;
   subtitle?: string;
@@ -436,11 +437,12 @@ function DocumentSection({
   items: DocRowItem[];
   canEdit: boolean;
   uploading: boolean;
-  onUpload?: (file: File) => void;
+  onUpload?: (files: File[]) => void;
   onDelete?: (documentId: string) => void;
   headerActions?: ReactNode;
   showUpload?: boolean;
   showDownloadAll?: boolean;
+  allowMultipleUploads?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -515,19 +517,23 @@ function DocumentSection({
                 type="file"
                 className="hidden"
                 accept={documentUploadAcceptAttr()}
+                multiple={allowMultipleUploads}
                 onChange={(e: ChangeEvent<HTMLInputElement>) => {
-                  const file = e.target.files?.[0];
+                  const files = Array.from(e.target.files || []);
                   e.target.value = "";
-                  if (!file) return;
-                  const validation = validateDocumentFile(
-                    file,
-                    MAX_DOCUMENT_UPLOAD_BYTES,
+                  if (files.length === 0) return;
+                  const invalidFile = files.find((file) =>
+                    validateDocumentFile(file, MAX_DOCUMENT_UPLOAD_BYTES),
                   );
-                  if (validation) {
-                    toast.error(validation.message);
+                  if (invalidFile) {
+                    const validation = validateDocumentFile(
+                      invalidFile,
+                      MAX_DOCUMENT_UPLOAD_BYTES,
+                    );
+                    toast.error(validation?.message || "Invalid document.");
                     return;
                   }
-                  onUpload(file);
+                  onUpload(files);
                 }}
               />
               <Button
@@ -944,33 +950,56 @@ export function TenderDetailClient({
     [documents, fees],
   );
 
-  const uploadSectionDoc = (
+  const uploadSectionDocs = (
     section: TenderDocumentSection,
-    file: File,
+    files: File[],
     feeId?: string | null,
   ) => {
-    const validation = validateDocumentFile(file, MAX_DOCUMENT_UPLOAD_BYTES);
-    if (validation) {
-      toast.error(validation.message);
+    if (files.length === 0) return;
+    const invalidFile = files.find((file) =>
+      validateDocumentFile(file, MAX_DOCUMENT_UPLOAD_BYTES),
+    );
+    if (invalidFile) {
+      const validation = validateDocumentFile(
+        invalidFile,
+        MAX_DOCUMENT_UPLOAD_BYTES,
+      );
+      toast.error(validation?.message || "Invalid document.");
       return;
     }
 
     startUploadTransition(async () => {
       // Direct-to-SharePoint: file bytes never pass through Vercel Server Actions.
-      const result = await uploadTenderDocumentDirectToSharePoint({
-        tenderId: tender.id,
-        section,
-        file,
-        feeId,
-      });
-      if (!result.ok) {
-        toast.error(result.error);
-        return;
+      let uploaded = 0;
+      const failures: string[] = [];
+      for (const file of files) {
+        const result = await uploadTenderDocumentDirectToSharePoint({
+          tenderId: tender.id,
+          section,
+          file,
+          feeId,
+        });
+        if (result.ok) {
+          uploaded += 1;
+        } else {
+          failures.push(`${file.name}: ${result.error}`);
+        }
       }
-      toast.success(result.message || "Document uploaded.");
-      router.refresh();
+      if (uploaded > 0) {
+        toast.success(
+          uploaded === 1 ? "Document uploaded." : `${uploaded} documents uploaded.`,
+        );
+        router.refresh();
+      }
+      if (failures.length > 0) toast.error(failures.join("\n"));
     });
   };
+
+  const uploadSectionDoc = (
+    section: TenderDocumentSection,
+    file: File,
+    feeId?: string | null,
+  ) => uploadSectionDocs(section, [file], feeId);
 
   const handleFinancialUpload = (file: File) => {
     if (fees.length === 0) {
@@ -1939,7 +1968,8 @@ export function TenderDetailClient({
             canEdit={canManageDocuments && !documentsError}
             uploading={uploadPending}
             showDownloadAll
-            onUpload={(file) => uploadSectionDoc("tender", file)}
+            allowMultipleUploads
+            onUpload={(files) => uploadSectionDocs("tender", files)}
             onDelete={handleDeleteDoc}
           />
 
@@ -1951,7 +1981,8 @@ export function TenderDetailClient({
             items={sectionDocs("bidding")}
             canEdit={canManageDocuments}
             uploading={uploadPending}
-            onUpload={(file) => uploadSectionDoc("bidding", file)}
+            allowMultipleUploads
+            onUpload={(files) => uploadSectionDocs("bidding", files)}
             onDelete={handleDeleteDoc}
           />
 
@@ -1965,7 +1996,10 @@ export function TenderDetailClient({
             items={sectionDocs("financial")}
             canEdit={canManageDocuments}
             uploading={uploadPending}
-            onUpload={handleFinancialUpload}
+            onUpload={(files) => {
+              const file = files[0];
+              if (file) handleFinancialUpload(file);
+            }}
             onDelete={handleDeleteDoc}
             headerActions={
               canCreateFee && eligibleTender ? (
@@ -1991,7 +2025,10 @@ export function TenderDetailClient({
             items={sectionDocs("deliverable")}
             canEdit={canManageDocuments}
             uploading={uploadPending}
-            onUpload={(file) => uploadSectionDoc("deliverable", file)}
+            onUpload={(files) => {
+              const file = files[0];
+              if (file) uploadSectionDoc("deliverable", file);
+            }}
             onDelete={handleDeleteDoc}
           />
 
