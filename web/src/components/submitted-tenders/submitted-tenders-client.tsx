@@ -37,9 +37,11 @@ import {
 import type {
   L1QcbsMethod,
   SubmittedTenderListItem,
-  SubmittedTenderSummary,
 } from "@/lib/submitted-tenders";
-import { L1_QCBS_METHODS } from "@/lib/submitted-tenders";
+import {
+  L1_QCBS_METHODS,
+  summarizeSubmittedTenders,
+} from "@/lib/submitted-tenders";
 
 type TeamMemberOption = {
   id: string;
@@ -48,7 +50,6 @@ type TeamMemberOption = {
 
 type SubmittedTendersClientProps = {
   items: SubmittedTenderListItem[];
-  summary: SubmittedTenderSummary;
   teamMembers: TeamMemberOption[];
   canEdit: boolean;
 };
@@ -93,7 +94,6 @@ function evaluationMethodLabel(method: L1QcbsMethod | null): string {
 
 export function SubmittedTendersClient({
   items,
-  summary,
   teamMembers,
   canEdit,
 }: SubmittedTendersClientProps) {
@@ -123,21 +123,21 @@ export function SubmittedTendersClient({
     setOutcomeFilter((current) => (current === next ? ALL : next));
   }
 
-  const filtered = useMemo(() => {
+  /** Non-status filters — same scope pattern as main tenders status cards. */
+  const scopedItems = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter((item) => {
-      const status = String(item.qualificationStatus || "").toUpperCase();
-      if (outcomeFilter === "SUBMITTED") {
-        if (status === "WON" || status === "LOST" || status === "CANCELLED") {
-          return false;
-        }
-      } else if (outcomeFilter !== ALL && status !== outcomeFilter) {
-        return false;
-      }
       if (methodFilter !== ALL && item.evaluationMethod !== methodFilter) {
         return false;
       }
-      if (!matchesScrapedDate(item.scrapedDate, scrapedPreset, scrapedFrom, scrapedTo)) {
+      if (
+        !matchesScrapedDate(
+          item.scrapedDate,
+          scrapedPreset,
+          scrapedFrom,
+          scrapedTo,
+        )
+      ) {
         return false;
       }
       if (!q) return true;
@@ -156,15 +156,26 @@ export function SubmittedTendersClient({
         .toLowerCase();
       return haystack.includes(q);
     });
-  }, [
-    items,
-    search,
-    outcomeFilter,
-    methodFilter,
-    scrapedPreset,
-    scrapedFrom,
-    scrapedTo,
-  ]);
+  }, [items, search, methodFilter, scrapedPreset, scrapedFrom, scrapedTo]);
+
+  const scopedSummary = useMemo(
+    () => summarizeSubmittedTenders(scopedItems),
+    [scopedItems],
+  );
+
+  const filtered = useMemo(() => {
+    return scopedItems.filter((item) => {
+      const status = String(item.qualificationStatus || "").toUpperCase();
+      if (outcomeFilter === "SUBMITTED") {
+        if (status === "WON" || status === "LOST" || status === "CANCELLED") {
+          return false;
+        }
+        return true;
+      }
+      if (outcomeFilter !== ALL && status !== outcomeFilter) return false;
+      return true;
+    });
+  }, [scopedItems, outcomeFilter]);
 
   return (
     <div className="space-y-6">
@@ -176,7 +187,7 @@ export function SubmittedTendersClient({
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <CompactKpiCard
           label="Total"
-          value={String(summary.total)}
+          value={String(scopedSummary.total)}
           icon={FileCheck2}
           iconClassName="bg-sky-100 text-sky-700"
           active={outcomeFilter === ALL}
@@ -184,7 +195,7 @@ export function SubmittedTendersClient({
         />
         <CompactKpiCard
           label="Awaiting outcome"
-          value={String(summary.submitted)}
+          value={String(scopedSummary.submitted)}
           icon={FileCheck2}
           iconClassName="bg-blue-100 text-blue-700"
           active={outcomeFilter === "SUBMITTED"}
@@ -192,7 +203,7 @@ export function SubmittedTendersClient({
         />
         <CompactKpiCard
           label="Won"
-          value={String(summary.won)}
+          value={String(scopedSummary.won)}
           icon={Trophy}
           iconClassName="bg-amber-100 text-amber-700"
           active={outcomeFilter === "WON"}
@@ -200,7 +211,7 @@ export function SubmittedTendersClient({
         />
         <CompactKpiCard
           label="Lost"
-          value={String(summary.lost)}
+          value={String(scopedSummary.lost)}
           icon={XCircle}
           iconClassName="bg-rose-100 text-rose-700"
           active={outcomeFilter === "LOST"}

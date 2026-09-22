@@ -19,7 +19,7 @@ export default async function SubmittedTendersPage() {
   }
 
   try {
-    const [{ items, summary }, members] = await Promise.all([
+    const [{ items }, members] = await Promise.all([
       listSubmittedTenders(companyId),
       listUsers({ companyId }),
     ]);
@@ -34,7 +34,6 @@ export default async function SubmittedTendersPage() {
     return (
       <SubmittedTendersClient
         items={items}
-        summary={summary}
         teamMembers={teamMembers}
         canEdit={sessionHasPermission(session, "tenders.edit")}
       />
