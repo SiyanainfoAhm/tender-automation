@@ -237,6 +237,8 @@ export function isQualifiedStatus(
 /** Outcomes that replace the pre-submission pipeline after a bid is submitted. */
 export const POST_SUBMISSION_STATUSES = [
   "SUBMITTED",
+  "UNDER_EVALUATION",
+  "DUPLICATE",
   "WON",
   "LOST",
   "CANCELLED",
@@ -253,7 +255,8 @@ export function isPostSubmissionStatus(
 
 /**
  * Status choices on tender details. After submission, earlier stages
- * (Will Bid, Verify, and so on) are omitted. Won, Lost, and Cancelled stay put.
+ * (Will Bid, Verify, and so on) are omitted. Under Evaluation and Duplicate
+ * remain valid submitted-bid states before a final outcome is recorded.
  */
 export function tenderDetailStatusChoices(options: {
   currentStatus: string | null | undefined;
@@ -268,7 +271,14 @@ export function tenderDetailStatusChoices(options: {
   if (current === "WON" || current === "LOST" || current === "CANCELLED") {
     return [current as TenderStatus];
   }
-  return ["SUBMITTED", "WON", "LOST", "CANCELLED"];
+  return [
+    "SUBMITTED",
+    "UNDER_EVALUATION",
+    "DUPLICATE",
+    "WON",
+    "LOST",
+    "CANCELLED",
+  ];
 }
 
 /**
