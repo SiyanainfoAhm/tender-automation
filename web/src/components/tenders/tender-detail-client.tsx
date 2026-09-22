@@ -59,6 +59,7 @@ import { invalidateTenderListCaches } from "@/lib/tenders/list-cache";
 import type { QualificationStatus } from "@/components/status/qualification-badge";
 import { SourceBadge } from "@/components/status/source-badge";
 import { StatusBadge } from "@/components/status/qualification-badge";
+import { QualificationStatusSelect } from "@/components/status/qualification-status-select";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ErrorState } from "@/components/ui/error-state";
@@ -1154,7 +1155,7 @@ export function TenderDetailClient({
           <div className="flex w-full flex-col gap-2 lg:w-[208px] lg:shrink-0">
             <div>
               <Label className="sr-only">Status</Label>
-              <Select
+              <QualificationStatusSelect
                 value={statusSelectValue}
                 onValueChange={handleStatusChange}
                 disabled={
@@ -1163,25 +1164,9 @@ export function TenderDetailClient({
                   pending ||
                   (pastSubmission && statusChoices.length === 1)
                 }
-              >
-                <SelectTrigger
-                  className={cn(
-                    "h-8 w-full rounded-full border-0 px-4 text-xs font-medium shadow-none outline-none",
-                    statusStyle
-                      ? cn(statusStyle.bg, statusStyle.text)
-                      : "bg-slate-100 text-slate-700",
-                  )}
-                >
-                  <SelectValue placeholder="Set status" />
-                </SelectTrigger>
-                <SelectContent>
-                  {statusChoices.map((status) => (
-                    <SelectItem key={status} value={status}>
-                      {STATUS_DISPLAY_LABELS[status]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                statuses={statusChoices}
+                className="h-8 w-full rounded-full border-0 px-4 text-xs font-medium shadow-none outline-none"
+              />
             </div>
 
             {canEdit && tender.qualificationStatus !== "WON" ? (
