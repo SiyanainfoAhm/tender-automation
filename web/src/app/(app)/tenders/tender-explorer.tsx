@@ -26,6 +26,7 @@ import { TenderLoadingOverlay } from "@/components/tenders/tender-loading-overla
 import { TenderStatsCards } from "@/components/tenders/tender-stats-cards";
 import { TenderExportButtons } from "@/components/tenders/tender-export-buttons";
 import { TenderPageActions } from "@/components/tenders/tender-page-actions";
+import { TenderListStatusSelect } from "@/components/tenders/tender-list-status-select";
 import {
   buildTenderSelectedExportFilename,
   downloadTenderExportXlsx,
@@ -38,8 +39,6 @@ import {
   tenderListHasDocuments,
   tenderListPrescreenReason,
 } from "@/lib/tenders/list-row-meta";
-import type { QualificationStatus } from "@/components/status/qualification-badge";
-import { StatusBadge } from "@/components/status/qualification-badge";
 import { SourceBadge } from "@/components/status/source-badge";
 import type { TenderSource } from "@/components/tenders/tender-status-styles";
 import {
@@ -91,7 +90,6 @@ import {
 import {
   getTenderUiStatus,
   TENDER_LIST_STATUS_FILTERS,
-  TENDER_STATUSES,
 } from "@/lib/tender-status";
 import {
   filterKeyWithoutPage,
@@ -128,6 +126,8 @@ type TenderExplorerProps = {
   cities: TenderExplorerFacet[];
   canImport: boolean;
   canCreate: boolean;
+  canEdit: boolean;
+  teamMembers: Array<{ id: string; fullName: string }>;
   statusCounts: TenderListStatusCounts | null;
   /** Non-status filter key used when SSR loaded `statusCounts`. */
   statusCountsFilterKey?: string;
@@ -320,6 +320,8 @@ export function TenderExplorer({
   cities,
   canImport,
   canCreate,
+  canEdit,
+  teamMembers,
   statusCounts,
   statusCountsFilterKey = "",
   lockedRegion,
@@ -1720,15 +1722,15 @@ export function TenderExplorer({
                         className="flex w-[7.5rem] shrink-0 flex-col items-end gap-2 sm:w-32"
                         onClick={(event) => event.stopPropagation()}
                       >
-                        {status &&
-                        (TENDER_STATUSES as readonly string[]).includes(
-                          status,
-                        ) ? (
+                        {status ? (
                           <div className="flex w-full flex-col items-end gap-1">
-                            <StatusBadge
-                              status={status as QualificationStatus}
-                              size="sm"
-                              className="max-w-full truncate"
+                            <TenderListStatusSelect
+                              tenderId={row.id}
+                              tenderTitle={listTitle(row)}
+                              tenderValue={row.tender_value}
+                              currentStatus={status}
+                              canEdit={canEdit}
+                              teamMembers={teamMembers}
                             />
                             {status === "DUPLICATE"
                               ? (() => {
@@ -1771,10 +1773,14 @@ export function TenderExplorer({
                               : null}
                           </div>
                         ) : (
-                          <span className="inline-flex max-w-full items-center gap-1.5 truncate rounded-md bg-background-200 px-2 py-0.5 text-[11px] font-medium text-foreground-600">
-                            <span className="size-1.5 shrink-0 rounded-full bg-foreground-400" />
-                            <span className="truncate">Under Evaluation</span>
-                          </span>
+                          <TenderListStatusSelect
+                            tenderId={row.id}
+                            tenderTitle={listTitle(row)}
+                            tenderValue={row.tender_value}
+                            currentStatus={null}
+                            canEdit={canEdit}
+                            teamMembers={teamMembers}
+                          />
                         )}
                         <Button
                           type="button"

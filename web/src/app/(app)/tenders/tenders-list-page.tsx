@@ -2,6 +2,7 @@ import { sessionHasPermission } from "@/server/auth/permissions";
 import { requireSession } from "@/server/auth/session";
 import { getTenderListStatusCounts } from "@/server/repositories/analyticsRepository";
 import { getTenderExplorerFacets } from "@/server/repositories/tenderRepository";
+import { listUsers } from "@/server/repositories/userRepository";
 import { tenderFiltersSchema } from "@/lib/validations";
 import {
   searchParamsForStatusCounts,
@@ -36,7 +37,7 @@ export async function TendersListPage({
   );
   const statusCountsFilterKey = tenderStatusCountQueryKey(scopedRaw);
 
-  const [facets, counts] = await Promise.all([
+  const [facets, counts, members] = await Promise.all([
     getTenderExplorerFacets().catch(() => ({
       categories: [],
       portals: ["TENDER247", "BIDASSIST"] as Array<
@@ -48,7 +49,13 @@ export async function TendersListPage({
       console.error("[tenders] failed to load status card counts", error);
       return null;
     }),
+    session.user.companyId
+      ? listUsers({ companyId: session.user.companyId }).catch(() => [])
+      : Promise.resolve([]),
   ]);
+  const teamMembers = members
+    .filter((member) => member.isActive)
+    .map((member) => ({ id: member.id, fullName: member.fullName || member.email }));
 
   return (
     <TenderExplorer
@@ -57,6 +64,8 @@ export async function TendersListPage({
       cities={facets.cities}
       canImport={sessionHasPermission(session, "tenders.import")}
       canCreate={sessionHasPermission(session, "tenders.edit")}
+      canEdit={sessionHasPermission(session, "tenders.edit")}
+      teamMembers={teamMembers}
       statusCounts={counts}
       statusCountsFilterKey={statusCountsFilterKey}
       lockedRegion={region}
