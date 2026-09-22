@@ -59,8 +59,6 @@ export async function TendersListPage({
 
   return (
     <TenderExplorer
-      categories={facets.categories}
-      portals={facets.portals}
       cities={facets.cities}
       canImport={sessionHasPermission(session, "tenders.import")}
       canCreate={sessionHasPermission(session, "tenders.edit")}

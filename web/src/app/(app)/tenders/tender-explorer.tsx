@@ -121,8 +121,6 @@ import type {
 type TenderListRegion = "INDIAN" | "GLOBAL";
 
 type TenderExplorerProps = {
-  categories: TenderExplorerFacet[];
-  portals: Array<"TENDER247" | "BIDASSIST" | "MANUAL">;
   cities: TenderExplorerFacet[];
   canImport: boolean;
   canCreate: boolean;
@@ -267,35 +265,6 @@ function normalizeStatusChip(value: string | undefined): string {
   return getTenderUiStatus(value);
 }
 
-function FilterCapsule({
-  active,
-  onClick,
-  disabled,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  disabled?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-        active
-          ? "bg-primary-500 text-white"
-          : "bg-background-100 text-foreground-600 hover:bg-background-200",
-        disabled && "cursor-wait opacity-60",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
 function ListRowSkeleton() {
   return (
     <div className="flex gap-3 border-b border-background-200/70 px-5 py-4">
@@ -315,8 +284,6 @@ function ListRowSkeleton() {
 }
 
 export function TenderExplorer({
-  categories,
-  portals,
   cities,
   canImport,
   canCreate,
@@ -1259,78 +1226,6 @@ export function TenderExplorer({
             </div>
           </div>
 
-          {(categories.length > 0 || portals.length > 0) ? (
-            <div className="grid grid-cols-1 gap-5 border-t border-border pt-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
-                  Category
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  <FilterCapsule
-                    active={!filters.category}
-                    onClick={() =>
-                      navigate({ category: undefined, page: "1" })
-                    }
-                  >
-                    All
-                  </FilterCapsule>
-                  {categories.map((option) => (
-                    <FilterCapsule
-                      key={option.value}
-                      active={filters.category === option.value}
-                      onClick={() =>
-                        navigate({
-                          category:
-                            filters.category === option.value
-                              ? undefined
-                              : option.value,
-                          page: "1",
-                        })
-                      }
-                    >
-                      {option.label}
-                    </FilterCapsule>
-                  ))}
-                </div>
-              </div>
-              <div className="space-y-2">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
-                  Portal
-                </p>
-                <div className="flex flex-wrap gap-1.5">
-                  <FilterCapsule
-                    active={!filters.source || filters.source === "ALL"}
-                    onClick={() => navigate({ source: undefined, page: "1" })}
-                  >
-                    All
-                  </FilterCapsule>
-                  {portals.map((portal) => (
-                    <FilterCapsule
-                      key={portal}
-                      active={filters.source === portal}
-                      onClick={() =>
-                        navigate({
-                          source:
-                            portal === "TENDER247"
-                              ? "tender247"
-                              : portal === "BIDASSIST"
-                                ? "bidassist"
-                                : "manual",
-                          page: "1",
-                        })
-                      }
-                    >
-                      {portal === "TENDER247"
-                        ? "Tender247"
-                        : portal === "BIDASSIST"
-                          ? "BidAssist"
-                          : "Manual"}
-                    </FilterCapsule>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : null}
         </div>
       ) : null}
 
