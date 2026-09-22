@@ -49,6 +49,7 @@ import {
   type FeeEligibleTender,
 } from "@/components/bid-fees/add-fee-wizard";
 import { StatusChangeCommentDialog } from "@/components/tenders/status-change-comment-dialog";
+import { TenderAskAiDrawer } from "@/components/tenders/tender-ask-ai-drawer";
 import { MarkAsWonDialog } from "@/components/won-tenders/mark-as-won-dialog";
 import { CategoryCapsule } from "@/components/tenders/category-capsule";
 import { TendersBackLink } from "@/components/tenders/tenders-back-link";
@@ -1070,9 +1071,10 @@ export function TenderDetailClient({
           </span>
         </div>
 
-        {canEdit ? (
-          <div className="flex shrink-0 items-center gap-1.5">
-            {editing ? (
+        <div className="flex shrink-0 items-center gap-1.5">
+          <TenderAskAiDrawer tenderId={tender.id} tenderTitle={tender.title} />
+          {canEdit ? (
+            editing ? (
               <>
                 <Button
                   type="button"
@@ -1111,9 +1113,9 @@ export function TenderDetailClient({
               >
                 <Pencil className="size-4" />
               </Button>
-            )}
-          </div>
-        ) : null}
+            )
+          ) : null}
+        </div>
       </div>
 
       <div className="rounded-lg border border-border bg-card p-5 shadow-sm md:p-6">

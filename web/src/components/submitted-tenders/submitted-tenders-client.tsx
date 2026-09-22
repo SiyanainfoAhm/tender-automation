@@ -18,6 +18,7 @@ import { CompactKpiCard } from "@/components/tenders/compact-kpi-card";
 import type { TenderSource } from "@/components/tenders/tender-status-styles";
 import { MarkAsLostDialog } from "@/components/submitted-tenders/mark-as-lost-dialog";
 import { SubmittedOutcomeSelect } from "@/components/submitted-tenders/submitted-outcome-select";
+import { TenderAskAiDrawer } from "@/components/tenders/tender-ask-ai-drawer";
 import { MarkAsWonDialog } from "@/components/won-tenders/mark-as-won-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -445,6 +446,10 @@ export function SubmittedTendersClient({
                           >
                             View
                           </Button>
+                          <TenderAskAiDrawer
+                            tenderId={item.id}
+                            tenderTitle={item.title}
+                          />
                           {canEdit && awaiting ? (
                             <>
                               <Button

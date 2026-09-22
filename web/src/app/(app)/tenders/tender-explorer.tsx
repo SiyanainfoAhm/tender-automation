@@ -27,6 +27,7 @@ import { TenderStatsCards } from "@/components/tenders/tender-stats-cards";
 import { TenderExportButtons } from "@/components/tenders/tender-export-buttons";
 import { TenderPageActions } from "@/components/tenders/tender-page-actions";
 import { TenderListStatusSelect } from "@/components/tenders/tender-list-status-select";
+import { TenderAskAiDrawer } from "@/components/tenders/tender-ask-ai-drawer";
 import {
   buildTenderSelectedExportFilename,
   downloadTenderExportXlsx,
@@ -1677,6 +1678,11 @@ export function TenderExplorer({
                             teamMembers={teamMembers}
                           />
                         )}
+                        <TenderAskAiDrawer
+                          tenderId={row.id}
+                          tenderTitle={listTitle(row)}
+                          compact
+                        />
                         <Button
                           type="button"
                           variant="ghost"

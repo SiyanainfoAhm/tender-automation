@@ -24,7 +24,8 @@ function getOpenAiApiKey(): string | null {
   return key || null;
 }
 
-function getOpenAiClient(): OpenAI | null {
+/** Reused by server-side tender assessment; never import from browser code. */
+export function getOpenAiClient(): OpenAI | null {
   const key = getOpenAiApiKey();
   if (!key) return null;
   return new OpenAI({ apiKey: key });
