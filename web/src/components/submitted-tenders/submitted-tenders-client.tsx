@@ -17,6 +17,7 @@ import { SourceBadge } from "@/components/status/source-badge";
 import { CompactKpiCard } from "@/components/tenders/compact-kpi-card";
 import type { TenderSource } from "@/components/tenders/tender-status-styles";
 import { MarkAsLostDialog } from "@/components/submitted-tenders/mark-as-lost-dialog";
+import { SubmittedOutcomeSelect } from "@/components/submitted-tenders/submitted-outcome-select";
 import { MarkAsWonDialog } from "@/components/won-tenders/mark-as-won-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,7 +44,6 @@ import {
   L1_QCBS_METHODS,
   summarizeSubmittedTenders,
 } from "@/lib/submitted-tenders";
-import { tenderUiStatusLabel } from "@/lib/tender-status";
 
 type TeamMemberOption = {
   id: string;
@@ -387,9 +387,14 @@ export function SubmittedTendersClient({
                         </p>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <span className="inline-flex items-center rounded-md bg-background-200 px-2 py-0.5 text-[11px] font-semibold text-foreground-800">
-                          {tenderUiStatusLabel(status)}
-                        </span>
+                        <SubmittedOutcomeSelect
+                          tenderId={item.id}
+                          tenderTitle={item.title}
+                          currentStatus={status}
+                          tenderValue={item.tenderValue}
+                          teamMembers={teamMembers}
+                          canEdit={canEdit}
+                        />
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-foreground-700">
                         {item.tenderValue != null

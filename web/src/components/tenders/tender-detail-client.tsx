@@ -50,9 +50,6 @@ import {
 } from "@/components/bid-fees/add-fee-wizard";
 import { StatusChangeCommentDialog } from "@/components/tenders/status-change-comment-dialog";
 import { MarkAsWonDialog } from "@/components/won-tenders/mark-as-won-dialog";
-import {
-  qualificationStatusStyles,
-} from "@/components/tenders/tender-status-styles";
 import { CategoryCapsule } from "@/components/tenders/category-capsule";
 import { TendersBackLink } from "@/components/tenders/tenders-back-link";
 import { invalidateTenderListCaches } from "@/lib/tenders/list-cache";
@@ -1024,13 +1021,8 @@ export function TenderDetailClient({
 
   const currentQualificationStatus = displayStatus || "";
 
-  const statusSelectValue = currentQualificationStatus || "UNDER_EVALUATION";
-
-  const statusStyle = (TENDER_STATUSES as readonly string[]).includes(
-    statusSelectValue,
-  )
-    ? qualificationStatusStyles[statusSelectValue as TenderStatus]
-    : null;
+  const statusSelectValue = (currentQualificationStatus ||
+    "UNDER_EVALUATION") as TenderStatus;
 
   const showLost = displayStatus === "LOST";
   const showDisqualified = displayStatus === "DISQUALIFIED";

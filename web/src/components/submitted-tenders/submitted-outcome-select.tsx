@@ -7,28 +7,18 @@ import { toast } from "sonner";
 import { StatusChangeCommentDialog } from "@/components/tenders/status-change-comment-dialog";
 import { MarkAsLostDialog } from "@/components/submitted-tenders/mark-as-lost-dialog";
 import { MarkAsWonDialog } from "@/components/won-tenders/mark-as-won-dialog";
+import { QualificationStatusSelect } from "@/components/status/qualification-status-select";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { STATUS_DISPLAY_LABELS, type TenderStatus } from "@/lib/tender-status";
+  STATUS_DISPLAY_LABELS,
+  tenderDetailStatusChoices,
+  type TenderStatus,
+} from "@/lib/tender-status";
 import { updateTenderDetailsAction } from "@/server/actions/tender-update";
 
 type TeamMemberOption = {
   id: string;
   fullName: string;
 };
-
-/**
- * After a bid is submitted, status can only move forward to Won, Lost, or
- * Cancelled. Earlier stages (Will Bid, Verify, and so on) are not offered.
- */
-const FORWARD_STATUSES = ["WON", "LOST", "CANCELLED"] as const;
-
-type ForwardStatus = (typeof FORWARD_STATUSES)[number];
 
 type SubmittedOutcomeSelectProps = {
   tenderId: string;
@@ -55,15 +45,19 @@ export function SubmittedOutcomeSelect({
   const [pending, startTransition] = useTransition();
   const [wonOpen, setWonOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
-  const [cancelOpen, setCancelOpen] = useState(false);
-  const status = normalizeStatus(currentStatus);
-  const locked = status === "WON" || status === "LOST" || status === "CANCELLED";
-  const selectValue =
-    status === "WON" || status === "LOST" || status === "CANCELLED"
-      ? status
-      : "SUBMITTED";
+  const [statusChangeOpen, setStatusChangeOpen] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<TenderStatus | null>(null);
+  const status = normalizeStatus(currentStatus) as TenderStatus;
+  const statusChoices = tenderDetailStatusChoices({
+    currentStatus: status,
+    submitted: true,
+  });
+  const selectValue = (statusChoices as readonly string[]).includes(status)
+    ? status
+    : "SUBMITTED";
+  const locked = statusChoices.length === 1;
 
-  function onChange(next: string) {
+  function onChange(next: TenderStatus) {
     if (!canEdit || locked || pending) return;
     if (next === selectValue) return;
     if (next === "WON") {
@@ -74,47 +68,20 @@ export function SubmittedOutcomeSelect({
       setLostOpen(true);
       return;
     }
-    if (next === "CANCELLED") {
-      setCancelOpen(true);
-    }
+    setPendingStatus(next);
+    setStatusChangeOpen(true);
   }
-
-  const options: Array<{ value: string; label: string }> = locked
-    ? [
-        {
-          value: selectValue,
-          label: STATUS_DISPLAY_LABELS[selectValue as TenderStatus] || selectValue,
-        },
-      ]
-    : [
-        { value: "SUBMITTED", label: STATUS_DISPLAY_LABELS.SUBMITTED },
-        ...FORWARD_STATUSES.map((value) => ({
-          value,
-          label: STATUS_DISPLAY_LABELS[value],
-        })),
-      ];
 
   return (
     <>
-      <Select
+      <QualificationStatusSelect
         value={selectValue}
         onValueChange={onChange}
+        statuses={statusChoices}
         disabled={!canEdit || locked || pending}
-      >
-        <SelectTrigger
-          className="h-8 w-[9.5rem] text-xs"
-          aria-label="Update submitted tender status"
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((option) => (
-            <SelectItem key={option.value} value={option.value}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+        className="h-8 w-[9.5rem] text-xs"
+        ariaLabel="Update submitted tender status"
+      />
 
       <MarkAsWonDialog
         open={wonOpen}
@@ -132,35 +99,33 @@ export function SubmittedOutcomeSelect({
         mode="mark-lost"
       />
       <StatusChangeCommentDialog
-        open={cancelOpen}
-        onOpenChange={setCancelOpen}
-        statusLabel={STATUS_DISPLAY_LABELS.CANCELLED}
+        open={statusChangeOpen}
+        onOpenChange={setStatusChangeOpen}
+        statusLabel={
+          pendingStatus ? STATUS_DISPLAY_LABELS[pendingStatus] : "status"
+        }
         pending={pending}
         onConfirm={(comment) => {
+          if (!pendingStatus) return;
           startTransition(async () => {
             const result = await updateTenderDetailsAction({
               tenderId,
-              qualificationStatus: "CANCELLED",
+              qualificationStatus: pendingStatus,
               decisionReason: comment,
             });
             if (!result.ok) {
               toast.error(result.error);
               return;
             }
-            toast.success("Tender marked as cancelled.");
-            setCancelOpen(false);
+            toast.success(
+              `Tender status updated to ${STATUS_DISPLAY_LABELS[pendingStatus]}.`,
+            );
+            setStatusChangeOpen(false);
+            setPendingStatus(null);
             router.refresh();
           });
         }}
       />
     </>
-  );
-}
-
-export function isForwardSubmittedStatus(
-  status: string | null | undefined,
-): status is ForwardStatus {
-  return (FORWARD_STATUSES as readonly string[]).includes(
-    normalizeStatus(status),
   );
 }
