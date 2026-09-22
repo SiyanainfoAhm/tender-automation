@@ -22,10 +22,22 @@ function asNumber(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+const SUPABASE_IN_BATCH_SIZE = 200;
+
+function batches<T>(values: T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    result.push(values.slice(index, index + size));
+  }
+  return result;
+}
+
 /**
- * Tender ids that belong on Submitted Tenders:
- * - qualification_status in SUBMITTED / WON / LOST / CANCELLED / DUPLICATE, or
- * - bid workspace marked submitted for this company.
+ * Tender ids that belong on Submitted Tenders include every tender in a
+ * submission outcome, plus company workspaces explicitly marked submitted.
+ *
+ * The status branch preserves manual and legacy submissions and keeps the
+ * three post-submission qualification statuses visible after they change.
  */
 async function resolveSubmittedTenderIds(
   companyId: string,
@@ -41,8 +53,6 @@ async function resolveSubmittedTenderIds(
         "SUBMITTED",
         "WON",
         "LOST",
-        "CANCELLED",
-        "DUPLICATE",
       ]),
     supabase
       .from("agenttender_bid_workspaces")
@@ -81,8 +91,18 @@ async function resolveSubmittedTenderIds(
 export async function countSubmittedTenders(
   companyId: string,
 ): Promise<number> {
+  const supabase = getServerSupabase();
   const ids = await resolveSubmittedTenderIds(companyId);
-  return ids.length;
+  if (ids.length === 0) return 0;
+
+  const results = await Promise.all(
+    batches(ids, SUPABASE_IN_BATCH_SIZE).map((idBatch) =>
+      supabase.from("agenttender_tenders").select("id").in("id", idBatch),
+    ),
+  );
+  const error = results.find((result) => result.error)?.error;
+  if (error) throw new Error(error.message);
+  return results.reduce((total, result) => total + (result.data?.length || 0), 0);
 }
 
 export async function listSubmittedTenders(
@@ -97,28 +117,46 @@ export async function listSubmittedTenders(
     return { items: [], summary: summarizeSubmittedTenders([]) };
   }
 
-  const [tendersResult, workspacesResult, wonResult] = await Promise.all([
-    supabase
-      .from("agenttender_tenders")
-      .select(
-        "id, title, reference_no, organization, source_portal, source_region, city, location_text, closing_date, tender_value, tender_type, category, project_category, scraped_date, qualification_status, raw_metadata, updated_at",
-      )
-      .in("id", ids),
-    supabase
-      .from("agenttender_bid_workspaces")
-      .select("tender_id, submitted_at, submission_reference")
-      .eq("company_id", companyId)
-      .in("tender_id", ids),
-    supabase
-      .from("agenttender_won_projects")
-      .select("id, tender_id")
-      .eq("company_id", companyId)
-      .in("tender_id", ids),
+  const idBatches = batches(ids, SUPABASE_IN_BATCH_SIZE);
+  const [tenderResults, workspaceResults, wonResults] = await Promise.all([
+    Promise.all(
+      idBatches.map((idBatch) =>
+        supabase
+          .from("agenttender_tenders")
+          .select(
+            "id, title, reference_no, organization, source_portal, source_region, city, location_text, closing_date, tender_value, tender_type, category, project_category, scraped_date, qualification_status, raw_metadata, updated_at",
+          )
+          .in("id", idBatch),
+      ),
+    ),
+    Promise.all(
+      idBatches.map((idBatch) =>
+        supabase
+          .from("agenttender_bid_workspaces")
+          .select("tender_id, submitted_at, submission_reference")
+          .eq("company_id", companyId)
+          .in("tender_id", idBatch),
+      ),
+    ),
+    Promise.all(
+      idBatches.map((idBatch) =>
+        supabase
+          .from("agenttender_won_projects")
+          .select("id, tender_id")
+          .eq("company_id", companyId)
+          .in("tender_id", idBatch),
+      ),
+    ),
   ]);
 
-  if (tendersResult.error) {
-    throw new Error(tendersResult.error.message);
-  }
+  const tenderError = tenderResults.find((result) => result.error)?.error;
+  if (tenderError) throw new Error(tenderError.message);
+
+  const workspaceError = workspaceResults.find((result) => result.error)?.error;
+  if (workspaceError) throw new Error(workspaceError.message);
+
+  const wonError = wonResults.find((result) => result.error)?.error;
+  if (wonError) throw new Error(wonError.message);
 
   type TenderRow = {
     id: string;
@@ -140,26 +178,30 @@ export async function listSubmittedTenders(
     updated_at: string | null;
   };
 
-  const tenderRows = (tendersResult.data || []) as TenderRow[];
+  const tenderRows = tenderResults.flatMap((result) => result.data || []) as TenderRow[];
 
   const workspaceByTender = new Map<
     string,
     { submittedAt: string | null; submissionReference: string | null }
   >();
-  for (const row of workspacesResult.data || []) {
-    const tenderId = asString(row.tender_id);
-    if (!tenderId) continue;
-    workspaceByTender.set(tenderId, {
-      submittedAt: asString(row.submitted_at),
-      submissionReference: asString(row.submission_reference),
-    });
+  for (const result of workspaceResults) {
+    for (const row of result.data || []) {
+      const tenderId = asString(row.tender_id);
+      if (!tenderId) continue;
+      workspaceByTender.set(tenderId, {
+        submittedAt: asString(row.submitted_at),
+        submissionReference: asString(row.submission_reference),
+      });
+    }
   }
 
   const wonByTender = new Map<string, string>();
-  for (const row of wonResult.data || []) {
-    const tenderId = asString(row.tender_id);
-    const wonId = asString(row.id);
-    if (tenderId && wonId) wonByTender.set(tenderId, wonId);
+  for (const result of wonResults) {
+    for (const row of result.data || []) {
+      const tenderId = asString(row.tender_id);
+      const wonId = asString(row.id);
+      if (tenderId && wonId) wonByTender.set(tenderId, wonId);
+    }
   }
 
   const items: SubmittedTenderListItem[] = tenderRows.map((row) => {

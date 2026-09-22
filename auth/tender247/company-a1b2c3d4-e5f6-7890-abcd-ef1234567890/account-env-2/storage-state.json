@@ -65,7 +65,7 @@
       "value": "1YmohJhudxTDR6Y",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1821585417,
+      "expires": 1821594702,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -155,7 +155,7 @@
       "value": "GA1.2.853973512.1789917604",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1790123668,
+      "expires": 1790145047,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -169,16 +169,6 @@
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
-    },
-    {
-      "name": "_ga",
-      "value": "GA1.2.1744748255.1785411924",
-      "domain": ".tender247.com",
-      "path": "/",
-      "expires": 1824597268.680819,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
     },
     {
       "name": "CLID",
@@ -201,31 +191,51 @@
       "sameSite": "Lax"
     },
     {
-      "name": "_clsk",
-      "value": "1xqb0x1%5E1790037270563%5E1%5E1%5Eg.clarity.ms%2Fcollect",
+      "name": "_ga",
+      "value": "GA1.2.1744748255.1785411924",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1790123670,
+      "expires": 1824618647.873248,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_gat",
+      "value": "1",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1790058707,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_clsk",
+      "value": "xyv722%5E1790058649610%5E1%5E1%5Et.clarity.ms%2Fcollect",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1790145049,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
     },
     {
       "name": "_ga_3FYV8W34LF",
-      "value": "GS2.1.s1790037268$o68$g0$t1790037272$j56$l0$h2008744951",
+      "value": "GS2.1.s1790058647$o69$g0$t1790058650$j57$l0$h884642773",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1824597272.363448,
+      "expires": 1824618650.151603,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
     },
     {
       "name": "AWSALBCORS",
-      "value": "c6DQw9w9SFsxSLgqxnFpXRttpWSXGDRmT5s8dGthzK7BJwbaj1694aBtkNPcnQRgKnzHh9mnh9b1b1dqfjCzNAEGHZL/qpt5u90jR7AVEIVIqbgeFewOVz2P8qcOUPAc+fCP1531YWTT8Ytj5h2yNGyOf6z6L1lNKaMLZahcvEIiBaoBxshaBt7ukWQQlQ==",
+      "value": "12e92zBh2r90MXArQexlpwSh7YzwiDgkpHTKA6l/w97qs4BbRkp7xM3cQ7KcfEwXuwBVhB+gQl6vDIezFgc6XpiAQ72NAMCiEl9e8laXihXZ6ZNKRWB24AnpVXZJ8AzW/Kt+GkOeUhfIldNJu7GSqroouUwX0nVCRQYgcsQWahnnn2XpOlbYNgzK1rbBZQ==",
       "domain": "widget-mediator.zopim.com",
       "path": "/",
-      "expires": 1790654217.772505,
+      "expires": 1790663501.883545,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
@@ -241,11 +251,11 @@
         },
         {
           "name": "ZD-suid",
-          "value": "{\"id\":\"961b42ef059f4c34843efc6d162bb689\",\"expiry\":1790050317401,\"tabs\":{\"count\":2,\"expiry\":0}}"
+          "value": "{\"id\":\"24b77c90580b4b98b5456833dc9eeebb\",\"expiry\":1790059601492,\"tabs\":{\"count\":1,\"expiry\":0}}"
         },
         {
           "name": "userData",
-          "value": "{\"person_name\":\"Jaimin Shah\",\"user_id\":1582623,\"company_service_id\":\"1,2\",\"email_id\":\"Jaimin.Shah@thinfo.in\",\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJVc2VyU3RhdXMiOjEsIlBlcnNvbk5hbWUiOiJKYWltaW4gU2hhaCIsIlVzZXJJZCI6MTU4MjYyMywiQ29tcGFueVNlcnZpY2VpZHMiOiIxLDIiLCJXb3JkSGlnaGxpZ2h0IjoiQ29tcHV0ZXIgSGFyZHdhcmUiLCJiaWRkZXJfbmFtZSI6IlNpeWFuYSBJbmZvIFNvbHV0aW9ucyIsImlzX2JpZGRlcl9leGlzdHMiOnRydWUsImlhdCI6MTc5MDAzNzI3MCwiZXhwIjoxNzkwMTAxNzk5fQ.tf4nbYEdR0_4mgaGAL0gojq3OAp2Wd7xaOa5r7DqOC0\",\"encryptKey\":\"\",\"mail_date\":\"2026-09-22\",\"user_query_id\":0,\"tab\":0,\"isChange\":0,\"grace_period_status\":false,\"bidder_name\":\"Siyana Info Solutions\",\"is_bidder_exists\":true}"
+          "value": "{\"person_name\":\"Jaimin Shah\",\"user_id\":1582623,\"company_service_id\":\"1,2\",\"email_id\":\"Jaimin.Shah@thinfo.in\",\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJVc2VyU3RhdXMiOjEsIlBlcnNvbk5hbWUiOiJKYWltaW4gU2hhaCIsIlVzZXJJZCI6MTU4MjYyMywiQ29tcGFueVNlcnZpY2VpZHMiOiIxLDIiLCJXb3JkSGlnaGxpZ2h0IjoiQ29tcHV0ZXIgSGFyZHdhcmUiLCJiaWRkZXJfbmFtZSI6IlNpeWFuYSBJbmZvIFNvbHV0aW9ucyIsImlzX2JpZGRlcl9leGlzdHMiOnRydWUsImlhdCI6MTc5MDA1ODY0OSwiZXhwIjoxNzkwMTAxNzk5fQ.YEUImgh1JWpyYMXImoFHyJY7UM_8B7XiMi92pQUVaEY\",\"encryptKey\":\"\",\"mail_date\":\"2026-09-22\",\"user_query_id\":0,\"tab\":0,\"isChange\":0,\"grace_period_status\":false,\"bidder_name\":\"Siyana Info Solutions\",\"is_bidder_exists\":true}"
         },
         {
           "name": "ZD-buid",
@@ -253,7 +263,7 @@
         },
         {
           "name": "_gcl_ls",
-          "value": "{\"schema\":\"gcl\",\"version\":1,\"gsid_dc\":{\"value\":{\"joinId\":\"fRDRKqMJDo4tCqkGn-5t91YSchvGhCpxpA\",\"lastJoinedTimeMs\":1790037268405},\"expires\":1790037568405},\"gcl_ctr\":{\"value\":{\"value\":0,\"timeouts\":0,\"errors\":0,\"eopCount\":0,\"creationTimeMs\":1785411924387},\"expires\":1793187924387},\"last_convs\":{\"value\":[],\"expires\":1796007710160}}"
+          "value": "{\"schema\":\"gcl\",\"version\":1,\"gsid_dc\":{\"value\":{\"joinId\":\"mfdCOXnY9rXENvnN0WNBU8OaCfR2xWwaFA\",\"lastJoinedTimeMs\":1790058647208},\"expires\":1790058947208},\"gcl_ctr\":{\"value\":{\"value\":0,\"timeouts\":0,\"errors\":0,\"eopCount\":0,\"creationTimeMs\":1785411924387},\"expires\":1793187924387},\"last_convs\":{\"value\":[],\"expires\":1796007710160}}"
         },
         {
           "name": "popup_settings",
@@ -265,7 +275,7 @@
         },
         {
           "name": "__zlcstore",
-          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1790049417988,\"account_status\":\"offline\"}}"
+          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1790058702079,\"account_status\":\"online\"}}"
         }
       ],
       "indexedDB": []

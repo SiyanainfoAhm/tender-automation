@@ -43,6 +43,7 @@ import {
   L1_QCBS_METHODS,
   summarizeSubmittedTenders,
 } from "@/lib/submitted-tenders";
+import { tenderUiStatusLabel } from "@/lib/tender-status";
 
 type TeamMemberOption = {
   id: string;
@@ -323,10 +324,13 @@ export function SubmittedTendersClient({
       ) : (
         <div className="overflow-hidden rounded-lg border border-border bg-card">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[920px] text-left text-sm">
+            <table className="w-full min-w-[1040px] text-left text-sm">
               <thead className="border-b border-border bg-background-50 text-xs uppercase tracking-wide text-foreground-500">
                 <tr>
                   <th className="px-4 py-3 font-medium">Tender</th>
+                  <th className="px-4 py-3 font-medium">
+                    Qualification Status
+                  </th>
                   <th className="px-4 py-3 font-medium">Value</th>
                   <th className="px-4 py-3 font-medium">Type</th>
                   <th className="px-4 py-3 font-medium">Lost reason</th>
@@ -381,6 +385,11 @@ export function SubmittedTendersClient({
                             .filter(Boolean)
                             .join(" · ") || "—"}
                         </p>
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <span className="inline-flex items-center rounded-md bg-background-200 px-2 py-0.5 text-[11px] font-semibold text-foreground-800">
+                          {tenderUiStatusLabel(status)}
+                        </span>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-foreground-700">
                         {item.tenderValue != null
