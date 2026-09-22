@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   isSubmittedOutcomeStatus,
+  normalizeL1QcbsMethod,
   summarizeSubmittedTenders,
   type SubmittedTenderListItem,
 } from "@/lib/submitted-tenders";
@@ -21,6 +22,7 @@ function item(
     location: null,
     closingDate: null,
     tenderType: null,
+    evaluationMethod: null,
     scrapedDate: null,
     tenderValue: null,
     submittedAt: null,
@@ -52,5 +54,14 @@ describe("submitted tenders helpers", () => {
     expect(isSubmittedOutcomeStatus("SUBMITTED")).toBe(true);
     expect(isSubmittedOutcomeStatus("won")).toBe(true);
     expect(isSubmittedOutcomeStatus("GO")).toBe(false);
+  });
+
+  it("normalizes L1 / QCBS tender types", () => {
+    expect(normalizeL1QcbsMethod("L1")).toBe("L1");
+    expect(normalizeL1QcbsMethod("l1-lowest-bidder")).toBe("L1");
+    expect(normalizeL1QcbsMethod("QCBS")).toBe("QCBS");
+    expect(normalizeL1QcbsMethod("qcbs-qcbc")).toBe("QCBS");
+    expect(normalizeL1QcbsMethod("not-disclosed")).toBeNull();
+    expect(normalizeL1QcbsMethod(null)).toBeNull();
   });
 });

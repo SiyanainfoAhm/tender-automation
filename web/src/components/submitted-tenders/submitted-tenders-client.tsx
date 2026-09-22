@@ -13,10 +13,8 @@ import {
 
 import { PageHeader } from "@/components/layout/page-header";
 import { SourceBadge } from "@/components/status/source-badge";
-import { StatusBadge } from "@/components/status/qualification-badge";
 import { CompactKpiCard } from "@/components/tenders/compact-kpi-card";
 import type { TenderSource } from "@/components/tenders/tender-status-styles";
-import type { QualificationStatus } from "@/components/tenders/tender-status-styles";
 import { MarkAsLostDialog } from "@/components/submitted-tenders/mark-as-lost-dialog";
 import { MarkAsWonDialog } from "@/components/won-tenders/mark-as-won-dialog";
 import { Button } from "@/components/ui/button";
@@ -37,9 +35,11 @@ import {
   type CreatedDatePreset,
 } from "@/lib/tender-date-filter";
 import type {
+  L1QcbsMethod,
   SubmittedTenderListItem,
   SubmittedTenderSummary,
 } from "@/lib/submitted-tenders";
+import { L1_QCBS_METHODS } from "@/lib/submitted-tenders";
 
 type TeamMemberOption = {
   id: string;
@@ -55,12 +55,9 @@ type SubmittedTendersClientProps = {
 
 const ALL = "__all__";
 
-const STATUS_OPTIONS = [
+const L1_QCBS_OPTIONS = [
   { value: ALL, label: "All" },
-  { value: "SUBMITTED", label: "Submitted" },
-  { value: "WON", label: "Won" },
-  { value: "LOST", label: "Lost" },
-  { value: "CANCELLED", label: "Tender cancelled" },
+  ...L1_QCBS_METHODS.map((method) => ({ value: method, label: method })),
 ] as const;
 
 function matchesScrapedDate(
@@ -81,32 +78,17 @@ function matchesScrapedDate(
   return scrapedDate >= filter.gte && scrapedDate <= filter.lte;
 }
 
-function asBadgeStatus(status: string): QualificationStatus {
-  const upper = status.toUpperCase();
-  if (
-    upper === "WON" ||
-    upper === "LOST" ||
-    upper === "SUBMITTED" ||
-    upper === "GO" ||
-    upper === "NO_GO" ||
-    upper === "DISQUALIFIED" ||
-    upper === "CANCELLED" ||
-    upper === "DUPLICATE" ||
-    upper === "VERIFY" ||
-    upper === "PARTNER_BID" ||
-    upper === "CONDITIONAL_GO" ||
-    upper === "UNDER_EVALUATION"
-  ) {
-    return upper as QualificationStatus;
-  }
-  return "SUBMITTED";
-}
-
 function portalSource(portal: string | null): TenderSource {
   const upper = (portal || "").toUpperCase();
   if (upper === "BIDASSIST") return "BIDASSIST";
   if (upper === "MANUAL") return "MANUAL";
   return "TENDER247";
+}
+
+function evaluationMethodLabel(method: L1QcbsMethod | null): string {
+  if (method === "L1") return "L1";
+  if (method === "QCBS") return "QCBS";
+  return "—";
 }
 
 export function SubmittedTendersClient({
@@ -116,8 +98,8 @@ export function SubmittedTendersClient({
   canEdit,
 }: SubmittedTendersClientProps) {
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>(ALL);
-  const [typeFilter, setTypeFilter] = useState<string>(ALL);
+  const [outcomeFilter, setOutcomeFilter] = useState<string>(ALL);
+  const [methodFilter, setMethodFilter] = useState<string>(ALL);
   const [scrapedPreset, setScrapedPreset] = useState<string>("all");
   const [scrapedFrom, setScrapedFrom] = useState("");
   const [scrapedTo, setScrapedTo] = useState("");
@@ -137,30 +119,24 @@ export function SubmittedTendersClient({
     router.push(`/tenders/${tenderId}`);
   }
 
-  function selectStatus(next: string) {
-    setStatusFilter((current) => (current === next ? ALL : next));
+  function selectOutcome(next: string) {
+    setOutcomeFilter((current) => (current === next ? ALL : next));
   }
-
-  const tenderTypes = useMemo(() => {
-    const values = new Set<string>();
-    for (const item of items) {
-      if (item.tenderType) values.add(item.tenderType);
-    }
-    return [...values].sort((a, b) => a.localeCompare(b));
-  }, [items]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter((item) => {
       const status = String(item.qualificationStatus || "").toUpperCase();
-      if (statusFilter === "SUBMITTED") {
+      if (outcomeFilter === "SUBMITTED") {
         if (status === "WON" || status === "LOST" || status === "CANCELLED") {
           return false;
         }
-      } else if (statusFilter !== ALL && status !== statusFilter) {
+      } else if (outcomeFilter !== ALL && status !== outcomeFilter) {
         return false;
       }
-      if (typeFilter !== ALL && item.tenderType !== typeFilter) return false;
+      if (methodFilter !== ALL && item.evaluationMethod !== methodFilter) {
+        return false;
+      }
       if (!matchesScrapedDate(item.scrapedDate, scrapedPreset, scrapedFrom, scrapedTo)) {
         return false;
       }
@@ -172,6 +148,7 @@ export function SubmittedTendersClient({
         item.submissionReference,
         item.lostReason,
         item.location,
+        item.evaluationMethod,
         item.tenderType,
       ]
         .filter(Boolean)
@@ -182,8 +159,8 @@ export function SubmittedTendersClient({
   }, [
     items,
     search,
-    statusFilter,
-    typeFilter,
+    outcomeFilter,
+    methodFilter,
     scrapedPreset,
     scrapedFrom,
     scrapedTo,
@@ -202,36 +179,36 @@ export function SubmittedTendersClient({
           value={String(summary.total)}
           icon={FileCheck2}
           iconClassName="bg-sky-100 text-sky-700"
-          active={statusFilter === ALL}
-          onClick={() => setStatusFilter(ALL)}
+          active={outcomeFilter === ALL}
+          onClick={() => setOutcomeFilter(ALL)}
         />
         <CompactKpiCard
           label="Awaiting outcome"
           value={String(summary.submitted)}
           icon={FileCheck2}
           iconClassName="bg-blue-100 text-blue-700"
-          active={statusFilter === "SUBMITTED"}
-          onClick={() => selectStatus("SUBMITTED")}
+          active={outcomeFilter === "SUBMITTED"}
+          onClick={() => selectOutcome("SUBMITTED")}
         />
         <CompactKpiCard
           label="Won"
           value={String(summary.won)}
           icon={Trophy}
           iconClassName="bg-amber-100 text-amber-700"
-          active={statusFilter === "WON"}
-          onClick={() => selectStatus("WON")}
+          active={outcomeFilter === "WON"}
+          onClick={() => selectOutcome("WON")}
         />
         <CompactKpiCard
           label="Lost"
           value={String(summary.lost)}
           icon={XCircle}
           iconClassName="bg-rose-100 text-rose-700"
-          active={statusFilter === "LOST"}
-          onClick={() => selectStatus("LOST")}
+          active={outcomeFilter === "LOST"}
+          onClick={() => selectOutcome("LOST")}
         />
       </div>
 
-      <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <div className="space-y-1.5 sm:col-span-2 xl:col-span-1">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
             Search
@@ -248,34 +225,16 @@ export function SubmittedTendersClient({
         </div>
         <div className="space-y-1.5">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
-            Status
+            L1 / QCBS
           </p>
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <Select value={methodFilter} onValueChange={setMethodFilter}>
             <SelectTrigger className="h-9 w-full">
               <SelectValue placeholder="All" />
             </SelectTrigger>
             <SelectContent>
-              {STATUS_OPTIONS.map((option) => (
+              {L1_QCBS_OPTIONS.map((option) => (
                 <SelectItem key={option.value} value={option.value}>
                   {option.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1.5">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-foreground-500">
-            Tender Type
-          </p>
-          <Select value={typeFilter} onValueChange={setTypeFilter}>
-            <SelectTrigger className="h-9 w-full">
-              <SelectValue placeholder="All" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>All</SelectItem>
-              {tenderTypes.map((type) => (
-                <SelectItem key={type} value={type}>
-                  {type}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -344,7 +303,7 @@ export function SubmittedTendersClient({
                 <tr>
                   <th className="px-4 py-3 font-medium">Tender</th>
                   <th className="px-4 py-3 font-medium">Value</th>
-                  <th className="px-4 py-3 font-medium">Outcome</th>
+                  <th className="px-4 py-3 font-medium">Type</th>
                   <th className="px-4 py-3 font-medium">Lost reason</th>
                   <th className="px-4 py-3 font-medium">Actions</th>
                 </tr>
@@ -394,7 +353,13 @@ export function SubmittedTendersClient({
                           : "—"}
                       </td>
                       <td className="px-4 py-3">
-                        <StatusBadge status={asBadgeStatus(status)} size="sm" />
+                        {item.evaluationMethod ? (
+                          <span className="inline-flex items-center rounded-md bg-background-200 px-2 py-0.5 text-[11px] font-semibold text-foreground-800">
+                            {evaluationMethodLabel(item.evaluationMethod)}
+                          </span>
+                        ) : (
+                          <span className="text-foreground-400">—</span>
+                        )}
                         {isWon && item.wonProjectId ? (
                           <Link
                             href={`/won-tenders/${item.wonProjectId}`}

@@ -5,7 +5,10 @@ import type {
   SubmittedTenderListItem,
   SubmittedTenderSummary,
 } from "@/lib/submitted-tenders";
-import { summarizeSubmittedTenders } from "@/lib/submitted-tenders";
+import {
+  normalizeL1QcbsMethod,
+  summarizeSubmittedTenders,
+} from "@/lib/submitted-tenders";
 
 function asString(value: unknown): string | null {
   if (value == null) return null;
@@ -175,10 +178,8 @@ export async function listSubmittedTenders(
             : null,
       location: asString(row.city) || asString(row.location_text) || null,
       closingDate: asString(row.closing_date),
-      tenderType:
-        asString(row.tender_type) ||
-        asString(row.project_category) ||
-        asString(row.category),
+      tenderType: asString(row.tender_type),
+      evaluationMethod: normalizeL1QcbsMethod(asString(row.tender_type)),
       scrapedDate: asString(row.scraped_date)?.slice(0, 10) ?? null,
       tenderValue: asNumber(row.tender_value),
       qualificationStatus: status,
