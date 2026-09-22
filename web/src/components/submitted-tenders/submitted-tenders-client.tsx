@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import {
   CheckCircle2,
+  Copy,
   FileCheck2,
   Search,
   Trophy,
@@ -167,7 +168,12 @@ export function SubmittedTendersClient({
     return scopedItems.filter((item) => {
       const status = String(item.qualificationStatus || "").toUpperCase();
       if (outcomeFilter === "SUBMITTED") {
-        if (status === "WON" || status === "LOST" || status === "CANCELLED") {
+        if (
+          status === "WON" ||
+          status === "LOST" ||
+          status === "CANCELLED" ||
+          status === "DUPLICATE"
+        ) {
           return false;
         }
         return true;
@@ -184,7 +190,7 @@ export function SubmittedTendersClient({
         subtitle="Track submitted bids and record Won or Lost outcomes. Lost reason is required when marking Lost."
       />
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
         <CompactKpiCard
           label="Total"
           value={String(scopedSummary.total)}
@@ -216,6 +222,14 @@ export function SubmittedTendersClient({
           iconClassName="bg-rose-100 text-rose-700"
           active={outcomeFilter === "LOST"}
           onClick={() => selectOutcome("LOST")}
+        />
+        <CompactKpiCard
+          label="Duplicate"
+          value={String(scopedSummary.duplicate)}
+          icon={Copy}
+          iconClassName="bg-slate-100 text-slate-700"
+          active={outcomeFilter === "DUPLICATE"}
+          onClick={() => selectOutcome("DUPLICATE")}
         />
       </div>
 
@@ -326,7 +340,12 @@ export function SubmittedTendersClient({
                   ).toUpperCase();
                   const isWon = status === "WON";
                   const isLost = status === "LOST";
-                  const awaiting = !isWon && !isLost && status !== "CANCELLED";
+                  const isDuplicate = status === "DUPLICATE";
+                  const awaiting =
+                    !isWon &&
+                    !isLost &&
+                    !isDuplicate &&
+                    status !== "CANCELLED";
 
                   return (
                     <tr
@@ -348,6 +367,11 @@ export function SubmittedTendersClient({
                             source={portalSource(item.portal)}
                             size="sm"
                           />
+                          {isDuplicate ? (
+                            <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                              Duplicate
+                            </span>
+                          ) : null}
                         </div>
                         <p className="font-medium text-foreground-900 group-hover:text-primary-700">
                           {item.title}

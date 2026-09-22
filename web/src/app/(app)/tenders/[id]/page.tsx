@@ -195,6 +195,10 @@ export default async function TenderDetailPage({
       fees={fees}
       eligibleTender={eligibleTender}
       canEdit={sessionHasPermission(session, "tenders.edit")}
+      canUploadDocuments={
+        sessionHasPermission(session, "tenders.edit") ||
+        sessionHasPermission(session, "documents.upload")
+      }
       canCreateFee={sessionHasPermission(session, "bids.create")}
       existingWonProject={existingWonProject}
       teamMembers={teamMembers}

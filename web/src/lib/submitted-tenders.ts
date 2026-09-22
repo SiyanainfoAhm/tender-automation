@@ -5,6 +5,7 @@ export const SUBMITTED_OUTCOME_STATUSES = [
   "SUBMITTED",
   "WON",
   "LOST",
+  "DUPLICATE",
 ] as const;
 
 export type SubmittedOutcomeStatus =
@@ -66,6 +67,7 @@ export type SubmittedTenderSummary = {
   submitted: number;
   won: number;
   lost: number;
+  duplicate: number;
 };
 
 export function summarizeSubmittedTenders(
@@ -74,15 +76,17 @@ export function summarizeSubmittedTenders(
   let submitted = 0;
   let won = 0;
   let lost = 0;
+  let duplicate = 0;
   for (const item of items) {
     const status = String(item.qualificationStatus || "").toUpperCase();
     if (status === "WON") won += 1;
     else if (status === "LOST") lost += 1;
+    else if (status === "DUPLICATE") duplicate += 1;
     else if (status === "CANCELLED") {
       // Cancelled stays in the list but is not "awaiting outcome".
     } else submitted += 1;
   }
-  return { total: items.length, submitted, won, lost };
+  return { total: items.length, submitted, won, lost, duplicate };
 }
 
 export function isSubmittedOutcomeStatus(

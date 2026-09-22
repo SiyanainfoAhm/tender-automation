@@ -184,6 +184,8 @@ type TenderDetailClientProps = {
   fees: BidFeeRecord[];
   eligibleTender: FeeEligibleTender | null;
   canEdit: boolean;
+  /** Upload/delete on Documents tab — tenders.edit or documents.upload. */
+  canUploadDocuments?: boolean;
   canCreateFee: boolean;
   existingWonProject?: ExistingWonProject | null;
   teamMembers?: TeamMemberOption[];
@@ -648,12 +650,14 @@ export function TenderDetailClient({
   fees,
   eligibleTender,
   canEdit,
+  canUploadDocuments,
   canCreateFee,
   existingWonProject = null,
   teamMembers = [],
   initialTab = "overview",
   initialFocus = null,
 }: TenderDetailClientProps) {
+  const canManageDocuments = canUploadDocuments ?? canEdit;
   const router = useRouter();
   const [tab, setTab] = useState<TabId>(
     initialTab === "documents" ? "documents" : "overview",
@@ -1955,7 +1959,7 @@ export function TenderDetailClient({
             subtitle="Official documents issued by the buyer"
             locked={false}
             items={tenderSectionDocs}
-            canEdit={canEdit && !documentsError}
+            canEdit={canManageDocuments && !documentsError}
             uploading={uploadPending}
             showDownloadAll
             onUpload={(file) => uploadSectionDoc("tender", file)}
@@ -1968,7 +1972,7 @@ export function TenderDetailClient({
             locked={!canAccessBiddingDocuments(tender.qualificationStatus)}
             lockReason={biddingDocumentsLockReason(tender.qualificationStatus)}
             items={sectionDocs("bidding")}
-            canEdit={canEdit}
+            canEdit={canManageDocuments}
             uploading={uploadPending}
             onUpload={(file) => uploadSectionDoc("bidding", file)}
             onDelete={handleDeleteDoc}
@@ -1982,9 +1986,8 @@ export function TenderDetailClient({
               tender.qualificationStatus,
             )}
             items={sectionDocs("financial")}
-            canEdit={canEdit}
+            canEdit={canManageDocuments}
             uploading={uploadPending}
-            showUpload={false}
             onUpload={handleFinancialUpload}
             onDelete={handleDeleteDoc}
             headerActions={
@@ -2009,7 +2012,7 @@ export function TenderDetailClient({
             locked={!canAccessDeliverables(tender.qualificationStatus)}
             lockReason={deliverablesLockReason(tender.qualificationStatus)}
             items={sectionDocs("deliverable")}
-            canEdit={canEdit}
+            canEdit={canManageDocuments}
             uploading={uploadPending}
             onUpload={(file) => uploadSectionDoc("deliverable", file)}
             onDelete={handleDeleteDoc}

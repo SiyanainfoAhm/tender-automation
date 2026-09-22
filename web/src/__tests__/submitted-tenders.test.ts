@@ -47,12 +47,29 @@ describe("submitted tenders helpers", () => {
       submitted: 2,
       won: 1,
       lost: 1,
+      duplicate: 0,
+    });
+  });
+
+  it("counts duplicate status separately from awaiting", () => {
+    const summary = summarizeSubmittedTenders([
+      item({ id: "1", qualificationStatus: "SUBMITTED" }),
+      item({ id: "2", qualificationStatus: "DUPLICATE" }),
+      item({ id: "3", qualificationStatus: "CANCELLED" }),
+    ]);
+    expect(summary).toEqual({
+      total: 3,
+      submitted: 1,
+      won: 0,
+      lost: 0,
+      duplicate: 1,
     });
   });
 
   it("recognizes outcome statuses", () => {
     expect(isSubmittedOutcomeStatus("SUBMITTED")).toBe(true);
     expect(isSubmittedOutcomeStatus("won")).toBe(true);
+    expect(isSubmittedOutcomeStatus("DUPLICATE")).toBe(true);
     expect(isSubmittedOutcomeStatus("GO")).toBe(false);
   });
 

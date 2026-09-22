@@ -24,7 +24,7 @@ function asNumber(value: unknown): number | null {
 
 /**
  * Tender ids that belong on Submitted Tenders:
- * - qualification_status in SUBMITTED / WON / LOST, or
+ * - qualification_status in SUBMITTED / WON / LOST / CANCELLED / DUPLICATE, or
  * - bid workspace marked submitted for this company.
  */
 async function resolveSubmittedTenderIds(
@@ -37,7 +37,13 @@ async function resolveSubmittedTenderIds(
     supabase
       .from("agenttender_tenders")
       .select("id")
-      .in("qualification_status", ["SUBMITTED", "WON", "LOST", "CANCELLED"]),
+      .in("qualification_status", [
+        "SUBMITTED",
+        "WON",
+        "LOST",
+        "CANCELLED",
+        "DUPLICATE",
+      ]),
     supabase
       .from("agenttender_bid_workspaces")
       .select("tender_id")

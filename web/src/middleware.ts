@@ -33,9 +33,10 @@ function applySecurityHeaders(response: NextResponse): NextResponse {
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set("X-Frame-Options", "DENY");
   response.headers.set("Permissions-Policy", "interest-cohort=()");
+  // Keep in sync with next.config.ts — browser SharePoint uploads need connect-src.
   response.headers.set(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.blob.core.windows.net; font-src 'self' data:; connect-src 'self' https://*.blob.core.windows.net; frame-src 'self' blob:; object-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.blob.core.windows.net https://*.sharepoint.com; font-src 'self' data:; connect-src 'self' https://*.blob.core.windows.net https://*.sharepoint.com; frame-src 'self' blob:; object-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
   );
   return response;
 }

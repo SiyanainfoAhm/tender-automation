@@ -5,8 +5,13 @@ import type { TenderDocumentSection } from "@/lib/bid-fees";
 import { getServerSupabase } from "@/lib/db/server";
 import { MAX_DOCUMENT_UPLOAD_BYTES } from "@/lib/uploads/config";
 import { validateDocumentFile } from "@/lib/uploads/validation";
-import { CompanyAccessError } from "@/server/auth/company-access";
-import { requirePermissionStrict } from "@/server/auth/permissions";
+import {
+  CompanyAccessError,
+  requireCompanySession,
+} from "@/server/auth/company-access";
+import {
+  sessionHasPermission,
+} from "@/server/auth/permissions";
 import {
   insertTenderDocument,
 } from "@/server/repositories/bidFeeRepository";
@@ -40,7 +45,8 @@ function applyTenderArtifactFields(
   const createdDate = /^\d{4}-\d{2}-\d{2}/.test(createdRaw)
     ? createdRaw.slice(0, 10)
     : new Date().toISOString().slice(0, 10);
-  payload.tenderArtifactPortal = "MANUAL";
+  // Keep portal-specific SharePoint folders (do not force MANUAL for crawled tenders).
+  payload.tenderArtifactPortal = portal;
   payload.tenderArtifactId = sourceId;
   payload.tenderArtifactDate = createdDate;
 }
@@ -52,20 +58,26 @@ function revalidate(tenderId: string) {
   revalidatePath("/dashboard");
 }
 
+/**
+ * For MANUAL tenders, mirror zip / AI-summary uploads onto the tender row so
+ * Tender Documents archive chips stay in sync. agenttender_tenders has no
+ * company_id column — filter by id only.
+ */
 async function persistManualArtifactUrl(options: {
   tenderId: string;
-  companyId: string;
   fileName: string;
   storageUrl: string | null;
 }) {
   if (!options.storageUrl) return;
   const supabase = getServerSupabase();
-  const { data: tender } = await supabase
+  const { data: tender, error: lookupError } = await supabase
     .from("agenttender_tenders")
     .select("source_portal")
     .eq("id", options.tenderId)
-    .eq("company_id", options.companyId)
     .maybeSingle();
+  if (lookupError) {
+    throw new Error(lookupError.message);
+  }
   if (String(tender?.source_portal || "").toUpperCase() !== "MANUAL") return;
 
   const lower = options.fileName.toLowerCase();
@@ -85,15 +97,28 @@ async function persistManualArtifactUrl(options: {
   const { error } = await supabase
     .from("agenttender_tenders")
     .update(patch)
-    .eq("id", options.tenderId)
-    .eq("company_id", options.companyId);
+    .eq("id", options.tenderId);
   if (error) throw new Error(error.message);
+}
+
+async function requireDocumentUploadSession() {
+  const session = await requireCompanySession();
+  if (
+    !sessionHasPermission(session, "tenders.edit") &&
+    !sessionHasPermission(session, "documents.upload")
+  ) {
+    throw new CompanyAccessError(
+      "FORBIDDEN",
+      "Missing permission: documents.upload",
+    );
+  }
+  return session;
 }
 
 /** Create a short-lived Microsoft Graph upload session (no file bytes). */
 export async function POST(request: Request, context: RouteContext) {
   try {
-    const session = await requirePermissionStrict("tenders.edit");
+    const session = await requireDocumentUploadSession();
     const { id: tenderId } = await context.params;
     const body = (await request.json().catch(() => null)) as Record<
       string,
@@ -200,7 +225,7 @@ export async function POST(request: Request, context: RouteContext) {
 }
 
 async function completeDirectUpload(
-  session: Awaited<ReturnType<typeof requirePermissionStrict>>,
+  session: Awaited<ReturnType<typeof requireDocumentUploadSession>>,
   tenderId: string,
   body: Record<string, unknown>,
 ) {
@@ -271,13 +296,6 @@ async function completeDirectUpload(
         typeof completed.storageUrl === "string" ? completed.storageUrl : null,
       userId: session.user.id,
     });
-    await persistManualArtifactUrl({
-      tenderId,
-      companyId: session.companyId,
-      fileName,
-      storageUrl:
-        typeof completed.storageUrl === "string" ? completed.storageUrl : null,
-    });
   } catch (error) {
     console.error("[tenders/direct-upload] tender document insert failed", {
       tenderId,
@@ -294,6 +312,22 @@ async function completeDirectUpload(
     );
   }
 
+  // Artifact URL sync is best-effort for MANUAL zip / AI summary uploads.
+  try {
+    await persistManualArtifactUrl({
+      tenderId,
+      fileName,
+      storageUrl:
+        typeof completed.storageUrl === "string" ? completed.storageUrl : null,
+    });
+  } catch (error) {
+    console.error("[tenders/direct-upload] manual artifact URL sync failed", {
+      tenderId,
+      documentId: completed.documentId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
   revalidate(tenderId);
   return NextResponse.json({
     success: true,
@@ -303,7 +337,7 @@ async function completeDirectUpload(
 }
 
 async function abortDirectUpload(
-  _session: Awaited<ReturnType<typeof requirePermissionStrict>>,
+  _session: Awaited<ReturnType<typeof requireDocumentUploadSession>>,
   tenderId: string,
   body: Record<string, unknown>,
 ) {
