@@ -44,3 +44,38 @@ test("pickPreferredQueueRow prefers artifact-complete GLOBAL sibling", () => {
   assert.equal(picked?.id, "gl");
   assert.ok(picked?.documentsZipUrl);
 });
+
+test("pickPreferredQueueRow prefers newer scraped_date when scores tie", () => {
+  const older: AiSummaryQueueRow = {
+    id: "old",
+    sourceTenderId: "104373910",
+    qualificationStatus: "VERIFY",
+    title: "x",
+    documentsZipUrl: null,
+    aiSummaryUrl: null,
+    sourceRegion: "INDIAN",
+    scrapedDate: "2026-09-01",
+  };
+  const newer: AiSummaryQueueRow = {
+    id: "new",
+    sourceTenderId: "104373910",
+    qualificationStatus: "VERIFY",
+    title: "x",
+    documentsZipUrl: null,
+    aiSummaryUrl: null,
+    sourceRegion: "INDIAN",
+    scrapedDate: "2026-09-20",
+  };
+  const picked = pickPreferredQueueRow([older, newer], "INDIAN");
+  assert.equal(picked?.id, "new");
+});
+
+test("buildIdsOnlySyntheticQueueRow invents VERIFY row for portal search", async () => {
+  const mod = await import("../runAiSummaryFirstDocumentPipeline.js");
+  const row = mod.buildIdsOnlySyntheticQueueRow("T247-104046893", "GLOBAL");
+  assert.equal(row?.sourceTenderId, "104046893");
+  assert.equal(row?.id, "ids-only-104046893");
+  assert.equal(row?.qualificationStatus, "VERIFY");
+  assert.equal(row?.sourceRegion, "GLOBAL");
+  assert.equal(row?.documentsZipUrl, null);
+});

@@ -146,7 +146,17 @@ function readFilters(searchParams: URLSearchParams): TenderFilters {
   searchParams.forEach((value, key) => {
     raw[key] = value;
   });
-  return tenderFiltersSchema.parse(raw);
+  const parsed = tenderFiltersSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+
+  // URL state can be restored by an old tab or pasted from a prior release.
+  // Keep the explorer mountable and let the next filter interaction replace it.
+  if (process.env.NODE_ENV === "development") {
+    console.warn("[tenders] invalid client list filters; using defaults", {
+      invalidFields: parsed.error.issues.map((issue) => issue.path.join(".")),
+    });
+  }
+  return tenderFiltersSchema.parse({});
 }
 
 function buildSearchParams(

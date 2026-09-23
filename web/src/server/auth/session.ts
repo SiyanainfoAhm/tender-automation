@@ -352,41 +352,46 @@ export async function getSession(): Promise<AuthSession | null> {
   const supabase = getServerSupabase();
   const tokenHash = hashSessionToken(token);
 
-  const { data: session } = await supabase
+  const { data: session, error: sessionError } = await supabase
     .from("agenttender_user_sessions")
     .select("id, user_id, expires_at, revoked_at, last_seen_at")
     .eq("token_hash", tokenHash)
     .maybeSingle();
 
-  if (!session) return null;
-  if (session.revoked_at) {
-    cookieStore.set(COOKIE_NAME, "", {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: 0,
+  if (sessionError) {
+    console.error("[auth] session lookup failed", {
+      operation: "getSession.sessionLookup",
+      message: sessionError.message,
     });
     return null;
   }
-  if (new Date(session.expires_at).getTime() <= Date.now()) {
-    await recordAuthEvent({
+  if (!session) return null;
+  if (session.revoked_at) {
+    // `getSession` also runs while rendering Server Components. Cookie writes
+    // are forbidden in that context, so route handlers perform cleanup.
+    return null;
+  }
+  const expiresAtMs = Date.parse(session.expires_at);
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+    // Audit logging is best-effort. An expired or malformed cookie must lead
+    // to a login redirect even if the audit table is temporarily unavailable.
+    void recordAuthEvent({
       userId: session.user_id,
-      eventType: "SESSION_EXPIRED",
+      eventType: Number.isFinite(expiresAtMs)
+        ? "SESSION_EXPIRED"
+        : "SESSION_INVALID_EXPIRY",
       success: false,
-    });
-    // Clear only the auth cookie — do not wipe unrelated localStorage/client data.
-    cookieStore.set(COOKIE_NAME, "", {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: 0,
+    }).catch((error) => {
+      console.warn("[auth] expired session audit failed", {
+        operation: "getSession.recordAuthEvent",
+        userId: session.user_id,
+        message: error instanceof Error ? error.message : String(error),
+      });
     });
     return null;
   }
 
-  const { data: user } = await supabase
+  const { data: user, error: userError } = await supabase
     .from("agenttender_users")
     .select(
       "id, email, full_name, role, company_id, is_active, must_change_password, last_login_at",
@@ -394,6 +399,14 @@ export async function getSession(): Promise<AuthSession | null> {
     .eq("id", session.user_id)
     .maybeSingle();
 
+  if (userError) {
+    console.error("[auth] user lookup failed", {
+      operation: "getSession.userLookup",
+      userId: session.user_id,
+      message: userError.message,
+    });
+    return null;
+  }
   if (!user || !user.is_active) return null;
 
   const lastSeen = session.last_seen_at
@@ -406,13 +419,25 @@ export async function getSession(): Promise<AuthSession | null> {
       .eq("id", session.id);
   }
 
-  const { ensureActiveMembership } = await import(
-    "@/server/repositories/membershipRepository"
-  );
-  const membership = await ensureActiveMembership(
-    user.id as string,
-    (user.company_id as string) || null,
-  );
+  let membership: { companyId: string; role: UserRole } | null = null;
+  try {
+    const { ensureActiveMembership } = await import(
+      "@/server/repositories/membershipRepository"
+    );
+    membership = await ensureActiveMembership(
+      user.id as string,
+      (user.company_id as string) || null,
+    );
+  } catch (error) {
+    // A missing/deleted company or a transient membership query failure should
+    // not turn an otherwise valid session into a route-level 500.
+    console.warn("[auth] membership resolution failed", {
+      operation: "getSession.ensureActiveMembership",
+      userId: user.id,
+      companyId: user.company_id ?? null,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   return {
     sessionId: session.id,

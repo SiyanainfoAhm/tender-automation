@@ -25,6 +25,25 @@ function withLockedRegion(
   return { ...raw, region };
 }
 
+/**
+ * URLs are user-controlled and can also be restored from an older browser
+ * session. A retired filter value must not make this Server Component throw.
+ */
+function parseTenderFiltersForPage(
+  raw: Record<string, string | string[] | undefined>,
+  region: TenderListRegion,
+) {
+  const input = searchParamsForStatusCounts(withLockedRegion(raw, region));
+  const parsed = tenderFiltersSchema.safeParse(input);
+  if (parsed.success) return parsed.data;
+
+  console.warn("[tenders] invalid list filters; using defaults", {
+    route: `/tenders/${region.toLowerCase()}`,
+    invalidFields: parsed.error.issues.map((issue) => issue.path.join(".")),
+  });
+  return tenderFiltersSchema.parse({ region });
+}
+
 export async function TendersListPage({
   region,
   searchParams,
@@ -32,9 +51,7 @@ export async function TendersListPage({
   const session = await requireSession();
   const rawParams = searchParams ? await searchParams : {};
   const scopedRaw = withLockedRegion(rawParams, region);
-  const statusCountFilters = tenderFiltersSchema.parse(
-    searchParamsForStatusCounts(scopedRaw),
-  );
+  const statusCountFilters = parseTenderFiltersForPage(rawParams, region);
   const statusCountsFilterKey = tenderStatusCountQueryKey(scopedRaw);
 
   const [facets, counts, members] = await Promise.all([

@@ -32,6 +32,8 @@
  *   npm run pipeline:tender247:ai-summary -- --date=2026-09-06 --dry-run
  *   npm run pipeline:tender247:ai-summary -- --date=2026-09-06 --skip-upsert --only-failed
  *   npm run pipeline:tender247:ai-summary -- --date=2026-09-06 --skip-upsert --ids=104046893,104046932
+ *   npm run pipeline:tender247:ai-summary -- --ids=104046893,104046932
+ *     (--ids without --date: any scraped_date / invent missing rows; open by T247 ID; no mail-date filter)
  */
 import "dotenv/config";
 import fs from "node:fs";
@@ -120,6 +122,8 @@ export type AiSummaryQueueRow = {
    * column when the same id was wrongly upserted into both INDIAN and GLOBAL.
    */
   sourceRegion: Tender247SourceRegion;
+  /** Present when loaded from Supabase; used to prefer newest re-listing. */
+  scrapedDate?: string | null;
 };
 
 type AiSummaryDbRow = {
@@ -130,6 +134,7 @@ type AiSummaryDbRow = {
   title?: string | null;
   documents_zip_url?: string | null;
   ai_summary_url?: string | null;
+  scraped_date?: string | null;
   raw_metadata?: unknown;
 };
 
@@ -180,6 +185,26 @@ function mapDbRowToQueueRow(
     documentsZipUrl,
     aiSummaryUrl,
     sourceRegion: resolveQueueOpenRegion(row, fallbackRegion),
+    scrapedDate: row.scraped_date ? String(row.scraped_date).trim() || null : null,
+  };
+}
+
+/** Queue row for `--ids` tenders not found in Supabase — still searchable by T247 ID. */
+export function buildIdsOnlySyntheticQueueRow(
+  tenderIdRaw: string,
+  preferredRegion: Tender247SourceRegion = DEFAULT_TENDER247_SOURCE_REGION,
+): AiSummaryQueueRow | null {
+  const sourceTenderId = normalizeTenderIdDigits(tenderIdRaw);
+  if (!sourceTenderId) return null;
+  return {
+    id: `ids-only-${sourceTenderId}`,
+    sourceTenderId,
+    qualificationStatus: "VERIFY",
+    title: null,
+    documentsZipUrl: null,
+    aiSummaryUrl: null,
+    sourceRegion: preferredRegion,
+    scrapedDate: null,
   };
 }
 
@@ -204,6 +229,11 @@ export function pickPreferredQueueRow(
       if (a.sourceRegion === preferredRegion) return -1;
       if (b.sourceRegion === preferredRegion) return 1;
     }
+    // Prefer newest scraped_date when the same id was re-listed across days.
+    const dateDiff = String(b.scrapedDate || "").localeCompare(
+      String(a.scrapedDate || ""),
+    );
+    if (dateDiff !== 0) return dateDiff;
     return 0;
   });
   const best = ranked[0]!;
@@ -553,6 +583,7 @@ export async function resolveAiSummaryResumeIdFilter(options: {
 
 function parseArgs(argv: string[]): {
   date: string;
+  hasExplicitDate: boolean;
   region: Tender247SourceRegion;
   accountId: string | null;
   companyId: string | null;
@@ -585,8 +616,13 @@ function parseArgs(argv: string[]): {
       process.env.TENDER247_REGION ||
       DEFAULT_TENDER247_SOURCE_REGION,
   );
+  const ids = parseIdsFilter(argv);
+  // --ids without --date: download workspace uses India-today folder, but queue
+  // is not scoped to that scraped_date and mail-date filter is skipped.
+  const idsOnlyAnyDate = Boolean(ids?.length) && !hasExplicitDate;
   return {
     date: resolved.requestedDate,
+    hasExplicitDate,
     region,
     accountId:
       getArgValue(argv, "account-id") ||
@@ -603,9 +639,9 @@ function parseArgs(argv: string[]): {
     force: hasBooleanFlag(argv, "force"),
     dryRun:
       hasBooleanFlag(argv, "dry-run") || hasBooleanFlag(argv, "dry-run-date"),
-    skipUpsert: hasBooleanFlag(argv, "skip-upsert"),
+    skipUpsert: hasBooleanFlag(argv, "skip-upsert") || idsOnlyAnyDate,
     limit,
-    ids: parseIdsFilter(argv),
+    ids,
     onlyFailed: hasBooleanFlag(argv, "only-failed"),
   };
 }
@@ -768,7 +804,7 @@ export async function downloadAndUpsertDailyExcelForAiSummary(options: {
 }
 
 const AI_SUMMARY_QUEUE_SELECT =
-  "id, source_tender_id, source_region, qualification_status, title, documents_zip_url, ai_summary_url, raw_metadata";
+  "id, source_tender_id, source_region, qualification_status, title, documents_zip_url, ai_summary_url, scraped_date, raw_metadata";
 
 /**
  * Load both INDIAN and GLOBAL rows for the date, then collapse duplicates.
@@ -854,15 +890,20 @@ export async function listAiSummaryQueueForDate(options: {
 }
 
 /**
- * Load queue rows for explicit --ids across INDIAN and GLOBAL for the scraped date.
- * Prefer detailUrl / artifact-complete sibling over --region when both exist.
+ * Load queue rows for explicit --ids across INDIAN and GLOBAL.
+ * With scrapedDate: only that day's rows.
+ * Without scrapedDate (--ids and no --date): any scraped_date, prefer newest /
+ * artifact-complete sibling; invent VERIFY rows for IDs absent from Supabase
+ * so the browser can still Search By T247 ID and download.
  */
 export async function listAiSummaryQueueRowsForIds(options: {
-  scrapedDate: string;
+  scrapedDate?: string | null;
   ids: string[];
   preferredRegion?: Tender247SourceRegion;
   force?: boolean;
   aiSummaryRequired?: boolean;
+  /** Invent queue rows for IDs not found in Supabase (ids-only / no --date). */
+  synthesizeMissing?: boolean;
 }): Promise<AiSummaryQueueRow[]> {
   if (!isSupabaseConfigured()) {
     throw new AutomationError(
@@ -881,13 +922,19 @@ export async function listAiSummaryQueueRowsForIds(options: {
 
   const preferred = options.preferredRegion || DEFAULT_TENDER247_SOURCE_REGION;
   const aiSummaryRequired = options.aiSummaryRequired !== false;
+  const synthesizeMissing = options.synthesizeMissing === true;
   const client = getSupabaseAdminClient();
-  const { data, error } = await client
+  let query = client
     .from("agenttender_tenders")
     .select(AI_SUMMARY_QUEUE_SELECT)
     .eq("source_portal", "TENDER247")
-    .eq("scraped_date", options.scrapedDate)
     .in("source_tender_id", wanted);
+  const scrapedDate = String(options.scrapedDate || "").trim();
+  if (scrapedDate) {
+    query = query.eq("scraped_date", scrapedDate);
+  }
+
+  const { data, error } = await query;
 
   if (error) {
     throw new AutomationError(
@@ -908,6 +955,11 @@ export async function listAiSummaryQueueRowsForIds(options: {
   return wanted
     .map((id) => {
       const candidates = byId.get(id) || [];
+      if (!candidates.length) {
+        return synthesizeMissing
+          ? buildIdsOnlySyntheticQueueRow(id, preferred)
+          : null;
+      }
       if (
         candidates.some((row) =>
           isQueueRowAlreadyComplete(row, options.force, aiSummaryRequired),
@@ -944,6 +996,8 @@ export async function runAiSummaryFirstDocumentPipeline(
   const args = parseArgs(argv);
   const config = loadConfig();
   const dateIso = args.date;
+  const idsOnlyAnyDate =
+    Boolean(args.ids?.length) && !args.hasExplicitDate;
 
   const account = await resolveTender247RunAccount({
     companyId: args.companyId || resolveRunCompanyId(),
@@ -975,6 +1029,12 @@ export async function runAiSummaryFirstDocumentPipeline(
   console.log(`AI_SUMMARY_PIPELINE_DATE=${dateIso}`);
   console.log(`AI_SUMMARY_PIPELINE_REGION=${args.region}`);
   logger.info(`AI_SUMMARY_PIPELINE_REGION=${args.region}`);
+  if (idsOnlyAnyDate) {
+    logger.info(
+      "AI_SUMMARY_PIPELINE_IDS_ONLY_ANY_DATE=true (no --date; queue by ids across scraped_dates; open by T247 ID)",
+    );
+    console.log("AI_SUMMARY_PIPELINE_IDS_ONLY_ANY_DATE=true");
+  }
 
   const dateFolder = runContext.downloadRoot;
   ensureTender247DateScopedDir(dateFolder, dateIso);
@@ -1073,52 +1133,91 @@ export async function runAiSummaryFirstDocumentPipeline(
     `AI_SUMMARY_PIPELINE_AI_REQUIRED=${aiSummaryRequired} region=${args.region}`,
   );
 
-  const allCandidates = await listAiSummaryQueueForDate({
-    scrapedDate: dateIso,
-    force: true,
-    sourceRegion: args.region,
-    aiSummaryRequired,
-  });
-  const pending = await listAiSummaryQueueForDate({
-    scrapedDate: dateIso,
-    // When retrying explicit failed IDs, always include them even if an AI URL
-    // was partially written; otherwise --force is required for missing-AI resume.
-    force: args.force || Boolean(idFilter?.length),
-    sourceRegion: args.region,
-    aiSummaryRequired,
-  });
-  const skippedExistingAi = Math.max(0, allCandidates.length - pending.length);
-  summary.selected = allCandidates.length;
-  summary.skippedExistingAi = idFilter?.length ? 0 : skippedExistingAi;
+  let allCandidates: AiSummaryQueueRow[] = [];
+  let queue: AiSummaryQueueRow[] = [];
 
-  let queue = pending;
-  if (idFilter?.length) {
-    // Explicit IDs: resolve each row's stored source_region (INDIAN or GLOBAL),
-    // not only the pipeline --region filter.
+  if (idFilter?.length && idsOnlyAnyDate) {
+    // --ids without --date: resolve across any scraped_date; invent missing rows.
     queue = await listAiSummaryQueueRowsForIds({
-      scrapedDate: dateIso,
+      scrapedDate: null,
       ids: idFilter,
       preferredRegion: args.region,
       force: args.force || true,
       aiSummaryRequired,
+      synthesizeMissing: true,
     });
-    const found = new Set(queue.map((row) => row.sourceTenderId));
-    const missing = idFilter.filter((id) => !found.has(id));
-    if (missing.length) {
-      logger.warn(
-        `AI_SUMMARY_PIPELINE_IDS_NOT_IN_QUEUE count=${missing.length} ids=${missing.join(",")}`,
+    allCandidates = queue;
+    summary.selected = queue.length;
+    summary.skippedExistingAi = 0;
+    const foundDb = queue.filter((row) => !row.id.startsWith("ids-only-"));
+    const synthesized = queue.filter((row) => row.id.startsWith("ids-only-"));
+    if (synthesized.length) {
+      logger.info(
+        `AI_SUMMARY_PIPELINE_IDS_SYNTHESIZED count=${synthesized.length} ids=${synthesized.map((r) => r.sourceTenderId).join(",")}`,
       );
       console.log(
-        `AI_SUMMARY_PIPELINE_IDS_NOT_IN_QUEUE=${missing.join(",")}`,
+        `AI_SUMMARY_PIPELINE_IDS_SYNTHESIZED=${synthesized.map((r) => r.sourceTenderId).join(",")}`,
       );
     }
+    logger.info(
+      `AI_SUMMARY_PIPELINE_IDS_RESOLVED db=${foundDb.length} synthesized=${synthesized.length}`,
+    );
     for (const row of queue) {
       logger.info(
-        `AI_SUMMARY_PIPELINE_ID_REGION id=${row.sourceTenderId} source_region=${row.sourceRegion}`,
+        `AI_SUMMARY_PIPELINE_ID_REGION id=${row.sourceTenderId} source_region=${row.sourceRegion} scraped_date=${row.scrapedDate || "n/a"}`,
       );
       console.log(
-        `AI_SUMMARY_PIPELINE_ID_REGION id=${row.sourceTenderId} source_region=${row.sourceRegion}`,
+        `AI_SUMMARY_PIPELINE_ID_REGION id=${row.sourceTenderId} source_region=${row.sourceRegion} scraped_date=${row.scrapedDate || "n/a"}`,
       );
+    }
+  } else {
+    allCandidates = await listAiSummaryQueueForDate({
+      scrapedDate: dateIso,
+      force: true,
+      sourceRegion: args.region,
+      aiSummaryRequired,
+    });
+    const pending = await listAiSummaryQueueForDate({
+      scrapedDate: dateIso,
+      // When retrying explicit failed IDs, always include them even if an AI URL
+      // was partially written; otherwise --force is required for missing-AI resume.
+      force: args.force || Boolean(idFilter?.length),
+      sourceRegion: args.region,
+      aiSummaryRequired,
+    });
+    const skippedExistingAi = Math.max(0, allCandidates.length - pending.length);
+    summary.selected = allCandidates.length;
+    summary.skippedExistingAi = idFilter?.length ? 0 : skippedExistingAi;
+
+    queue = pending;
+    if (idFilter?.length) {
+      // Explicit IDs + --date: resolve each row's stored source_region
+      // (INDIAN or GLOBAL) for that scraped_date only.
+      queue = await listAiSummaryQueueRowsForIds({
+        scrapedDate: dateIso,
+        ids: idFilter,
+        preferredRegion: args.region,
+        force: args.force || true,
+        aiSummaryRequired,
+      });
+      const found = new Set(queue.map((row) => row.sourceTenderId));
+      const missing = idFilter.filter((id) => !found.has(id));
+      if (missing.length) {
+        logger.warn(
+          `AI_SUMMARY_PIPELINE_IDS_NOT_IN_QUEUE count=${missing.length} ids=${missing.join(",")}`,
+        );
+        console.log(
+          `AI_SUMMARY_PIPELINE_IDS_NOT_IN_QUEUE=${missing.join(",")}`,
+        );
+      }
+      for (const row of queue) {
+        logger.info(
+          `AI_SUMMARY_PIPELINE_ID_REGION id=${row.sourceTenderId} source_region=${row.sourceRegion}`,
+        );
+        console.log(
+          `AI_SUMMARY_PIPELINE_ID_REGION id=${row.sourceTenderId} source_region=${row.sourceRegion}`,
+        );
+      }
     }
   }
 
@@ -1161,7 +1260,9 @@ export async function runAiSummaryFirstDocumentPipeline(
   const queuePath = writeQueueArtifact(dateFolder, {
     runDate: dateIso,
     mode: aiSummaryRequired ? "ai-summary-first" : "global-documents-first",
-    source: "agenttender_tenders (all statuses including NO_GO)",
+    source: idsOnlyAnyDate
+      ? "agenttender_tenders by --ids (any scraped_date; synthesize missing)"
+      : "agenttender_tenders (all statuses including NO_GO)",
     sourceRegion: args.region,
     aiSummaryRequired,
     statuses: [...QUEUE_STATUSES, "*"],
@@ -1170,6 +1271,7 @@ export async function runAiSummaryFirstDocumentPipeline(
     documentsOnlyIfAiMissing: false,
     allowNoBidDetailOpen: true,
     idFilter: idFilter || null,
+    idsOnlyAnyDate,
     onlyFailed: args.onlyFailed,
     autoResumeMode,
     totalMatching: allCandidates.length,
@@ -1244,18 +1346,27 @@ export async function runAiSummaryFirstDocumentPipeline(
         await loginToTender247(listPage, context, logger, config);
         await dismissTender247Interruptions(listPage, logger, config);
 
-        const mailDate = await ensureTender247FreshListForDate(
-          listPage,
-          dateIso,
-          logger,
-          config.pageTimeoutMs,
-        );
-        assertMailDateReadyForExcel(mailDate, dateIso);
-        if (mailDate.selectedMailDateIso !== dateIso) {
-          throw new AutomationError(
-            "TENDER247_DATE_FILTER_MISMATCH",
-            `AI summary pipeline mail date mismatch requested=${dateIso} selected=${mailDate.selectedMailDateIso}`,
+        if (idsOnlyAnyDate) {
+          // Same as daily-batch --file without --date: Search By T247 ID does
+          // not require that day's Fresh-list mail date.
+          logger.info(
+            "AI_SUMMARY_PIPELINE_MAIL_DATE_SKIPPED=true (--ids without --date; open by T247 ID)",
           );
+          console.log("AI_SUMMARY_PIPELINE_MAIL_DATE_SKIPPED=true");
+        } else {
+          const mailDate = await ensureTender247FreshListForDate(
+            listPage,
+            dateIso,
+            logger,
+            config.pageTimeoutMs,
+          );
+          assertMailDateReadyForExcel(mailDate, dateIso);
+          if (mailDate.selectedMailDateIso !== dateIso) {
+            throw new AutomationError(
+              "TENDER247_DATE_FILTER_MISMATCH",
+              `AI summary pipeline mail date mismatch requested=${dateIso} selected=${mailDate.selectedMailDateIso}`,
+            );
+          }
         }
 
         const screeningStatusById = new Map<string, string>();

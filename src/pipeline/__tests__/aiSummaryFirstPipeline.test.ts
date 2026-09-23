@@ -25,6 +25,11 @@ test("ai-summary pipeline always downloads documents and uploads SharePoint arti
   assert.match(src, /preserveExistingQualificationStatus/);
   assert.match(src, /persistGptScreenedWorkbookToDatabase/);
   assert.match(src, /listAiSummaryQueueForDate/);
+  assert.match(src, /listAiSummaryQueueRowsForIds/);
+  assert.match(src, /buildIdsOnlySyntheticQueueRow/);
+  assert.match(src, /AI_SUMMARY_PIPELINE_IDS_ONLY_ANY_DATE/);
+  assert.match(src, /AI_SUMMARY_PIPELINE_MAIL_DATE_SKIPPED/);
+  assert.match(src, /synthesizeMissing/);
   assert.match(src, /resolveAiSummaryResumeIdFilter/);
   assert.match(src, /computeAiSummaryResumeIdFilter/);
   assert.match(src, /AI_SUMMARY_PIPELINE_AUTO_RESUME/);
@@ -81,6 +86,7 @@ test("processTender uploads SharePoint artifacts even when docs zip is incomplet
   assert.match(src, /aiSummaryPipelineFullLocalDone/);
   assert.match(src, /uploadTenderArtifactsAndPersistUrls/);
   assert.match(src, /local_ai_and_docs_complete/);
+  assert.match(src, /supabase_urls_complete/);
   assert.doesNotMatch(src, /TENDER247_SKIP_BYPASS_AI_SUMMARY_MISSING/);
 });
 

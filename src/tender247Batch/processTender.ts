@@ -306,14 +306,19 @@ export async function processLiveTender(
     (localArtifacts.aiSummaryValid || localArtifacts.documentsZipValid);
   // AI+docs pipeline: completeness is Supabase URLs when provided; else local.
   // Global (aiSummaryRequired=false): documents URL alone is enough.
+  const satisfiedBySupabaseUrls =
+    aiSummaryPipelineUsesSupabaseUrls &&
+    hasSupabaseDocs &&
+    (aiSummaryRequired ? hasSupabaseSummary : true);
+  const satisfiedByLocalArtifacts =
+    !aiSummaryPipelineUsesSupabaseUrls &&
+    (aiSummaryRequired
+      ? localArtifacts.complete
+      : localArtifacts.documentsZipValid);
   const aiSummaryPipelineFullLocalDone =
     options.documentsOnlyIfAiMissing !== true &&
     options.allowNoBidDetailOpen === true &&
-    (aiSummaryPipelineUsesSupabaseUrls
-      ? hasSupabaseDocs && (aiSummaryRequired ? hasSupabaseSummary : true)
-      : aiSummaryRequired
-        ? localArtifacts.complete
-        : localArtifacts.documentsZipValid);
+    (satisfiedBySupabaseUrls || satisfiedByLocalArtifacts);
   // Document pipeline: skip when core docs+metadata are ready (AI optional).
   const classicCoreDone =
     options.documentsOnlyIfAiMissing !== true &&
@@ -333,9 +338,11 @@ export async function processLiveTender(
     logger.info(
       aiSummaryPipelineLocalDone
         ? `TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id} reason=local_ai_or_docs ai=${artifacts.aiSummaryValid} docs=${artifacts.documentsZipValid}`
-        : aiSummaryPipelineFullLocalDone
-          ? `TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id} reason=local_ai_and_docs_complete`
-          : `TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id}`,
+        : satisfiedBySupabaseUrls
+          ? `TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id} reason=supabase_urls_complete docs=${hasSupabaseDocs} ai=${hasSupabaseSummary}`
+          : aiSummaryPipelineFullLocalDone
+            ? `TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id} reason=local_ai_and_docs_complete`
+            : `TENDER247_ALREADY_COMPLETED_SKIP=T247-${t247Id}`,
     );
     if (!artifacts.aiSummaryValid && isAiSummaryTerminalFailure(aiStage)) {
       t247Event(logger, t247Id, "AI_SUMMARY_DOWNLOAD_FAILED");
@@ -410,21 +417,45 @@ export async function processLiveTender(
     ) {
       removeDirectoryRecursive(resume.tenderFolder);
     }
+    // Skip may be driven by Supabase SharePoint URLs while the local folder is
+    // empty (only artifact-upload.json). Treat URL completeness as success so
+    // buildResult does not throw T247_COMPLETED_WITHOUT_REQUIRED_ARTIFACTS.
+    const artifactComplete =
+      satisfiedBySupabaseUrls ||
+      artifacts.complete ||
+      (!aiSummaryRequired && artifacts.documentsZipValid);
+    const completeWithAiMissing =
+      !artifactComplete &&
+      artifacts.coreReady &&
+      !artifacts.aiSummaryValid &&
+      isAiSummaryTerminalFailure(aiStage);
     return buildResult({
       t247Id,
       status: "completed",
       zipPath: zipPath || (zipOk ? resume.zipPath : null),
       zipSize: zipSize || (zipOk ? fs.statSync(resume.zipPath).size : 0),
-      aiSummaryDownloaded: artifacts.aiSummaryValid,
-      allDocumentsDownloaded: artifacts.documentsZipValid,
+      aiSummaryDownloaded:
+        artifacts.aiSummaryValid ||
+        (satisfiedBySupabaseUrls && hasSupabaseSummary),
+      allDocumentsDownloaded:
+        artifacts.documentsZipValid ||
+        (satisfiedBySupabaseUrls && hasSupabaseDocs),
       securityCodeCaptured: true,
-      metadataStatus: artifacts.metadataValid ? "complete" : "missing",
-      aiSummaryStatus: artifacts.aiSummaryValid
+      metadataStatus: artifacts.metadataValid
         ? "complete"
-        : isAiSummaryTerminalFailure(aiStage)
-          ? "failed"
-          : "unavailable",
-      allDocumentsStatus: artifacts.documentsZipValid ? "complete" : "missing",
+        : satisfiedBySupabaseUrls
+          ? "complete"
+          : "missing",
+      aiSummaryStatus:
+        artifacts.aiSummaryValid || (satisfiedBySupabaseUrls && hasSupabaseSummary)
+          ? "complete"
+          : isAiSummaryTerminalFailure(aiStage)
+            ? "failed"
+            : "unavailable",
+      allDocumentsStatus:
+        artifacts.documentsZipValid || (satisfiedBySupabaseUrls && hasSupabaseDocs)
+          ? "complete"
+          : "missing",
       metadataPath: artifacts.metadataValid ? artifacts.metadataPath : null,
       aiSummaryPath: artifacts.aiSummaryValid ? artifacts.aiSummaryPath : null,
       allDocumentsPath: artifacts.documentsZipValid
@@ -433,12 +464,9 @@ export async function processLiveTender(
       lastCompletedStep: lastCompletedStep || "zip",
       error: null,
       pendingReason: null,
-      artifactComplete: artifacts.complete,
+      artifactComplete,
       chatgptSkipped: false,
-      completeWithAiMissing:
-        artifacts.coreReady &&
-        !artifacts.aiSummaryValid &&
-        isAiSummaryTerminalFailure(aiStage),
+      completeWithAiMissing,
     });
   }
   if (options.force && isTenderSafeToSkipReopen(resume.tenderFolder, t247Id)) {

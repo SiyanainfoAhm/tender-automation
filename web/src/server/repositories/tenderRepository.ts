@@ -330,9 +330,12 @@ export async function applyTenderListNonStatusFilters(
     });
     const excludeIds = await listGlobalSiblingSourceTenderIds(scrapedFilter);
     if (excludeIds.length > 0) {
-      // PostgREST `.not('col','in',...)` rejects very long URLs; chunk.
-      const chunk = excludeIds.slice(0, 800);
-      q = q.not("source_tender_id", "in", `(${chunk.join(",")})`);
+      // Apply every chunk. Previously only the first 800 Global IDs were
+      // excluded, so All-date Indian counts could include later Global rows.
+      for (let start = 0; start < excludeIds.length; start += 800) {
+        const chunk = excludeIds.slice(start, start + 800);
+        q = q.not("source_tender_id", "in", `(${chunk.join(",")})`);
+      }
     }
   }
 
@@ -734,11 +737,13 @@ export async function getTenderRegionCounts(): Promise<TenderRegionCounts> {
     .select("id", { count: "exact", head: true })
     .eq("source_region", "INDIAN");
   if (globalSiblingIds.length > 0) {
-    indianQuery = indianQuery.not(
-      "source_tender_id",
-      "in",
-      `(${globalSiblingIds.slice(0, 800).join(",")})`,
-    );
+    for (let start = 0; start < globalSiblingIds.length; start += 800) {
+      indianQuery = indianQuery.not(
+        "source_tender_id",
+        "in",
+        `(${globalSiblingIds.slice(start, start + 800).join(",")})`,
+      );
+    }
   }
   const [indianRes, globalRes] = await Promise.all([
     indianQuery,

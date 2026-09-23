@@ -17,8 +17,35 @@ export async function GET(request: Request) {
     raw[key] = value;
   });
   // Drop status/page/sort — cards are a facet over the non-status population.
-  const filters = tenderFiltersSchema.parse(searchParamsForStatusCounts(raw));
-  const counts = await getTenderListStatusCounts(filters);
+  const parsedFilters = tenderFiltersSchema.safeParse(
+    searchParamsForStatusCounts(raw),
+  );
+  if (!parsedFilters.success) {
+    console.warn("[tenders] invalid status-count filters", {
+      route: "/api/tenders/status-counts",
+      userId: session.user.id,
+      companyId: session.user.companyId,
+      invalidFields: parsedFilters.error.issues.map((issue) => issue.path.join(".")),
+    });
+    return NextResponse.json({ error: "Invalid tender filters" }, { status: 400 });
+  }
+
+  let counts;
+  try {
+    counts = await getTenderListStatusCounts(parsedFilters.data);
+  } catch (error) {
+    console.error("[tenders] status counts query failed", {
+      route: "/api/tenders/status-counts",
+      userId: session.user.id,
+      companyId: session.user.companyId,
+      operation: "getTenderListStatusCounts",
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return NextResponse.json(
+      { error: "Unable to load tender status counts. Please try again." },
+      { status: 503 },
+    );
+  }
 
   return NextResponse.json(counts, {
     headers: {
