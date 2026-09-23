@@ -17,9 +17,15 @@ import {
 } from "@/server/repositories/bidFeeRepository";
 import { getTenderById } from "@/server/repositories/tenderRepository";
 import {
+  indexTenderDocumentById,
+  indexTenderPortalZip,
+  scheduleAiIndexing,
+} from "@/server/ai/rag";
+import {
   invokeAbortDirectUpload,
   invokeCompleteDirectUpload,
   invokeCreateDirectUpload,
+  peekDocumentSessionToken,
 } from "@/server/storage/tenderAutomationDocumentFunctions";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -279,7 +285,7 @@ async function completeDirectUpload(
   }
 
   try {
-    await insertTenderDocument({
+    const tenderDoc = await insertTenderDocument({
       companyId: session.companyId,
       tenderId,
       section,
@@ -296,6 +302,23 @@ async function completeDirectUpload(
         typeof completed.storageUrl === "string" ? completed.storageUrl : null,
       userId: session.user.id,
     });
+
+    scheduleAiIndexing(
+      async () => {
+        await indexTenderDocumentById({
+          companyId: session.companyId,
+          tenderId,
+          tenderDocumentId: tenderDoc.id,
+        });
+        if (fileName.toLowerCase().endsWith(".zip")) {
+          await indexTenderPortalZip({
+            tenderId,
+            companyId: session.companyId,
+          });
+        }
+      },
+      { sessionToken: await peekDocumentSessionToken() },
+    );
   } catch (error) {
     console.error("[tenders/direct-upload] tender document insert failed", {
       tenderId,

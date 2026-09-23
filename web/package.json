@@ -11,7 +11,13 @@
     "test": "vitest run",
     "create-admin": "tsx scripts/create-admin.ts",
     "seed-initial-admins": "tsx scripts/seed-initial-admins.ts",
-    "sync-env": "tsx scripts/sync-env-from-root.ts"
+    "sync-env": "tsx scripts/sync-env-from-root.ts",
+    "index-ai-source": "tsx scripts/index-ai-source.ts",
+    "ask-ai-rag-smoke": "tsx scripts/ask-ai-rag-smoke.ts",
+    "ask-ai-stream-smoke": "tsx scripts/ask-ai-stream-smoke.ts",
+    "ask-ai-actions-smoke": "tsx scripts/ask-ai-actions-smoke.ts",
+    "ask-ai-phase8-smoke": "tsx scripts/ask-ai-phase8-smoke.ts",
+    "ask-ai-phase9-acceptance": "tsx scripts/ask-ai-phase9-acceptance.ts"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.2.6",
@@ -37,6 +43,7 @@
     "date-fns": "^4.4.0",
     "docx": "^9.5.0",
     "exceljs": "^4.4.0",
+    "js-tiktoken": "^1.0.21",
     "jszip": "^3.10.2",
     "lucide-react": "^1.28.0",
     "mammoth": "^1.12.2",
@@ -45,7 +52,9 @@
     "pdf-parse": "^2.4.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
     "recharts": "^3.10.1",
+    "remark-gfm": "^4.0.1",
     "remixicon": "^4.9.1",
     "server-only": "^0.0.1",
     "sonner": "^2.0.7",

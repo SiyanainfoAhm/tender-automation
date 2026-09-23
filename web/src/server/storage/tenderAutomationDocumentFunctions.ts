@@ -1,9 +1,32 @@
 import "server-only";
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { cookies } from "next/headers";
 import { COOKIE_NAME } from "@/server/auth/session";
 
 const FUNCTION_NAME = "tender-automation-company-documents";
+
+/** Propagate session into `after()` / background indexing without Next request cookies. */
+const indexingSessionStore = new AsyncLocalStorage<string>();
+
+export function runWithDocumentSession<T>(
+  sessionToken: string,
+  fn: () => T,
+): T {
+  return indexingSessionStore.run(sessionToken, fn);
+}
+
+export async function runWithDocumentSessionAsync<T>(
+  sessionToken: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return indexingSessionStore.run(sessionToken, fn);
+}
+
+/** Best-effort session token for background indexing (ALS → env → cookies). */
+export async function peekDocumentSessionToken(): Promise<string | null> {
+  return getSessionToken();
+}
 
 type EdgeJson = {
   success?: boolean;
@@ -53,8 +76,21 @@ function resolveServiceKey(): string {
 }
 
 async function getSessionToken(): Promise<string | null> {
-  const cookieStore = await cookies();
-  return cookieStore.get(COOKIE_NAME)?.value ?? null;
+  const fromStore = indexingSessionStore.getStore()?.trim();
+  if (fromStore) return fromStore;
+
+  const fromEnv =
+    process.env.AI_INDEX_SESSION_TOKEN?.trim() ||
+    process.env.AGENTTENDER_INDEX_SESSION_TOKEN?.trim();
+  if (fromEnv) return fromEnv;
+
+  try {
+    const cookieStore = await cookies();
+    return cookieStore.get(COOKIE_NAME)?.value ?? null;
+  } catch {
+    // Outside Next.js request scope (scripts / detached after()).
+    return null;
+  }
 }
 
 async function invokeCompanyDocumentsRaw(

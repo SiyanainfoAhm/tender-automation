@@ -9,6 +9,11 @@ import {
   jsonError,
   requireDocumentUploader,
 } from "@/server/uploads/requireDocumentUploader";
+import {
+  indexCompanyDocument,
+  scheduleAiIndexing,
+} from "@/server/ai/rag";
+import { peekDocumentSessionToken } from "@/server/storage/tenderAutomationDocumentFunctions";
 
 export const maxDuration = 120;
 
@@ -36,6 +41,18 @@ export async function POST(request: Request, context: RouteContext) {
 
     revalidatePath("/documents");
     revalidatePath("/dashboard");
+
+    if (result.documentId) {
+      scheduleAiIndexing(
+        async () => {
+          await indexCompanyDocument({
+            companyId: auth.session.companyId,
+            documentId: result.documentId,
+          });
+        },
+        { sessionToken: await peekDocumentSessionToken() },
+      );
+    }
 
     return Response.json({
       success: true,

@@ -11,7 +11,12 @@ import {
   invokeAbortDirectUpload,
   invokeCompleteDirectUpload,
   invokeCreateDirectUpload,
+  peekDocumentSessionToken,
 } from "@/server/storage/tenderAutomationDocumentFunctions";
+import {
+  indexCompanyDocument,
+  scheduleAiIndexing,
+} from "@/server/ai/rag";
 
 function categoryFromKind(kind: UploadKind | string | undefined): string {
   const k = String(kind || "general").toLowerCase();
@@ -129,9 +134,21 @@ export async function POST(request: Request) {
 
       revalidatePath("/documents");
       revalidatePath("/dashboard");
+
+      const indexedDocumentId = completed.documentId || documentId;
+      scheduleAiIndexing(
+        async () => {
+          await indexCompanyDocument({
+            companyId: auth.session.companyId,
+            documentId: indexedDocumentId,
+          });
+        },
+        { sessionToken: await peekDocumentSessionToken() },
+      );
+
       return NextResponse.json({
         success: true,
-        documentId: completed.documentId || documentId,
+        documentId: indexedDocumentId,
         storageUrl: completed.storageUrl || null,
         message: "Document uploaded to Company Documents.",
       });

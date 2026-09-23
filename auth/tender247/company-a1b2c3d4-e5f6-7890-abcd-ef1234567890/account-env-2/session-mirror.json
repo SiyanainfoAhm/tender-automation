@@ -65,7 +65,7 @@
       "value": "1YmohJhudxTDR6Y",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1821671635,
+      "expires": 1821713531,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -151,16 +151,6 @@
       "sameSite": "None"
     },
     {
-      "name": "_clsk",
-      "value": "xyv722%5E1790058649610%5E1%5E1%5Et.clarity.ms%2Fcollect",
-      "domain": ".tender247.com",
-      "path": "/",
-      "expires": 1790145049,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
       "name": "_fbp",
       "value": "fb.1.1790101905899.182093629219920524",
       "domain": ".tender247.com",
@@ -222,10 +212,10 @@
     },
     {
       "name": "AWSALBCORS",
-      "value": "pwDWHVBxbTQYWXS6pCtY8KHv06IWRl1rHXIeyBVeQSQZZ7GKtMB0Qv/bNj9mujnKHPm11h9wal7IJmG349DjvIhAynp0oBmmi7D9576bogsDhlTJL+jfj1nJ/XQhOMHbZ7+xJerxiqXxLgNv6cFcGiZ9hKVM5JEXM3OTZgzKpjaWgsO+uWCFVzX+EqxxRA==",
+      "value": "hFUvMaK0fyQH84g0FDdF3x6lMFBuEcNVuEvw4Icgd2n7j7gLngCyAz0l1iHHySCUE9sfIWnRYDZzpepgrvot9J+0XKR6RYQYRwC7yhR/XqrCiE3uX4lD1uifa27FGfN8jZZQKRtIuZWqt0bDHPzrvQkBrfdPbqF3+nRbXAn7JbzpCnXRw4L8SVnsZWEG6w==",
       "domain": "widget-mediator.zopim.com",
       "path": "/",
-      "expires": 1790740435.494847,
+      "expires": 1790782330.959221,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
@@ -241,7 +231,7 @@
         },
         {
           "name": "ZD-suid",
-          "value": "{\"id\":\"dc509eb3e0244241ba4fb6f06b243cf5\",\"expiry\":1790136535126,\"tabs\":{\"count\":2,\"expiry\":0}}"
+          "value": "{\"id\":\"63a4d3638820416289c1de1c3f94babf\",\"expiry\":1790178430589,\"tabs\":{\"count\":1,\"expiry\":0}}"
         },
         {
           "name": "lastExternalReferrerTime",
@@ -273,7 +263,7 @@
         },
         {
           "name": "__zlcstore",
-          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1790135635728,\"account_status\":\"offline\"}}"
+          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1790177531286,\"account_status\":\"offline\"}}"
         }
       ],
       "indexedDB": []
