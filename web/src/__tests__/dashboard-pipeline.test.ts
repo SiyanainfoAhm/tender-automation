@@ -152,7 +152,13 @@ describe("dashboard pipeline mapping", () => {
         qualificationStatus: null,
         submitted: false,
       }),
-    ).toBe("under_evaluation");
+    ).toBeNull();
+    expect(
+      mapToDashboardPipelineStage({
+        qualificationStatus: "UNDER_EVALUATION",
+        submitted: false,
+      }),
+    ).toBeNull();
     expect(
       mapToDashboardPipelineStage({
         qualificationStatus: "NO_GO",
@@ -186,14 +192,18 @@ describe("dashboard pipeline mapping", () => {
     expect(isWonQualificationStatus("WON")).toBe(true);
   });
 
-  it("exposes every tender dropdown status as a dashboard stage", () => {
-    const filterValues = TENDER_LIST_STATUS_FILTERS.filter(
-      (item) => item.value !== "ALL",
-    ).map((item) => item.value);
-    expect([...DASHBOARD_PIPELINE_STAGES]).toEqual(filterValues);
-    expect(DASHBOARD_PIPELINE_STAGES).toContain("under_evaluation");
+  it("exposes dashboard stages without Under Evaluation", () => {
+    expect(DASHBOARD_PIPELINE_STAGES).not.toContain("under_evaluation");
+    expect(DASHBOARD_PIPELINE_STAGES).toContain("verify");
     expect(DASHBOARD_PIPELINE_STAGES).toContain("disqualified");
     expect(DASHBOARD_PIPELINE_STAGES).toContain("lost");
+    const filterValues = TENDER_LIST_STATUS_FILTERS.filter(
+      (item) =>
+        item.value !== "ALL" &&
+        item.value !== "technical_rejected" &&
+        item.value !== "financial_rejected",
+    ).map((item) => item.value);
+    expect([...DASHBOARD_PIPELINE_STAGES]).toEqual(filterValues);
   });
 
   it("treats VERIFY as pending review", () => {

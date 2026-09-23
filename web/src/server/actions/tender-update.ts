@@ -216,7 +216,7 @@ export async function updateTenderDetailsAction(
         }
       }
     
-      // Main tender status (UNDER_EVALUATION is a real DB value).
+      // Main tender status.
       patch.qualification_status = status;
     
       if (existing.qualification) {

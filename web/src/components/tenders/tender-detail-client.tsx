@@ -242,8 +242,7 @@ function buildDraft(tender: TenderDetailDTO): EditDraft {
     publishedDate: dateInputValue(tender.publishedDate),
     closingDate: dateInputValue(tender.closingDate),
     qualificationStatus:
-      (tender.qualificationStatus as TenderStatus | null) ||
-      "UNDER_EVALUATION",
+      (tender.qualificationStatus as TenderStatus | null) || "",
     description: tender.description || "",
     notes: tender.notes || "",
     tenderValue:
@@ -752,7 +751,7 @@ export function TenderDetailClient({
     if (!(TENDER_STATUSES as readonly string[]).includes(next)) {
       return;
     }
-    if (next === (displayStatus || "UNDER_EVALUATION")) {
+    if (next === (displayStatus || "")) {
       return;
     }
 
@@ -835,7 +834,7 @@ export function TenderDetailClient({
           )
             ? draft.qualificationStatus
             : savedDetailStatus) || "SUBMITTED"
-        : draft.qualificationStatus || "UNDER_EVALUATION") as TenderStatus;
+        : draft.qualificationStatus || "VERIFY") as TenderStatus;
       const userChangedStatus =
         (draft.qualificationStatus || "") !==
         (tender.qualificationStatus || "");
@@ -1051,8 +1050,13 @@ export function TenderDetailClient({
 
   const currentQualificationStatus = displayStatus || "";
 
-  const statusSelectValue = (currentQualificationStatus ||
-    "UNDER_EVALUATION") as TenderStatus;
+  const statusSelectValue = (
+    (statusChoices as readonly string[]).includes(currentQualificationStatus)
+      ? currentQualificationStatus
+      : statusChoices.includes("VERIFY")
+        ? "VERIFY"
+        : statusChoices[0]
+  ) as TenderStatus;
 
   const showLost = displayStatus === "LOST";
   const showDisqualified = displayStatus === "DISQUALIFIED";
@@ -1360,7 +1364,7 @@ export function TenderDetailClient({
                         className="size-1.5 shrink-0 rounded-full bg-foreground-400"
                         aria-hidden
                       />
-                      Under Evaluation
+                      Not Evaluated
                     </span>
                   )}
                 </InfoRow>
@@ -1616,7 +1620,7 @@ export function TenderDetailClient({
                           className="size-1.5 shrink-0 rounded-full bg-foreground-400"
                           aria-hidden
                         />
-                        Under Evaluation
+                        Not Evaluated
                       </span>
                     )}
                   </div>

@@ -11,7 +11,7 @@ describe("tender status-count filter params", () => {
     const params = buildTenderStatusCountSearchParams(
       new URLSearchParams({
         date: "today",
-        status: "under_evaluation",
+        status: "verify",
         city: "Delhi",
         category: "Website / Web Portal",
         source: "TENDER247",
@@ -74,7 +74,7 @@ describe("tender status-count filter params", () => {
     const withStatus = tenderStatusCountQueryKey(
       new URLSearchParams({
         date: "today",
-        status: "under_evaluation",
+        status: "verify",
         city: "Delhi",
       }),
     );
@@ -93,7 +93,7 @@ describe("tender status-count filter params", () => {
   it("drops status when flattening Next.js searchParams for SSR counts", () => {
     const flat = searchParamsForStatusCounts({
       date: "today",
-      status: ["under_evaluation"],
+      status: ["verify"],
       source: "ALL",
       city: "Mumbai",
     });
@@ -108,14 +108,14 @@ describe("tender status-count filter params", () => {
     const scrapedToday = tenderStatusCountQueryKey(
       new URLSearchParams({ date: "today" }),
     );
-    const afterUnderEvalClick = tenderStatusCountQueryKey(
+    const afterVerifyClick = tenderStatusCountQueryKey(
       new URLSearchParams({
         date: "today",
-        status: "under_evaluation",
+        status: "verify",
         page: "1",
       }),
     );
-    expect(scrapedToday).toBe(afterUnderEvalClick);
+    expect(scrapedToday).toBe(afterVerifyClick);
   });
 
   it("models Total card as clearing only status", () => {

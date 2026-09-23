@@ -3,7 +3,6 @@ export const TENDER_STATUSES = [
   "CONDITIONAL_GO",
   "PARTNER_BID",
   "VERIFY",
-  "UNDER_EVALUATION",
   "NO_GO",
   "DUPLICATE",
   "WON",
@@ -44,7 +43,6 @@ export const STATUS_DISPLAY_LABELS: Record<TenderStatus, string> = {
   CONDITIONAL_GO: "May Bid",
   PARTNER_BID: "Partnership",
   VERIFY: "Verify",
-  UNDER_EVALUATION: "Under Evaluation",
   NO_GO: "No Bid",
   DUPLICATE: "Duplicate",
   WON: "Won",
@@ -61,7 +59,6 @@ export const STATUS_DISPLAY_LABELS: Record<TenderStatus, string> = {
  */
 export const TENDER_UI_STATUSES = [
   "verify",
-  "under_evaluation",
   "may_bid",
   "will_bid",
   "partnership",
@@ -81,7 +78,6 @@ export type TenderUiStatus = (typeof TENDER_UI_STATUSES)[number];
 
 export const TENDER_UI_STATUS_LABELS: Record<TenderUiStatus, string> = {
   verify: "Verify",
-  under_evaluation: "Under Evaluation",
   may_bid: "May Bid",
   will_bid: "Will Bid",
   partnership: "Partnership",
@@ -99,7 +95,6 @@ export const TENDER_UI_STATUS_LABELS: Record<TenderUiStatus, string> = {
 
 export const TENDER_UI_STATUS_COLORS: Record<TenderUiStatus, string> = {
   verify: "#0ea5e9",
-  under_evaluation: "#64748b",
   may_bid: "#f59e0b",
   will_bid: "#059669",
   partnership: "#7c3aed",
@@ -122,7 +117,6 @@ export const TENDER_LIST_STATUS_FILTERS: Array<{
 }> = [
   { value: "ALL", label: "All" },
   { value: "verify", label: "Verify" },
-  { value: "under_evaluation", label: "Under Evaluation" },
   { value: "may_bid", label: "May Bid" },
   { value: "will_bid", label: "Will Bid" },
   { value: "partnership", label: "Partnership" },
@@ -148,9 +142,11 @@ export function getTenderUiStatus(
     !value ||
     value === "NOT_EVALUATED" ||
     value === "NEW" ||
-    value === "UNDER_EVALUATION"
+    // Legacy DB value — never shown as its own UI status.
+    value === "UNDER_EVALUATION" ||
+    value === "SCREENING"
   ) {
-    return "under_evaluation";
+    return "not_evaluated";
   }
   if (value === "GO" || value === "WILL_BID") return "will_bid";
   if (value === "PARTNER_BID" || value === "PARTNERSHIP") return "partnership";
@@ -165,8 +161,7 @@ export function getTenderUiStatus(
   if (value === "FINANCIAL_REJECTED") return "financial_rejected";
   if (value === "VERIFY") return "verify";
   if (value === "CONDITIONAL_GO" || value === "MAY_BID") return "may_bid";
-  if (value === "SCREENING") return "under_evaluation";
-  return "under_evaluation";
+  return "not_evaluated";
 }
 
 export function tenderUiStatusLabel(
@@ -184,11 +179,14 @@ export function qualificationStatusesForFilter(
   const upper = value.toUpperCase().replace(/[\s-]+/g, "_");
   const ui = value.toLowerCase().replace(/[\s-]+/g, "_");
 
-  if (ui === "not_evaluated" || upper === "NOT_EVALUATED") {
+  if (
+    ui === "not_evaluated" ||
+    upper === "NOT_EVALUATED" ||
+    // Legacy filter URLs — treat as unevaluated (null status).
+    ui === "under_evaluation" ||
+    upper === "UNDER_EVALUATION"
+  ) {
     return { kind: "null" };
-  }
-  if (ui === "under_evaluation" || upper === "UNDER_EVALUATION") {
-    return { kind: "in", values: ["UNDER_EVALUATION"] };
   }
   if (ui === "verify" || upper === "VERIFY") {
     return { kind: "in", values: ["VERIFY"] };
@@ -244,7 +242,6 @@ export const DECISION_CHART_COLORS: Record<TenderStatus | "NOT_EVALUATED", strin
   CONDITIONAL_GO: "#d97706",
   PARTNER_BID: "#7c3aed",
   VERIFY: "#2563eb",
-  UNDER_EVALUATION: "#64748b",
   NO_GO: "#dc2626",
   DUPLICATE: "#6b7280",
   WON: "#16a34a",
@@ -266,7 +263,6 @@ export function isQualifiedStatus(
 /** Outcomes that replace the pre-submission pipeline after a bid is submitted. */
 export const POST_SUBMISSION_STATUSES = [
   "SUBMITTED",
-  "UNDER_EVALUATION",
   "DUPLICATE",
   "WON",
   "LOST",
@@ -286,8 +282,7 @@ export function isPostSubmissionStatus(
 
 /**
  * Status choices on tender details.
- * - Submitted → Technical Rejected / Financial Rejected
- * - Under Evaluation → Technical Rejected / Financial Rejected
+ * After submission: Technical Rejected / Financial Rejected.
  * Terminal outcomes lock to themselves.
  */
 export function tenderDetailStatusChoices(options: {
@@ -309,14 +304,6 @@ export function tenderDetailStatusChoices(options: {
     current === "FINANCIAL_REJECTED"
   ) {
     return [current as TenderStatus];
-  }
-
-  if (current === "UNDER_EVALUATION") {
-    return [
-      "UNDER_EVALUATION",
-      "TECHNICAL_REJECTED",
-      "FINANCIAL_REJECTED",
-    ];
   }
 
   // SUBMITTED and other post-submission mid-states
@@ -350,7 +337,6 @@ export function canOpenBidWorkspace(
   return (
     value === "GO" ||
     value === "SUBMITTED" ||
-    value === "UNDER_EVALUATION" ||
     value === "WON" ||
     value === "LOST" ||
     value === "CANCELLED" ||

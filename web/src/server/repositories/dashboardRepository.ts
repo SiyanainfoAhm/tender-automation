@@ -185,6 +185,7 @@ function buildPipeline(
       submitted: submittedIds.has(row.id),
       won: isWonQualificationStatus(row.effective_qualification_status),
     });
+    if (!stage) continue;
     const bucket = aggregates.get(stage);
     if (!bucket) continue;
     bucket.count += 1;

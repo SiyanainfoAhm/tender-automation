@@ -10,6 +10,7 @@ import { StatusChangeCommentDialog } from "@/components/tenders/status-change-co
 import { MarkAsWonDialog } from "@/components/won-tenders/mark-as-won-dialog";
 import {
   STATUS_DISPLAY_LABELS,
+  TENDER_STATUSES,
   tenderDetailStatusChoices,
   type TenderStatus,
 } from "@/lib/tender-status";
@@ -42,13 +43,22 @@ export function TenderListStatusSelect({
   const [lostOpen, setLostOpen] = useState(false);
   const [wonOpen, setWonOpen] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<TenderStatus | null>(null);
-  const status = (String(currentStatus || "UNDER_EVALUATION")
+  const raw = String(currentStatus || "")
     .trim()
-    .toUpperCase() || "UNDER_EVALUATION") as TenderStatus;
-  const statuses = tenderDetailStatusChoices({ currentStatus: status });
-  const value = (statuses as readonly string[]).includes(status)
-    ? status
-    : "UNDER_EVALUATION";
+    .toUpperCase();
+  const known = (TENDER_STATUSES as readonly string[]).includes(raw)
+    ? (raw as TenderStatus)
+    : null;
+  const statuses = tenderDetailStatusChoices({
+    currentStatus: known ?? "VERIFY",
+  });
+  const value = (
+    known && (statuses as readonly string[]).includes(known)
+      ? known
+      : statuses.includes("VERIFY")
+        ? "VERIFY"
+        : statuses[0]
+  ) as TenderStatus;
   const locked = statuses.length === 1;
 
   function onStatusChange(next: TenderStatus) {

@@ -18,7 +18,6 @@ import {
   HelpCircle,
   IndianRupee,
   Percent,
-  Search,
   Send,
   Shield,
   ShieldX,
@@ -90,7 +89,6 @@ const PIPELINE_ICONS: Record<
   typeof HelpCircle
 > = {
   verify: HelpCircle,
-  under_evaluation: Search,
   may_bid: ClipboardCheck,
   will_bid: CheckCircle2,
   partnership: Handshake,

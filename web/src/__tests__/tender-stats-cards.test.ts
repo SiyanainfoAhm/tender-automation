@@ -9,7 +9,6 @@ import { describe, it } from "node:test";
 const CARD_STATUS_FILTERS = {
   totalTenders: undefined,
   verify: "verify",
-  underEvaluation: "under_evaluation",
   willBid: "will_bid",
   mayBid: "may_bid",
   noBid: "no_bid",
@@ -44,7 +43,6 @@ describe("tender stats card status mapping", () => {
     assert.equal(isCardActive("willBid", "will_bid"), true);
     assert.equal(isCardActive("mayBid", "may_bid"), true);
     assert.equal(isCardActive("noBid", "no_bid"), true);
-    assert.equal(isCardActive("underEvaluation", "under_evaluation"), true);
     assert.equal(isCardActive("totalTenders", "verify"), false);
     assert.equal(isCardActive("willBid", "verify"), false);
   });
@@ -54,9 +52,9 @@ describe("tender stats card status mapping", () => {
     assert.equal(CARD_STATUS_FILTERS.willBid, "will_bid");
     assert.equal(CARD_STATUS_FILTERS.mayBid, "may_bid");
     assert.equal(CARD_STATUS_FILTERS.noBid, "no_bid");
-    assert.equal(CARD_STATUS_FILTERS.underEvaluation, "under_evaluation");
     assert.equal(CARD_STATUS_FILTERS.lost, "lost");
     assert.equal(CARD_STATUS_FILTERS.disqualified, "disqualified");
     assert.equal(CARD_STATUS_FILTERS.cancelled, "cancelled");
+    assert.ok(!("underEvaluation" in CARD_STATUS_FILTERS));
   });
 });

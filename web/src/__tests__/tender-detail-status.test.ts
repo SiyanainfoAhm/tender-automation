@@ -48,7 +48,7 @@ describe("tender detail overview qualification status", () => {
     ).toBe("GO");
   });
 
-  it("treats missing status as under evaluation (null)", () => {
+  it("treats missing status as null", () => {
     expect(
       resolveDetailQualificationStatus({
         tenderQualificationStatus: null,
@@ -96,19 +96,6 @@ describe("tender detail status after submission", () => {
     ).toEqual(["SUBMITTED", "TECHNICAL_REJECTED", "FINANCIAL_REJECTED"]);
   });
 
-  it("offers Technical / Financial Rejected from Under Evaluation", () => {
-    expect(
-      tenderDetailStatusChoices({
-        currentStatus: "UNDER_EVALUATION",
-        submitted: true,
-      }),
-    ).toEqual([
-      "UNDER_EVALUATION",
-      "TECHNICAL_REJECTED",
-      "FINANCIAL_REJECTED",
-    ]);
-  });
-
   it("locks Won so earlier statuses are not offered", () => {
     expect(
       tenderDetailStatusChoices({ currentStatus: "WON", submitted: true }),
@@ -128,5 +115,18 @@ describe("tender detail status after submission", () => {
     expect(
       tenderDetailStatusChoices({ currentStatus: "GO", submitted: false }),
     ).toEqual(TENDER_STATUSES);
+  });
+
+  it("does not offer Under Evaluation in any status choices", () => {
+    expect(TENDER_STATUSES).not.toContain("UNDER_EVALUATION");
+    expect(
+      tenderDetailStatusChoices({ currentStatus: "GO", submitted: false }),
+    ).not.toContain("UNDER_EVALUATION");
+    expect(
+      tenderDetailStatusChoices({
+        currentStatus: "SUBMITTED",
+        submitted: true,
+      }),
+    ).not.toContain("UNDER_EVALUATION");
   });
 });

@@ -185,7 +185,6 @@ export async function getTenderManagementKpis(): Promise<TenderManagementKpis> {
 export type TenderListStatusCounts = {
   totalTenders: number;
   verify: number;
-  underEvaluation: number;
   willBid: number;
   mayBid: number;
   noBid: number;
@@ -280,7 +279,6 @@ export async function getTenderListStatusCounts(
   const [
     totalRes,
     verifyRes,
-    underEvalRes,
     willBidRes,
     mayBidRes,
     noBidRes,
@@ -295,7 +293,6 @@ export async function getTenderListStatusCounts(
   ] = await Promise.all([
     runCount(),
     runCount((q) => q.eq("qualification_status", "VERIFY")),
-    runCount((q) => q.eq("qualification_status", "UNDER_EVALUATION")),
     runCount((q) => q.eq("qualification_status", "GO")),
     runCount((q) => q.eq("qualification_status", "CONDITIONAL_GO")),
     runCount((q) => q.eq("qualification_status", "NO_GO")),
@@ -314,7 +311,6 @@ export async function getTenderListStatusCounts(
   const results = [
     ["total", totalRes],
     ["verify", verifyRes],
-    ["underEvaluation", underEvalRes],
     ["willBid", willBidRes],
     ["mayBid", mayBidRes],
     ["noBid", noBidRes],
@@ -339,7 +335,6 @@ export async function getTenderListStatusCounts(
 
   const totalTenders = totalRes.count ?? 0;
   const verify = verifyRes.count ?? 0;
-  const underEvaluation = underEvalRes.count ?? 0;
   const willBid = willBidRes.count ?? 0;
   const mayBid = mayBidRes.count ?? 0;
   const noBid = noBidRes.count ?? 0;
@@ -353,7 +348,6 @@ export async function getTenderListStatusCounts(
 
   const mappedSum =
     verify +
-    underEvaluation +
     willBid +
     mayBid +
     noBid +
@@ -378,7 +372,6 @@ export async function getTenderListStatusCounts(
   return {
     totalTenders,
     verify,
-    underEvaluation,
     willBid,
     mayBid,
     noBid,

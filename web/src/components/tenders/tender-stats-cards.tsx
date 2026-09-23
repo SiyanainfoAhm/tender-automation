@@ -4,7 +4,6 @@ import { useState } from "react";
 
 import {
   Ban,
-  Briefcase,
   CheckCircle2,
   Clock,
   Copy,
@@ -57,13 +56,6 @@ const PRIMARY: CardDef[] = [
     icon: ShieldAlert,
     iconClassName: "bg-sky-100 text-sky-700",
     filterStatus: "verify",
-  },
-  {
-    key: "underEvaluation",
-    label: "Under Evaluation",
-    icon: Briefcase,
-    iconClassName: "bg-slate-100 text-slate-700",
-    filterStatus: "under_evaluation",
   },
   {
     key: "willBid",
@@ -180,7 +172,7 @@ export function TenderStatsCards({
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {cards.map((card) => {
           const clickable =
             interactive &&

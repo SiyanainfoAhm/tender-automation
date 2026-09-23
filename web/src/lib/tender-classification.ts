@@ -58,7 +58,6 @@ export const CLASSIFICATION_DECISION_LABELS: Record<TenderStatus, string> = {
   CONDITIONAL_GO: "CONDITIONAL GO",
   PARTNER_BID: "PARTNER BID",
   VERIFY: "VERIFY",
-  UNDER_EVALUATION: "UNDER EVALUATION",
   NO_GO: "NO-GO",
   DUPLICATE: "DUPLICATE",
   WON: "WON",
@@ -77,8 +76,6 @@ export const CLASSIFICATION_REQUIRED_ACTIONS: Record<TenderStatus, string> = {
   PARTNER_BID:
     "Obtain approval, partner evidence and the required agreement before bid lock.",
   VERIFY: "Hold the decision and obtain the missing source or clarification.",
-  UNDER_EVALUATION:
-    "Continue evaluation and update the decision when screening is complete.",
   NO_GO: "Record the exact reason and close the tender.",
   DUPLICATE:
     "This tender matches another record — open the linked tender to see why it was marked duplicate.",

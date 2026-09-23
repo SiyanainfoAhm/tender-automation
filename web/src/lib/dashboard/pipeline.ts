@@ -4,7 +4,6 @@
  */
 export const DASHBOARD_PIPELINE_STAGES = [
   "verify",
-  "under_evaluation",
   "may_bid",
   "will_bid",
   "partnership",
@@ -22,7 +21,6 @@ export type DashboardPipelineStage = (typeof DASHBOARD_PIPELINE_STAGES)[number];
 /** Active opportunities counted in pipeline KPIs (excludes terminal statuses). */
 export const DASHBOARD_LIVE_PIPELINE_STAGES = [
   "verify",
-  "under_evaluation",
   "may_bid",
   "will_bid",
   "partnership",
@@ -59,17 +57,9 @@ export const DASHBOARD_PIPELINE_META: Record<
     iconText: "text-sky-600",
     color: "#0ea5e9",
   },
-  under_evaluation: {
-    label: "Under Evaluation",
-    number: 2,
-    barClass: "bg-slate-400",
-    iconBg: "bg-slate-100",
-    iconText: "text-slate-600",
-    color: "#64748b",
-  },
   may_bid: {
     label: "May Bid",
-    number: 3,
+    number: 2,
     barClass: "bg-amber-500",
     iconBg: "bg-amber-50",
     iconText: "text-amber-600",
@@ -77,7 +67,7 @@ export const DASHBOARD_PIPELINE_META: Record<
   },
   will_bid: {
     label: "Will Bid",
-    number: 4,
+    number: 3,
     barClass: "bg-emerald-500",
     iconBg: "bg-emerald-50",
     iconText: "text-emerald-600",
@@ -85,7 +75,7 @@ export const DASHBOARD_PIPELINE_META: Record<
   },
   partnership: {
     label: "Partnership",
-    number: 5,
+    number: 4,
     barClass: "bg-violet-500",
     iconBg: "bg-violet-50",
     iconText: "text-violet-600",
@@ -93,7 +83,7 @@ export const DASHBOARD_PIPELINE_META: Record<
   },
   submitted: {
     label: "Submitted",
-    number: 6,
+    number: 5,
     barClass: "bg-blue-500",
     iconBg: "bg-blue-50",
     iconText: "text-blue-600",
@@ -101,7 +91,7 @@ export const DASHBOARD_PIPELINE_META: Record<
   },
   won: {
     label: "Won",
-    number: 7,
+    number: 6,
     barClass: "bg-emerald-600",
     iconBg: "bg-emerald-50",
     iconText: "text-emerald-800",
@@ -109,7 +99,7 @@ export const DASHBOARD_PIPELINE_META: Record<
   },
   lost: {
     label: "Lost",
-    number: 8,
+    number: 7,
     barClass: "bg-rose-700",
     iconBg: "bg-rose-50",
     iconText: "text-rose-800",
@@ -117,7 +107,7 @@ export const DASHBOARD_PIPELINE_META: Record<
   },
   disqualified: {
     label: "Disqualified",
-    number: 9,
+    number: 8,
     barClass: "bg-red-600",
     iconBg: "bg-red-50",
     iconText: "text-red-800",
@@ -125,7 +115,7 @@ export const DASHBOARD_PIPELINE_META: Record<
   },
   no_bid: {
     label: "No Bid",
-    number: 10,
+    number: 9,
     barClass: "bg-rose-500",
     iconBg: "bg-rose-50",
     iconText: "text-rose-700",
@@ -133,7 +123,7 @@ export const DASHBOARD_PIPELINE_META: Record<
   },
   duplicate: {
     label: "Duplicate",
-    number: 11,
+    number: 10,
     barClass: "bg-slate-500",
     iconBg: "bg-slate-50",
     iconText: "text-slate-700",
@@ -141,7 +131,7 @@ export const DASHBOARD_PIPELINE_META: Record<
   },
   cancelled: {
     label: "Tender cancelled",
-    number: 12,
+    number: 11,
     barClass: "bg-stone-500",
     iconBg: "bg-stone-50",
     iconText: "text-stone-700",
@@ -152,12 +142,13 @@ export const DASHBOARD_PIPELINE_META: Record<
 /**
  * Map qualification + workspace flags into a dashboard status stage.
  * Matches tender dropdown / list filter buckets.
+ * Returns null for unevaluated / legacy UNDER_EVALUATION (not a UI stage).
  */
 export function mapToDashboardPipelineStage(options: {
   qualificationStatus: string | null | undefined;
   submitted: boolean;
   won?: boolean;
-}): DashboardPipelineStage {
+}): DashboardPipelineStage | null {
   if (options.won) return "won";
   const raw = String(options.qualificationStatus || "")
     .trim()
@@ -178,8 +169,7 @@ export function mapToDashboardPipelineStage(options: {
   if (raw === "PARTNER_BID" || raw === "PARTNERSHIP") return "partnership";
   if (raw === "CONDITIONAL_GO" || raw === "MAY_BID") return "may_bid";
   if (raw === "VERIFY") return "verify";
-  if (raw === "UNDER_EVALUATION") return "under_evaluation";
-  return "under_evaluation";
+  return null;
 }
 
 export function isPendingReviewStatus(

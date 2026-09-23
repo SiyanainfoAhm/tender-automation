@@ -13,7 +13,7 @@ describe("tender UI status mapping", () => {
     expect(getTenderUiStatus("MAY_BID")).toBe("may_bid");
     expect(tenderUiStatusLabel("VERIFY")).toBe("Verify");
     expect(tenderUiStatusLabel("CONDITIONAL_GO")).toBe("May Bid");
-    expect(getTenderUiStatus(null)).toBe("under_evaluation");
+    expect(getTenderUiStatus(null)).toBe("not_evaluated");
   });
 
   it("keeps partnership, will bid, won and no bid distinct", () => {
@@ -74,18 +74,14 @@ describe("tender UI status mapping", () => {
       kind: "in",
       values: ["FINANCIAL_REJECTED"],
     });
-    expect(getTenderUiStatus("UNDER_EVALUATION")).toBe("under_evaluation");
-    expect(tenderUiStatusLabel("UNDER_EVALUATION")).toBe("Under Evaluation");
     expect(getTenderUiStatus("SUBMITTED")).toBe("submitted");
-    expect(qualificationStatusesForFilter("under_evaluation")).toEqual({
-      kind: "in",
-      values: ["UNDER_EVALUATION"],
-    });
-    expect(qualificationStatusesForFilter("UNDER_EVALUATION")).toEqual({
-      kind: "in",
-      values: ["UNDER_EVALUATION"],
-    });
     expect(qualificationStatusesForFilter("not_evaluated")).toEqual({
+      kind: "null",
+    });
+    // Legacy UNDER_EVALUATION is never a visible UI status.
+    expect(getTenderUiStatus("UNDER_EVALUATION")).toBe("not_evaluated");
+    expect(tenderUiStatusLabel("UNDER_EVALUATION")).toBe("Not Evaluated");
+    expect(qualificationStatusesForFilter("under_evaluation")).toEqual({
       kind: "null",
     });
   });
