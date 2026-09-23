@@ -34,12 +34,13 @@ export const ASK_AI_PREPARING_KNOWLEDGE_MESSAGE =
   "Preparing AI knowledge for this tender. This is required only once.";
 
 export type AiIndexStatusPoll = {
-  state: "ready" | "indexing" | "failed" | "none";
+  state: "ready" | "indexing" | "failed" | "none" | "no_documents";
   activeChunkCount: number;
   indexedSources: number;
   failedSources: number;
   pendingSources: number;
   inflight: boolean;
+  jobStatus?: string | null;
   message: string | null;
 };
 
@@ -62,17 +63,21 @@ export async function fetchAiIndexStatus(
   return (await response.json()) as AiIndexStatusPoll;
 }
 
-/** Poll until ready / failed / timeout. */
+/** Poll until ready / failed / timeout / stuck-none. */
 export async function waitForAiIndexReady(options: {
   tenderId: string;
   signal?: AbortSignal;
   intervalMs?: number;
   timeoutMs?: number;
+  /** Stop if poll stays `none` this many times after indexing was requested. */
+  maxConsecutiveNone?: number;
   onTick?: (poll: AiIndexStatusPoll) => void;
 }): Promise<AiIndexStatusPoll> {
   const intervalMs = options.intervalMs ?? 2_000;
   const timeoutMs = options.timeoutMs ?? 180_000;
+  const maxConsecutiveNone = options.maxConsecutiveNone ?? 3;
   const started = Date.now();
+  let consecutiveNone = 0;
 
   while (true) {
     if (options.signal?.aborted) {
@@ -81,7 +86,22 @@ export async function waitForAiIndexReady(options: {
     const poll = await fetchAiIndexStatus(options.tenderId, options.signal);
     options.onTick?.(poll);
     if (poll.state === "ready") return poll;
-    if (poll.state === "failed") return poll;
+    if (poll.state === "failed" || poll.state === "no_documents") return poll;
+
+    if (poll.state === "none") {
+      consecutiveNone += 1;
+      if (consecutiveNone >= maxConsecutiveNone) {
+        return {
+          ...poll,
+          state: "failed",
+          message:
+            "Indexing did not start. Please retry indexing.",
+        };
+      }
+    } else {
+      consecutiveNone = 0;
+    }
+
     if (Date.now() - started >= timeoutMs) {
       return {
         ...poll,

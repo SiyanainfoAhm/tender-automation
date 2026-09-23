@@ -85,11 +85,33 @@ export function TenderAskAiDrawer({
               incomplete: true,
               error: false,
               indexFailed: false,
+              noDocuments: false,
               warnings: undefined,
             }
           : item,
       ),
     );
+  }
+
+  function markAssistantNoDocuments(assistantId: string, message: string) {
+    setReindexState("idle");
+    setMessages((current) =>
+      current.map((item) =>
+        item.id === assistantId
+          ? {
+              ...item,
+              content: message,
+              statusText: undefined,
+              incomplete: false,
+              error: false,
+              indexFailed: false,
+              noDocuments: true,
+              warnings: [message],
+            }
+          : item,
+      ),
+    );
+    setPhase("idle");
   }
 
   function markAssistantIndexFailed(assistantId: string, message: string) {
@@ -104,6 +126,7 @@ export function TenderAskAiDrawer({
               incomplete: true,
               error: true,
               indexFailed: true,
+              noDocuments: false,
               warnings: [message],
             }
           : item,
@@ -200,6 +223,13 @@ export function TenderAskAiDrawer({
               );
               return;
             }
+            if (meta?.indexStatus === "no_documents") {
+              markAssistantNoDocuments(
+                options.assistantId,
+                "No tender documents are available to index for this tender yet.",
+              );
+              return;
+            }
             setMessages((current) =>
               current.map((item) =>
                 item.id === options.assistantId
@@ -236,12 +266,20 @@ export function TenderAskAiDrawer({
               return;
             }
 
-            if (error.code === "INDEX_FAILED" || error.code === "INDEXING") {
+            if (error.code === "INDEX_FAILED" || error.code === "INDEXING" || error.code === "INDEX_NO_DOCUMENTS") {
               if (error.code === "INDEXING") {
                 indexingStarted = true;
                 markAssistantIndexing(
                   options.assistantId,
                   error.message || ASK_AI_PREPARING_KNOWLEDGE_MESSAGE,
+                );
+                return;
+              }
+              if (error.code === "INDEX_NO_DOCUMENTS") {
+                markAssistantNoDocuments(
+                  options.assistantId,
+                  error.message ||
+                    "No tender documents are available to index for this tender yet.",
                 );
                 return;
               }
@@ -294,6 +332,15 @@ export function TenderAskAiDrawer({
 
         if (abort.signal.aborted) {
           setPhase("idle");
+          return;
+        }
+
+        if (poll.state === "no_documents") {
+          markAssistantNoDocuments(
+            options.assistantId,
+            poll.message ||
+              "No tender documents are available to index for this tender yet.",
+          );
           return;
         }
 

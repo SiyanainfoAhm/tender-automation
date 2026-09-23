@@ -41,6 +41,7 @@ export function AskAiMessageView({
   const uniqueWarnings = Array.from(new Set(warnings));
   const showReindex =
     Boolean(onReindex) &&
+    !message.noDocuments &&
     (Boolean(message.indexFailed) || isIndexNotReadyWarning(message.warnings));
 
   async function copyAnswer() {

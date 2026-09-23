@@ -17,6 +17,8 @@ export type AskAiMessage = {
   cancelled?: boolean;
   /** Show Retry Indexing control after on-demand index failure. */
   indexFailed?: boolean;
+  /** True when tender has no indexable documents — do not offer Retry Indexing. */
+  noDocuments?: boolean;
 };
 
 /** UI quick-action chip (structured `action` + display message). */
@@ -29,18 +31,30 @@ export type { AskAiPhase };
 export function isIndexNotReadyWarning(warnings?: string[]): boolean {
   if (!warnings?.length) return false;
   const text = warnings.join(" ").toLowerCase();
+  // No-documents is a terminal informational state — not a reindex prompt.
+  if (
+    text.includes("no tender documents are available to index") ||
+    text.includes("no documents")
+  ) {
+    return false;
+  }
   return (
     text.includes("not been indexed") ||
     text.includes("not indexed yet") ||
     text.includes("ai knowledge for this tender has not") ||
     text.includes("could not prepare ai knowledge") ||
-    text.includes("no tender documents are available to index") ||
     text.includes("retry indexing")
   );
 }
 
 export function humanizeAskAiWarning(warning: string): string {
   const lower = warning.toLowerCase();
+  if (
+    lower.includes("no tender documents are available to index") ||
+    lower.includes("no documents are available")
+  ) {
+    return "No tender documents are available to index for this tender yet.";
+  }
   if (
     lower.includes("preparing ai knowledge") ||
     lower.includes("required only once")

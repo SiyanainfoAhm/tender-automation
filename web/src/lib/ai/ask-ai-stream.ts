@@ -51,7 +51,7 @@ export type AskAiRetrievalMeta = {
   tenderChunks: number;
   companyChunks: number;
   contextTokensApprox: number;
-  indexStatus: "ready" | "partial" | "none" | "indexing" | "failed";
+  indexStatus: "ready" | "partial" | "none" | "indexing" | "failed" | "no_documents";
   llmFirstTokenMs?: number;
   streamed?: boolean;
   /** Development / smoke only — never required by UI. */
@@ -78,6 +78,7 @@ export type AskAiStreamErrorCode =
   | "INDEX_NOT_READY"
   | "INDEXING"
   | "INDEX_FAILED"
+  | "INDEX_NO_DOCUMENTS"
   | "PARTIAL_INDEX"
   | "NOT_FOUND"
   | "FORBIDDEN"

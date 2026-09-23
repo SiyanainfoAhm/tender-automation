@@ -42,7 +42,16 @@ function emptyTimings() {
 }
 
 function logIndex(event: string, payload: Record<string, unknown>) {
-  console.info("[ai-rag]", event, payload);
+  console.info("[AIIndex]", {
+    stage: event,
+    tenderId: payload.tender_id ?? payload.tenderId ?? null,
+    sourceCount: payload.sourceCount ?? payload.units ?? payload.chunks ?? null,
+    sourceIds: payload.source_id ? [payload.source_id] : payload.sourceIds ?? null,
+    status: payload.status ?? event,
+    errorCode: payload.error ?? payload.errorCode ?? null,
+    durationMs: payload.total_ms ?? payload.durationMs ?? null,
+    source_type: payload.source_type ?? null,
+  });
 }
 
 function stableMemberSourceId(parentSourceId: string, memberPath: string): string {
@@ -65,12 +74,28 @@ export async function indexDocumentSource(
   };
 
   try {
-    // Fetch/extract before flipping to INDEXING so unchanged sources can skip
-    // against the previous INDEXED status + content_hash.
+    // Durable status BEFORE fetch/extract so failed attempts never leave zero rows
+    // when a document source exists.
+    await upsertIndexStatus({
+      companyId: descriptor.companyId,
+      tenderId: descriptor.tenderId,
+      sourceType: descriptor.sourceType,
+      sourceId: descriptor.sourceId,
+      documentName: descriptor.documentName,
+      documentUrl: descriptor.documentUrl,
+      status: "INDEXING",
+      errorMessage: null,
+    });
+    logIndex("FETCHING", baseMeta);
     const fetchStarted = Date.now();
     const extractedUnits = await loadAndExtract(descriptor);
     timings.fetchMs = Date.now() - fetchStarted;
     timings.extractMs = timings.fetchMs;
+    logIndex("EXTRACTING", {
+      ...baseMeta,
+      units: extractedUnits.length,
+      fetch_ms: timings.fetchMs,
+    });
 
     if (extractedUnits.length === 0) {
       throw new Error("No extractable text found for this source.");
@@ -198,7 +223,7 @@ export async function indexDocumentSource(
       errorMessage: message.slice(0, 2_000),
     }).catch(() => null);
 
-    logIndex("INDEX_FAILED", {
+    logIndex("FAILED", {
       ...baseMeta,
       error: message,
       total_ms: timings.totalMs,
@@ -237,12 +262,9 @@ async function indexExtractedUnit(options: {
     sourceId: unit.sourceId,
   });
 
-  // Unchanged content: restore INDEXED even if status was NEEDS_REINDEX / INDEX_FAILED.
-  if (
-    existing?.contentHash === contentHash &&
-    existing.chunkCount > 0 &&
-    existing.status !== "INDEXING"
-  ) {
+  // Unchanged content: restore INDEXED even if we briefly marked INDEXING
+  // before fetch, or status was NEEDS_REINDEX / INDEX_FAILED.
+  if (existing?.contentHash === contentHash && existing.chunkCount > 0) {
     timings.totalMs = Date.now() - options.started;
     logIndex("SKIPPED_UNCHANGED", {
       source_id: unit.sourceId,
@@ -285,6 +307,10 @@ async function indexExtractedUnit(options: {
     errorMessage: null,
   });
 
+  logIndex("CHUNKING", {
+    source_id: unit.sourceId,
+    source_type: descriptor.sourceType,
+  });
   const chunkStarted = Date.now();
   const textChunks = chunkText({
     text: normalized,
@@ -298,6 +324,11 @@ async function indexExtractedUnit(options: {
     throw new Error("Chunking produced no chunks.");
   }
 
+  logIndex("EMBEDDING", {
+    source_id: unit.sourceId,
+    source_type: descriptor.sourceType,
+    chunks: textChunks.length,
+  });
   const embedStarted = Date.now();
   const { embeddings, embeddingTokens } = await embedTexts(
     textChunks.map((c) => c.content),
@@ -327,6 +358,11 @@ async function indexExtractedUnit(options: {
     },
   }));
 
+  logIndex("WRITING", {
+    source_id: unit.sourceId,
+    source_type: descriptor.sourceType,
+    chunks: drafts.length,
+  });
   const dbStarted = Date.now();
   await replaceActiveChunks({
     sourceType: descriptor.sourceType,

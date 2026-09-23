@@ -309,18 +309,19 @@ export async function* streamTenderRagAnswer(options: {
         tenderId: options.tenderId,
         companyId: options.companyId,
         sessionToken: options.sessionToken,
+        requestId,
       });
 
       if (start.outcome === "no_sources") {
         yield {
           type: "error",
-          code: "INDEX_FAILED",
+          code: "INDEX_NO_DOCUMENTS",
           message: start.message,
-          retryable: true,
+          retryable: false,
         };
         await finishUsage({
           status: "error",
-          errorCode: "INDEX_FAILED",
+          errorCode: "INDEX_NO_DOCUMENTS",
           meta: buildRetrievalMeta(prepared, {
             llmMs: 0,
             llmFirstTokenMs: 0,
@@ -335,7 +336,7 @@ export async function* streamTenderRagAnswer(options: {
               llmFirstTokenMs: 0,
               streamed: true,
             }),
-            indexStatus: "failed",
+            indexStatus: "no_documents",
           },
         };
         return;
