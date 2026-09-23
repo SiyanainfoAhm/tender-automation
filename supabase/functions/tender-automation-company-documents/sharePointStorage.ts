@@ -340,6 +340,54 @@ export async function createSharePointUploadSession(
   return { existed: false, session, path: clean };
 }
 
+/**
+ * Forward one Content-Range chunk to a Graph upload-session URL.
+ * Chunk sizes (except the last) must be multiples of 320 KiB.
+ */
+export async function putSharePointUploadChunk(options: {
+  uploadUrl: string;
+  bytes: Uint8Array;
+  start: number;
+  totalSize: number;
+}): Promise<{ complete: boolean; item: SharePointItem | null }> {
+  const end = options.start + options.bytes.byteLength - 1;
+  const response = await fetch(options.uploadUrl, {
+    method: "PUT",
+    headers: {
+      "Content-Length": String(options.bytes.byteLength),
+      "Content-Range": `bytes ${options.start}-${end}/${options.totalSize}`,
+    },
+    body: options.bytes,
+  });
+  const body = (await response.json().catch(() => ({}))) as SharePointItem & {
+    error?: { code?: string; message?: string };
+  };
+  if (![200, 201, 202].includes(response.status)) {
+    throw new Error(
+      body.error?.message ||
+        `SharePoint chunk upload failed (${response.status}).`,
+    );
+  }
+  if (response.status === 200 || response.status === 201) {
+    return { complete: true, item: body.webUrl ? body : null };
+  }
+  return { complete: false, item: null };
+}
+
+/** True when a stored URL points at SharePoint (legacy Azure otherwise). */
+export function isSharePointStorageUrl(
+  url: string | null | undefined,
+): boolean {
+  if (!url?.trim()) return false;
+  try {
+    return new URL(url.trim()).hostname
+      .toLowerCase()
+      .endsWith(".sharepoint.com");
+  } catch {
+    return false;
+  }
+}
+
 function relativePathFromWebUrl(
   storageUrl: string,
   config: SharePointConfig,

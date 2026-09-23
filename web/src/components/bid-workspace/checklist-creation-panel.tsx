@@ -8,7 +8,9 @@ import {
   MoreHorizontal,
   Plus,
   RefreshCw,
+  RotateCcw,
   Sparkles,
+  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -23,8 +25,10 @@ import { promptKeyForChecklistCategory } from "@/lib/bid-ai-prompts";
 import { DOCUMENT_STATUS_LABELS } from "@/lib/bid-workspace";
 import { cn } from "@/lib/utils";
 import { AddRequirementDialog } from "@/components/bid-workspace/add-requirement-dialog";
+import { CompanyDocumentPickerDialog } from "@/components/bid-workspace/company-document-picker-dialog";
 import { EditAiPromptDialog } from "@/components/bid-workspace/edit-ai-prompt-dialog";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -39,6 +43,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import {
   Sheet,
   SheetContent,
@@ -54,6 +59,15 @@ import type {
   ChecklistItemRow,
   ChecklistProgress,
 } from "@/server/repositories/bidChecklistRepository";
+import type { CompanyDocument } from "@/server/repositories/documentRepository";
+
+type UploadOptions = { saveAsCompanyDocument?: boolean };
+type UnlinkOptions = {
+  deleteWorkspaceFiles?: boolean;
+  deleteCompanyDocument?: boolean;
+  /** Archive/delete the checklist requirement itself (manual items). */
+  deleteChecklistItem?: boolean;
+};
 
 type RequirementListPanelProps = {
   tenderId: string;
@@ -62,6 +76,8 @@ type RequirementListPanelProps = {
   items: ChecklistItemRow[];
   /** All workspace requirements (for duplicate checks / aggregate add). */
   allItems?: ChecklistItemRow[];
+  /** Shared once for the page — used by every checklist row. */
+  companyDocuments?: CompanyDocument[];
   progress: ChecklistProgress;
   readOnly: boolean;
   /** null = Checklist Creation (user must pick section). */
@@ -70,7 +86,19 @@ type RequirementListPanelProps = {
   generationPhase?: string | null;
   togglingItemId?: string | null;
   emptyMessage?: string;
-  onUpload?: (item: ChecklistItemRow, file: File) => void | Promise<void>;
+  onUpload?: (
+    item: ChecklistItemRow,
+    file: File,
+    options?: UploadOptions,
+  ) => void | Promise<void>;
+  onLinkCompanyDocument?: (
+    item: ChecklistItemRow,
+    companyDocumentId: string,
+  ) => void | Promise<void>;
+  onUnlinkDocument?: (
+    item: ChecklistItemRow,
+    options?: UnlinkOptions,
+  ) => void | Promise<void>;
   onGenerateAi?: (
     item: ChecklistItemRow,
     options?: { customInstructions?: string },
@@ -102,12 +130,24 @@ function formatCreatedAt(value: string | null): string | null {
   }
 }
 
+function itemHasWorkspaceDocs(item: ChecklistItemRow): boolean {
+  return item.documents.some((doc) => doc.source === "TENDER");
+}
+
+function itemHasCompanyDocs(item: ChecklistItemRow): boolean {
+  return (
+    item.matchedDocumentSource === "COMPANY" ||
+    item.documents.some((doc) => doc.source === "COMPANY")
+  );
+}
+
 export function RequirementListPanel({
   tenderId,
   title,
   subtitle,
   items,
   allItems,
+  companyDocuments = [],
   progress,
   readOnly,
   addSection = null,
@@ -116,27 +156,43 @@ export function RequirementListPanel({
   togglingItemId = null,
   emptyMessage = "No requirements in this section yet. Checklist extraction runs automatically when you open Bid Workspace for a Will Bid tender.",
   onUpload,
+  onLinkCompanyDocument,
+  onUnlinkDocument,
   onGenerateAi,
   onToggleComplete,
   onRequirementsChanged,
 }: RequirementListPanelProps) {
   const catalog = allItems || items;
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [actionItemId, setActionItemId] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [linking, setLinking] = useState(false);
+  const [unlinking, setUnlinking] = useState(false);
+  const [unlinkConfirmOpen, setUnlinkConfirmOpen] = useState(false);
   const [generatePromptOpen, setGeneratePromptOpen] = useState(false);
   const [generateMode, setGenerateMode] = useState<"create" | "regenerate">(
     "create",
   );
   const [uploading, setUploading] = useState(false);
+  const [uploadConfirmOpen, setUploadConfirmOpen] = useState(false);
+  const [pendingUploadFile, setPendingUploadFile] = useState<File | null>(null);
+  const [saveAsCompanyDocument, setSaveAsCompanyDocument] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteLinkedCount, setDeleteLinkedCount] = useState(0);
   const [deleting, setDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
   const selected = useMemo(
     () => items.find((item) => item.id === selectedId) || null,
     [items, selectedId],
   );
+  const actionItem = useMemo(
+    () => items.find((item) => item.id === actionItemId) || null,
+    [items, actionItemId],
+  );
+
   const generating =
     Boolean(selectedId) && selectedId === generatingRequirementId;
   const selectedFromScratch = selected
@@ -153,6 +209,7 @@ export function RequirementListPanel({
     : "TECHNICAL_DOCUMENT";
   const hasLinkedDocs = (selected?.documents.length || 0) > 0;
   const isManual = selected?.requirementOrigin === "MANUAL";
+  const busy = uploading || linking || unlinking;
 
   function openGeneratePrompt(mode: "create" | "regenerate") {
     if (!selected || !onGenerateAi || readOnly) return;
@@ -160,11 +217,82 @@ export function RequirementListPanel({
     setGeneratePromptOpen(true);
   }
 
-  async function openDeleteConfirm() {
-    if (!selected || !isManual || readOnly) return;
+  function startSelectCompany(item: ChecklistItemRow) {
+    if (readOnly || !onLinkCompanyDocument) return;
+    setActionItemId(item.id);
+    setPickerOpen(true);
+  }
+
+  function startUpload(item: ChecklistItemRow) {
+    if (readOnly || !onUpload) return;
+    setActionItemId(item.id);
+    setSaveAsCompanyDocument(false);
+    setPendingUploadFile(null);
+    fileInputRef.current?.click();
+  }
+
+  function startUnlink(item: ChecklistItemRow) {
+    if (readOnly || !onUnlinkDocument || item.documents.length === 0) return;
+    setActionItemId(item.id);
+    // Always confirm — workspace and/or company delete is optional.
+    setUnlinkConfirmOpen(true);
+  }
+
+  async function confirmUnlink(
+    item: ChecklistItemRow,
+    options?: UnlinkOptions,
+  ) {
+    if (!onUnlinkDocument) return;
+    setUnlinking(true);
+    try {
+      await onUnlinkDocument(item, options);
+      if (options?.deleteChecklistItem) {
+        const deleted = await deleteChecklistRequirementAction({
+          tenderId,
+          itemId: item.id,
+        });
+        if (!deleted.ok) {
+          toast.error(deleted.error);
+          return;
+        }
+        toast.success("Requirement deleted.");
+        setSelectedId((id) => (id === item.id ? null : id));
+        onRequirementsChanged?.();
+      }
+      setUnlinkConfirmOpen(false);
+      setActionItemId(null);
+    } finally {
+      setUnlinking(false);
+    }
+  }
+
+  async function confirmUpload() {
+    if (!actionItem || !pendingUploadFile || !onUpload) return;
+    setUploading(true);
+    try {
+      await onUpload(actionItem, pendingUploadFile, {
+        saveAsCompanyDocument,
+      });
+      setUploadConfirmOpen(false);
+      setPendingUploadFile(null);
+      setSaveAsCompanyDocument(false);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Upload failed.",
+      );
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function openDeleteConfirm(item?: ChecklistItemRow | null) {
+    const target = item || selected;
+    if (!target || readOnly) return;
+    setActionItemId(target.id);
+    setSelectedId(target.id);
     const preview = await previewDeleteChecklistRequirementAction({
       tenderId,
-      itemId: selected.id,
+      itemId: target.id,
     });
     if (!preview.ok) {
       toast.error(preview.error);
@@ -249,75 +377,179 @@ export function RequirementListPanel({
                 item.completionStatus === "INVALID_DOCUMENT";
               const primaryDoc = item.documents[0] || null;
               const manual = item.requirementOrigin === "MANUAL";
+              const itemBusy =
+                busy && actionItemId === item.id;
+              const itemGenerating = generatingRequirementId === item.id;
+              const linked = item.documents.length > 0;
               return (
-                <button
+                <div
                   key={item.id}
-                  type="button"
                   className={cn(
-                    "flex min-h-[72px] w-full items-start gap-2.5 rounded-md border px-3 py-2.5 text-left transition-colors",
-                    complete &&
-                      "border-emerald-200 bg-emerald-50/80 hover:bg-emerald-50",
-                    draft &&
-                      "border-amber-200 bg-amber-50/70 hover:bg-amber-50",
-                    expired &&
-                      "border-rose-200 bg-rose-50/70 hover:bg-rose-50",
+                    "flex min-h-[72px] w-full flex-col gap-2 rounded-md border px-3 py-2.5 text-left transition-colors",
+                    complete && "border-emerald-200 bg-emerald-50/80",
+                    draft && "border-amber-200 bg-amber-50/70",
+                    expired && "border-rose-200 bg-rose-50/70",
                     !complete &&
                       !draft &&
                       !expired &&
-                      "border-border bg-white hover:bg-background-50",
+                      "border-border bg-white",
                   )}
-                  onClick={() => {
-                    setSelectedId(item.id);
-                    setGeneratePromptOpen(false);
-                  }}
                 >
-                  {complete ? (
-                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" />
-                  ) : (
-                    <FileText className="mt-0.5 size-4 shrink-0 text-foreground-300" />
-                  )}
-                  <span className="min-w-0 flex-1">
-                    <span
-                      className={cn(
-                        "block text-sm font-medium text-foreground-900",
-                        complete && "text-foreground-600 line-through",
-                      )}
-                    >
-                      {item.requirementName}
-                    </span>
-                    <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-foreground-500">
-                      <span>
-                        {[
-                          manual ? "Manually Added" : null,
-                          complete ? "Completed" : statusLine(item),
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
+                  <button
+                    type="button"
+                    className="flex w-full items-start gap-2.5 text-left hover:opacity-90"
+                    onClick={() => {
+                      setSelectedId(item.id);
+                      setGeneratePromptOpen(false);
+                    }}
+                  >
+                    {complete ? (
+                      <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" />
+                    ) : (
+                      <FileText className="mt-0.5 size-4 shrink-0 text-foreground-300" />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span
+                        className={cn(
+                          "block text-sm font-medium text-foreground-900",
+                          complete && "text-foreground-600 line-through",
+                        )}
+                      >
+                        {item.requirementName}
                       </span>
-                      {item.sourceClause ? (
-                        <span className="text-foreground-400">
-                          {item.sourceClause}
+                      <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-foreground-500">
+                        <span>
+                          {[
+                            manual ? "Manually Added" : null,
+                            complete ? "Completed" : statusLine(item),
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </span>
+                        {item.sourceClause ? (
+                          <span className="text-foreground-400">
+                            {item.sourceClause}
+                          </span>
+                        ) : null}
+                        {primaryDoc?.downloadHref ? (
+                          <a
+                            className="font-medium text-emerald-700 hover:underline"
+                            href={primaryDoc.downloadHref}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            View Document
+                          </a>
+                        ) : null}
+                      </span>
+                      {item.documents.length > 1 ? (
+                        <span className="mt-1 block text-[11px] text-foreground-400">
+                          {item.documents.length} linked documents
                         </span>
                       ) : null}
-                      {primaryDoc?.downloadHref ? (
-                        <a
-                          className="font-medium text-emerald-700 hover:underline"
-                          href={primaryDoc.downloadHref}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          View Document
-                        </a>
-                      ) : null}
                     </span>
-                    {item.documents.length > 1 ? (
-                      <span className="mt-1 block text-[11px] text-foreground-400">
-                        {item.documents.length} linked documents
-                      </span>
-                    ) : null}
-                  </span>
-                </button>
+                  </button>
+
+                  {!readOnly ? (
+                    <div
+                      className="flex flex-wrap gap-1.5 border-t border-border/60 pt-2"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1 px-2 text-xs"
+                        disabled={
+                          itemBusy ||
+                          itemGenerating ||
+                          !onLinkCompanyDocument
+                        }
+                        onClick={() => startSelectCompany(item)}
+                      >
+                        {linking && actionItemId === item.id ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          <FileText className="size-3" />
+                        )}
+                        Select
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 gap-1 px-2 text-xs"
+                        disabled={itemBusy || itemGenerating || !onUpload}
+                        onClick={() => startUpload(item)}
+                      >
+                        {uploading && actionItemId === item.id ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          <Upload className="size-3" />
+                        )}
+                        {linked ? "Replace" : "Upload"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        className="h-7 gap-1 px-2 text-xs"
+                        disabled={
+                          itemGenerating ||
+                          togglingItemId === item.id ||
+                          !onToggleComplete
+                        }
+                        onClick={() =>
+                          onToggleComplete?.(item, !item.isCompleted)
+                        }
+                      >
+                        {togglingItemId === item.id ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : complete ? (
+                          <RotateCcw className="size-3" />
+                        ) : (
+                          <CheckCircle2 className="size-3" />
+                        )}
+                        {complete ? "Reopen" : "Mark done"}
+                      </Button>
+                      {linked ? (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 gap-1 px-2 text-xs text-status-nogo"
+                          disabled={
+                            itemBusy || itemGenerating || !onUnlinkDocument
+                          }
+                          onClick={() => startUnlink(item)}
+                        >
+                          {unlinking && actionItemId === item.id ? (
+                            <Loader2 className="size-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="size-3" />
+                          )}
+                          Remove
+                        </Button>
+                      ) : null}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 gap-1 px-2 text-xs text-rose-700"
+                        disabled={itemBusy || itemGenerating || deleting}
+                        onClick={() => void openDeleteConfirm(item)}
+                      >
+                        {deleting && actionItemId === item.id ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="size-3" />
+                        )}
+                        Delete
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
               );
             })}
           </div>
@@ -328,20 +560,13 @@ export function RequirementListPanel({
         ref={fileInputRef}
         type="file"
         className="hidden"
-        onChange={async (e) => {
+        onChange={(e) => {
           const file = e.target.files?.[0];
           e.target.value = "";
-          if (!file || !selected || !onUpload) return;
-          setUploading(true);
-          try {
-            await onUpload(selected, file);
-          } catch (error) {
-            toast.error(
-              error instanceof Error ? error.message : "Upload failed.",
-            );
-          } finally {
-            setUploading(false);
-          }
+          if (!file || !actionItemId) return;
+          setPendingUploadFile(file);
+          setSaveAsCompanyDocument(false);
+          setUploadConfirmOpen(true);
         }}
       />
 
@@ -367,7 +592,7 @@ export function RequirementListPanel({
                   >
                     {selected.requirementName}
                   </SheetTitle>
-                  {!readOnly && isManual ? (
+                  {!readOnly ? (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button
@@ -381,12 +606,14 @@ export function RequirementListPanel({
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => setEditOpen(true)}>
-                          Edit Requirement
-                        </DropdownMenuItem>
+                        {isManual ? (
+                          <DropdownMenuItem onClick={() => setEditOpen(true)}>
+                            Edit Requirement
+                          </DropdownMenuItem>
+                        ) : null}
                         <DropdownMenuItem
                           className="text-rose-700 focus:text-rose-700"
-                          onClick={() => void openDeleteConfirm()}
+                          onClick={() => void openDeleteConfirm(selected)}
                         >
                           Delete Requirement
                         </DropdownMenuItem>
@@ -472,7 +699,9 @@ export function RequirementListPanel({
                         className="rounded-md border border-emerald-200 bg-emerald-50/60 p-3"
                       >
                         <p className="font-medium text-foreground-900">
-                          {doc.fileName || doc.title}
+                          {doc.source === "COMPANY"
+                            ? doc.title || doc.fileName
+                            : doc.fileName || doc.title}
                         </p>
                         <p className="mt-0.5 text-xs text-foreground-500">
                           {doc.source === "COMPANY"
@@ -508,7 +737,7 @@ export function RequirementListPanel({
                       <div>
                         <p>
                           {canGenerate
-                            ? "No tender draft yet — generate this document from scratch for this RFP."
+                            ? "No tender draft yet — generate this document from scratch for this RFP, or link a company document."
                             : "No matching document found."}
                         </p>
                         {canGenerate ? (
@@ -518,7 +747,7 @@ export function RequirementListPanel({
                           </p>
                         ) : (
                           <p className="mt-1 text-xs text-foreground-500">
-                            Upload the required certificate or evidence, or mark
+                            Use Select or Upload on the checklist card, or mark
                             complete manually if already handled offline.
                           </p>
                         )}
@@ -585,22 +814,6 @@ export function RequirementListPanel({
                         Regenerate
                       </Button>
                     ) : null}
-                    <Button
-                      type="button"
-                      className="justify-start gap-2"
-                      variant="outline"
-                      disabled={generating || uploading || !onUpload}
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      {uploading ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : (
-                        <Upload className="size-4" />
-                      )}
-                      {hasLinkedDocs
-                        ? "Upload Replacement"
-                        : "Upload Document"}
-                    </Button>
                     <Button
                       type="button"
                       variant="ghost"
@@ -675,8 +888,8 @@ export function RequirementListPanel({
             <DialogTitle>Delete requirement?</DialogTitle>
             <DialogDescription>
               {deleteLinkedCount > 0
-                ? `This requirement has ${deleteLinkedCount} linked document${deleteLinkedCount === 1 ? "" : "s"}. Deleting removes the requirement but keeps documents in the workspace library.`
-                : "This permanently removes the manually added requirement from the workspace."}
+                ? `This requirement has ${deleteLinkedCount} linked document${deleteLinkedCount === 1 ? "" : "s"}. Deleting removes the requirement row but keeps documents in the library.`
+                : "This permanently deletes the checklist requirement record from the workspace."}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -702,6 +915,206 @@ export function RequirementListPanel({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog
+        open={uploadConfirmOpen}
+        onOpenChange={(open) => {
+          setUploadConfirmOpen(open);
+          if (!open) {
+            setPendingUploadFile(null);
+            setSaveAsCompanyDocument(false);
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Upload document</DialogTitle>
+            <DialogDescription>
+              {actionItem
+                ? `Attach a file for “${actionItem.requirementName}”.`
+                : "Attach a file for this requirement."}
+            </DialogDescription>
+          </DialogHeader>
+          {pendingUploadFile ? (
+            <p className="truncate text-sm text-foreground-700">
+              File:{" "}
+              <span className="font-medium">{pendingUploadFile.name}</span>
+            </p>
+          ) : null}
+          <div className="flex items-start gap-2 rounded-md border border-border bg-background-50/80 p-3">
+            <Checkbox
+              id="save-as-company-doc"
+              checked={saveAsCompanyDocument}
+              onCheckedChange={(checked) =>
+                setSaveAsCompanyDocument(checked === true)
+              }
+              disabled={uploading}
+            />
+            <div className="space-y-0.5">
+              <Label
+                htmlFor="save-as-company-doc"
+                className="cursor-pointer text-sm font-medium text-foreground-900"
+              >
+                Save as template in Company Documents
+              </Label>
+              <p className="text-xs text-foreground-500">
+                Adds this file to your company library so you can reuse it on
+                future tenders. You can remove it from a checklist later without
+                deleting the library copy — or choose to delete it when asked.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={uploading}
+              onClick={() => setUploadConfirmOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={uploading || !pendingUploadFile}
+              onClick={() => void confirmUpload()}
+            >
+              {uploading ? <Loader2 className="size-4 animate-spin" /> : null}
+              Upload
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={unlinkConfirmOpen}
+        onOpenChange={(open) => {
+          setUnlinkConfirmOpen(open);
+          if (!open) setActionItemId(null);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Remove document?</DialogTitle>
+            <DialogDescription>
+              {actionItem && itemHasCompanyDocs(actionItem)
+                ? "This requirement links a company document. Choose unlink only, delete the company file, and/or delete this requirement."
+                : actionItem && itemHasWorkspaceDocs(actionItem)
+                  ? "This document was uploaded for this tender only. Choose whether to also delete the file or this requirement."
+                  : "Remove the linked document from this checklist requirement."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col gap-2 sm:flex-col">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={unlinking || !actionItem}
+              className="w-full"
+              onClick={() =>
+                actionItem &&
+                void confirmUnlink(actionItem, {
+                  deleteWorkspaceFiles: false,
+                  deleteCompanyDocument: false,
+                })
+              }
+            >
+              {unlinking ? <Loader2 className="size-4 animate-spin" /> : null}
+              Remove from checklist only
+            </Button>
+            {actionItem && itemHasWorkspaceDocs(actionItem) ? (
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={unlinking}
+                className="w-full"
+                onClick={() =>
+                  void confirmUnlink(actionItem, {
+                    deleteWorkspaceFiles: true,
+                    deleteCompanyDocument: false,
+                  })
+                }
+              >
+                {unlinking ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : null}
+                Remove and delete uploaded file
+              </Button>
+            ) : null}
+            {actionItem && itemHasCompanyDocs(actionItem) ? (
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={unlinking}
+                className="w-full"
+                onClick={() =>
+                  void confirmUnlink(actionItem, {
+                    deleteWorkspaceFiles: itemHasWorkspaceDocs(actionItem),
+                    deleteCompanyDocument: true,
+                    deleteChecklistItem: true,
+                  })
+                }
+              >
+                {unlinking ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : null}
+                Delete company doc & requirement
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={unlinking || !actionItem}
+              className="w-full"
+              onClick={() =>
+                actionItem &&
+                void confirmUnlink(actionItem, {
+                  deleteWorkspaceFiles: false,
+                  deleteCompanyDocument: false,
+                  deleteChecklistItem: true,
+                })
+              }
+            >
+              {unlinking ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : null}
+              Delete this requirement
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={unlinking}
+              className="w-full"
+              onClick={() => setUnlinkConfirmOpen(false)}
+            >
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {actionItem && onLinkCompanyDocument ? (
+        <CompanyDocumentPickerDialog
+          open={pickerOpen}
+          onOpenChange={(open) => {
+            setPickerOpen(open);
+            if (!open) setActionItemId(null);
+          }}
+          documents={companyDocuments}
+          selectedId={
+            actionItem.documents.find((doc) => doc.source === "COMPANY")?.id ||
+            null
+          }
+          busy={linking}
+          onSelect={async (companyDocumentId) => {
+            setLinking(true);
+            try {
+              await onLinkCompanyDocument(actionItem, companyDocumentId);
+              setPickerOpen(false);
+            } finally {
+              setLinking(false);
+            }
+          }}
+        />
+      ) : null}
     </div>
   );
 }

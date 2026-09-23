@@ -23,12 +23,12 @@ import {
   FINANCIAL_DOCUMENT_TYPES,
   generateFinancialYears,
 } from "@/lib/company/types";
+import { uploadCompanyDocumentDirectToSharePoint } from "@/lib/uploads/directSharePointUpload";
 import type {
   DocumentUploadMetadata,
   FileUploadProgressState,
   UploadKind,
 } from "@/lib/uploads/types";
-import { UploadManager } from "@/lib/uploads/uploadManager";
 import {
   documentUploadAcceptAttr,
   documentUploadHint,
@@ -94,10 +94,8 @@ export function UploadDocumentDialog({
   kind,
   existingFinancialTypes = [],
 }: UploadDocumentDialogProps) {
-  const router = useRouter();
-  const managerRef = useRef<UploadManager | null>(null);
-  const currentIdRef = useRef<string | null>(null);
-  const handledCompleteRef = useRef<string | null>(null);
+﻿  const router = useRouter();
+  const abortRef = useRef<AbortController | null>(null);
   const successTimerRef = useRef<number | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [progress, setProgress] = useState<FileUploadProgressState | null>(null);
@@ -110,22 +108,6 @@ export function UploadDocumentDialog({
   const copy = COPY[kind];
   const uploading = isActiveStatus(progress?.status);
   const maxIssueDate = todayIsoDate();
-
-  useEffect(() => {
-    const manager = new UploadManager();
-    managerRef.current = manager;
-    const unsubscribe = manager.subscribe((items) => {
-      const currentId = currentIdRef.current;
-      const match = currentId
-        ? items.find((item) => item.id === currentId)
-        : items.at(-1);
-      setProgress(match ?? null);
-    });
-    return () => {
-      unsubscribe();
-      managerRef.current = null;
-    };
-  }, []);
 
   useEffect(() => {
     if (!open) {
@@ -143,8 +125,8 @@ export function UploadDocumentDialog({
       window.clearTimeout(successTimerRef.current);
       successTimerRef.current = null;
     }
-    currentIdRef.current = null;
-    managerRef.current?.clear();
+    abortRef.current?.abort();
+    abortRef.current = null;
     setFile(null);
     setProgress(null);
     setConfirmClose(false);
@@ -154,21 +136,11 @@ export function UploadDocumentDialog({
   }, [onOpenChange]);
 
   useEffect(() => {
-    if (progress?.status !== "complete" || !progress.id) return;
-    if (handledCompleteRef.current === progress.id) return;
-    handledCompleteRef.current = progress.id;
-    toast.success("Document uploaded successfully.");
-    successTimerRef.current = window.setTimeout(() => {
-      resetAndClose();
-      router.refresh();
-    }, 1200);
-  }, [progress?.id, progress?.status, resetAndClose, router]);
-
-  useEffect(() => {
     return () => {
       if (successTimerRef.current) {
         window.clearTimeout(successTimerRef.current);
       }
+      abortRef.current?.abort();
     };
   }, []);
 
@@ -181,20 +153,13 @@ export function UploadDocumentDialog({
   }
 
   async function cancelUploadAndClose() {
-    if (progress?.id) {
-      try {
-        await managerRef.current?.cancel(progress.id);
-      } catch {
-        // Cancel is best-effort; still close the modal.
-      }
-    }
+    abortRef.current?.abort();
     resetAndClose();
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setFormError(null);
-
     const form = event.currentTarget;
     const formData = new FormData(form);
     const selected = file ?? (formData.get("file") instanceof File
@@ -248,43 +213,93 @@ export function UploadDocumentDialog({
       setFormError(metaError.message);
       return;
     }
+    if (!selected) return;
+
+    const uploadId = `sp-${Date.now()}`;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setProgress({
+      id: uploadId,
+      fileName: selected.name,
+      uploadedBytes: 0,
+      totalBytes: selected.size,
+      percentage: 0,
+      currentChunk: 0,
+      totalChunks: 1,
+      status: "uploading",
+      error: null,
+      documentId: null,
+      uploadId: null,
+    });
 
     try {
-      const manager = managerRef.current;
-      if (!manager || !selected) return;
-      const id = manager.addFile(selected, metadata);
-      currentIdRef.current = id;
-      const result = await manager.start(id);
-      if (result.status === "failed") {
+      const result = await uploadCompanyDocumentDirectToSharePoint({
+        file: selected,
+        metadata,
+        signal: controller.signal,
+        onProgress: (uploadedBytes, totalBytes) => {
+          setProgress((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  uploadedBytes,
+                  totalBytes,
+                  percentage: Math.min(
+                    99,
+                    Math.round((uploadedBytes / Math.max(1, totalBytes)) * 100),
+                  ),
+                  status: "uploading",
+                }
+              : prev,
+          );
+        },
+      });
+      if (!result.ok) {
+        setProgress((prev) =>
+          prev
+            ? { ...prev, status: "failed", error: result.error, percentage: 0 }
+            : prev,
+        );
         setFormError(result.error);
         return;
       }
-      if (result.status === "complete") {
-        router.refresh();
-      }
-    } catch (error) {
-      setFormError(
-        error instanceof Error ? error.message : "Upload failed",
+      setProgress((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: "complete",
+              percentage: 100,
+              uploadedBytes: selected.size,
+              documentId: result.documentId,
+            }
+          : prev,
       );
+      toast.success(result.message || "Document uploaded successfully.");
+      successTimerRef.current = window.setTimeout(() => {
+        resetAndClose();
+        router.refresh();
+      }, 1200);
+    } catch (error) {
+      if (controller.signal.aborted) {
+        setProgress((prev) =>
+          prev ? { ...prev, status: "cancelled", error: null } : prev,
+        );
+        return;
+      }
+      const message =
+        error instanceof Error ? error.message : "Upload failed";
+      setProgress((prev) =>
+        prev ? { ...prev, status: "failed", error: message } : prev,
+      );
+      setFormError(message);
+    } finally {
+      abortRef.current = null;
     }
   }
 
   async function handleRetry() {
-    if (!progress?.id) return;
     setFormError(null);
-    try {
-      const result = await managerRef.current?.retry(progress.id);
-      if (result?.status === "failed") {
-        setFormError(result.error);
-      }
-      if (result?.status === "complete") {
-        router.refresh();
-      }
-    } catch (error) {
-      setFormError(
-        error instanceof Error ? error.message : "Upload failed",
-      );
-    }
+    setProgress(null);
   }
 
   const showProgress = Boolean(progress && progress.status !== "queued");

@@ -1,4 +1,5 @@
 import { MAX_DOCUMENT_UPLOAD_BYTES } from "@/lib/uploads/config";
+import type { DocumentUploadMetadata } from "@/lib/uploads/types";
 import { validateDocumentFile } from "@/lib/uploads/validation";
 import type { TenderDocumentSection } from "@/lib/bid-fees";
 
@@ -21,6 +22,44 @@ type CreateUploadResponse = {
 // Graph fragments must be a multiple of 320 KiB and below 60 MiB.
 export const SHAREPOINT_UPLOAD_CHUNK_BYTES = 10 * 1024 * 1024;
 
+export async function uploadChunksToSharePoint(options: {
+  uploadUrl: string;
+  file: File | Blob;
+  signal?: AbortSignal;
+  onProgress?: (uploadedBytes: number, totalBytes: number) => void;
+}): Promise<{ ok: true; duplicate?: boolean } | { ok: false; error: string }> {
+  const total = options.file.size;
+  for (
+    let start = 0;
+    start < total;
+    start += SHAREPOINT_UPLOAD_CHUNK_BYTES
+  ) {
+    const end = Math.min(total, start + SHAREPOINT_UPLOAD_CHUNK_BYTES);
+    const response = await fetch(options.uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Range": `bytes ${start}-${end - 1}/${total}`,
+      },
+      body: options.file.slice(start, end),
+      signal: options.signal,
+    });
+    if (response.status === 409) {
+      return { ok: true, duplicate: true };
+    }
+    if (![200, 201, 202].includes(response.status)) {
+      const body = await response.text().catch(() => "");
+      return {
+        ok: false,
+        error:
+          body.slice(0, 500) ||
+          `SharePoint upload failed (${response.status}).`,
+      };
+    }
+    options.onProgress?.(end, total);
+  }
+  return { ok: true };
+}
+
 async function abortUpload(tenderId: string, documentId: string): Promise<void> {
   await fetch(
     `/api/tenders/${encodeURIComponent(tenderId)}/documents/direct-upload`,
@@ -37,38 +76,7 @@ async function uploadChunks(options: {
   file: File;
   signal?: AbortSignal;
 }): Promise<{ ok: true; duplicate?: boolean } | { ok: false; error: string }> {
-  for (
-    let start = 0;
-    start < options.file.size;
-    start += SHAREPOINT_UPLOAD_CHUNK_BYTES
-  ) {
-    const end = Math.min(
-      options.file.size,
-      start + SHAREPOINT_UPLOAD_CHUNK_BYTES,
-    );
-    const response = await fetch(options.uploadUrl, {
-      method: "PUT",
-      headers: {
-        "Content-Range": `bytes ${start}-${end - 1}/${options.file.size}`,
-      },
-      body: options.file.slice(start, end),
-      signal: options.signal,
-    });
-    // 202 = more ranges expected; 200/201 = driveItem created.
-    if (response.status === 409) {
-      return { ok: true, duplicate: true };
-    }
-    if (![200, 201, 202].includes(response.status)) {
-      const body = await response.text().catch(() => "");
-      return {
-        ok: false,
-        error:
-          body.slice(0, 500) ||
-          `SharePoint upload failed (${response.status}).`,
-      };
-    }
-  }
-  return { ok: true };
+  return uploadChunksToSharePoint(options);
 }
 
 /**
@@ -183,5 +191,117 @@ export async function uploadTenderDocumentDirectToSharePoint(options: {
       (created.duplicate
         ? "Existing SharePoint document linked."
         : "Document uploaded."),
+  };
+}
+
+async function abortCompanyUpload(documentId: string): Promise<void> {
+  await fetch("/api/documents/direct-upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ intent: "abort", documentId }),
+  }).catch(() => null);
+}
+
+/**
+ * Company Documents library — browser → Graph SharePoint upload session.
+ * Persists storage_url (SharePoint webUrl) on the company document row.
+ */
+export async function uploadCompanyDocumentDirectToSharePoint(options: {
+  file: File;
+  metadata: DocumentUploadMetadata;
+  signal?: AbortSignal;
+  onProgress?: (uploadedBytes: number, totalBytes: number) => void;
+}): Promise<DirectUploadResult> {
+  const validation = validateDocumentFile(
+    options.file,
+    MAX_DOCUMENT_UPLOAD_BYTES,
+  );
+  if (validation) return { ok: false, error: validation.message };
+
+  const createRes = await fetch("/api/documents/direct-upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      intent: "create",
+      ...options.metadata,
+      fileName: options.file.name,
+      originalFileName: options.file.name,
+      mimeType: options.file.type || "application/octet-stream",
+      fileSizeBytes: options.file.size,
+    }),
+    signal: options.signal,
+  });
+  const created =
+    (await createRes.json().catch(() => ({}))) as CreateUploadResponse;
+  if (!createRes.ok || !created.success || !created.documentId) {
+    return {
+      ok: false,
+      error: created.error || "Unable to start SharePoint upload.",
+    };
+  }
+
+  const documentId = created.documentId;
+  const storagePath = String(created.blobPath || created.blobName || "");
+  if (!created.duplicate) {
+    if (!created.uploadUrl) {
+      await abortCompanyUpload(documentId);
+      return { ok: false, error: "SharePoint upload session was not created." };
+    }
+    try {
+      const upload = await uploadChunksToSharePoint({
+        uploadUrl: created.uploadUrl,
+        file: options.file,
+        signal: options.signal,
+        onProgress: options.onProgress,
+      });
+      if (!upload.ok) {
+        await abortCompanyUpload(documentId);
+        return upload;
+      }
+    } catch (error) {
+      await abortCompanyUpload(documentId);
+      return {
+        ok: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "SharePoint upload failed. Please try again.",
+      };
+    }
+  }
+
+  const completeRes = await fetch("/api/documents/direct-upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      intent: "complete",
+      documentId,
+      blobPath: storagePath,
+      fileName: options.file.name,
+      originalFileName: options.file.name,
+      mimeType: options.file.type || "application/octet-stream",
+      fileSizeBytes: options.file.size,
+    }),
+    signal: options.signal,
+  });
+  const completed = (await completeRes.json().catch(() => ({}))) as {
+    success?: boolean;
+    error?: string;
+    documentId?: string;
+    message?: string;
+  };
+  if (!completeRes.ok || !completed.success) {
+    return {
+      ok: false,
+      error:
+        completed.error ||
+        "The file reached SharePoint but metadata could not be saved.",
+    };
+  }
+
+  return {
+    ok: true,
+    documentId: completed.documentId || documentId,
+    message: completed.message || "Document uploaded to Company Documents.",
   };
 }

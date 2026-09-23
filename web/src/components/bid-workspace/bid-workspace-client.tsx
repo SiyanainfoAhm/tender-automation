@@ -56,9 +56,11 @@ import {
   generateChecklistDocumentAction,
   getChecklistPreparationStatusAction,
   ingestTenderDocumentsAction,
+  linkCompanyDocumentToChecklistAction,
   markBidSubmittedAction,
   toggleChecklistItemCompleteAction,
-  uploadWorkspaceDocumentAction,
+  unlinkChecklistDocumentAction,
+  uploadChecklistDocumentAction,
 } from "@/server/actions/bid-workspace";
 import type {
   ChecklistItemRow,
@@ -99,7 +101,6 @@ export function BidWorkspaceClient({
   canSubmit,
   canUpdateStatus = false,
 }: BidWorkspaceClientProps) {
-  void companyDocuments;
   const router = useRouter();
   const [tab, setTab] = useState<WorkspaceTab>("checklist");
   const [submitOpen, setSubmitOpen] = useState(false);
@@ -458,7 +459,11 @@ export function BidWorkspaceClient({
     }
   }
 
-  async function uploadForChecklistItem(item: ChecklistItemRow, file: File) {
+  async function uploadForChecklistItem(
+    item: ChecklistItemRow,
+    file: File,
+    options?: { saveAsCompanyDocument?: boolean },
+  ) {
     const formData = new FormData();
     formData.set("tenderId", tender.id);
     formData.set("file", file);
@@ -473,28 +478,148 @@ export function BidWorkspaceClient({
           ? "Annexure"
           : "Pre-Qualification";
     formData.set("documentType", docType);
-    const result = await uploadWorkspaceDocumentAction(formData);
+    if (options?.saveAsCompanyDocument) {
+      formData.set("saveAsCompanyDocument", "1");
+    }
+    const result = await uploadChecklistDocumentAction(formData);
     if (!result.ok) {
       toast.error(result.error);
       return;
     }
-    toast.success("Document uploaded and requirement completed.");
+    toast.success(
+      options?.saveAsCompanyDocument
+        ? "Uploaded and saved to Company Documents."
+        : "Document uploaded and requirement completed.",
+    );
     setItems((prev) => {
       const next = prev.map((row) =>
         row.id === item.id
           ? {
               ...row,
-              completionStatus: "COMPLETED_TENDER_DOCUMENT" as const,
-              matchedDocumentSource: "TENDER" as const,
+              completionStatus: options?.saveAsCompanyDocument
+                ? ("COMPLETED_COMPANY_DOCUMENT" as const)
+                : ("COMPLETED_TENDER_DOCUMENT" as const),
+              matchedDocumentSource: options?.saveAsCompanyDocument
+                ? ("COMPANY" as const)
+                : ("TENDER" as const),
               matchedBy: "USER" as const,
               isCompleted: true,
-              completionSource: "UPLOADED" as const,
+              completionSource: options?.saveAsCompanyDocument
+                ? ("COMPANY_DOCUMENT" as const)
+                : ("UPLOADED" as const),
             }
           : row,
       );
       setProgress(calculateSectionProgress(next));
       return next;
     });
+    router.refresh();
+  }
+
+  async function linkCompanyDocumentForChecklistItem(
+    item: ChecklistItemRow,
+    companyDocumentId: string,
+  ) {
+    const result = await linkCompanyDocumentToChecklistAction({
+      tenderId: tender.id,
+      itemId: item.id,
+      companyDocumentId,
+    });
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    const companyDoc = companyDocuments.find((doc) => doc.id === companyDocumentId);
+    toast.success("Company document linked.");
+    setItems((prev) => {
+      const next = prev.map((row) =>
+        row.id === item.id
+          ? {
+              ...row,
+              completionStatus: "COMPLETED_COMPANY_DOCUMENT" as const,
+              matchedDocumentSource: "COMPANY" as const,
+              matchedBy: "USER" as const,
+              isCompleted: true,
+              completionSource: "COMPANY_DOCUMENT" as const,
+              documents: companyDoc
+                ? [
+                    {
+                      id: companyDoc.id,
+                      title: companyDoc.name,
+                      fileName: companyDoc.originalFileName,
+                      status: companyDoc.verificationStatus,
+                      versionLabel: null,
+                      source: "COMPANY" as const,
+                      hasFile: true,
+                      downloadHref: `/api/documents/${companyDoc.id}`,
+                      matchedBy: "USER" as const,
+                    },
+                  ]
+                : row.documents,
+            }
+          : row,
+      );
+      setProgress(calculateSectionProgress(next));
+      return next;
+    });
+    router.refresh();
+  }
+
+  async function unlinkDocumentForChecklistItem(
+    item: ChecklistItemRow,
+    options?: {
+      deleteWorkspaceFiles?: boolean;
+      deleteCompanyDocument?: boolean;
+      deleteChecklistItem?: boolean;
+    },
+  ) {
+    const result = await unlinkChecklistDocumentAction({
+      tenderId: tender.id,
+      itemId: item.id,
+      deleteWorkspaceFiles: options?.deleteWorkspaceFiles,
+      deleteCompanyDocument: options?.deleteCompanyDocument,
+    });
+    if (!result.ok) {
+      toast.error(result.error);
+      return;
+    }
+    if (!options?.deleteChecklistItem) {
+      toast.success(
+        options?.deleteCompanyDocument
+          ? "Removed from checklist and deleted from Company Documents."
+          : options?.deleteWorkspaceFiles
+            ? "Document removed from checklist and deleted."
+            : item.matchedDocumentSource === "COMPANY"
+              ? "Document removed from checklist (company library unchanged)."
+              : "Document removed from checklist.",
+      );
+      setItems((prev) => {
+        const next = prev.map((row) =>
+          row.id === item.id
+            ? {
+                ...row,
+                completionStatus: "MISSING" as const,
+                matchedDocumentSource: null,
+                matchedBy: null,
+                isCompleted: row.manualCompleted,
+                completionSource: row.manualCompleted
+                  ? ("MANUAL" as const)
+                  : null,
+                documents: [],
+              }
+            : row,
+        );
+        setProgress(calculateSectionProgress(next));
+        return next;
+      });
+    } else {
+      // Requirement will be archived by the panel after this returns.
+      setItems((prev) => {
+        const next = prev.filter((row) => row.id !== item.id);
+        setProgress(calculateSectionProgress(next));
+        return next;
+      });
+    }
     router.refresh();
   }
 
@@ -559,10 +684,13 @@ export function BidWorkspaceClient({
     tenderId: tender.id,
     readOnly,
     allItems: items,
+    companyDocuments,
     generatingRequirementId,
     generationPhase,
     togglingItemId,
     onUpload: uploadForChecklistItem,
+    onLinkCompanyDocument: linkCompanyDocumentForChecklistItem,
+    onUnlinkDocument: unlinkDocumentForChecklistItem,
     onGenerateAi: runChecklistDocumentGeneration,
     onToggleComplete: toggleChecklistComplete,
     onRequirementsChanged: () => router.refresh(),

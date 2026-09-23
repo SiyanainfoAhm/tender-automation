@@ -7,6 +7,8 @@ import {
   createSharePointUploadSession,
   deleteSharePointFile,
   getSharePointItemByPath,
+  isSharePointStorageUrl,
+  putSharePointUploadChunk,
   readSharePointFile,
   requireSharePointConfig,
   resolveSharePointItem,
@@ -956,13 +958,14 @@ async function handleBlobRead(
     Boolean(
       pathCandidate &&
         (pathCandidate.includes("/tender-artifacts/") ||
+          pathCandidate.includes("/companydocs/") ||
           pathCandidate.startsWith("companies/")),
     );
 
   if (!useSharePoint) {
     throw new HttpError(
       400,
-      "Tender document downloads use SharePoint only. Set documents_zip_url / document_urls to a SharePoint URL.",
+      "Document downloads use SharePoint only. Open the SharePoint storage_url from the document record.",
       "SHAREPOINT_URL_REQUIRED",
     );
   }
@@ -1195,7 +1198,7 @@ async function handleCreateUploadSession(
   req: Request,
   body: Record<string, unknown>,
 ) {
-  const azure = requireAzureConfig();
+  const sharePoint = requireSharePointConfig();
   const user = await authenticate(req);
   if (!UPLOAD_ROLES.has(user.role)) {
     throw new HttpError(403, "You do not have permission to manage company documents.");
@@ -1254,6 +1257,27 @@ async function handleCreateUploadSession(
   const expiresAt = new Date(Date.now() + UPLOAD_SESSION_TTL_MS).toISOString();
   const supabase = serviceSupabase();
 
+  let sharePointUploadUrl: string | null = null;
+  try {
+    let sessionResult = await createSharePointUploadSession(blobName, sharePoint);
+    if (sessionResult.existed) {
+      // Same path from a prior abandoned attempt — replace so chunks can proceed.
+      await deleteSharePointFile({ path: blobName }, sharePoint);
+      sessionResult = await createSharePointUploadSession(blobName, sharePoint);
+    }
+    if (sessionResult.existed) {
+      throw new Error("Unable to replace an existing SharePoint file for upload.");
+    }
+    sharePointUploadUrl = sessionResult.session.uploadUrl;
+  } catch (error) {
+    console.error("[company-documents] SharePoint upload session failed", {
+      companyId: user.companyId,
+      documentId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw new HttpError(500, "Unable to start SharePoint upload session.");
+  }
+
   const { error: insertDocError } = await supabase
     .from("agenttender_company_documents")
     .insert({
@@ -1271,8 +1295,8 @@ async function handleCreateUploadSession(
       notes,
       mime_type: mimeType || null,
       file_size_bytes: fileSizeBytes,
-      storage_provider: "azure",
-      storage_container: azure.containerName,
+      storage_provider: "sharepoint",
+      storage_container: sharePoint.libraryName,
       storage_blob_name: blobName,
       storage_url: null,
       content_hash: null,
@@ -1282,7 +1306,7 @@ async function handleCreateUploadSession(
     });
 
   if (insertDocError) {
-    console.error("[tender-automation-documents] pending document insert failed", {
+    console.error("[company-documents] pending document insert failed", {
       message: insertDocError.message,
       documentId,
     });
@@ -1303,12 +1327,13 @@ async function handleCreateUploadSession(
       chunk_size: CHUNK_SIZE,
       total_chunks: totalChunks,
       received_indexes: [],
+      sharepoint_upload_url: sharePointUploadUrl,
       status: "pending",
       expires_at: expiresAt,
     });
 
   if (insertSessionError) {
-    console.error("[tender-automation-documents] upload session insert failed", {
+    console.error("[company-documents] upload session insert failed", {
       message: insertSessionError.message,
       uploadId,
     });
@@ -1316,7 +1341,7 @@ async function handleCreateUploadSession(
     throw new HttpError(500, "Unable to start upload session.");
   }
 
-  console.info("[tender-automation-documents] upload session created", {
+  console.info("[company-documents] upload session created", {
     companyId: user.companyId,
     uploadId,
     documentId,
@@ -1336,7 +1361,6 @@ async function loadOwnedUploadSession(
   req: Request,
   uploadId: string,
 ) {
-  const azure = requireAzureConfig();
   const user = await authenticate(req);
   if (!UPLOAD_ROLES.has(user.role)) {
     throw new HttpError(403, "You do not have permission to manage company documents.");
@@ -1380,20 +1404,19 @@ async function loadOwnedUploadSession(
     throw new HttpError(410, "Upload session expired");
   }
 
-  return { azure, user, supabase, session };
+  return { user, supabase, session };
 }
 
 async function handleUploadChunk(req: Request) {
   const uploadId = String(req.headers.get("x-upload-id") || "").trim();
   const chunkIndex = Number(req.headers.get("x-chunk-index"));
   const totalChunksHeader = Number(req.headers.get("x-total-chunks"));
-  const blockIdHeader = String(req.headers.get("x-block-id") || "").trim();
   if (!uploadId) throw new HttpError(400, "uploadId is required");
   if (!Number.isInteger(chunkIndex) || chunkIndex < 0) {
     throw new HttpError(400, "chunkIndex is required");
   }
 
-  const { azure, supabase, session } = await loadOwnedUploadSession(req, uploadId);
+  const { supabase, session } = await loadOwnedUploadSession(req, uploadId);
   const chunkSize = Number(session.chunk_size) || CHUNK_SIZE;
   const totalChunks = Number(session.total_chunks);
   const fileSize = Number(session.file_size_bytes);
@@ -1404,10 +1427,9 @@ async function handleUploadChunk(req: Request) {
     throw new HttpError(400, "chunkIndex is out of range.");
   }
 
-  const expectedId = encodeAzureBlockId(chunkIndex);
-  const blockId = blockIdHeader || expectedId;
-  if (blockId !== expectedId) {
-    throw new HttpError(400, "Invalid block id.");
+  const uploadUrl = String(session.sharepoint_upload_url || "").trim();
+  if (!uploadUrl) {
+    throw new HttpError(500, "SharePoint upload session URL is missing.");
   }
 
   const received = Array.isArray(session.received_indexes)
@@ -1423,7 +1445,34 @@ async function handleUploadChunk(req: Request) {
   }
 
   if (!received.includes(chunkIndex)) {
-    await stageAzureBlock(azure, String(session.blob_name), blockId, bytes);
+    // Graph upload sessions require sequential Content-Range writes in order.
+    // Reject out-of-order chunks so the client retries in sequence.
+    const nextExpected = received.length === 0 ? 0 : Math.max(...received) + 1;
+    if (chunkIndex !== nextExpected) {
+      throw new HttpError(
+        409,
+        `Chunks must be uploaded in order. Expected index ${nextExpected}.`,
+      );
+    }
+    const start = chunkIndex * chunkSize;
+    try {
+      await putSharePointUploadChunk({
+        uploadUrl,
+        bytes,
+        start,
+        totalSize: fileSize,
+      });
+    } catch (error) {
+      console.error("[company-documents] SharePoint chunk upload failed", {
+        uploadId,
+        chunkIndex,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throw new HttpError(
+        500,
+        error instanceof Error ? error.message : "SharePoint chunk upload failed.",
+      );
+    }
     received.push(chunkIndex);
     const { error: updateError } = await supabase
       .from("agenttender_document_upload_sessions")
@@ -1451,12 +1500,12 @@ async function handleCompleteUpload(
 ) {
   const uploadId = String(body.uploadId || "").trim();
   if (!uploadId) throw new HttpError(400, "uploadId is required");
-  const { azure, user, supabase, session } = await loadOwnedUploadSession(
+  const { user, supabase, session } = await loadOwnedUploadSession(
     req,
     uploadId,
   );
+  const sharePoint = requireSharePointConfig();
 
-  const chunkSize = Number(session.chunk_size) || CHUNK_SIZE;
   const totalChunks = Number(session.total_chunks);
   const received = Array.isArray(session.received_indexes)
     ? (session.received_indexes as number[]).map((n) => Number(n))
@@ -1482,21 +1531,22 @@ async function handleCompleteUpload(
     .eq("company_id", user.companyId)
     .eq("status", "uploading");
 
-  const blockIds = Array.from({ length: totalChunks }, (_, index) =>
-    encodeAzureBlockId(index),
-  );
   const blobName = String(session.blob_name);
-  const fileName = String(session.original_file_name || "document");
   const mimeType = String(session.mime_type || "application/octet-stream");
+  let storageUrl: string | null = null;
 
   try {
-    await commitAzureBlockList(azure, blobName, blockIds, { mimeType, fileName });
+    const item = await getSharePointItemByPath(blobName, sharePoint);
+    if (!item?.webUrl) {
+      throw new Error("SharePoint file was not found after upload.");
+    }
+    storageUrl = item.webUrl;
   } catch (error) {
     await supabase
       .from("agenttender_document_upload_sessions")
       .update({
         status: "failed",
-        error_message: "Storage commit failed",
+        error_message: "SharePoint finalize failed",
         updated_at: new Date().toISOString(),
       })
       .eq("id", uploadId);
@@ -1505,10 +1555,12 @@ async function handleCompleteUpload(
       .update({ status: "failed", updated_at: new Date().toISOString() })
       .eq("id", session.document_id)
       .eq("company_id", user.companyId);
-    throw error;
+    throw new HttpError(
+      500,
+      error instanceof Error ? error.message : "SharePoint finalize failed.",
+    );
   }
 
-  const storageUrl = `${azureBaseUrl(azure)}/${encodeBlobPath(blobName)}`;
   const contentHash =
     typeof body.contentHash === "string" && body.contentHash.trim()
       ? body.contentHash.trim()
@@ -1518,8 +1570,8 @@ async function handleCompleteUpload(
     .from("agenttender_company_documents")
     .update({
       status: "active",
-      storage_provider: "azure",
-      storage_container: azure.containerName,
+      storage_provider: "sharepoint",
+      storage_container: sharePoint.libraryName,
       storage_blob_name: blobName,
       storage_url: storageUrl,
       content_hash: contentHash,
@@ -1533,11 +1585,11 @@ async function handleCompleteUpload(
     .single();
 
   if (updateDocError) {
-    console.error("[tender-automation-documents] metadata finalize failed", {
+    console.error("[company-documents] metadata finalize failed", {
       message: updateDocError.message,
       documentId: session.document_id,
     });
-    await deleteAzureBlob(azure, blobName).catch(() => null);
+    await deleteSharePointFile({ path: blobName }).catch(() => null);
     await supabase
       .from("agenttender_document_upload_sessions")
       .update({
@@ -1562,12 +1614,13 @@ async function handleCompleteUpload(
     .update({
       status: "complete",
       content_hash: contentHash,
+      sharepoint_upload_url: null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", uploadId)
     .eq("company_id", user.companyId);
 
-  console.info("[tender-automation-documents] chunked upload complete", {
+  console.info("[company-documents] chunked upload complete", {
     documentId: session.document_id,
     uploadId,
   });
@@ -1583,7 +1636,6 @@ async function handleAbortUpload(req: Request, body: Record<string, unknown>) {
   const uploadId = String(body.uploadId || "").trim();
   if (!uploadId) throw new HttpError(400, "uploadId is required");
 
-  const azure = requireAzureConfig();
   const user = await authenticate(req);
   if (!UPLOAD_ROLES.has(user.role)) {
     throw new HttpError(403, "You do not have permission to manage company documents.");
@@ -1608,11 +1660,12 @@ async function handleAbortUpload(req: Request, body: Record<string, unknown>) {
     throw new HttpError(409, "Completed uploads cannot be cancelled.");
   }
 
-  await deleteAzureBlob(azure, String(session.blob_name)).catch(() => null);
+  await deleteSharePointFile({ path: String(session.blob_name) }).catch(() => null);
   await supabase
     .from("agenttender_document_upload_sessions")
     .update({
       status: "aborted",
+      sharepoint_upload_url: null,
       updated_at: new Date().toISOString(),
     })
     .eq("id", uploadId)
@@ -1624,11 +1677,17 @@ async function handleAbortUpload(req: Request, body: Record<string, unknown>) {
     .eq("company_id", user.companyId)
     .in("status", ["uploading", "processing", "failed"]);
 
+  console.info("[company-documents] upload aborted", {
+    companyId: user.companyId,
+    uploadId,
+    documentId: session.document_id,
+  });
+
   return json({ success: true });
 }
 
 async function handleUpload(req: Request, form: FormData) {
-  const azure = requireAzureConfig();
+  const sharePoint = requireSharePointConfig();
   const user = await authenticate(req);
   if (!UPLOAD_ROLES.has(user.role)) {
     throw new HttpError(403, "You do not have permission to manage company documents.");
@@ -1689,16 +1748,14 @@ async function handleUpload(req: Request, form: FormData) {
   const useManualArtifactPath =
     artifactPortal === "MANUAL" && Boolean(artifactId);
 
-  // Manual tenders → {companyName_id}/tender-artifacts/manual/{created-date}/{tender-id}/…
+  // Manual tenders → SharePoint tender-artifacts path (canonical).
   // Company docs → {companyName_id}/companydocs/{General|Certificate|Other}/…
   const blobName = useManualArtifactPath
-    ? buildTenderArtifactBlobName({
-        sourcePortal: "MANUAL",
-        sourceTenderId: artifactId,
-        runDate: artifactDate,
+    ? tenderArtifactPath(sharePoint, {
+        portal: "manual",
+        date: artifactDate || new Date().toISOString().slice(0, 10),
+        tenderId: artifactId,
         fileName: `${documentId.slice(0, 8)}_${file.name}`,
-        companyName: user.companyName,
-        companyId: user.companyId,
       })
     : buildCompanyDocumentBlobName({
         companyName: user.companyName,
@@ -1709,7 +1766,7 @@ async function handleUpload(req: Request, form: FormData) {
         fileName: file.name,
       });
 
-  console.info("[tender-automation-documents] upload started", {
+  console.info("[company-documents] upload started", {
     companyId: user.companyId,
     documentId,
     category,
@@ -1717,8 +1774,21 @@ async function handleUpload(req: Request, form: FormData) {
     blobName,
   });
 
-  await uploadAzureBlob(azure, blobName, file);
-  const storedFileUrl = `${azureBaseUrl(azure)}/${encodeBlobPath(blobName)}`;
+  let uploaded;
+  try {
+    uploaded = await uploadSharePointFile(blobName, file, sharePoint);
+  } catch (error) {
+    console.error("[company-documents] SharePoint upload failed", {
+      companyId: user.companyId,
+      documentId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw new HttpError(
+      500,
+      error instanceof Error ? error.message : "SharePoint upload failed.",
+    );
+  }
+  const storedFileUrl = uploaded.item.webUrl;
 
   const supabase = serviceSupabase();
   const { data: inserted, error: insertError } = await supabase
@@ -1738,9 +1808,9 @@ async function handleUpload(req: Request, form: FormData) {
       notes,
       mime_type: file.type || null,
       file_size_bytes: file.size,
-      storage_provider: "azure",
-      storage_container: azure.containerName,
-      storage_blob_name: blobName,
+      storage_provider: "sharepoint",
+      storage_container: sharePoint.libraryName,
+      storage_blob_name: uploaded.path,
       storage_url: storedFileUrl,
       verification_status: "pending",
       status: "active",
@@ -1750,18 +1820,18 @@ async function handleUpload(req: Request, form: FormData) {
     .single();
 
   if (insertError) {
-    console.error("[tender-automation-documents] supabase insert failed", {
+    console.error("[company-documents] supabase insert failed", {
       message: insertError.message,
       documentId,
     });
-    await deleteAzureBlob(azure, blobName).catch(() => null);
+    await deleteSharePointFile({ path: uploaded.path }).catch(() => null);
     throw new HttpError(
       500,
       "The file was uploaded but the document record could not be saved. The uploaded file was cleaned up. Please try again.",
     );
   }
 
-  console.info("[tender-automation-documents] upload complete", { documentId });
+  console.info("[company-documents] upload complete", { documentId });
   return json({ success: true, documentId, document: inserted });
 }
 
@@ -1800,27 +1870,41 @@ async function handleDocumentRead(
       ? "attachment"
       : "inline";
 
-  console.info("[tender-automation-documents] read started", {
+  console.info("[company-documents] read started", {
     companyId: user.companyId,
     documentId,
     disposition: dispositionMode,
+    provider: doc.storage_provider || "unknown",
   });
 
+  const storageUrl = doc.storage_url ? String(doc.storage_url) : null;
+  const blobName =
+    (doc.storage_blob_name as string | null) ||
+    null;
+  const useSharePoint =
+    doc.storage_provider === "sharepoint" ||
+    isSharePointStorageUrl(storageUrl) ||
+    Boolean(
+      blobName &&
+        (blobName.includes("/companydocs/") ||
+          blobName.includes("/tender-artifacts/") ||
+          blobName.startsWith("companies/")),
+    );
+
   let storageResponse: Response;
-  if (doc.storage_provider === "sharepoint") {
+  if (useSharePoint) {
     const downloaded = await readSharePointFile({
-      storageUrl: doc.storage_url ? String(doc.storage_url) : null,
-      path: doc.storage_blob_name ? String(doc.storage_blob_name) : null,
+      storageUrl,
+      path: blobName,
     });
     storageResponse = downloaded.response;
   } else {
-    // Legacy Azure records remain readable during migration.
-    const azure = requireAzureConfig();
-    const blobName =
-      (doc.storage_blob_name as string | null) ||
-      blobNameFromUrl(azure, doc.storage_url ? String(doc.storage_url) : null);
-    if (!blobName) throw new HttpError(404, "File not found.");
-    storageResponse = await readAzureBlob(azure, blobName);
+    // Legacy Azure records only — Azure account may be offline; prefer SharePoint URL.
+    throw new HttpError(
+      410,
+      "This document is stored on legacy Azure Blob storage which is no longer reachable. Re-upload it to Company Documents (SharePoint).",
+      "AZURE_STORAGE_RETIRED",
+    );
   }
   const headers = new Headers({
     ...corsHeaders,
@@ -2567,7 +2651,7 @@ function nextWorkspaceVersion(current: string | null) {
 }
 
 async function handleWorkspaceDocumentSave(req: Request, form: FormData) {
-  const azure = requireAzureConfig();
+  const sharePoint = requireSharePointConfig();
   const user = await authenticate(req);
   if (!BID_WORKSPACE_ROLES.has(user.role)) {
     throw new HttpError(403, "You do not have permission to manage bid workspace documents.");
@@ -2608,7 +2692,8 @@ async function handleWorkspaceDocumentSave(req: Request, form: FormData) {
     throw new HttpError(400, "This bid has been marked submitted. Editing is disabled.");
   }
 
-  let previousBlob: string | null = null;
+  let previousPath: string | null = null;
+  let previousStorageUrl: string | null = null;
   let previousVersion: string | null = null;
   if (existingId) {
     const { data: existing, error: existingError } = await supabase
@@ -2624,9 +2709,8 @@ async function handleWorkspaceDocumentSave(req: Request, form: FormData) {
     if (String(existing.workspace_id) !== workspaceId) {
       throw new HttpError(400, "Document does not belong to this workspace.");
     }
-    previousBlob =
-      (existing.blob_name as string | null) ||
-      blobNameFromUrl(azure, existing.storage_url as string | null);
+    previousPath = (existing.blob_name as string | null) || null;
+    previousStorageUrl = (existing.storage_url as string | null) || null;
     previousVersion = (existing.version_label as string | null) || null;
   }
 
@@ -2640,14 +2724,31 @@ async function handleWorkspaceDocumentSave(req: Request, form: FormData) {
   const blobName =
     `${prefix}/${slugify(documentType)}/${documentId}/${sanitizeFileName(file.name)}`;
 
-  console.info("[tender-automation-workspace] upload started", {
+  console.info("[bid-workspace] upload started", {
     companyId: user.companyId,
     workspaceId,
     documentId,
+    path: blobName,
   });
 
-  const uploaded = await uploadAzureBlob(azure, blobName, file);
+  let uploaded;
+  try {
+    uploaded = await uploadSharePointFile(blobName, file, sharePoint);
+  } catch (error) {
+    console.error("[bid-workspace] SharePoint upload failed", {
+      companyId: user.companyId,
+      workspaceId,
+      documentId,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw new HttpError(
+      500,
+      error instanceof Error ? error.message : "SharePoint upload failed.",
+    );
+  }
   const versionLabel = existingId ? nextWorkspaceVersion(previousVersion) : "v1";
+  const storageUrl = uploaded.item.webUrl;
+  const storedPath = uploaded.path;
 
   if (existingId) {
     const { error: updateError } = await supabase
@@ -2658,8 +2759,8 @@ async function handleWorkspaceDocumentSave(req: Request, form: FormData) {
         file_name: file.name,
         file_size_bytes: file.size,
         mime_type: file.type || "application/octet-stream",
-        storage_url: uploaded.storageUrl,
-        blob_name: uploaded.blobName,
+        storage_url: storageUrl,
+        blob_name: storedPath,
         status: "ready",
         version_label: versionLabel,
         updated_by: user.id,
@@ -2668,11 +2769,23 @@ async function handleWorkspaceDocumentSave(req: Request, form: FormData) {
       .eq("id", documentId)
       .eq("company_id", user.companyId);
     if (updateError) {
-      await deleteAzureBlob(azure, uploaded.blobName).catch(() => null);
+      await deleteSharePointFile({ path: storedPath }).catch(() => null);
       throw new HttpError(500, "Unable to save workspace document. Please try again.");
     }
-    if (previousBlob && previousBlob !== uploaded.blobName) {
-      await deleteAzureBlob(azure, previousBlob);
+    if (previousPath && previousPath !== storedPath) {
+      if (isSharePointStorageUrl(previousStorageUrl) || !previousStorageUrl) {
+        await deleteSharePointFile({
+          path: previousPath,
+          storageUrl: previousStorageUrl,
+        }).catch(() => null);
+      } else {
+        try {
+          const azure = requireAzureConfig();
+          await deleteAzureBlob(azure, previousPath);
+        } catch {
+          // Legacy Azure cleanup is best-effort after SharePoint replace.
+        }
+      }
     }
   } else {
     const { error: insertError } = await supabase
@@ -2687,8 +2800,8 @@ async function handleWorkspaceDocumentSave(req: Request, form: FormData) {
         file_name: file.name,
         file_size_bytes: file.size,
         mime_type: file.type || "application/octet-stream",
-        storage_url: uploaded.storageUrl,
-        blob_name: uploaded.blobName,
+        storage_url: storageUrl,
+        blob_name: storedPath,
         status: "ready",
         is_required: false,
         version_label: versionLabel,
@@ -2696,12 +2809,12 @@ async function handleWorkspaceDocumentSave(req: Request, form: FormData) {
         updated_by: user.id,
       });
     if (insertError) {
-      await deleteAzureBlob(azure, uploaded.blobName).catch(() => null);
+      await deleteSharePointFile({ path: storedPath }).catch(() => null);
       throw new HttpError(500, "Unable to save workspace document. Please try again.");
     }
   }
 
-  console.info("[tender-automation-workspace] upload complete", { documentId });
+  console.info("[bid-workspace] upload complete", { documentId });
   return json({ success: true, workspaceDocumentId: documentId, documentId });
 }
 
@@ -2709,7 +2822,6 @@ async function handleWorkspaceDocumentRead(
   req: Request,
   body: { documentId?: string },
 ) {
-  const azure = requireAzureConfig();
   const user = await authenticate(req);
   if (!BID_WORKSPACE_ROLES.has(user.role)) {
     throw new HttpError(403, "You do not have permission to view bid workspace documents.");
@@ -2731,20 +2843,43 @@ async function handleWorkspaceDocumentRead(
     throw new HttpError(403, "You cannot access another company's document.");
   }
 
-  const blobName =
-    (document.blob_name as string | null) ||
-    blobNameFromUrl(azure, document.storage_url as string | null);
-  if (!blobName) throw new HttpError(404, "File not found.");
+  const storageUrl = document.storage_url
+    ? String(document.storage_url)
+    : null;
+  const blobName = document.blob_name ? String(document.blob_name) : null;
+  const useSharePoint =
+    isSharePointStorageUrl(storageUrl) ||
+    Boolean(blobName && !storageUrl?.includes("blob.core.windows.net"));
 
-  const azureResponse = await readAzureBlob(azure, blobName);
+  console.info("[bid-workspace] read started", {
+    companyId: user.companyId,
+    documentId,
+    provider: useSharePoint ? "sharepoint" : "azure",
+  });
+
+  let storageResponse: Response;
+  if (useSharePoint) {
+    const downloaded = await readSharePointFile({
+      storageUrl,
+      path: blobName,
+    });
+    storageResponse = downloaded.response;
+  } else {
+    const azure = requireAzureConfig();
+    const resolved =
+      blobName || blobNameFromUrl(azure, storageUrl);
+    if (!resolved) throw new HttpError(404, "File not found.");
+    storageResponse = await readAzureBlob(azure, resolved);
+  }
+
   const headers = new Headers({
     ...corsHeaders,
     "Content-Type":
-      azureResponse.headers.get("content-type") ||
+      storageResponse.headers.get("content-type") ||
       String(document.mime_type || "application/octet-stream"),
     "Cache-Control": "private, max-age=300",
   });
-  const contentLength = azureResponse.headers.get("content-length");
+  const contentLength = storageResponse.headers.get("content-length");
   if (contentLength) headers.set("Content-Length", contentLength);
   const fileName = String(document.file_name || "document");
   headers.set(
@@ -2752,14 +2887,14 @@ async function handleWorkspaceDocumentRead(
     `attachment; filename="${fileName.replace(/"/g, "")}"`,
   );
 
-  return new Response(azureResponse.body, { status: 200, headers });
+  console.info("[bid-workspace] read complete", { documentId });
+  return new Response(storageResponse.body, { status: 200, headers });
 }
 
 async function handleWorkspaceDocumentDelete(
   req: Request,
   body: { documentId?: string },
 ) {
-  const azure = requireAzureConfig();
   const user = await authenticate(req);
   if (!BID_WORKSPACE_ROLES.has(user.role) && !DELETE_ROLES.has(user.role)) {
     throw new HttpError(403, "You do not have permission to delete bid workspace documents.");
@@ -2781,9 +2916,10 @@ async function handleWorkspaceDocumentDelete(
     throw new HttpError(403, "You cannot access another company's document.");
   }
 
-  const blobName =
-    (document.blob_name as string | null) ||
-    blobNameFromUrl(azure, document.storage_url as string | null);
+  const storageUrl = document.storage_url
+    ? String(document.storage_url)
+    : null;
+  const blobName = document.blob_name ? String(document.blob_name) : null;
 
   if (document.is_required) {
     const { error: clearError } = await supabase
@@ -2811,8 +2947,20 @@ async function handleWorkspaceDocumentDelete(
     if (deleteError) throw new Error(deleteError.message);
   }
 
-  await deleteAzureBlob(azure, blobName);
-  console.info("[tender-automation-workspace] delete complete", { documentId });
+  if (isSharePointStorageUrl(storageUrl) || (blobName && !storageUrl?.includes("blob.core.windows.net"))) {
+    await deleteSharePointFile({ storageUrl, path: blobName }).catch(() => null);
+  } else if (blobName || storageUrl) {
+    try {
+      const azure = requireAzureConfig();
+      const resolved =
+        blobName || blobNameFromUrl(azure, storageUrl);
+      if (resolved) await deleteAzureBlob(azure, resolved);
+    } catch {
+      // Legacy Azure delete is best-effort.
+    }
+  }
+
+  console.info("[bid-workspace] delete complete", { documentId });
   return json({ success: true, documentId });
 }
 
@@ -2833,14 +2981,126 @@ async function handleCreateDirectUpload(
     throw new HttpError(403, "You do not have permission to upload documents.");
   }
 
-  const tenderId = String(body.tenderId || "").trim();
-  const section = String(body.section || "").trim();
+  const purpose = String(body.purpose || body.uploadPurpose || "")
+    .trim()
+    .toLowerCase();
+  const isCompanyLibrary =
+    purpose === "company-library" ||
+    purpose === "company" ||
+    body.companyLibrary === true;
+
   const fileName = String(body.fileName || body.originalFileName || "").trim();
   const mimeType = String(body.mimeType || "application/octet-stream");
   const fileSizeBytes = Number(body.fileSizeBytes);
   const documentName = String(body.documentName || body.name || fileName).trim();
-  const feeId = String(body.feeId || "").trim() || null;
   const notes = String(body.notes || "").trim() || null;
+
+  if (!documentName) throw new HttpError(400, "Document name is required");
+  validateCompanyDocumentFile(fileName, mimeType, fileSizeBytes);
+
+  // Company Documents library — same Graph session pattern as tender docs,
+  // but paths under {company}/companydocs/{General|Certificate|Other}/…
+  if (isCompanyLibrary) {
+    const category = resolveCategoryFromValue(body.category || body.uploadKind);
+    let documentType: string | null = null;
+    let certificateType: string | null = null;
+    let financialYear: string | null = null;
+    let issuingAuthority: string | null = null;
+    let issueDate: string | null = null;
+    let expiryDate: string | null = null;
+
+    if (category === "Certificate") {
+      certificateType = String(body.certificateType || "").trim();
+      issuingAuthority = String(body.issuingAuthority || "").trim();
+      issueDate = String(body.issueDate || "").trim() || null;
+      expiryDate = String(body.expiryDate || "").trim() || null;
+      if (!certificateType) throw new HttpError(400, "Certificate type is required");
+      if (!issuingAuthority) throw new HttpError(400, "Issuing authority is required");
+      if (!issueDate) throw new HttpError(400, "Issue date is required");
+      const today = new Date().toISOString().slice(0, 10);
+      if (issueDate > today) {
+        throw new HttpError(400, "Issue date cannot be after today");
+      }
+      if (expiryDate && expiryDate < issueDate) {
+        throw new HttpError(400, "Expiry date must be on or after issue date");
+      }
+    } else if (category === "Financial") {
+      financialYear = String(body.financialYear || "").trim();
+      documentType = String(body.documentType || "").trim();
+      if (!financialYear) throw new HttpError(400, "Financial year is required");
+      if (!documentType) throw new HttpError(400, "Document type is required");
+    }
+
+    const documentId = crypto.randomUUID();
+    const storagePath = buildCompanyDocumentBlobName({
+      companyName: user.companyName,
+      companyId: user.companyId,
+      documentName,
+      documentId,
+      category,
+      fileName,
+    });
+    const upload = await createSharePointUploadSession(storagePath, sharePoint);
+
+    const supabase = serviceSupabase();
+    const { error: insertDocError } = await supabase
+      .from("agenttender_company_documents")
+      .insert({
+        id: documentId,
+        company_id: user.companyId,
+        name: documentName,
+        original_file_name: fileName,
+        document_category: category,
+        document_type: documentType,
+        certificate_type: certificateType,
+        financial_year: financialYear,
+        issuing_authority: issuingAuthority,
+        issue_date: issueDate,
+        expiry_date: expiryDate,
+        notes,
+        mime_type: mimeType || null,
+        file_size_bytes: fileSizeBytes,
+        storage_provider: "sharepoint",
+        storage_container: sharePoint.libraryName,
+        storage_blob_name: storagePath,
+        storage_url: upload.existed ? upload.item.webUrl : null,
+        content_hash: null,
+        verification_status: "pending",
+        status: "uploading",
+        created_by: user.id,
+      });
+
+    if (insertDocError) {
+      console.error("[company-documents] direct-upload pending insert failed", {
+        message: insertDocError.message,
+        documentId,
+      });
+      throw new HttpError(500, "Unable to start SharePoint upload.");
+    }
+
+    console.info("[company-documents] SharePoint upload prepared", {
+      documentId,
+      storagePath,
+      category,
+      duplicate: upload.existed,
+    });
+
+    return json({
+      success: true,
+      documentId,
+      blobPath: storagePath,
+      blobName: storagePath,
+      storageUrl: upload.existed ? upload.item.webUrl : null,
+      uploadUrl: upload.existed ? null : upload.session.uploadUrl,
+      expiresAt: upload.existed ? null : upload.session.expirationDateTime,
+      duplicate: upload.existed,
+      headers: {},
+    });
+  }
+
+  const tenderId = String(body.tenderId || "").trim();
+  const section = String(body.section || "").trim();
+  const feeId = String(body.feeId || "").trim() || null;
 
   if (!tenderId) throw new HttpError(400, "tenderId is required");
   assertSafeId(tenderId, "tenderId");
@@ -2850,8 +3110,6 @@ async function handleCreateDirectUpload(
   if (section === "financial" && !feeId) {
     throw new HttpError(400, "feeId is required for financial documents.");
   }
-  if (!documentName) throw new HttpError(400, "Document name is required");
-  validateCompanyDocumentFile(fileName, mimeType, fileSizeBytes);
 
   const category: Category = section === "financial" ? "Financial" : "General";
   const documentId = crypto.randomUUID();

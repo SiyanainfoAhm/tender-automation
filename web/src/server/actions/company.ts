@@ -14,6 +14,9 @@ import {
   updateCompanyProfile,
   upsertCompanyBidPreferences,
 } from "@/server/repositories/companyRepository";
+import {
+  updateCompanyDocumentMetadata,
+} from "@/server/repositories/documentRepository";
 import { roleHasPermission } from "@/lib/rbac/permissions";
 import {
   invokeDocumentDelete,
@@ -410,6 +413,45 @@ export async function deleteCompanyDocumentAction(
   } catch (error) {
     return {
       error: error instanceof Error ? error.message : "Unable to delete document",
+    };
+  }
+}
+
+export async function renameCompanyDocumentAction(input: {
+  documentId: string;
+  name: string;
+  notes?: string | null;
+}): Promise<{ error?: string; ok?: boolean; name?: string }> {
+  try {
+    const session = await requireCompanySession();
+    if (
+      !roleHasPermission(session.user.role, "documents.upload") &&
+      !roleHasPermission(session.user.role, "documents.delete")
+    ) {
+      throw new CompanyAccessError(
+        "FORBIDDEN",
+        "You do not have permission to edit documents.",
+      );
+    }
+
+    const updated = await updateCompanyDocumentMetadata({
+      companyId: session.companyId,
+      documentId: input.documentId,
+      name: input.name,
+      notes: input.notes,
+    });
+
+    revalidatePath("/documents");
+    revalidatePath("/dashboard");
+    revalidatePath("/tenders", "layout");
+    return { ok: true, name: updated.name };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { error: error.message };
+    }
+    return {
+      error:
+        error instanceof Error ? error.message : "Unable to rename document",
     };
   }
 }

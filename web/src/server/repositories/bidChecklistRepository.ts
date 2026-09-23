@@ -261,6 +261,11 @@ function collectLinkedDocuments(options: {
     const company = options.companyById.get(options.matchedCompanyDocumentId);
     if (company && !seen.has(`company:${company.id}`)) {
       seen.add(`company:${company.id}`);
+      const sharePointHref =
+        company.storageUrl &&
+        company.storageUrl.toLowerCase().includes(".sharepoint.com")
+          ? company.storageUrl
+          : null;
       docs.push({
         id: company.id,
         title: company.name,
@@ -269,7 +274,8 @@ function collectLinkedDocuments(options: {
         versionLabel: null,
         source: "COMPANY",
         hasFile: true,
-        downloadHref: `/api/documents/${company.id}`,
+        // Prefer SharePoint column URL (tender-docs pattern); API proxies Graph when needed.
+        downloadHref: sharePointHref || `/api/documents/${company.id}`,
         matchedBy: options.matchedBy,
       });
     }
@@ -365,6 +371,7 @@ export async function rematchChecklistItems(options: {
     }
 
     // Explicit USER matches win unless the linked doc disappeared.
+    // USER with no linked docs = intentional unlink — do not rematch.
     if (row.matched_by === "USER") {
       const stillCompany =
         row.matched_company_document_id &&
@@ -380,6 +387,16 @@ export async function rematchChecklistItems(options: {
         (d) =>
           d.checklistItemId === String(row.id) && isActiveWorkspaceDoc(d),
       );
+
+      // User cleared the link (no matched ids) — leave MISSING alone.
+      if (
+        !row.matched_company_document_id &&
+        !row.matched_workspace_document_id &&
+        !linkedByFk
+      ) {
+        continue;
+      }
+
       if (stillCompany || stillWorkspace || linkedByFk) {
         if (
           row.completion_status !== "COMPLETED_COMPANY_DOCUMENT" &&
@@ -398,7 +415,7 @@ export async function rematchChecklistItems(options: {
         }
         continue;
       }
-      // Linked docs gone → reopen unless manual.
+      // Linked docs gone → reopen but keep USER so rematch won't re-attach.
       const { error: clearError } = await supabase
         .from("agenttender_bid_checklist_items")
         .update({
@@ -406,7 +423,7 @@ export async function rematchChecklistItems(options: {
           matched_document_source: null,
           matched_company_document_id: null,
           matched_workspace_document_id: null,
-          matched_by: null,
+          matched_by: "USER",
           match_confidence: null,
           match_reason: "Linked document removed.",
         })
@@ -633,13 +650,16 @@ export async function setChecklistManualMatch(options: {
       matched_document_source: source,
       matched_company_document_id: options.companyDocumentId || null,
       matched_workspace_document_id: options.workspaceDocumentId || null,
-      matched_by: source ? "USER" : null,
+      // Keep matched_by = USER on clear so rematch does not re-attach docs.
+      matched_by: "USER",
       completion_status: source
         ? source === "COMPANY"
           ? "COMPLETED_COMPANY_DOCUMENT"
           : "COMPLETED_TENDER_DOCUMENT"
         : "MISSING",
-      match_reason: source ? "Manually linked by user." : "Match cleared.",
+      match_reason: source
+        ? "Manually linked by user."
+        : "User removed document link.",
       match_confidence: source ? 1 : null,
     })
     .eq("id", options.itemId)
@@ -655,6 +675,18 @@ export async function setChecklistManualMatch(options: {
         is_placeholder: false,
       })
       .eq("id", options.workspaceDocumentId)
+      .eq("workspace_id", options.workspaceId)
+      .eq("company_id", options.companyId);
+  } else {
+    // Linking a company document or clearing the match must not leave
+    // workspace rows pointing at this checklist item (unlink-only semantics).
+    await supabase
+      .from("agenttender_bid_workspace_documents")
+      .update({
+        checklist_item_id: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("checklist_item_id", options.itemId)
       .eq("workspace_id", options.workspaceId)
       .eq("company_id", options.companyId);
   }
@@ -1059,19 +1091,21 @@ export async function updateManualChecklistItem(options: {
 }
 
 /**
- * Soft-delete a MANUAL requirement. Linked workspace documents are unlinked
- * (kept in the document library) — Azure blobs are never deleted here.
+ * Delete a checklist requirement row (AI or MANUAL).
+ * Clears workspace document FKs first; library files are kept unless the
+ * caller already deleted them.
  */
-export async function archiveManualChecklistItem(options: {
+export async function deleteChecklistItem(options: {
   itemId: string;
   workspaceId: string;
   companyId: string;
   userId: string;
 }): Promise<{ linkedDocumentCount: number }> {
+  void options.userId;
   const supabase = getServerSupabase();
   const { data: row, error: loadError } = await supabase
     .from("agenttender_bid_checklist_items")
-    .select("id, requirement_origin")
+    .select("id")
     .eq("id", options.itemId)
     .eq("workspace_id", options.workspaceId)
     .eq("company_id", options.companyId)
@@ -1079,9 +1113,6 @@ export async function archiveManualChecklistItem(options: {
     .maybeSingle();
   if (loadError) throw new Error(loadError.message);
   if (!row) throw new Error("Requirement not found.");
-  if (String(row.requirement_origin) !== "MANUAL") {
-    throw new Error("Only manually added requirements can be deleted.");
-  }
 
   const { data: linkedDocs, error: docsError } = await supabase
     .from("agenttender_bid_workspace_documents")
@@ -1091,7 +1122,6 @@ export async function archiveManualChecklistItem(options: {
   if (docsError) throw new Error(docsError.message);
   const linkedDocumentCount = (linkedDocs || []).length;
 
-  // Keep documents in the workspace library; only clear the requirement FK.
   if (linkedDocumentCount > 0) {
     const { error: unlinkError } = await supabase
       .from("agenttender_bid_workspace_documents")
@@ -1101,26 +1131,25 @@ export async function archiveManualChecklistItem(options: {
     if (unlinkError) throw new Error(unlinkError.message);
   }
 
-  const now = new Date().toISOString();
   const { error } = await supabase
     .from("agenttender_bid_checklist_items")
-    .update({
-      is_archived: true,
-      archived_at: now,
-      archived_by: options.userId,
-      updated_by: options.userId,
-      updated_at: now,
-      matched_workspace_document_id: null,
-      matched_company_document_id: null,
-      matched_document_source: null,
-      matched_by: null,
-    })
+    .delete()
     .eq("id", options.itemId)
     .eq("workspace_id", options.workspaceId)
     .eq("company_id", options.companyId);
   if (error) throw new Error(error.message);
 
   return { linkedDocumentCount };
+}
+
+/** @deprecated Prefer deleteChecklistItem. */
+export async function archiveManualChecklistItem(options: {
+  itemId: string;
+  workspaceId: string;
+  companyId: string;
+  userId: string;
+}): Promise<{ linkedDocumentCount: number }> {
+  return deleteChecklistItem(options);
 }
 
 export async function countLinkedDocumentsForChecklistItem(options: {

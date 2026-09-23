@@ -127,7 +127,7 @@ async function uploadLinkedAttachment(options: {
     originalName: options.file.name,
     mimeType: options.file.type || null,
     fileSizeBytes: options.file.size,
-    storageProvider: "azure",
+    storageProvider: "sharepoint",
     userId: options.userId,
   });
 }

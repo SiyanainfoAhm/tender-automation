@@ -28,13 +28,13 @@ function asNumber(value: unknown, fallback = 0): number {
 }
 
 /**
- * Azure Block Blob writes go through the Edge Function so account keys
- * never reach Next.js or the browser.
+ * Company document writes go through the Edge Function to SharePoint so
+ * Graph credentials never reach Next.js or the browser.
  */
 export class EdgeFunctionDocumentStorageProvider
   implements DocumentStorageProvider
 {
-  readonly name = "azure";
+  readonly name = "sharepoint";
 
   isConfigured(): boolean {
     return Boolean(
@@ -60,7 +60,7 @@ export class EdgeFunctionDocumentStorageProvider
       throw new Error(result.error || "Unable to upload document.");
     }
     return {
-      storageProvider: "azure",
+      storageProvider: "sharepoint",
       storageContainer: null,
       storageBlobName: null,
       storageUrl: null,
@@ -119,7 +119,7 @@ export class EdgeFunctionDocumentStorageProvider
     const document = (result.document || {}) as Record<string, unknown>;
     return {
       documentId: asString(result.documentId || document.id),
-      storageProvider: "azure",
+      storageProvider: "sharepoint",
       storageContainer: asString(document.storage_container) || null,
       storageBlobName: asString(document.storage_blob_name) || null,
       storageUrl: asString(document.storage_url) || null,

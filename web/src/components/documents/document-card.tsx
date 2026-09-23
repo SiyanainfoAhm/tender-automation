@@ -11,14 +11,25 @@ import {
   FileText,
   Loader2,
   MoreHorizontal,
+  Pencil,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import type { CompanyDocument } from "@/server/repositories/documentRepository";
-import { deleteCompanyDocumentAction } from "@/server/actions/company";
+import {
+  deleteCompanyDocumentAction,
+  renameCompanyDocumentAction,
+} from "@/server/actions/company";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -26,7 +37,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { formatBytes, formatDate } from "@/lib/format";
+import {
+  toAccessibleStorageUrl,
+  toProxiedStorageUrl,
+} from "@/lib/storage/accessible-storage-url";
 import { cn } from "@/lib/utils";
 
 function categoryStyles(category: string) {
@@ -108,7 +125,10 @@ export function DocumentCard({
   canManage?: boolean;
 }) {
   const router = useRouter();
-  const [busy, setBusy] = useState<"delete" | null>(null);
+  const [busy, setBusy] = useState<"delete" | "rename" | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [displayName, setDisplayName] = useState(doc.name);
+  const [notes, setNotes] = useState(doc.notes || "");
   const [pending, startTransition] = useTransition();
   const categoryLabel = doc.certificateType || doc.documentCategory;
   const styleKey =
@@ -120,7 +140,20 @@ export function DocumentCard({
   const hasFile = Boolean(doc.storageBlobName || doc.storageUrl);
   const disabled = busy != null || pending;
 
-  function documentApiUrl(mode: "view" | "download") {
+  function documentHref(mode: "view" | "download") {
+    // Prefer SharePoint storage_url from the document column (tender-docs pattern).
+    const direct = toAccessibleStorageUrl(doc.storageUrl, {
+      download: mode === "download",
+      fileName: doc.originalFileName || doc.name,
+    });
+    if (direct) return direct;
+
+    const proxied = toProxiedStorageUrl(doc.storageUrl, {
+      download: mode === "download",
+      fileName: doc.originalFileName || doc.name,
+    });
+    if (proxied) return proxied;
+
     const base = `/api/documents/${encodeURIComponent(doc.id)}`;
     return mode === "download" ? `${base}?download=1` : base;
   }
@@ -130,7 +163,7 @@ export function DocumentCard({
       toast.error("No file is available for this document.");
       return;
     }
-    const url = documentApiUrl(mode);
+    const url = documentHref(mode);
     if (mode === "download") {
       const a = window.document.createElement("a");
       a.href = url;
@@ -141,6 +174,41 @@ export function DocumentCard({
       return;
     }
     window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  function openRename() {
+    setDisplayName(doc.name);
+    setNotes(doc.notes || "");
+    setRenameOpen(true);
+  }
+
+  function handleRename() {
+    const trimmed = displayName.trim();
+    if (!trimmed) {
+      toast.error("Document name is required.");
+      return;
+    }
+    setBusy("rename");
+    startTransition(async () => {
+      try {
+        const result = await renameCompanyDocumentAction({
+          documentId: doc.id,
+          name: trimmed,
+          notes,
+        });
+        if (result.error) {
+          toast.error(result.error);
+          return;
+        }
+        toast.success("Document name updated.");
+        setRenameOpen(false);
+        router.refresh();
+      } catch {
+        toast.error("Unable to rename document");
+      } finally {
+        setBusy(null);
+      }
+    });
   }
 
   function handleDelete() {
@@ -170,104 +238,178 @@ export function DocumentCard({
   }
 
   return (
-    <Card
-      className="group cursor-pointer transition-all hover:border-primary-300/40"
-      onClick={() => {
-        if (hasFile) openFile("view");
-      }}
-    >
-      <CardContent className="p-4 pt-4 sm:p-4 sm:pt-4">
-        <div className="flex items-start gap-3">
-          <div
-            className={cn(
-              "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
-              styles.icon,
-            )}
-          >
-            <FileText className="size-5" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-start justify-between gap-2">
-              <p className="truncate text-sm font-medium text-foreground-800 transition-colors group-hover:text-primary-600">
-                {doc.name}
-              </p>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="size-7 shrink-0 text-foreground-400 hover:text-foreground-700"
-                    aria-label="Document actions"
-                    disabled={disabled}
+    <>
+      <Card
+        className="group cursor-pointer transition-all hover:border-primary-300/40"
+        onClick={() => {
+          if (hasFile) openFile("view");
+        }}
+      >
+        <CardContent className="p-4 pt-4 sm:p-4 sm:pt-4">
+          <div className="flex items-start gap-3">
+            <div
+              className={cn(
+                "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
+                styles.icon,
+              )}
+            >
+              <FileText className="size-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start justify-between gap-2">
+                <p className="truncate text-sm font-medium text-foreground-800 transition-colors group-hover:text-primary-600">
+                  {doc.name}
+                </p>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-7 shrink-0 text-foreground-400 hover:text-foreground-700"
+                      aria-label="Document actions"
+                      disabled={disabled}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      {busy ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <MoreHorizontal className="size-4" />
+                      )}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="end"
+                    className="w-44"
                     onClick={(event) => event.stopPropagation()}
                   >
-                    {busy === "delete" ? (
-                      <Loader2 className="size-4 animate-spin" />
-                    ) : (
-                      <MoreHorizontal className="size-4" />
-                    )}
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent
-                  align="end"
-                  className="w-40"
-                  onClick={(event) => event.stopPropagation()}
+                    <DropdownMenuItem
+                      disabled={!hasFile || disabled}
+                      onSelect={() => openFile("view")}
+                    >
+                      <Eye className="size-4" />
+                      View
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      disabled={!hasFile || disabled}
+                      onSelect={() => openFile("download")}
+                    >
+                      <Download className="size-4" />
+                      Download
+                    </DropdownMenuItem>
+                    {canManage ? (
+                      <>
+                        <DropdownMenuItem
+                          disabled={disabled}
+                          onSelect={openRename}
+                        >
+                          <Pencil className="size-4" />
+                          Edit / Rename
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          className="text-status-nogo"
+                          disabled={disabled}
+                          onSelect={handleDelete}
+                        >
+                          <Trash2 className="size-4" />
+                          Delete
+                        </DropdownMenuItem>
+                      </>
+                    ) : null}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              <div className="mt-1 flex items-center gap-2">
+                <span
+                  className={cn(
+                    "rounded px-1.5 py-0.5 text-[11px] font-medium",
+                    styles.capsule,
+                  )}
                 >
-                  <DropdownMenuItem
-                    disabled={!hasFile || disabled}
-                    onSelect={() => openFile("view")}
-                  >
-                    <Eye className="size-4" />
-                    View
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    disabled={!hasFile || disabled}
-                    onSelect={() => openFile("download")}
-                  >
-                    <Download className="size-4" />
-                    Download
-                  </DropdownMenuItem>
-                  {canManage ? (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        className="text-status-nogo"
-                        disabled={disabled}
-                        onSelect={handleDelete}
-                      >
-                        <Trash2 className="size-4" />
-                        Delete
-                      </DropdownMenuItem>
-                    </>
-                  ) : null}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-            <div className="mt-1 flex items-center gap-2">
-              <span
-                className={cn(
-                  "rounded px-1.5 py-0.5 text-[11px] font-medium",
-                  styles.capsule,
-                )}
-              >
-                {categoryLabel}
-              </span>
-              {doc.fileSizeBytes != null ? (
-                <span className="text-xs text-foreground-400">
-                  {formatBytes(doc.fileSizeBytes)}
+                  {categoryLabel}
                 </span>
-              ) : null}
-            </div>
-            <div className="mt-2 flex items-center justify-between gap-2">
-              <span className="text-xs text-foreground-400">
-                {formatDate(doc.createdAt)}
-              </span>
-              <StatusRow doc={doc} />
+                {doc.fileSizeBytes != null ? (
+                  <span className="text-xs text-foreground-400">
+                    {formatBytes(doc.fileSizeBytes)}
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <span className="text-xs text-foreground-400">
+                  {formatDate(doc.createdAt)}
+                </span>
+                <StatusRow doc={doc} />
+              </div>
             </div>
           </div>
-        </div>
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent
+          className="sm:max-w-md"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <DialogHeader>
+            <DialogTitle>Edit Document</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor={`doc-name-${doc.id}`}>Document Name *</Label>
+              <Input
+                id={`doc-name-${doc.id}`}
+                value={displayName}
+                maxLength={200}
+                disabled={disabled}
+                onChange={(event) => setDisplayName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    handleRename();
+                  }
+                }}
+              />
+              {doc.originalFileName ? (
+                <p className="text-xs text-foreground-500">
+                  File: {doc.originalFileName}
+                </p>
+              ) : null}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor={`doc-notes-${doc.id}`}>Notes</Label>
+              <Input
+                id={`doc-notes-${doc.id}`}
+                value={notes}
+                maxLength={2000}
+                disabled={disabled}
+                placeholder="Optional"
+                onChange={(event) => setNotes(event.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={disabled}
+              onClick={() => setRenameOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={disabled || !displayName.trim()}
+              onClick={handleRename}
+            >
+              {busy === "rename" ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : null}
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

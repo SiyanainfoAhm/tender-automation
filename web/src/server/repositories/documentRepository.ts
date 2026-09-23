@@ -211,3 +211,39 @@ export async function softDeleteCompanyDocument(options: {
     .eq("company_id", options.companyId);
   if (error) throw new Error(error.message);
 }
+
+/** Update display name (and optional notes). Does not rename the SharePoint file. */
+export async function updateCompanyDocumentMetadata(options: {
+  companyId: string;
+  documentId: string;
+  name: string;
+  notes?: string | null;
+}): Promise<CompanyDocument> {
+  const name = options.name.trim();
+  if (!name) throw new Error("Document name is required.");
+  if (name.length > 200) throw new Error("Document name is too long.");
+
+  const supabase = getServerSupabase();
+  const patch: Record<string, unknown> = {
+    name,
+    updated_at: new Date().toISOString(),
+  };
+  if (options.notes !== undefined) {
+    const notes = options.notes?.trim() || null;
+    if (notes && notes.length > 2000) {
+      throw new Error("Notes are too long.");
+    }
+    patch.notes = notes;
+  }
+
+  const { data, error } = await supabase
+    .from("agenttender_company_documents")
+    .update(patch)
+    .eq("id", options.documentId)
+    .eq("company_id", options.companyId)
+    .eq("status", "active")
+    .select("*")
+    .single();
+  if (error) throw new Error(error.message);
+  return mapDoc(data as Record<string, unknown>);
+}

@@ -854,7 +854,7 @@ export async function insertWonProjectDocument(options: {
       original_name: options.originalName || options.fileName,
       mime_type: options.mimeType || null,
       file_size_bytes: options.fileSizeBytes ?? null,
-      storage_provider: options.storageProvider || "azure",
+      storage_provider: options.storageProvider || "sharepoint",
       storage_url: options.storageUrl || null,
       tender_document_id: options.tenderDocumentId || null,
       document_date: options.documentDate || null,

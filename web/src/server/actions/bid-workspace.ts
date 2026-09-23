@@ -32,9 +32,9 @@ import {
 } from "@/server/repositories/bidAiPromptRepository";
 import {
   clearChecklistLinksForDeletedDocument,
-  archiveManualChecklistItem,
   countLinkedDocumentsForChecklistItem,
   createManualChecklistItem,
+  deleteChecklistItem,
   rematchChecklistItems,
   setChecklistCompletionState,
   setChecklistManualMatch,
@@ -55,9 +55,13 @@ import {
 import { getTenderById } from "@/server/repositories/tenderRepository";
 import { loadTenderDetail } from "@/server/tenders/load-tender-detail";
 import {
+  invokeDocumentDelete,
+  invokeDocumentUpload,
   invokeWorkspaceDocumentDelete,
   invokeWorkspaceDocumentSave,
+  resolveUploadedDocumentId,
 } from "@/server/storage/tenderAutomationDocumentFunctions";
+import { uploadCompanyDocumentToSharePoint } from "@/server/storage/uploadCompanyDocumentToSharePoint";
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
@@ -1111,6 +1115,311 @@ export async function toggleChecklistItemCompleteAction(input: {
   }
 }
 
+/**
+ * Link an existing Company Document to a checklist item without re-uploading
+ * to SharePoint. Does not copy the physical file.
+ */
+export async function linkCompanyDocumentToChecklistAction(input: {
+  tenderId: string;
+  itemId: string;
+  companyDocumentId: string;
+}): Promise<ActionResult> {
+  try {
+    const { session, workspaceId } = await requireEditableWorkspace(
+      input.tenderId,
+      "bids.edit",
+    );
+    const companyDocumentId = String(input.companyDocumentId || "").trim();
+    if (!companyDocumentId) {
+      return { ok: false, error: "Select a company document." };
+    }
+
+    const { getCompanyDocumentById } = await import(
+      "@/server/repositories/documentRepository"
+    );
+    const doc = await getCompanyDocumentById({
+      companyId: session.companyId,
+      documentId: companyDocumentId,
+    });
+    if (!doc || doc.status !== "active") {
+      return { ok: false, error: "Company document not found." };
+    }
+
+    await setChecklistManualMatch({
+      itemId: input.itemId,
+      workspaceId,
+      companyId: session.companyId,
+      companyDocumentId: doc.id,
+      workspaceDocumentId: null,
+    });
+
+    await insertTenderActivity({
+      tenderId: input.tenderId,
+      companyId: session.companyId,
+      eventType: "checklist_company_document_linked",
+      summary: `Company document linked: ${doc.name}`,
+      payload: {
+        requirementId: input.itemId,
+        companyDocumentId: doc.id,
+      },
+      actorUserId: session.user.id,
+    });
+
+    revalidateWorkspace(input.tenderId);
+    revalidatePath("/documents");
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message };
+    }
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to link company document.",
+    };
+  }
+}
+
+/**
+ * Remove checklist / Bid Workspace association.
+ * Optionally deletes workspace-uploaded files and/or the company library document.
+ */
+export async function unlinkChecklistDocumentAction(input: {
+  tenderId: string;
+  itemId: string;
+  /** When true, also delete TENDER/workspace uploaded files. */
+  deleteWorkspaceFiles?: boolean;
+  /** When true, also delete the linked Company Document (SharePoint + row). */
+  deleteCompanyDocument?: boolean;
+}): Promise<ActionResult> {
+  try {
+    const { session, workspaceId } = await requireEditableWorkspace(
+      input.tenderId,
+      "bids.edit",
+    );
+
+    const supabase = getServerSupabase();
+    const { data: item, error: itemError } = await supabase
+      .from("agenttender_bid_checklist_items")
+      .select(
+        "id, matched_workspace_document_id, matched_company_document_id, matched_document_source",
+      )
+      .eq("id", input.itemId)
+      .eq("workspace_id", workspaceId)
+      .eq("company_id", session.companyId)
+      .maybeSingle();
+    if (itemError) throw new Error(itemError.message);
+    if (!item) return { ok: false, error: "Checklist item not found." };
+
+    const companyDocumentId = item.matched_company_document_id
+      ? String(item.matched_company_document_id)
+      : null;
+
+    const workspaceDocIds = new Set<string>();
+    if (item.matched_workspace_document_id) {
+      workspaceDocIds.add(String(item.matched_workspace_document_id));
+    }
+    const { data: linkedRows } = await supabase
+      .from("agenttender_bid_workspace_documents")
+      .select("id")
+      .eq("checklist_item_id", input.itemId)
+      .eq("workspace_id", workspaceId)
+      .eq("company_id", session.companyId);
+    for (const row of linkedRows || []) {
+      workspaceDocIds.add(String(row.id));
+    }
+
+    await setChecklistManualMatch({
+      itemId: input.itemId,
+      workspaceId,
+      companyId: session.companyId,
+      companyDocumentId: null,
+      workspaceDocumentId: null,
+    });
+
+    if (input.deleteWorkspaceFiles && workspaceDocIds.size > 0) {
+      for (const documentId of workspaceDocIds) {
+        await clearChecklistLinksForDeletedDocument({
+          workspaceId,
+          companyId: session.companyId,
+          documentId,
+        });
+        const deleted = await invokeWorkspaceDocumentDelete(documentId);
+        if (!deleted.success) {
+          console.warn("[bid-workspace] workspace doc delete after unlink failed", {
+            documentId,
+            error: deleted.error,
+          });
+        }
+      }
+    }
+
+    if (input.deleteCompanyDocument && companyDocumentId) {
+      const deleted = await invokeDocumentDelete(companyDocumentId);
+      if (!deleted.success) {
+        return {
+          ok: false,
+          error:
+            deleted.error ||
+            "Removed from checklist, but the company document could not be deleted.",
+        };
+      }
+      revalidatePath("/documents");
+    }
+
+    await insertTenderActivity({
+      tenderId: input.tenderId,
+      companyId: session.companyId,
+      eventType: "checklist_document_unlinked",
+      summary: input.deleteCompanyDocument
+        ? "Checklist document unlinked and company document deleted"
+        : input.deleteWorkspaceFiles
+          ? "Checklist document unlinked and workspace file deleted"
+          : "Checklist document link removed",
+      payload: {
+        requirementId: input.itemId,
+        deleteWorkspaceFiles: Boolean(input.deleteWorkspaceFiles),
+        deleteCompanyDocument: Boolean(input.deleteCompanyDocument),
+        companyDocumentId,
+        hadCompanyDocument: Boolean(companyDocumentId),
+      },
+      actorUserId: session.user.id,
+    });
+
+    revalidateWorkspace(input.tenderId);
+    return { ok: true };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message };
+    }
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Unable to remove checklist document.",
+    };
+  }
+}
+
+/**
+ * Upload a file for a checklist item.
+ * - Default: workspace/SharePoint upload + TENDER match
+ * - saveAsCompanyDocument: also (or instead) save into Company Documents library
+ *   and link via matched_company_document_id (no duplicate association needed)
+ */
+export async function uploadChecklistDocumentAction(
+  formData: FormData,
+): Promise<ActionResult & { companyDocumentId?: string; workspaceDocumentId?: string }> {
+  try {
+    const tenderId = String(formData.get("tenderId") || "").trim();
+    const { session, detail, workspaceId } = await requireEditableWorkspace(
+      tenderId,
+      "bids.edit",
+    );
+    const file = formData.get("file");
+    if (!(file instanceof File) || file.size <= 0) {
+      return { ok: false, error: "Choose a file to upload." };
+    }
+    if (file.size > MAX_SINGLE_SHOT_UPLOAD_BYTES) {
+      return { ok: false, error: "File exceeds the 25 MB limit." };
+    }
+
+    const checklistItemId = String(formData.get("checklistItemId") || "").trim();
+    if (!checklistItemId) {
+      return { ok: false, error: "checklistItemId is required." };
+    }
+    const title = String(formData.get("title") || file.name).trim();
+    const documentType = String(formData.get("documentType") || "Other").trim();
+    const saveAsCompanyDocument =
+      String(formData.get("saveAsCompanyDocument") || "").trim() === "1" ||
+      String(formData.get("saveAsCompanyDocument") || "")
+        .trim()
+        .toLowerCase() === "true";
+
+    if (saveAsCompanyDocument) {
+      const uploaded = await uploadCompanyDocumentToSharePoint({
+        file,
+        metadata: {
+          name: title,
+          uploadKind: "general",
+        },
+      });
+      if (!uploaded.ok) {
+        return { ok: false, error: uploaded.error };
+      }
+      const companyDocumentId = uploaded.documentId;
+
+      await setChecklistManualMatch({
+        itemId: checklistItemId,
+        workspaceId,
+        companyId: session.companyId,
+        companyDocumentId,
+        workspaceDocumentId: null,
+      });
+
+      await insertTenderActivity({
+        tenderId,
+        companyId: session.companyId,
+        eventType: "checklist_company_document_uploaded",
+        summary: `Uploaded and saved to Company Documents: ${title}`,
+        payload: { checklistItemId, companyDocumentId },
+        actorUserId: session.user.id,
+      });
+
+      revalidateWorkspace(tenderId);
+      revalidatePath("/documents");
+      return { ok: true, companyDocumentId };
+    }
+
+    const result = await invokeWorkspaceDocumentSave({
+      workspaceId,
+      tenderId: detail.id,
+      tenderReference: detail.sourceTenderId,
+      documentType,
+      title,
+      file,
+    });
+    if (!result.success) {
+      return { ok: false, error: result.error || "Document upload failed." };
+    }
+
+    const workspaceDocumentId = String(
+      result.workspaceDocumentId || result.documentId || "",
+    );
+    if (workspaceDocumentId) {
+      await setChecklistManualMatch({
+        itemId: checklistItemId,
+        workspaceId,
+        companyId: session.companyId,
+        workspaceDocumentId,
+      });
+    }
+
+    await insertTenderActivity({
+      tenderId,
+      companyId: session.companyId,
+      eventType: "workspace_document_uploaded",
+      summary: "Workspace document uploaded",
+      payload: { title, checklistItemId },
+      actorUserId: session.user.id,
+    });
+    revalidateWorkspace(tenderId);
+    return { ok: true, workspaceDocumentId: workspaceDocumentId || undefined };
+  } catch (error) {
+    if (error instanceof CompanyAccessError) {
+      return { ok: false, error: error.message };
+    }
+    return {
+      ok: false,
+      error:
+        error instanceof Error ? error.message : "Unable to upload document.",
+    };
+  }
+}
+
 export type AddChecklistRequirementResult =
   | {
       ok: true;
@@ -1337,7 +1646,7 @@ export async function deleteChecklistRequirementAction(input: {
       input.tenderId,
       "bids.edit",
     );
-    const result = await archiveManualChecklistItem({
+    const result = await deleteChecklistItem({
       itemId: input.itemId,
       workspaceId,
       companyId: session.companyId,
@@ -1347,7 +1656,7 @@ export async function deleteChecklistRequirementAction(input: {
       tenderId: input.tenderId,
       companyId: session.companyId,
       eventType: "checklist_requirement_deleted",
-      summary: "Manual requirement removed",
+      summary: "Checklist requirement deleted",
       payload: {
         itemId: input.itemId,
         linkedDocumentCount: result.linkedDocumentCount,

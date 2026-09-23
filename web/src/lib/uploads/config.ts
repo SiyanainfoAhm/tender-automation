@@ -4,7 +4,8 @@
  */
 
 export const CHUNK_SIZE = 5 * 1024 * 1024;
-export const UPLOAD_CHUNK_CONCURRENCY = 2;
+/** SharePoint Graph upload sessions require sequential Content-Range writes. */
+export const UPLOAD_CHUNK_CONCURRENCY = 1;
 export const MAX_CHUNK_RETRIES = 3;
 export const UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
 export const CHUNK_RETRY_BACKOFF_MS = [1_000, 2_000, 4_000] as const;

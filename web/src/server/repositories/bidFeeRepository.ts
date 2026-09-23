@@ -386,7 +386,7 @@ export async function insertTenderDocument(input: {
       original_name: input.originalName || input.fileName,
       mime_type: input.mimeType || null,
       file_size_bytes: input.fileSizeBytes ?? null,
-      storage_provider: input.storageProvider || "azure",
+      storage_provider: input.storageProvider || "sharepoint",
       storage_url: input.storageUrl || null,
       created_by: input.userId || null,
     })
