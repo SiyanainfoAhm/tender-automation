@@ -24,9 +24,13 @@ describe("tender UI status mapping", () => {
     expect(getTenderUiStatus("LOST")).toBe("lost");
     expect(getTenderUiStatus("DISQUALIFIED")).toBe("disqualified");
     expect(getTenderUiStatus("CANCELLED")).toBe("cancelled");
+    expect(getTenderUiStatus("TECHNICAL_REJECTED")).toBe("technical_rejected");
+    expect(getTenderUiStatus("FINANCIAL_REJECTED")).toBe("financial_rejected");
     expect(tenderUiStatusLabel("CANCELLED")).toBe("Tender cancelled");
     expect(tenderUiStatusLabel("DISQUALIFIED")).toBe("Disqualified");
     expect(tenderUiStatusLabel("LOST")).toBe("Lost");
+    expect(tenderUiStatusLabel("TECHNICAL_REJECTED")).toBe("Technical Rejected");
+    expect(tenderUiStatusLabel("FINANCIAL_REJECTED")).toBe("Financial Rejected");
   });
 
   it("expands status filters to the correct DB values", () => {
@@ -61,6 +65,14 @@ describe("tender UI status mapping", () => {
     expect(qualificationStatusesForFilter("disqualified")).toEqual({
       kind: "in",
       values: ["DISQUALIFIED"],
+    });
+    expect(qualificationStatusesForFilter("technical_rejected")).toEqual({
+      kind: "in",
+      values: ["TECHNICAL_REJECTED"],
+    });
+    expect(qualificationStatusesForFilter("financial_rejected")).toEqual({
+      kind: "in",
+      values: ["FINANCIAL_REJECTED"],
     });
     expect(getTenderUiStatus("UNDER_EVALUATION")).toBe("under_evaluation");
     expect(tenderUiStatusLabel("UNDER_EVALUATION")).toBe("Under Evaluation");

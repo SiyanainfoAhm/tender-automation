@@ -11,6 +11,8 @@ export const TENDER_STATUSES = [
   "DISQUALIFIED",
   "SUBMITTED",
   "CANCELLED",
+  "TECHNICAL_REJECTED",
+  "FINANCIAL_REJECTED",
 ] as const;
 
 export type TenderStatus = (typeof TENDER_STATUSES)[number];
@@ -27,7 +29,14 @@ export const ACTIONABLE_STATUSES = [
 
 export const MANUAL_REVIEW_STATUSES = ["VERIFY"] as const;
 
-export const REJECTED_STATUSES = ["NO_GO", "LOST", "DISQUALIFIED", "CANCELLED"] as const;
+export const REJECTED_STATUSES = [
+  "NO_GO",
+  "LOST",
+  "DISQUALIFIED",
+  "CANCELLED",
+  "TECHNICAL_REJECTED",
+  "FINANCIAL_REJECTED",
+] as const;
 
 /** Presentation labels only — stored DB values remain GO / CONDITIONAL_GO / etc. */
 export const STATUS_DISPLAY_LABELS: Record<TenderStatus, string> = {
@@ -43,6 +52,8 @@ export const STATUS_DISPLAY_LABELS: Record<TenderStatus, string> = {
   DISQUALIFIED: "Disqualified",
   SUBMITTED: "Submitted",
   CANCELLED: "Tender cancelled",
+  TECHNICAL_REJECTED: "Technical Rejected",
+  FINANCIAL_REJECTED: "Financial Rejected",
 };
 
 /**
@@ -58,6 +69,8 @@ export const TENDER_UI_STATUSES = [
   "won",
   "lost",
   "disqualified",
+  "technical_rejected",
+  "financial_rejected",
   "no_bid",
   "duplicate",
   "cancelled",
@@ -76,6 +89,8 @@ export const TENDER_UI_STATUS_LABELS: Record<TenderUiStatus, string> = {
   won: "Won",
   lost: "Lost",
   disqualified: "Disqualified",
+  technical_rejected: "Technical Rejected",
+  financial_rejected: "Financial Rejected",
   no_bid: "No Bid",
   duplicate: "Duplicate",
   cancelled: "Tender cancelled",
@@ -92,6 +107,8 @@ export const TENDER_UI_STATUS_COLORS: Record<TenderUiStatus, string> = {
   won: "#16a34a",
   lost: "#b91c1c",
   disqualified: "#9f1239",
+  technical_rejected: "#c2410c",
+  financial_rejected: "#9a3412",
   no_bid: "#dc2626",
   duplicate: "#6b7280",
   cancelled: "#78716c",
@@ -113,6 +130,8 @@ export const TENDER_LIST_STATUS_FILTERS: Array<{
   { value: "won", label: "Won" },
   { value: "lost", label: "Lost" },
   { value: "disqualified", label: "Disqualified" },
+  { value: "technical_rejected", label: "Technical Rejected" },
+  { value: "financial_rejected", label: "Financial Rejected" },
   { value: "no_bid", label: "No Bid" },
   { value: "duplicate", label: "Duplicate" },
   { value: "cancelled", label: "Tender cancelled" },
@@ -142,6 +161,8 @@ export function getTenderUiStatus(
   if (value === "WON" || value === "AWARDED") return "won";
   if (value === "LOST") return "lost";
   if (value === "DISQUALIFIED") return "disqualified";
+  if (value === "TECHNICAL_REJECTED") return "technical_rejected";
+  if (value === "FINANCIAL_REJECTED") return "financial_rejected";
   if (value === "VERIFY") return "verify";
   if (value === "CONDITIONAL_GO" || value === "MAY_BID") return "may_bid";
   if (value === "SCREENING") return "under_evaluation";
@@ -199,6 +220,12 @@ export function qualificationStatusesForFilter(
   if (ui === "disqualified" || upper === "DISQUALIFIED") {
     return { kind: "in", values: ["DISQUALIFIED"] };
   }
+  if (ui === "technical_rejected" || upper === "TECHNICAL_REJECTED") {
+    return { kind: "in", values: ["TECHNICAL_REJECTED"] };
+  }
+  if (ui === "financial_rejected" || upper === "FINANCIAL_REJECTED") {
+    return { kind: "in", values: ["FINANCIAL_REJECTED"] };
+  }
   if (ui === "submitted" || upper === "SUBMITTED") {
     return { kind: "in", values: ["SUBMITTED"] };
   }
@@ -225,6 +252,8 @@ export const DECISION_CHART_COLORS: Record<TenderStatus | "NOT_EVALUATED", strin
   DISQUALIFIED: "#9f1239",
   SUBMITTED: "#3b82f6",
   CANCELLED: "#78716c",
+  TECHNICAL_REJECTED: "#c2410c",
+  FINANCIAL_REJECTED: "#9a3412",
   NOT_EVALUATED: "#94a3b8",
 };
 
@@ -242,6 +271,8 @@ export const POST_SUBMISSION_STATUSES = [
   "WON",
   "LOST",
   "CANCELLED",
+  "TECHNICAL_REJECTED",
+  "FINANCIAL_REJECTED",
 ] as const;
 
 export function isPostSubmissionStatus(
@@ -254,9 +285,10 @@ export function isPostSubmissionStatus(
 }
 
 /**
- * Status choices on tender details. After submission, earlier stages
- * (Will Bid, Verify, and so on) are omitted. Under Evaluation and Duplicate
- * remain valid submitted-bid states before a final outcome is recorded.
+ * Status choices on tender details.
+ * - Submitted → Technical Rejected / Financial Rejected
+ * - Under Evaluation → Technical Rejected / Financial Rejected
+ * Terminal outcomes lock to themselves.
  */
 export function tenderDetailStatusChoices(options: {
   currentStatus: string | null | undefined;
@@ -268,17 +300,27 @@ export function tenderDetailStatusChoices(options: {
   const pastSubmission =
     options.submitted === true || isPostSubmissionStatus(current);
   if (!pastSubmission) return TENDER_STATUSES;
-  if (current === "WON" || current === "LOST" || current === "CANCELLED") {
+
+  if (
+    current === "WON" ||
+    current === "LOST" ||
+    current === "CANCELLED" ||
+    current === "TECHNICAL_REJECTED" ||
+    current === "FINANCIAL_REJECTED"
+  ) {
     return [current as TenderStatus];
   }
-  return [
-    "SUBMITTED",
-    "UNDER_EVALUATION",
-    "DUPLICATE",
-    "WON",
-    "LOST",
-    "CANCELLED",
-  ];
+
+  if (current === "UNDER_EVALUATION") {
+    return [
+      "UNDER_EVALUATION",
+      "TECHNICAL_REJECTED",
+      "FINANCIAL_REJECTED",
+    ];
+  }
+
+  // SUBMITTED and other post-submission mid-states
+  return ["SUBMITTED", "TECHNICAL_REJECTED", "FINANCIAL_REJECTED"];
 }
 
 /**
@@ -308,9 +350,12 @@ export function canOpenBidWorkspace(
   return (
     value === "GO" ||
     value === "SUBMITTED" ||
+    value === "UNDER_EVALUATION" ||
     value === "WON" ||
     value === "LOST" ||
-    value === "CANCELLED"
+    value === "CANCELLED" ||
+    value === "TECHNICAL_REJECTED" ||
+    value === "FINANCIAL_REJECTED"
   );
 }
 
@@ -330,7 +375,9 @@ export function isRejectedStatus(
     status === "NO_GO" ||
     status === "CANCELLED" ||
     status === "LOST" ||
-    status === "DISQUALIFIED"
+    status === "DISQUALIFIED" ||
+    status === "TECHNICAL_REJECTED" ||
+    status === "FINANCIAL_REJECTED"
   );
 }
 

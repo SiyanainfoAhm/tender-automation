@@ -167,6 +167,7 @@ export function mapToDashboardPipelineStage(options: {
   if (raw === "WON" || raw === "AWARDED") return "won";
   if (raw === "LOST") return "lost";
   if (raw === "DISQUALIFIED") return "disqualified";
+  if (raw === "TECHNICAL_REJECTED" || raw === "FINANCIAL_REJECTED") return "lost";
   if (raw === "NO_GO" || raw === "NO_BID") return "no_bid";
   if (raw === "DUPLICATE") return "duplicate";
   if (raw === "CANCELLED" || raw === "CANCELED") return "cancelled";

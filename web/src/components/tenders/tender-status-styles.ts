@@ -111,6 +111,22 @@ export const qualificationStatusStyles: Record<
     border: "border-stone-300",
     dot: "bg-stone-500",
   },
+  TECHNICAL_REJECTED: {
+    label: STATUS_DISPLAY_LABELS.TECHNICAL_REJECTED,
+    shortLabel: "Tech Rejected",
+    bg: "bg-orange-100",
+    text: "text-orange-900",
+    border: "border-orange-300",
+    dot: "bg-orange-600",
+  },
+  FINANCIAL_REJECTED: {
+    label: STATUS_DISPLAY_LABELS.FINANCIAL_REJECTED,
+    shortLabel: "Fin Rejected",
+    bg: "bg-amber-100",
+    text: "text-amber-950",
+    border: "border-amber-400",
+    dot: "bg-amber-700",
+  },
 };
 
 export type TenderSource = "TENDER247" | "BIDASSIST" | "MANUAL";

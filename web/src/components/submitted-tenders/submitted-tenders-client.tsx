@@ -189,7 +189,7 @@ export function SubmittedTendersClient({
     <div className="space-y-6">
       <PageHeader
         title="Submitted Tenders"
-        subtitle="Track submitted bids and record Won or Lost outcomes. Lost reason is required when marking Lost."
+        subtitle="Track submitted bids and record Technical Rejected or Financial Rejected outcomes."
       />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">

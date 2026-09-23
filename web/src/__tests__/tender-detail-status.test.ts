@@ -87,19 +87,41 @@ describe("tender detail status after submission", () => {
     ).toBe("WON");
   });
 
-  it("offers only forward outcomes from Submitted", () => {
+  it("offers Technical / Financial Rejected from Submitted", () => {
     expect(
       tenderDetailStatusChoices({
         currentStatus: "SUBMITTED",
         submitted: true,
       }),
-    ).toEqual(["SUBMITTED", "WON", "LOST", "CANCELLED"]);
+    ).toEqual(["SUBMITTED", "TECHNICAL_REJECTED", "FINANCIAL_REJECTED"]);
+  });
+
+  it("offers Technical / Financial Rejected from Under Evaluation", () => {
+    expect(
+      tenderDetailStatusChoices({
+        currentStatus: "UNDER_EVALUATION",
+        submitted: true,
+      }),
+    ).toEqual([
+      "UNDER_EVALUATION",
+      "TECHNICAL_REJECTED",
+      "FINANCIAL_REJECTED",
+    ]);
   });
 
   it("locks Won so earlier statuses are not offered", () => {
     expect(
       tenderDetailStatusChoices({ currentStatus: "WON", submitted: true }),
     ).toEqual(["WON"]);
+  });
+
+  it("locks Technical Rejected", () => {
+    expect(
+      tenderDetailStatusChoices({
+        currentStatus: "TECHNICAL_REJECTED",
+        submitted: true,
+      }),
+    ).toEqual(["TECHNICAL_REJECTED"]);
   });
 
   it("still lists the full pipeline before submission", () => {

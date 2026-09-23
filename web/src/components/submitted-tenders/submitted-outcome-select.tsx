@@ -79,7 +79,7 @@ export function SubmittedOutcomeSelect({
         onValueChange={onChange}
         statuses={statusChoices}
         disabled={!canEdit || locked || pending}
-        className="h-8 w-[9.5rem] text-xs"
+        className="h-8 min-w-[11.5rem] text-xs"
         ariaLabel="Update submitted tender status"
       />
 
