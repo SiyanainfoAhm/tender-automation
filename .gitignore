@@ -25,3 +25,6 @@ Thumbs.db
 # Keep the import template tracked
 !templates/
 !templates/tender-import-template.xlsx
+
+.vercel
+.env*

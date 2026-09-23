@@ -448,5 +448,26 @@ export async function uploadTenderArtifactsAndPersistUrls(options: {
     }
   }
 
+  // Whenever a docs zip URL is known (fresh upload or already on SharePoint),
+  // schedule Ask AI indexing. Deduped server-side via tender index jobs.
+  if (result.urls.documents_zip_url) {
+    try {
+      const { scheduleTenderAiIndexAfterArtifactUpload } = await import(
+        "./scheduleTenderAiIndex.js"
+      );
+      void scheduleTenderAiIndexAfterArtifactUpload({
+        sourcePortal: options.sourcePortal,
+        sourceRegion: options.sourceRegion,
+        sourceTenderId: options.sourceTenderId,
+        runDate: options.runDate,
+        logger: options.logger,
+      });
+    } catch (error) {
+      options.logger?.warn?.(
+        `AI_INDEX_SCHEDULE_IMPORT_FAILED=${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   return result;
 }
