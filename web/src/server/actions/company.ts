@@ -15,6 +15,8 @@ import {
   upsertCompanyBidPreferences,
 } from "@/server/repositories/companyRepository";
 import {
+  getCompanyDocumentById,
+  hardDeleteCompanyDocument,
   updateCompanyDocumentMetadata,
 } from "@/server/repositories/documentRepository";
 import { roleHasPermission } from "@/lib/rbac/permissions";
@@ -400,8 +402,31 @@ export async function deleteCompanyDocumentAction(
       );
     }
 
+    const document = await getCompanyDocumentById({
+      companyId: session.companyId,
+      documentId,
+    });
+    if (!document) return { error: "Document not found." };
+
     const result = await invokeDocumentDelete(documentId);
     if (!result.success) {
+      // Legacy Azure records can outlive their blob/container configuration.
+      // The storage function cannot remove a file it can no longer reach; the
+      // user explicitly requested removal, so clean up the stale DB record.
+      if (document.storageProvider.toLowerCase().includes("azure")) {
+        console.warn("[documents] removing stale Azure document record", {
+          documentId,
+          storageProvider: document.storageProvider,
+          storageDeleteError: result.error || null,
+        });
+        await hardDeleteCompanyDocument({
+          companyId: session.companyId,
+          documentId,
+        });
+        revalidatePath("/documents");
+        revalidatePath("/dashboard");
+        return { ok: true };
+      }
       return {
         error: result.error || "Unable to delete document",
       };

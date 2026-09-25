@@ -212,6 +212,20 @@ export async function softDeleteCompanyDocument(options: {
   if (error) throw new Error(error.message);
 }
 
+/** Permanently remove a document row after its legacy storage copy is unavailable. */
+export async function hardDeleteCompanyDocument(options: {
+  companyId: string;
+  documentId: string;
+}): Promise<void> {
+  const supabase = getServerSupabase();
+  const { error } = await supabase
+    .from("agenttender_company_documents")
+    .delete()
+    .eq("id", options.documentId)
+    .eq("company_id", options.companyId);
+  if (error) throw new Error(error.message);
+}
+
 /** Update display name (and optional notes). Does not rename the SharePoint file. */
 export async function updateCompanyDocumentMetadata(options: {
   companyId: string;

@@ -1960,17 +1960,19 @@ async function handleDelete(req: Request, body: { documentId?: string }) {
   } else if (doc.storage_provider === "azure") {
     const azure = requireAzureConfig();
     const blobName = storagePath || blobNameFromUrl(azure, storageUrl);
-    if (!blobName) throw new HttpError(404, "File not found.");
-    try {
+    if (blobName) {
+      try {
       await deleteAzureBlob(azure, blobName);
-    } catch (error) {
-      if (error instanceof HttpError) {
-        throw new HttpError(
-          500,
-          "Unable to delete the file from document storage. Please try again.",
-        );
+      } catch (error) {
+        // The blob may already have been removed, or legacy Azure may no
+        // longer be configured/reachable. Honour the delete request by
+        // removing its stale metadata record below.
+        console.warn("[tender-automation-documents] Azure cleanup skipped", {
+          documentId,
+          blobName,
+          message: error instanceof Error ? error.message : String(error),
+        });
       }
-      throw error;
     }
   }
 
