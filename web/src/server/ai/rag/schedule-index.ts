@@ -1,24 +1,9 @@
 import "server-only";
+import { after } from "next/server";
 
 import {
   runWithDocumentSessionAsync,
 } from "@/server/storage/tenderAutomationDocumentFunctions";
-
-type WaitUntilFn = (promise: Promise<unknown>) => void;
-
-function getWaitUntil(): WaitUntilFn | null {
-  try {
-    // Optional Vercel runtime helper (keeps work alive after the response).
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const vercel = require("@vercel/functions") as {
-      waitUntil?: WaitUntilFn;
-    };
-    if (typeof vercel.waitUntil === "function") return vercel.waitUntil;
-  } catch {
-    // package may be absent locally
-  }
-  return null;
-}
 
 /**
  * Schedule AI indexing without blocking the HTTP response body.
@@ -48,24 +33,11 @@ export function scheduleAiIndexing(
     });
   };
 
-  const waitUntil = getWaitUntil();
-  if (waitUntil) {
-    waitUntil(run());
-    return;
-  }
-
   try {
-    // Next 16 supports after() in Route Handlers / Server Actions.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const nextServer = require("next/server") as {
-      after?: (fn: () => void | Promise<unknown>) => void;
-    };
-    if (typeof nextServer.after === "function") {
-      nextServer.after(() => run());
-      return;
-    }
+    after(() => run());
+    return;
   } catch {
-    // fall through
+    // `after()` is only available in a Next.js request context.
   }
 
   // Last resort — may not survive serverless request teardown.
