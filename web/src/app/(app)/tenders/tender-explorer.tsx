@@ -1389,9 +1389,9 @@ export function TenderExplorer({
                 ))
               : rows.map((row) => {
                   const deadline = getDeadlineMeta(row.closing_date);
-                  const bidLabel = moneyLabel(
-                    row.tender_value,
-                    row.tender_value_text,
+                  const estimatedCostLabel = moneyLabel(
+                    row.rfp_estimated_cost,
+                    null,
                   );
                   const emdLabel = moneyLabel(row.emd_amount, row.emd_text);
                   // List filters/cards use the tender-row qualification status,
@@ -1479,10 +1479,10 @@ export function TenderExplorer({
                         <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm text-foreground-700">
                           <span>
                             <span className="text-foreground-500">
-                              Bid Value:
+                              Estimated Cost:
                             </span>{" "}
                             <span className="font-semibold text-foreground-900">
-                              {bidLabel}
+                              {estimatedCostLabel}
                             </span>
                           </span>
                           <span className="text-foreground-300" aria-hidden>

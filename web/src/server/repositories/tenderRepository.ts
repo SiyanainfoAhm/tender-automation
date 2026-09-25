@@ -53,6 +53,8 @@ export type WebTenderListRow = {
   bid_submission_date: string | null;
   tender_value: number | null;
   tender_value_text: string | null;
+  /** Present after the RFP estimated-cost migration is applied. */
+  rfp_estimated_cost?: number | null;
   emd_amount: number | null;
   emd_text: string | null;
   currency: string;
@@ -113,6 +115,7 @@ export const WEB_TENDER_LIST_SELECT = [
   "closing_date",
   "tender_value",
   "tender_value_text",
+  "rfp_estimated_cost",
   "emd_amount",
   "emd_text",
   "qualification_status",
