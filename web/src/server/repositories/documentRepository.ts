@@ -85,10 +85,28 @@ export async function listCompanyDocuments(options: {
     query = query.eq("document_category", options.category);
   }
 
-  const { data, error } = await query;
+  // Tender documents use a company-document row only as their storage
+  // attachment. They are never Company Documents and must not be offered as
+  // reusable company-library files or shown on the Documents page.
+  const [{ data, error }, { data: tenderLinks, error: tenderLinksError }] =
+    await Promise.all([
+      query,
+      supabase
+        .from("agenttender_tender_documents")
+        .select("company_document_id")
+        .eq("company_id", options.companyId)
+        .not("company_document_id", "is", null),
+    ]);
   if (error) throw new Error(error.message);
+  if (tenderLinksError) throw new Error(tenderLinksError.message);
 
-  let rows = (data || []).map((r) => mapDoc(r as Record<string, unknown>));
+  const tenderDocumentIds = new Set(
+    (tenderLinks || []).map((row) => String(row.company_document_id)),
+  );
+
+  let rows = (data || [])
+    .filter((row) => !tenderDocumentIds.has(String(row.id)))
+    .map((row) => mapDoc(row as Record<string, unknown>));
   const q = options.q?.trim().toLowerCase();
   if (q) {
     rows = rows.filter((d) => {
@@ -111,13 +129,25 @@ export async function listCompanyDocuments(options: {
 
 export async function countCompanyDocuments(companyId: string): Promise<number> {
   const supabase = getServerSupabase();
-  const { count, error } = await supabase
-    .from("agenttender_company_documents")
-    .select("id", { count: "exact", head: true })
-    .eq("company_id", companyId)
-    .eq("status", "active");
+  const [{ count, error }, { data: tenderLinks, error: tenderLinksError }] =
+    await Promise.all([
+      supabase
+        .from("agenttender_company_documents")
+        .select("id", { count: "exact", head: true })
+        .eq("company_id", companyId)
+        .eq("status", "active"),
+      supabase
+        .from("agenttender_tender_documents")
+        .select("company_document_id")
+        .eq("company_id", companyId)
+        .not("company_document_id", "is", null),
+    ]);
   if (error) throw new Error(error.message);
-  return count ?? 0;
+  if (tenderLinksError) throw new Error(tenderLinksError.message);
+  const tenderDocumentIds = new Set(
+    (tenderLinks || []).map((row) => String(row.company_document_id)),
+  );
+  return Math.max(0, (count ?? 0) - tenderDocumentIds.size);
 }
 
 export async function listExpiringDocuments(options: {
