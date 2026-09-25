@@ -65,7 +65,7 @@
       "value": "1YmohJhudxTDR6Y",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1821842172,
+      "expires": 1821852537,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -191,16 +191,6 @@
       "sameSite": "None"
     },
     {
-      "name": "_gat",
-      "value": "1",
-      "domain": ".tender247.com",
-      "path": "/",
-      "expires": 1790306202,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
       "name": "_clck",
       "value": "mzjoox%5E2%5Eg9r%5E0%5E2402",
       "domain": ".tender247.com",
@@ -232,10 +222,10 @@
     },
     {
       "name": "AWSALBCORS",
-      "value": "iAccDP6coTq/NWcBT0hevMZNiKrYEH4lZfrvfuCQXZtrAyZgy4x86SHX6f3zyvu13B19PvFAGGlU5YrVHyh8KWrJaACM6flnYsRMxdUKALgvv9OxIGdpCmMEz1Ll1nXYhoPcK6pZxwigyvC6/5RL+ISxZmnMHAl+IR2Y9CERkeCsuANJS/h6R/fq7rpl7A==",
+      "value": "I612OjvwTDy2QiR6XezLpdc8HE7RaBUJ5SMgCKBWPO/K75bUhVOaQD77MztQ4AYf44hgg9ssA3TU1YCo8zhKPWeQZUMZyj3Hc0yYEfMiBM78T7rzuojTrhiFJGbzL2UlqDdsFAS6rAu6yCwEUA0Wa+OkgstsNRxGN3jrlb5hk8g7dzI+4w84gDGlJWHLLA==",
       "domain": "widget-mediator.zopim.com",
       "path": "/",
-      "expires": 1790910976.488972,
+      "expires": 1790921336.949937,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
@@ -247,11 +237,11 @@
       "localStorage": [
         {
           "name": "ZD-store",
-          "value": "{\"activeEmbed\":\"chat\",\"widgetShown\":false,\"is_chatting\":false}"
+          "value": "{\"activeEmbed\":\"chat\",\"widgetShown\":false,\"is_chatting\":true}"
         },
         {
           "name": "ZD-suid",
-          "value": "{\"id\":\"c3605beeef06470eb6f21a85b70a3087\",\"expiry\":1790307076115,\"tabs\":{\"count\":1,\"expiry\":0}}"
+          "value": "{\"id\":\"c3605beeef06470eb6f21a85b70a3087\",\"expiry\":1790317436443,\"tabs\":{\"count\":2,\"expiry\":0}}"
         },
         {
           "name": "lastExternalReferrerTime",
@@ -279,11 +269,11 @@
         },
         {
           "name": "user_query_id",
-          "value": "336722"
+          "value": "340481"
         },
         {
           "name": "__zlcstore",
-          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1790306176585,\"account_status\":\"offline\"}}"
+          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1790316537542,\"account_status\":\"online\"}}"
         }
       ],
       "indexedDB": []

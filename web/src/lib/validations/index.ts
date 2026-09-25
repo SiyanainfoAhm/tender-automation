@@ -133,6 +133,7 @@ export const QUALIFICATION_STATUSES = [
   "DISQUALIFIED",
   "SUBMITTED",
   "CANCELLED",
+  "DELETE",
 ] as const;
 
 export const DATE_TYPES = [

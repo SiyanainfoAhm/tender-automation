@@ -119,6 +119,14 @@ export const qualificationStatusStyles: Record<
     border: "border-amber-400",
     dot: "bg-amber-700",
   },
+  DELETE: {
+    label: STATUS_DISPLAY_LABELS.DELETE,
+    shortLabel: "Delete",
+    bg: "bg-slate-100",
+    text: "text-slate-800",
+    border: "border-slate-300",
+    dot: "bg-slate-600",
+  },
 };
 
 export type TenderSource = "TENDER247" | "BIDASSIST" | "MANUAL";

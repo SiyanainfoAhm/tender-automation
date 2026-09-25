@@ -82,7 +82,7 @@ export function summarizeSubmittedTenders(
     if (status === "WON") won += 1;
     else if (status === "LOST") lost += 1;
     else if (status === "DUPLICATE") duplicate += 1;
-    else if (status === "CANCELLED") {
+    else if (status === "CANCELLED" || status === "DELETE") {
       // Cancelled stays in the list but is not "awaiting outcome".
     } else submitted += 1;
   }

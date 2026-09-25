@@ -1394,6 +1394,10 @@ export function TenderExplorer({
                     row.tender_value_text,
                   );
                   const emdLabel = moneyLabel(row.emd_amount, row.emd_text);
+                  // List filters/cards use the tender-row qualification status,
+                  // so render that same source of truth. In particular, a
+                  // Duplicate filter can otherwise return a row whose stale
+                  // effective value still says Submitted.
                   const status =
                     row.qualification_status ??
                     row.effective_qualification_status;

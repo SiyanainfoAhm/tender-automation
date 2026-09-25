@@ -174,6 +174,7 @@ export function SubmittedTendersClient({
           status === "WON" ||
           status === "LOST" ||
           status === "CANCELLED" ||
+          status === "DELETE" ||
           status === "DUPLICATE"
         ) {
           return false;
@@ -329,9 +330,7 @@ export function SubmittedTendersClient({
               <thead className="border-b border-border bg-background-50 text-xs uppercase tracking-wide text-foreground-500">
                 <tr>
                   <th className="px-4 py-3 font-medium">Tender</th>
-                  <th className="px-4 py-3 font-medium">
-                    Qualification Status
-                  </th>
+                  <th className="px-4 py-3 font-medium">Outcome</th>
                   <th className="px-4 py-3 font-medium">Value</th>
                   <th className="px-4 py-3 font-medium">Type</th>
                   <th className="px-4 py-3 font-medium">Lost reason</th>
@@ -346,12 +345,6 @@ export function SubmittedTendersClient({
                   const isWon = status === "WON";
                   const isLost = status === "LOST";
                   const isDuplicate = status === "DUPLICATE";
-                  const awaiting =
-                    !isWon &&
-                    !isLost &&
-                    !isDuplicate &&
-                    status !== "CANCELLED";
-
                   return (
                     <tr
                       key={item.id}
@@ -391,7 +384,6 @@ export function SubmittedTendersClient({
                         <SubmittedOutcomeSelect
                           tenderId={item.id}
                           tenderTitle={item.title}
-                          currentStatus={status}
                           tenderValue={item.tenderValue}
                           teamMembers={teamMembers}
                           canEdit={canEdit}
@@ -450,26 +442,6 @@ export function SubmittedTendersClient({
                             tenderId={item.id}
                             tenderTitle={item.title}
                           />
-                          {canEdit && awaiting ? (
-                            <>
-                              <Button
-                                size="sm"
-                                onClick={() => setWonTarget(item)}
-                              >
-                                Mark Won
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                onClick={() => {
-                                  setLostMode("mark-lost");
-                                  setLostTarget(item);
-                                }}
-                              >
-                                Mark Lost
-                              </Button>
-                            </>
-                          ) : null}
                           {canEdit && isLost ? (
                             <Button
                               size="sm"

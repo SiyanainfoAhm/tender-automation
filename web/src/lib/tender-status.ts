@@ -12,6 +12,7 @@ export const TENDER_STATUSES = [
   "CANCELLED",
   "TECHNICAL_REJECTED",
   "FINANCIAL_REJECTED",
+  "DELETE",
 ] as const;
 
 export type TenderStatus = (typeof TENDER_STATUSES)[number];
@@ -52,6 +53,7 @@ export const STATUS_DISPLAY_LABELS: Record<TenderStatus, string> = {
   CANCELLED: "Tender cancelled",
   TECHNICAL_REJECTED: "Technical Rejected",
   FINANCIAL_REJECTED: "Financial Rejected",
+  DELETE: "Delete",
 };
 
 /**
@@ -68,6 +70,7 @@ export const TENDER_UI_STATUSES = [
   "disqualified",
   "technical_rejected",
   "financial_rejected",
+  "delete",
   "no_bid",
   "duplicate",
   "cancelled",
@@ -87,6 +90,7 @@ export const TENDER_UI_STATUS_LABELS: Record<TenderUiStatus, string> = {
   disqualified: "Disqualified",
   technical_rejected: "Technical Rejected",
   financial_rejected: "Financial Rejected",
+  delete: "Delete",
   no_bid: "No Bid",
   duplicate: "Duplicate",
   cancelled: "Tender cancelled",
@@ -104,6 +108,7 @@ export const TENDER_UI_STATUS_COLORS: Record<TenderUiStatus, string> = {
   disqualified: "#9f1239",
   technical_rejected: "#c2410c",
   financial_rejected: "#9a3412",
+  delete: "#64748b",
   no_bid: "#dc2626",
   duplicate: "#6b7280",
   cancelled: "#78716c",
@@ -126,6 +131,7 @@ export const TENDER_LIST_STATUS_FILTERS: Array<{
   { value: "disqualified", label: "Disqualified" },
   { value: "technical_rejected", label: "Technical Rejected" },
   { value: "financial_rejected", label: "Financial Rejected" },
+  { value: "delete", label: "Delete" },
   { value: "no_bid", label: "No Bid" },
   { value: "duplicate", label: "Duplicate" },
   { value: "cancelled", label: "Tender cancelled" },
@@ -159,6 +165,7 @@ export function getTenderUiStatus(
   if (value === "DISQUALIFIED") return "disqualified";
   if (value === "TECHNICAL_REJECTED") return "technical_rejected";
   if (value === "FINANCIAL_REJECTED") return "financial_rejected";
+  if (value === "DELETE") return "delete";
   if (value === "VERIFY") return "verify";
   if (value === "CONDITIONAL_GO" || value === "MAY_BID") return "may_bid";
   return "not_evaluated";
@@ -224,6 +231,9 @@ export function qualificationStatusesForFilter(
   if (ui === "financial_rejected" || upper === "FINANCIAL_REJECTED") {
     return { kind: "in", values: ["FINANCIAL_REJECTED"] };
   }
+  if (ui === "delete" || upper === "DELETE") {
+    return { kind: "in", values: ["DELETE"] };
+  }
   if (ui === "submitted" || upper === "SUBMITTED") {
     return { kind: "in", values: ["SUBMITTED"] };
   }
@@ -251,6 +261,7 @@ export const DECISION_CHART_COLORS: Record<TenderStatus | "NOT_EVALUATED", strin
   CANCELLED: "#78716c",
   TECHNICAL_REJECTED: "#c2410c",
   FINANCIAL_REJECTED: "#9a3412",
+  DELETE: "#64748b",
   NOT_EVALUATED: "#94a3b8",
 };
 
@@ -269,6 +280,7 @@ export const POST_SUBMISSION_STATUSES = [
   "CANCELLED",
   "TECHNICAL_REJECTED",
   "FINANCIAL_REJECTED",
+  "DELETE",
 ] as const;
 
 export function isPostSubmissionStatus(
@@ -299,15 +311,17 @@ export function tenderDetailStatusChoices(options: {
   if (
     current === "WON" ||
     current === "LOST" ||
+    current === "DUPLICATE" ||
     current === "CANCELLED" ||
     current === "TECHNICAL_REJECTED" ||
-    current === "FINANCIAL_REJECTED"
+    current === "FINANCIAL_REJECTED" ||
+    current === "DELETE"
   ) {
     return [current as TenderStatus];
   }
 
   // SUBMITTED and other post-submission mid-states
-  return ["SUBMITTED", "TECHNICAL_REJECTED", "FINANCIAL_REJECTED"];
+  return ["SUBMITTED", "TECHNICAL_REJECTED", "FINANCIAL_REJECTED", "DELETE"];
 }
 
 /**
@@ -341,7 +355,8 @@ export function canOpenBidWorkspace(
     value === "LOST" ||
     value === "CANCELLED" ||
     value === "TECHNICAL_REJECTED" ||
-    value === "FINANCIAL_REJECTED"
+    value === "FINANCIAL_REJECTED" ||
+    value === "DELETE"
   );
 }
 
@@ -363,7 +378,8 @@ export function isRejectedStatus(
     status === "LOST" ||
     status === "DISQUALIFIED" ||
     status === "TECHNICAL_REJECTED" ||
-    status === "FINANCIAL_REJECTED"
+    status === "FINANCIAL_REJECTED" ||
+    status === "DELETE"
   );
 }
 

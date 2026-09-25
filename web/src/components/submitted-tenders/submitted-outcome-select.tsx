@@ -2,17 +2,20 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
 
-import { StatusChangeCommentDialog } from "@/components/tenders/status-change-comment-dialog";
 import { MarkAsLostDialog } from "@/components/submitted-tenders/mark-as-lost-dialog";
+import { StatusChangeCommentDialog } from "@/components/tenders/status-change-comment-dialog";
 import { MarkAsWonDialog } from "@/components/won-tenders/mark-as-won-dialog";
-import { QualificationStatusSelect } from "@/components/status/qualification-status-select";
+import { Button } from "@/components/ui/button";
 import {
-  STATUS_DISPLAY_LABELS,
-  tenderDetailStatusChoices,
-  type TenderStatus,
-} from "@/lib/tender-status";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { STATUS_DISPLAY_LABELS } from "@/lib/tender-status";
 import { updateTenderDetailsAction } from "@/server/actions/tender-update";
 
 type TeamMemberOption = {
@@ -23,20 +26,14 @@ type TeamMemberOption = {
 type SubmittedOutcomeSelectProps = {
   tenderId: string;
   tenderTitle: string;
-  currentStatus: string | null | undefined;
   tenderValue?: number | null;
   teamMembers?: TeamMemberOption[];
   canEdit: boolean;
 };
 
-function normalizeStatus(status: string | null | undefined): string {
-  return String(status || "SUBMITTED").trim().toUpperCase();
-}
-
 export function SubmittedOutcomeSelect({
   tenderId,
   tenderTitle,
-  currentStatus,
   tenderValue = null,
   teamMembers = [],
   canEdit,
@@ -45,43 +42,54 @@ export function SubmittedOutcomeSelect({
   const [pending, startTransition] = useTransition();
   const [wonOpen, setWonOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
-  const [statusChangeOpen, setStatusChangeOpen] = useState(false);
-  const [pendingStatus, setPendingStatus] = useState<TenderStatus | null>(null);
-  const status = normalizeStatus(currentStatus) as TenderStatus;
-  const statusChoices = tenderDetailStatusChoices({
-    currentStatus: status,
-    submitted: true,
-  });
-  const selectValue = (statusChoices as readonly string[]).includes(status)
-    ? status
-    : "SUBMITTED";
-  const locked = statusChoices.length === 1;
 
-  function onChange(next: TenderStatus) {
-    if (!canEdit || locked || pending) return;
-    if (next === selectValue) return;
-    if (next === "WON") {
-      setWonOpen(true);
+  const [deleteStatusOpen, setDeleteStatusOpen] = useState(false);
+
+  /* function deleteTender() {
+    if (!window.confirm(`Delete “${tenderTitle}”? This cannot be undone.`)) {
       return;
     }
-    if (next === "LOST") {
-      setLostOpen(true);
-      return;
-    }
-    setPendingStatus(next);
-    setStatusChangeOpen(true);
-  }
+    startTransition(async () => {
+      const result = await deleteTenderAction(tenderId);
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
+      }
+      toast.success(result.message);
+      router.refresh();
+    });
+  } */
 
   return (
     <>
-      <QualificationStatusSelect
-        value={selectValue}
-        onValueChange={onChange}
-        statuses={statusChoices}
-        disabled={!canEdit || locked || pending}
-        className="h-8 min-w-[11.5rem] text-xs"
-        ariaLabel="Update submitted tender status"
-      />
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!canEdit || pending}
+            className="h-8 min-w-[6.5rem] justify-between text-xs"
+            aria-label={`Actions for ${tenderTitle}`}
+          >
+            Actions <MoreHorizontal className="size-3.5" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={() => setWonOpen(true)}>
+            Won
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setLostOpen(true)}>
+            Lost
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className="text-rose-700 focus:text-rose-700"
+            onSelect={() => setDeleteStatusOpen(true)}
+          >
+            Delete
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       <MarkAsWonDialog
         open={wonOpen}
@@ -99,29 +107,23 @@ export function SubmittedOutcomeSelect({
         mode="mark-lost"
       />
       <StatusChangeCommentDialog
-        open={statusChangeOpen}
-        onOpenChange={setStatusChangeOpen}
-        statusLabel={
-          pendingStatus ? STATUS_DISPLAY_LABELS[pendingStatus] : "status"
-        }
+        open={deleteStatusOpen}
+        onOpenChange={setDeleteStatusOpen}
+        statusLabel={STATUS_DISPLAY_LABELS.DELETE}
         pending={pending}
         onConfirm={(comment) => {
-          if (!pendingStatus) return;
           startTransition(async () => {
             const result = await updateTenderDetailsAction({
               tenderId,
-              qualificationStatus: pendingStatus,
+              qualificationStatus: "DELETE",
               decisionReason: comment,
             });
             if (!result.ok) {
               toast.error(result.error);
               return;
             }
-            toast.success(
-              `Tender status updated to ${STATUS_DISPLAY_LABELS[pendingStatus]}.`,
-            );
-            setStatusChangeOpen(false);
-            setPendingStatus(null);
+            toast.success("Tender status updated to Delete.");
+            setDeleteStatusOpen(false);
             router.refresh();
           });
         }}

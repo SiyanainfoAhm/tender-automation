@@ -765,7 +765,6 @@ export function BidWorkspaceClient({
                   <SubmittedOutcomeSelect
                     tenderId={tender.id}
                     tenderTitle={tender.title}
-                    currentStatus={tender.qualificationStatus}
                     tenderValue={tender.tenderValue}
                     canEdit={canUpdateStatus}
                   />
