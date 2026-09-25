@@ -1,15 +1,8 @@
 import { NextResponse } from "next/server";
 
-import {
-  isSharePointUrl,
-  sharePointRelativePathFromUrl,
-} from "@/lib/storage/accessible-storage-url";
 import { getServerSupabase } from "@/lib/db/server";
 import { getSession } from "@/server/auth/session";
-import {
-  invokeBlobRead,
-  invokeDocumentRead,
-} from "@/server/storage/tenderAutomationDocumentFunctions";
+import { invokeDocumentRead } from "@/server/storage/tenderAutomationDocumentFunctions";
 
 type RouteContext = {
   params: Promise<{ documentId: string }>;
@@ -66,43 +59,16 @@ export async function GET(request: Request, context: RouteContext) {
       );
     }
 
-    const storageUrl = doc.storage_url ? String(doc.storage_url) : null;
     const fileName =
       (doc.original_file_name as string | null) ||
       (doc.name as string | null) ||
       "document";
 
-    if (isSharePointUrl(storageUrl)) {
-      const sharePointPath =
-        sharePointRelativePathFromUrl(storageUrl) ||
-        (doc.storage_blob_name ? String(doc.storage_blob_name) : undefined);
-      const upstream = await invokeBlobRead({
-        storageUrl: storageUrl!,
-        blobName: sharePointPath,
-        disposition,
-        fileName,
-      });
-      const headers = new Headers();
-      const contentType = upstream.headers.get("content-type");
-      if (contentType) headers.set("Content-Type", contentType);
-      const contentLength = upstream.headers.get("content-length");
-      if (contentLength) headers.set("Content-Length", contentLength);
-      const contentDisposition = upstream.headers.get("content-disposition");
-      if (contentDisposition) {
-        headers.set("Content-Disposition", contentDisposition);
-      }
-      headers.set(
-        "Cache-Control",
-        upstream.ok ? "private, max-age=300" : "no-store",
-      );
-      return new Response(upstream.body, {
-        status: upstream.status,
-        headers,
-      });
-    }
-
     if (
       doc.storage_provider === "sharepoint" ||
+      // Historic rows can retain an "azure" provider while their canonical
+      // storage URL/blob points to SharePoint. Always resolve by document ID.
+      String(doc.storage_url || "").includes(".sharepoint.com") ||
       (doc.storage_blob_name &&
         String(doc.storage_blob_name).includes("/companydocs/"))
     ) {

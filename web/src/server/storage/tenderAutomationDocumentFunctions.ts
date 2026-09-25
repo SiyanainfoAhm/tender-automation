@@ -95,6 +95,7 @@ async function getSessionToken(): Promise<string | null> {
 
 async function invokeCompanyDocumentsRaw(
   init: RequestInit,
+  options?: { internalIndexCompanyId?: string | null },
 ): Promise<Response> {
   const base = process.env.SUPABASE_URL?.trim()?.replace(/\/$/, "");
   const key = resolveServiceKey();
@@ -109,7 +110,8 @@ async function invokeCompanyDocumentsRaw(
   }
 
   const sessionToken = await getSessionToken();
-  if (!sessionToken) {
+  const internalCompanyId = options?.internalIndexCompanyId?.trim() || null;
+  if (!sessionToken && !internalCompanyId) {
     return Response.json(
       { success: false, error: "Authentication required." },
       { status: 401 },
@@ -122,7 +124,10 @@ async function invokeCompanyDocumentsRaw(
       ...(init.headers || {}),
       Authorization: `Bearer ${key}`,
       apikey: key,
-      "x-agenttender-session": sessionToken,
+      ...(sessionToken ? { "x-agenttender-session": sessionToken } : {}),
+      ...(internalCompanyId
+        ? { "x-agenttender-internal-company": internalCompanyId }
+        : {}),
     },
   });
 }
@@ -247,6 +252,7 @@ export async function invokeAbortDirectUpload(
 export async function invokeDocumentRead(
   documentId: string,
   disposition: "inline" | "attachment" = "inline",
+  options?: { internalIndexCompanyId?: string | null },
 ): Promise<Response> {
   return invokeCompanyDocumentsRaw({
     method: "POST",
@@ -256,7 +262,7 @@ export async function invokeDocumentRead(
       documentId,
       disposition,
     }),
-  });
+  }, options);
 }
 
 export async function invokeBlobRead(options: {

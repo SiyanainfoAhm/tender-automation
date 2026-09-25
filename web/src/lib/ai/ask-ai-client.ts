@@ -9,6 +9,16 @@ import {
   type AskAiStreamStage,
 } from "@/lib/ai/ask-ai-stream";
 
+export type AskAiChatSession = { id: string; title: string; createdAt: string; updatedAt: string; lastMessageAt: string };
+export type AskAiStoredMessage = { id: string; role: "user" | "assistant"; content: string; action?: string | null; sources?: AskAiSource[]; warnings?: string[]; status: "complete" | "interrupted" | "cancelled" | "error"; createdAt: string };
+async function chatJson<T>(url: string, init?: RequestInit): Promise<T> { const response=await fetch(url,{...init,headers:{"Content-Type":"application/json",...(init?.headers||{})},cache:"no-store"}); if(!response.ok){const data=await response.json().catch(()=>null) as {error?:string}|null;throw new Error(data?.error||"Unable to update conversation.");} return (response.status===204 ? undefined : await response.json()) as T; }
+export function fetchAskAiSessions(tenderId:string, search="", offset=0) { return chatJson<{sessions:AskAiChatSession[];total:number}>(`/api/tenders/${tenderId}/ask-ai/sessions?offset=${offset}&search=${encodeURIComponent(search)}`); }
+export function createAskAiSession(tenderId:string, question:string, action?:string|null) { return chatJson<{session:AskAiChatSession}>(`/api/tenders/${tenderId}/ask-ai/sessions`,{method:"POST",body:JSON.stringify({question,action})}); }
+export function fetchAskAiSessionMessages(tenderId:string,sessionId:string) { return chatJson<{messages:AskAiStoredMessage[]}>(`/api/tenders/${tenderId}/ask-ai/sessions/${sessionId}`); }
+export function saveAskAiMessage(tenderId:string,sessionId:string,message:Omit<AskAiStoredMessage,"id"|"createdAt">) { return chatJson<{id:string}>(`/api/tenders/${tenderId}/ask-ai/sessions/${sessionId}/messages`,{method:"POST",body:JSON.stringify(message)}); }
+export function renameAskAiSession(tenderId:string,sessionId:string,title:string) { return chatJson<void>(`/api/tenders/${tenderId}/ask-ai/sessions/${sessionId}`,{method:"PATCH",body:JSON.stringify({title})}); }
+export function deleteAskAiSession(tenderId:string,sessionId:string) { return chatJson<void>(`/api/tenders/${tenderId}/ask-ai/sessions/${sessionId}`,{method:"DELETE"}); }
+
 export type AskAiPhase =
   | "idle"
   | "retrieving"

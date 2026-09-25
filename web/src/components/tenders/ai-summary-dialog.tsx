@@ -22,6 +22,11 @@ import {
   toAccessibleStorageUrl,
   toProxiedStorageUrl,
 } from "@/lib/storage/accessible-storage-url";
+import {
+  clearAuthenticatedDocumentPreview,
+  fetchAuthenticatedDocumentObjectUrl,
+  preloadAuthenticatedDocument,
+} from "@/lib/storage/authenticated-document-preview";
 import { cn } from "@/lib/utils";
 
 export type AiSummaryTenderMeta = {
@@ -40,10 +45,6 @@ type AiSummaryDialogProps = {
   onOpenChange: (open: boolean) => void;
   tender: AiSummaryTenderMeta | null;
 };
-
-/** In-memory PDF blob URLs so hover preload + reopen are fast. */
-const pdfObjectUrlCache = new Map<string, string>();
-const pdfFetchInFlight = new Map<string, Promise<string>>();
 
 /**
  * Same-origin Graph proxy stream — required for iframe preview because
@@ -67,70 +68,11 @@ export function resolveAiSummaryDownloadUrl(
   });
 }
 
-/**
- * Fetch the PDF via the authenticated SharePoint proxy and expose a Blob URL
- * for the iframe (same pattern as the previous Azure blob viewer).
- */
-async function fetchPdfObjectUrl(proxyUrl: string): Promise<string> {
-  const cached = pdfObjectUrlCache.get(proxyUrl);
-  if (cached) return cached;
-
-  const existing = pdfFetchInFlight.get(proxyUrl);
-  if (existing) return existing;
-
-  const promise = (async () => {
-    const response = await fetch(proxyUrl, {
-      method: "GET",
-      credentials: "same-origin",
-    });
-    if (!response.ok) {
-      let detail = "";
-      const contentType = response.headers.get("content-type") || "";
-      if (contentType.includes("application/json")) {
-        const body = (await response.json().catch(() => null)) as {
-          error?: string;
-          code?: string;
-        } | null;
-        detail = body?.error || body?.code || "";
-      }
-      if (response.status === 401) {
-        throw new Error("Sign in again to view the AI summary.");
-      }
-      if (response.status === 404) {
-        throw new Error(
-          detail || "AI summary file was not found in SharePoint.",
-        );
-      }
-      throw new Error(detail || "Unable to load AI summary from SharePoint.");
-    }
-    const blob = await response.blob();
-    if (!blob.size) {
-      throw new Error("AI summary file was empty.");
-    }
-    const type =
-      blob.type && blob.type !== "application/octet-stream"
-        ? blob.type
-        : "application/pdf";
-    const pdfBlob =
-      type === "application/pdf"
-        ? blob
-        : new Blob([blob], { type: "application/pdf" });
-    const objectUrl = URL.createObjectURL(pdfBlob);
-    pdfObjectUrlCache.set(proxyUrl, objectUrl);
-    return objectUrl;
-  })().finally(() => {
-    pdfFetchInFlight.delete(proxyUrl);
-  });
-
-  pdfFetchInFlight.set(proxyUrl, promise);
-  return promise;
-}
-
 /** Prefetch PDF bytes on hover without opening the dialog. */
 export function preloadAiSummaryUrl(rawUrl: string | null | undefined): void {
   const url = resolveAiSummaryViewerUrl(rawUrl);
   if (!url) return;
-  void fetchPdfObjectUrl(url).catch(() => undefined);
+  preloadAuthenticatedDocument(url);
 }
 
 export function AiSummaryDialog({
@@ -177,7 +119,7 @@ export function AiSummaryDialog({
     setLoading(true);
     void (async () => {
       try {
-        const url = await fetchPdfObjectUrl(viewerUrl);
+        const url = await fetchAuthenticatedDocumentObjectUrl(viewerUrl);
         if (cancelled) return;
         setObjectUrl(url);
         setLoading(false);
@@ -269,11 +211,7 @@ export function AiSummaryDialog({
                 variant="outline"
                 onClick={() => {
                   if (viewerUrl) {
-                    const cached = pdfObjectUrlCache.get(viewerUrl);
-                    if (cached) {
-                      URL.revokeObjectURL(cached);
-                      pdfObjectUrlCache.delete(viewerUrl);
-                    }
+                    clearAuthenticatedDocumentPreview(viewerUrl);
                   }
                   setRetryKey((k) => k + 1);
                 }}

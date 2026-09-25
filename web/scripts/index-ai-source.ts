@@ -4,6 +4,8 @@
  * Usage:
  *   cd web
  *   npx tsx scripts/index-ai-source.ts --company-profile <companyId>
+ *   npx tsx scripts/index-ai-source.ts --company-inventory <companyId>
+ *   npx tsx scripts/index-ai-source.ts --company <companyId>
  *   npx tsx scripts/index-ai-source.ts --company-document <companyId> <documentId>
  *   npx tsx scripts/index-ai-source.ts --tender <companyId> <tenderId>
  *   npx tsx scripts/index-ai-source.ts --tender-document <companyId> <tenderId> <tenderDocumentId>
@@ -33,6 +35,8 @@ async function main() {
 
   const {
     indexCompanyDocument,
+    indexCompanyDocumentInventory,
+    indexCompanyKnowledge,
     indexCompanyProfile,
     indexTenderDocumentById,
     indexTenderKnowledge,
@@ -44,6 +48,14 @@ async function main() {
     const companyId = args[1];
     if (!companyId) throw new Error("companyId required");
     results = [await indexCompanyProfile(companyId)];
+  } else if (mode === "--company-inventory") {
+    const companyId = args[1];
+    if (!companyId) throw new Error("companyId required");
+    results = [await indexCompanyDocumentInventory(companyId)];
+  } else if (mode === "--company") {
+    const companyId = args[1];
+    if (!companyId) throw new Error("companyId required");
+    results = await indexCompanyKnowledge(companyId);
   } else if (mode === "--company-document") {
     const companyId = args[1];
     const documentId = args[2];
@@ -74,7 +86,7 @@ async function main() {
     ];
   } else {
     throw new Error(
-      "Usage: --company-profile | --company-document | --tender | --tender-document",
+      "Usage: --company-profile | --company-inventory | --company | --company-document | --tender | --tender-document",
     );
   }
 

@@ -23,6 +23,10 @@ function companyProfileSourceId(companyId: string): string {
   return `company_profile:${companyId}`;
 }
 
+function companyDocumentInventorySourceId(companyId: string): string {
+  return `company_document_inventory:${companyId}`;
+}
+
 function companyDocumentSourceId(documentId: string): string {
   return documentId;
 }
@@ -107,6 +111,38 @@ export async function buildCompanyProfileText(companyId: string): Promise<string
   return lines.filter(Boolean).join("\n");
 }
 
+/**
+ * Safe catalogue metadata for the Company Documents library. This deliberately
+ * exposes availability/counts to Ask AI without treating file names or metadata
+ * as proof that a tender requirement is met.
+ */
+export async function buildCompanyDocumentInventoryText(companyId: string): Promise<string> {
+  const docs = await listCompanyDocuments({ companyId });
+  const byCategory = new Map<string, number>();
+  for (const doc of docs) {
+    byCategory.set(doc.documentCategory, (byCategory.get(doc.documentCategory) || 0) + 1);
+  }
+  const lines = [
+    "Company Documents Inventory (catalogue metadata; not document-content evidence).",
+    `Active reusable company documents: ${docs.length}.`,
+    byCategory.size ? `Categories: ${[...byCategory.entries()].map(([category, count]) => `${category} (${count})`).join(", ")}.` : "Categories: none.",
+    "Document list:",
+  ];
+  for (const doc of docs.slice(0, 200)) {
+    lines.push([
+      `- ${doc.name}`,
+      `category=${doc.documentCategory}`,
+      doc.documentType ? `type=${doc.documentType}` : null,
+      doc.certificateType ? `certificate=${doc.certificateType}` : null,
+      doc.financialYear ? `financial_year=${doc.financialYear}` : null,
+      doc.expiryDate ? `expiry=${doc.expiryDate}` : null,
+      `verification=${doc.verificationStatus}`,
+      doc.storageUrl ? "file_available=yes" : "file_available=no",
+    ].filter(Boolean).join(" | "));
+  }
+  return lines.join("\n");
+}
+
 async function isAiIndexEnabled(documentId: string): Promise<boolean> {
   const supabase = getServerSupabase();
   const { data, error } = await supabase
@@ -138,9 +174,27 @@ export async function indexCompanyProfile(
   });
 }
 
+export async function indexCompanyDocumentInventory(companyId: string): Promise<IndexSourceResult> {
+  const text = await buildCompanyDocumentInventoryText(companyId);
+  return indexDocumentSource({
+    sourceType: "COMPANY_PROFILE",
+    sourceId: companyDocumentInventorySourceId(companyId),
+    companyId,
+    tenderId: null,
+    documentName: "Company Documents Inventory",
+    documentUrl: null,
+    documentType: "company_document_inventory",
+    section: "company_documents_inventory",
+    fetch: { kind: "profile_text", text },
+    metadata: { origin: "company_document_inventory", catalogue_only: true },
+  });
+}
+
 export async function indexCompanyDocument(options: {
   companyId: string;
   documentId: string;
+  /** Batch callers refresh the inventory once after all documents finish. */
+  refreshInventory?: boolean;
 }): Promise<IndexSourceResult> {
   const enabled = await isAiIndexEnabled(options.documentId);
   if (!enabled) {
@@ -149,7 +203,7 @@ export async function indexCompanyDocument(options: {
       sourceId: companyDocumentSourceId(options.documentId),
       companyId: options.companyId,
     });
-    return {
+    const skipped = {
       sourceType: "COMPANY_DOCUMENT",
       sourceId: companyDocumentSourceId(options.documentId),
       status: "SKIPPED_DISABLED",
@@ -164,7 +218,11 @@ export async function indexCompanyDocument(options: {
         dbWriteMs: 0,
         totalMs: 0,
       },
-    };
+    } satisfies IndexSourceResult;
+    if (options.refreshInventory !== false) {
+      await indexCompanyDocumentInventory(options.companyId);
+    }
+    return skipped;
   }
 
   const doc = await getCompanyDocumentById({
@@ -173,7 +231,7 @@ export async function indexCompanyDocument(options: {
   });
   if (!doc) throw new Error("Company document not found.");
   if (!INDEXABLE_CATEGORIES.has(doc.documentCategory)) {
-    return {
+    const skipped = {
       sourceType: "COMPANY_DOCUMENT",
       sourceId: companyDocumentSourceId(doc.id),
       status: "SKIPPED_DISABLED",
@@ -188,7 +246,11 @@ export async function indexCompanyDocument(options: {
         dbWriteMs: 0,
         totalMs: 0,
       },
-    };
+    } satisfies IndexSourceResult;
+    if (options.refreshInventory !== false) {
+      await indexCompanyDocumentInventory(options.companyId);
+    }
+    return skipped;
   }
 
   const descriptor: IndexableSourceDescriptor = {
@@ -196,7 +258,9 @@ export async function indexCompanyDocument(options: {
     sourceId: companyDocumentSourceId(doc.id),
     companyId: options.companyId,
     tenderId: null,
-    documentName: doc.name,
+    // Display names frequently omit extensions; extraction must receive the
+    // original uploaded filename so it can select the correct parser.
+    documentName: doc.originalFileName || doc.name,
     documentUrl: doc.storageUrl,
     documentType: doc.documentType || doc.documentCategory,
     section: doc.documentCategory,
@@ -212,7 +276,11 @@ export async function indexCompanyDocument(options: {
     },
   };
 
-  return indexDocumentSource(descriptor);
+  const result = await indexDocumentSource(descriptor);
+  if (options.refreshInventory !== false) {
+    await indexCompanyDocumentInventory(options.companyId);
+  }
+  return result;
 }
 
 /** Index profile + enabled company library documents. */
@@ -229,8 +297,10 @@ export async function indexCompanyKnowledge(
       await indexCompanyDocument({
         companyId,
         documentId: doc.id,
+        refreshInventory: false,
       }),
     );
   }
+  results.push(await indexCompanyDocumentInventory(companyId));
   return results;
 }

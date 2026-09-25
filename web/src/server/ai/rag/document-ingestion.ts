@@ -453,6 +453,7 @@ async function loadAndExtract(
     const response = await invokeDocumentRead(
       descriptor.fetch.documentId,
       "attachment",
+      { internalIndexCompanyId: descriptor.companyId },
     );
     if (!response.ok) {
       throw new Error(

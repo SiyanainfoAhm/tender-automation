@@ -26,6 +26,7 @@ import { DOCUMENT_STATUS_LABELS } from "@/lib/bid-workspace";
 import { cn } from "@/lib/utils";
 import { AddRequirementDialog } from "@/components/bid-workspace/add-requirement-dialog";
 import { CompanyDocumentPickerDialog } from "@/components/bid-workspace/company-document-picker-dialog";
+import { ChecklistDocumentPreviewDialog } from "@/components/bid-workspace/checklist-document-preview-dialog";
 import { EditAiPromptDialog } from "@/components/bid-workspace/edit-ai-prompt-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -211,6 +212,12 @@ export function RequirementListPanel({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteLinkedCount, setDeleteLinkedCount] = useState(0);
   const [deleting, setDeleting] = useState(false);
+  const [previewDocument, setPreviewDocument] = useState<{
+    title: string;
+    fileName?: string | null;
+    href: string;
+    requirementName: string;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const selected = useMemo(
@@ -478,14 +485,12 @@ export function RequirementListPanel({
                       <FileText className="mt-0.5 size-4 shrink-0 text-foreground-300" />
                     )}
                     <span className="min-w-0 flex-1">
-                      <span
-                        className={cn(
-                          "block text-sm font-medium text-foreground-900",
-                          complete && "text-foreground-600 line-through",
-                        )}
-                      >
+                      <span className={cn("block text-sm font-medium text-foreground-900", complete && "text-foreground-600 line-through")}>
                         {item.requirementName}
                       </span>
+                      <p className="mt-1 text-xs leading-relaxed text-foreground-600">
+                        {item.description || item.sourceText || "No additional requirement details were extracted for this checklist item."}
+                      </p>
                       <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-foreground-500">
                         <span>
                           {[
@@ -501,15 +506,16 @@ export function RequirementListPanel({
                           </span>
                         ) : null}
                         {primaryDoc?.downloadHref ? (
-                          <a
+                          <button
+                            type="button"
                             className="font-medium text-emerald-700 hover:underline"
-                            href={primaryDoc.downloadHref}
-                            target="_blank"
-                            rel="noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            View Document
-                          </a>
+                            onPointerEnter={(e) => {
+                              e.stopPropagation();
+                              setPreviewDocument({ title: primaryDoc.title, fileName: primaryDoc.fileName, href: primaryDoc.downloadHref!, requirementName: item.requirementName });
+                            }}
+                            onFocus={() => setPreviewDocument({ title: primaryDoc.title, fileName: primaryDoc.fileName, href: primaryDoc.downloadHref!, requirementName: item.requirementName })}
+                            onClick={(e) => { e.stopPropagation(); setPreviewDocument({ title: primaryDoc.title, fileName: primaryDoc.fileName, href: primaryDoc.downloadHref!, requirementName: item.requirementName }); }}
+                          >View Document</button>
                         ) : null}
                       </span>
                       {item.documents.length > 1 ? (
@@ -787,14 +793,36 @@ export function RequirementListPanel({
                           {doc.versionLabel ? ` · ${doc.versionLabel}` : ""}
                         </p>
                         {doc.downloadHref ? (
-                          <a
+                          <button
+                            type="button"
                             className="mt-2 inline-flex text-xs font-medium text-emerald-700 hover:underline"
-                            href={doc.downloadHref}
-                            target="_blank"
-                            rel="noreferrer"
+                            onPointerEnter={() =>
+                              setPreviewDocument({
+                                title: doc.title,
+                                fileName: doc.fileName,
+                                href: doc.downloadHref!,
+                                requirementName: selected.requirementName,
+                              })
+                            }
+                            onFocus={() =>
+                              setPreviewDocument({
+                                title: doc.title,
+                                fileName: doc.fileName,
+                                href: doc.downloadHref!,
+                                requirementName: selected.requirementName,
+                              })
+                            }
+                            onClick={() =>
+                              setPreviewDocument({
+                                title: doc.title,
+                                fileName: doc.fileName,
+                                href: doc.downloadHref!,
+                                requirementName: selected.requirementName,
+                              })
+                            }
                           >
-                            View / Download
-                          </a>
+                            View Document
+                          </button>
                         ) : null}
                       </div>
                     ))}
@@ -1308,6 +1336,7 @@ export function RequirementListPanel({
           }}
         />
       ) : null}
+      <ChecklistDocumentPreviewDialog open={Boolean(previewDocument)} onOpenChange={(nextOpen) => { if (!nextOpen) setPreviewDocument(null); }} document={previewDocument} />
     </div>
   );
 }

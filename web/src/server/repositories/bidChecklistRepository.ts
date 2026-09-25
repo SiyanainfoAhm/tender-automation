@@ -261,11 +261,6 @@ function collectLinkedDocuments(options: {
     const company = options.companyById.get(options.matchedCompanyDocumentId);
     if (company && !seen.has(`company:${company.id}`)) {
       seen.add(`company:${company.id}`);
-      const sharePointHref =
-        company.storageUrl &&
-        company.storageUrl.toLowerCase().includes(".sharepoint.com")
-          ? company.storageUrl
-          : null;
       docs.push({
         id: company.id,
         title: company.name,
@@ -274,8 +269,9 @@ function collectLinkedDocuments(options: {
         versionLabel: null,
         source: "COMPANY",
         hasFile: true,
-        // Prefer SharePoint column URL (tender-docs pattern); API proxies Graph when needed.
-        downloadHref: sharePointHref || `/api/documents/${company.id}`,
+        // Always resolve from the authoritative document id. This handles
+        // historic rows whose provider says Azure but whose file is SharePoint.
+        downloadHref: `/api/documents/${company.id}`,
         matchedBy: options.matchedBy,
       });
     }

@@ -15,7 +15,9 @@ export {
 export {
   indexCompanyKnowledge,
   indexCompanyDocument,
+  indexCompanyDocumentInventory,
   indexCompanyProfile,
+  buildCompanyDocumentInventoryText,
   buildCompanyProfileText,
 } from "@/server/ai/rag/company-knowledge";
 export { scheduleAiIndexing } from "@/server/ai/rag/schedule-index";

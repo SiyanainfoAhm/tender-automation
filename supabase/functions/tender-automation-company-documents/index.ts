@@ -19,7 +19,7 @@ import {
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-agenttender-session, x-upload-action, x-upload-id, x-chunk-index, x-total-chunks, x-block-id",
+    "authorization, x-client-info, apikey, content-type, x-agenttender-session, x-agenttender-internal-company, x-upload-action, x-upload-id, x-chunk-index, x-total-chunks, x-block-id",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -1127,6 +1127,25 @@ async function authenticate(req: Request): Promise<AuthUser> {
   };
 }
 
+/**
+ * Server-only RAG backfills may run after the browser request has ended, when
+ * no user session cookie is available. The caller already authenticates with
+ * the Edge Function's service-role key; this header supplies only the company
+ * scope and is accepted exclusively with that key.
+ */
+function internalIndexCompany(req: Request): string | null {
+  const companyId = req.headers.get("x-agenttender-internal-company")?.trim();
+  if (!companyId) return null;
+  const serviceKey =
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim() ||
+    Deno.env.get("SUPABASE_SECRET_KEY")?.trim();
+  const authorization = req.headers.get("authorization")?.trim();
+  if (!serviceKey || authorization !== `Bearer ${serviceKey}`) {
+    throw new HttpError(401, "Internal indexing authentication failed.");
+  }
+  return companyId;
+}
+
 function resolveCategory(form: FormData): Category {
   const raw = String(form.get("category") || form.get("uploadKind") || "General").trim();
   const lower = raw.toLowerCase();
@@ -1839,7 +1858,8 @@ async function handleDocumentRead(
   req: Request,
   body: { documentId?: string; disposition?: string },
 ) {
-  const user = await authenticate(req);
+  const internalCompanyId = internalIndexCompany(req);
+  const user = internalCompanyId ? null : await authenticate(req);
 
   const documentId = String(body.documentId || "").trim();
   if (!documentId) throw new HttpError(400, "documentId is required");
@@ -1857,7 +1877,8 @@ async function handleDocumentRead(
   if (!doc || doc.status !== "active") {
     throw new HttpError(404, "Document not found.");
   }
-  if (String(doc.company_id) !== user.companyId) {
+  const authorizedCompanyId = internalCompanyId || user?.companyId;
+  if (String(doc.company_id) !== authorizedCompanyId) {
     throw new HttpError(403, "You do not have permission to view this document.");
   }
 
@@ -1871,7 +1892,7 @@ async function handleDocumentRead(
       : "inline";
 
   console.info("[company-documents] read started", {
-    companyId: user.companyId,
+    companyId: authorizedCompanyId,
     documentId,
     disposition: dispositionMode,
     provider: doc.storage_provider || "unknown",

@@ -15,6 +15,12 @@ const streamAskAiRequest = vi.fn();
 
 vi.mock("@/lib/ai/ask-ai-client", () => ({
   streamAskAiRequest: (...args: unknown[]) => streamAskAiRequest(...args),
+  fetchAskAiSessions: vi.fn(async () => ({ sessions: [], total: 0 })),
+  createAskAiSession: vi.fn(async () => ({ session: { id: "session-1", title: "Test", createdAt: "2026-01-01", updatedAt: "2026-01-01", lastMessageAt: "2026-01-01" } })),
+  fetchAskAiSessionMessages: vi.fn(async () => ({ messages: [] })),
+  saveAskAiMessage: vi.fn(async () => ({ id: "message-1" })),
+  renameAskAiSession: vi.fn(async () => undefined),
+  deleteAskAiSession: vi.fn(async () => undefined),
 }));
 
 vi.mock("@/server/actions/ai-reindex", () => ({

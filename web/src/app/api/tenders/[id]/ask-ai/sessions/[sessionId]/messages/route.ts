@@ -1,0 +1,6 @@
+import { NextResponse } from "next/server";
+import { requirePermissionStrict } from "@/server/auth/permissions";
+import { CompanyAccessError } from "@/server/auth/company-access";
+import { addChatMessage } from "@/server/ai/chat-history";
+type Context={params:Promise<{id:string;sessionId:string}>};
+export async function POST(request:Request,context:Context){try{const auth=await requirePermissionStrict("tenders.view");const {id:tenderId,sessionId}=await context.params;const body=await request.json();if((body.role!=="user"&&body.role!=="assistant")||typeof body.content!=="string")return NextResponse.json({error:"Invalid message."},{status:400});const status=["complete","interrupted","cancelled","error"].includes(body.status)?body.status:"complete";const id=await addChatMessage({companyId:auth.companyId,userId:auth.user.id,tenderId},sessionId,{role:body.role,content:body.content.slice(0,100000),action:typeof body.action==="string"?body.action:null,sources:Array.isArray(body.sources)?body.sources:undefined,warnings:Array.isArray(body.warnings)?body.warnings:undefined,status});return NextResponse.json({id},{status:201});}catch(error){return NextResponse.json({error:error instanceof Error?error.message:"Unable to save message."},{status:error instanceof CompanyAccessError?403:400});}}
