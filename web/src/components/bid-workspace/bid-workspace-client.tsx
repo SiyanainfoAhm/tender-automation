@@ -35,6 +35,7 @@ import {
 import {
   calculateSectionProgress,
 } from "@/lib/bid-checklist";
+import type { DocumentCategory } from "@/lib/company/types";
 import type { BidWorkspaceDTO } from "@/lib/bid-workspace";
 import {
   isTransientChecklistPrepError,
@@ -462,7 +463,19 @@ export function BidWorkspaceClient({
   async function uploadForChecklistItem(
     item: ChecklistItemRow,
     file: File,
-    options?: { saveAsCompanyDocument?: boolean },
+    options?: {
+      saveAsCompanyDocument?: boolean;
+      companyDocument?: {
+        name: string;
+        category: DocumentCategory;
+        certificateType?: string;
+        issuingAuthority?: string;
+        issueDate?: string;
+        expiryDate?: string;
+        financialYear?: string;
+        documentType?: string;
+      };
+    },
   ) {
     const formData = new FormData();
     formData.set("tenderId", tender.id);
@@ -480,6 +493,17 @@ export function BidWorkspaceClient({
     formData.set("documentType", docType);
     if (options?.saveAsCompanyDocument) {
       formData.set("saveAsCompanyDocument", "1");
+      const companyDocument = options.companyDocument;
+      if (companyDocument) {
+        formData.set("companyDocumentName", companyDocument.name);
+        formData.set("companyDocumentCategory", companyDocument.category);
+        formData.set("certificateType", companyDocument.certificateType || "");
+        formData.set("issuingAuthority", companyDocument.issuingAuthority || "");
+        formData.set("issueDate", companyDocument.issueDate || "");
+        formData.set("expiryDate", companyDocument.expiryDate || "");
+        formData.set("financialYear", companyDocument.financialYear || "");
+        formData.set("financialDocumentType", companyDocument.documentType || "");
+      }
     }
     const result = await uploadChecklistDocumentAction(formData);
     if (!result.ok) {

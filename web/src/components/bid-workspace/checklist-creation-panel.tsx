@@ -29,6 +29,14 @@ import { CompanyDocumentPickerDialog } from "@/components/bid-workspace/company-
 import { EditAiPromptDialog } from "@/components/bid-workspace/edit-ai-prompt-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import {
+  CERTIFICATE_TYPES,
+  DOCUMENT_CATEGORIES,
+  FINANCIAL_DOCUMENT_TYPES,
+  generateFinancialYears,
+  type DocumentCategory,
+} from "@/lib/company/types";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -61,7 +69,19 @@ import type {
 } from "@/server/repositories/bidChecklistRepository";
 import type { CompanyDocument } from "@/server/repositories/documentRepository";
 
-type UploadOptions = { saveAsCompanyDocument?: boolean };
+type UploadOptions = {
+  saveAsCompanyDocument?: boolean;
+  companyDocument?: {
+    name: string;
+    category: DocumentCategory;
+    certificateType?: string;
+    issuingAuthority?: string;
+    issueDate?: string;
+    expiryDate?: string;
+    financialYear?: string;
+    documentType?: string;
+  };
+};
 type UnlinkOptions = {
   deleteWorkspaceFiles?: boolean;
   deleteCompanyDocument?: boolean;
@@ -177,6 +197,15 @@ export function RequirementListPanel({
   const [uploadConfirmOpen, setUploadConfirmOpen] = useState(false);
   const [pendingUploadFile, setPendingUploadFile] = useState<File | null>(null);
   const [saveAsCompanyDocument, setSaveAsCompanyDocument] = useState(false);
+  const [companyDocumentName, setCompanyDocumentName] = useState("");
+  const [companyDocumentCategory, setCompanyDocumentCategory] =
+    useState<DocumentCategory>("General");
+  const [certificateType, setCertificateType] = useState("");
+  const [issuingAuthority, setIssuingAuthority] = useState("");
+  const [issueDate, setIssueDate] = useState("");
+  const [expiryDate, setExpiryDate] = useState("");
+  const [financialYear, setFinancialYear] = useState("");
+  const [financialDocumentType, setFinancialDocumentType] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -227,6 +256,14 @@ export function RequirementListPanel({
     if (readOnly || !onUpload) return;
     setActionItemId(item.id);
     setSaveAsCompanyDocument(false);
+    setCompanyDocumentName(item.requirementName);
+    setCompanyDocumentCategory("General");
+    setCertificateType("");
+    setIssuingAuthority("");
+    setIssueDate("");
+    setExpiryDate("");
+    setFinancialYear("");
+    setFinancialDocumentType("");
     setPendingUploadFile(null);
     fileInputRef.current?.click();
   }
@@ -268,10 +305,42 @@ export function RequirementListPanel({
 
   async function confirmUpload() {
     if (!actionItem || !pendingUploadFile || !onUpload) return;
+    if (saveAsCompanyDocument && !companyDocumentName.trim()) {
+      toast.error("Enter a document name for Company Documents.");
+      return;
+    }
+    if (
+      saveAsCompanyDocument &&
+      companyDocumentCategory === "Certificate" &&
+      (!certificateType || !issuingAuthority.trim() || !issueDate)
+    ) {
+      toast.error("Certificate type, issuing authority, and issue date are required.");
+      return;
+    }
+    if (
+      saveAsCompanyDocument &&
+      companyDocumentCategory === "Financial" &&
+      (!financialYear || !financialDocumentType)
+    ) {
+      toast.error("Financial year and document type are required.");
+      return;
+    }
     setUploading(true);
     try {
       await onUpload(actionItem, pendingUploadFile, {
         saveAsCompanyDocument,
+        companyDocument: saveAsCompanyDocument
+          ? {
+              name: companyDocumentName.trim(),
+              category: companyDocumentCategory,
+              certificateType,
+              issuingAuthority: issuingAuthority.trim(),
+              issueDate,
+              expiryDate,
+              financialYear,
+              documentType: financialDocumentType,
+            }
+          : undefined,
       });
       setUploadConfirmOpen(false);
       setPendingUploadFile(null);
@@ -923,6 +992,7 @@ export function RequirementListPanel({
           if (!open) {
             setPendingUploadFile(null);
             setSaveAsCompanyDocument(false);
+            setCompanyDocumentName("");
           }
         }}
       >
@@ -964,6 +1034,109 @@ export function RequirementListPanel({
               </p>
             </div>
           </div>
+          {saveAsCompanyDocument ? (
+            <div className="space-y-3 rounded-md border border-border p-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="company-document-name">Document name *</Label>
+                <Input
+                  id="company-document-name"
+                  value={companyDocumentName}
+                  onChange={(event) => setCompanyDocumentName(event.target.value)}
+                  disabled={uploading}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="company-document-category">Category *</Label>
+                <select
+                  id="company-document-category"
+                  value={companyDocumentCategory}
+                  disabled={uploading}
+                  onChange={(event) =>
+                    setCompanyDocumentCategory(event.target.value as DocumentCategory)
+                  }
+                  className="flex h-9 w-full rounded-md border border-border bg-white px-3 text-sm disabled:opacity-60"
+                >
+                  {DOCUMENT_CATEGORIES.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {companyDocumentCategory === "Certificate" ? (
+                <>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="template-certificate-type">Certificate type *</Label>
+                    <select
+                      id="template-certificate-type"
+                      value={certificateType}
+                      disabled={uploading}
+                      onChange={(event) => setCertificateType(event.target.value)}
+                      className="flex h-9 w-full rounded-md border border-border bg-white px-3 text-sm disabled:opacity-60"
+                    >
+                      <option value="">Select type</option>
+                      {CERTIFICATE_TYPES.map((type) => (
+                        <option key={type} value={type}>{type}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="template-issuing-authority">Issuing authority *</Label>
+                    <Input
+                      id="template-issuing-authority"
+                      value={issuingAuthority}
+                      disabled={uploading}
+                      onChange={(event) => setIssuingAuthority(event.target.value)}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="template-issue-date">Issue date *</Label>
+                      <Input id="template-issue-date" type="date" value={issueDate} disabled={uploading} onChange={(event) => setIssueDate(event.target.value)} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="template-expiry-date">Expiry date</Label>
+                      <Input id="template-expiry-date" type="date" value={expiryDate} disabled={uploading} onChange={(event) => setExpiryDate(event.target.value)} />
+                    </div>
+                  </div>
+                </>
+              ) : null}
+              {companyDocumentCategory === "Financial" ? (
+                <>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="template-financial-year">Financial year *</Label>
+                    <select
+                      id="template-financial-year"
+                      value={financialYear}
+                      disabled={uploading}
+                      onChange={(event) => setFinancialYear(event.target.value)}
+                      className="flex h-9 w-full rounded-md border border-border bg-white px-3 text-sm disabled:opacity-60"
+                    >
+                      <option value="">Select financial year</option>
+                      {generateFinancialYears(12).map((year) => (
+                        <option key={year} value={year}>{year}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="template-financial-document-type">Document type *</Label>
+                    <select
+                      id="template-financial-document-type"
+                      value={financialDocumentType}
+                      disabled={uploading}
+                      onChange={(event) => setFinancialDocumentType(event.target.value)}
+                      className="flex h-9 w-full rounded-md border border-border bg-white px-3 text-sm disabled:opacity-60"
+                    >
+                      <option value="">Select type</option>
+                      {FINANCIAL_DOCUMENT_TYPES.map((type) => (
+                        <option key={type} value={type}>{type}</option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : null}
           <DialogFooter>
             <Button
               type="button"
@@ -997,7 +1170,7 @@ export function RequirementListPanel({
             <DialogTitle>Remove document?</DialogTitle>
             <DialogDescription>
               {actionItem && itemHasCompanyDocs(actionItem)
-                ? "This requirement links a company document. Choose unlink only, delete the company file, and/or delete this requirement."
+                ? "This requirement links a company document. You can keep the requirement while removing its document, or delete both."
                 : actionItem && itemHasWorkspaceDocs(actionItem)
                   ? "This document was uploaded for this tender only. Choose whether to also delete the file or this requirement."
                   : "Remove the linked document from this checklist requirement."}
@@ -1037,6 +1210,26 @@ export function RequirementListPanel({
                   <Loader2 className="size-4 animate-spin" />
                 ) : null}
                 Remove and delete uploaded file
+              </Button>
+            ) : null}
+            {actionItem && itemHasCompanyDocs(actionItem) ? (
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={unlinking}
+                className="w-full"
+                onClick={() =>
+                  void confirmUnlink(actionItem, {
+                    deleteWorkspaceFiles: false,
+                    deleteCompanyDocument: true,
+                    deleteChecklistItem: false,
+                  })
+                }
+              >
+                {unlinking ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : null}
+                Delete company doc, keep requirement
               </Button>
             ) : null}
             {actionItem && itemHasCompanyDocs(actionItem) ? (

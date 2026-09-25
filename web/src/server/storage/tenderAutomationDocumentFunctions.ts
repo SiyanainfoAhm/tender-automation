@@ -418,6 +418,12 @@ export async function invokeWorkspaceDocumentSave(options: {
   formData.set("action", "workspace-document-save");
   formData.set("workspaceId", options.workspaceId);
   formData.set("tenderId", options.tenderId);
+  // Keep the identifier available to both the current camelCase edge handler
+  // and older deployments that read multipart fields using database naming.
+  // The edge function treats tenderId as canonical; this compatibility field
+  // prevents a workspace upload from losing its tender context during a
+  // rolling web/function deployment.
+  formData.set("tender_id", options.tenderId);
   formData.set("tenderReference", options.tenderReference);
   formData.set("documentType", options.documentType);
   formData.set("title", options.title);

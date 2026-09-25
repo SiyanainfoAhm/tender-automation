@@ -15,7 +15,11 @@ import {
   promptKeyForChecklistCategory,
   type BidAiPromptKey,
 } from "@/lib/bid-ai-prompts";
-import { MAX_SINGLE_SHOT_UPLOAD_BYTES } from "@/lib/company/types";
+import {
+  DOCUMENT_CATEGORIES,
+  MAX_SINGLE_SHOT_UPLOAD_BYTES,
+  type DocumentCategory,
+} from "@/lib/company/types";
 import { getServerSupabase } from "@/lib/db/server";
 import {
   CLASSIFICATION_DECISION_LABELS,
@@ -1340,11 +1344,34 @@ export async function uploadChecklistDocumentAction(
         .toLowerCase() === "true";
 
     if (saveAsCompanyDocument) {
+      const companyDocumentName =
+        String(formData.get("companyDocumentName") || "").trim() || title;
+      const rawCategory = String(
+        formData.get("companyDocumentCategory") || "General",
+      ).trim();
+      if (!(DOCUMENT_CATEGORIES as readonly string[]).includes(rawCategory)) {
+        return { ok: false, error: "Select a valid Company Documents category." };
+      }
+      const category = rawCategory as DocumentCategory;
+      const uploadKind =
+        category === "Certificate"
+          ? "certificate"
+          : category === "Financial"
+            ? "financial"
+            : "general";
       const uploaded = await uploadCompanyDocumentToSharePoint({
         file,
+        tenderId: detail.id,
         metadata: {
-          name: title,
-          uploadKind: "general",
+          name: companyDocumentName,
+          uploadKind,
+          category,
+          certificateType: String(formData.get("certificateType") || "").trim(),
+          issuingAuthority: String(formData.get("issuingAuthority") || "").trim(),
+          issueDate: String(formData.get("issueDate") || "").trim(),
+          expiryDate: String(formData.get("expiryDate") || "").trim(),
+          financialYear: String(formData.get("financialYear") || "").trim(),
+          documentType: String(formData.get("financialDocumentType") || "").trim(),
         },
       });
       if (!uploaded.ok) {
@@ -1364,8 +1391,8 @@ export async function uploadChecklistDocumentAction(
         tenderId,
         companyId: session.companyId,
         eventType: "checklist_company_document_uploaded",
-        summary: `Uploaded and saved to Company Documents: ${title}`,
-        payload: { checklistItemId, companyDocumentId },
+        summary: `Uploaded and saved to Company Documents: ${companyDocumentName}`,
+        payload: { checklistItemId, companyDocumentId, category },
         actorUserId: session.user.id,
       });
 

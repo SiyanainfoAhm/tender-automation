@@ -2658,7 +2658,12 @@ async function handleWorkspaceDocumentSave(req: Request, form: FormData) {
   }
 
   const workspaceId = String(form.get("workspaceId") || "").trim();
-  const tenderId = String(form.get("tenderId") || "").trim();
+  // Accept both field spellings while the web app and edge function may be
+  // deployed independently. The browser always sends tenderId, with
+  // tender_id as a compatibility fallback.
+  const tenderId = String(
+    form.get("tenderId") || form.get("tender_id") || "",
+  ).trim();
   const tenderReference = String(form.get("tenderReference") || "").trim() || tenderId;
   const documentType = String(form.get("documentType") || "Other").trim() || "Other";
   const title = String(form.get("title") || "").trim();

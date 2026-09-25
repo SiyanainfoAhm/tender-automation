@@ -3,6 +3,7 @@ import "server-only";
 import { MAX_DOCUMENT_UPLOAD_BYTES } from "@/lib/uploads/config";
 import { SHAREPOINT_UPLOAD_CHUNK_BYTES } from "@/lib/uploads/directSharePointUpload";
 import type { DocumentUploadMetadata, UploadKind } from "@/lib/uploads/types";
+import type { DocumentCategory } from "@/lib/company/types";
 import {
   invokeAbortDirectUpload,
   invokeCompleteDirectUpload,
@@ -22,7 +23,13 @@ function categoryFromKind(kind: UploadKind | string | undefined): string {
  */
 export async function uploadCompanyDocumentToSharePoint(options: {
   file: File;
-  metadata: DocumentUploadMetadata;
+  metadata: DocumentUploadMetadata & { category?: DocumentCategory };
+  /**
+   * Compatibility context for an older storage function that did not yet
+   * recognize `purpose: company-library`. The current function ignores these
+   * fields for Company Documents uploads.
+   */
+  tenderId?: string;
 }): Promise<{ ok: true; documentId: string } | { ok: false; error: string }> {
   if (!(options.file instanceof File) || options.file.size <= 0) {
     return { ok: false, error: "Choose a file to upload." };
@@ -33,6 +40,8 @@ export async function uploadCompanyDocumentToSharePoint(options: {
 
   const created = await invokeCreateDirectUpload({
     purpose: "company-library",
+    uploadPurpose: "company-library",
+    companyLibrary: true,
     documentName: options.metadata.name,
     name: options.metadata.name,
     fileName: options.file.name,
@@ -41,13 +50,19 @@ export async function uploadCompanyDocumentToSharePoint(options: {
     fileSizeBytes: options.file.size,
     notes: options.metadata.notes || null,
     uploadKind: options.metadata.uploadKind || "general",
-    category: categoryFromKind(options.metadata.uploadKind),
+    category: options.metadata.category || categoryFromKind(options.metadata.uploadKind),
     certificateType: options.metadata.certificateType || null,
     issuingAuthority: options.metadata.issuingAuthority || null,
     issueDate: options.metadata.issueDate || null,
     expiryDate: options.metadata.expiryDate || null,
     financialYear: options.metadata.financialYear || null,
     documentType: options.metadata.documentType || null,
+    // Old deployments fall through to the tender-upload branch before the
+    // company-library purpose check. Supplying context lets them complete the
+    // upload instead of rejecting it as missing a tender ID. New deployments
+    // never read these values for a company-library request.
+    tenderId: options.tenderId || null,
+    section: options.tenderId ? "bidding" : null,
   });
 
   const documentId = String(created.documentId || "");

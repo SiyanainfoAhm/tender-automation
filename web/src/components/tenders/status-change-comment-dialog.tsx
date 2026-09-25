@@ -39,7 +39,14 @@ export function StatusChangeCommentDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent
+        className="max-w-md"
+        // Dialogs render in a portal, but React keyboard events still bubble
+        // through their logical parent tree. This dialog can be used inside a
+        // keyboard-clickable tender row, so prevent comment typing from
+        // triggering that row's Enter/Space handler.
+        onKeyDown={(event) => event.stopPropagation()}
+      >
         <DialogHeader>
           <DialogTitle>Comment required</DialogTitle>
           <DialogDescription>

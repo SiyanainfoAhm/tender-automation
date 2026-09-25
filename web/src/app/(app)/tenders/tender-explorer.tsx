@@ -1627,6 +1627,10 @@ export function TenderExplorer({
                       <div
                         className="flex w-[7.5rem] shrink-0 flex-col items-end gap-2 sm:w-32"
                         onClick={(event) => event.stopPropagation()}
+                        // The row itself is keyboard-clickable. Keep keyboard input in
+                        // the status picker/comment dialog from reaching that row (a
+                        // space in the required comment previously opened the tender).
+                        onKeyDown={(event) => event.stopPropagation()}
                       >
                         {status ? (
                           <div className="flex w-full flex-col items-end gap-1">
