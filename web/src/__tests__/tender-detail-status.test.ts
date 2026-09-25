@@ -87,13 +87,18 @@ describe("tender detail status after submission", () => {
     ).toBe("WON");
   });
 
-  it("offers Technical / Financial Rejected from Submitted", () => {
+  it("offers Technical / Financial Rejected and Delete from Submitted", () => {
     expect(
       tenderDetailStatusChoices({
         currentStatus: "SUBMITTED",
         submitted: true,
       }),
-    ).toEqual(["SUBMITTED", "TECHNICAL_REJECTED", "FINANCIAL_REJECTED"]);
+    ).toEqual([
+      "SUBMITTED",
+      "TECHNICAL_REJECTED",
+      "FINANCIAL_REJECTED",
+      "DELETE",
+    ]);
   });
 
   it("locks Won so earlier statuses are not offered", () => {

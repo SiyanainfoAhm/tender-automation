@@ -18,10 +18,7 @@ import {
 import { STATUS_DISPLAY_LABELS } from "@/lib/tender-status";
 import { updateTenderDetailsAction } from "@/server/actions/tender-update";
 
-type TeamMemberOption = {
-  id: string;
-  fullName: string;
-};
+type TeamMemberOption = { id: string; fullName: string };
 
 type SubmittedOutcomeSelectProps = {
   tenderId: string;
@@ -42,23 +39,7 @@ export function SubmittedOutcomeSelect({
   const [pending, startTransition] = useTransition();
   const [wonOpen, setWonOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
-
   const [deleteStatusOpen, setDeleteStatusOpen] = useState(false);
-
-  /* function deleteTender() {
-    if (!window.confirm(`Delete “${tenderTitle}”? This cannot be undone.`)) {
-      return;
-    }
-    startTransition(async () => {
-      const result = await deleteTenderAction(tenderId);
-      if (!result.ok) {
-        toast.error(result.error);
-        return;
-      }
-      toast.success(result.message);
-      router.refresh();
-    });
-  } */
 
   return (
     <>
@@ -76,12 +57,8 @@ export function SubmittedOutcomeSelect({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem onSelect={() => setWonOpen(true)}>
-            Won
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setLostOpen(true)}>
-            Lost
-          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setWonOpen(true)}>Won</DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setLostOpen(true)}>Lost</DropdownMenuItem>
           <DropdownMenuItem
             className="text-rose-700 focus:text-rose-700"
             onSelect={() => setDeleteStatusOpen(true)}
