@@ -221,6 +221,9 @@ export function mapQualification(
 export function mapTenderDetail(options: {
   tender: Record<string, unknown>;
   qualification: Record<string, unknown> | null;
+  result: Record<string, unknown> | null;
+  bidders: Record<string, unknown>[];
+  aocDocuments: Record<string, unknown>[];
   submitted: boolean;
   workspaceId: string | null;
   activity: TenderDetailDTO["activity"];
@@ -378,5 +381,10 @@ export function mapTenderDetail(options: {
       asString(tender.duplicate_match_kind) ||
       asString(rawMeta.duplicateMatchKind) ||
       parsedDuplicate.matchKind,
+    result: options.result ? {
+      stage: asString(options.result.result_stage), contractDate: asString(options.result.contract_date), contractAmountDisplay: asString(options.result.contract_amount_display), numberOfBids: asNumber(options.result.number_of_bids), sourceUrl: asString(options.result.source_url), checkedAt: asString(options.result.result_checked_at),
+      bidders: options.bidders.map((b) => ({ id: String(b.id), name: asString(b.bidder_name) || "Unknown bidder", address: asString(b.bidder_address), displayAmount: asString(b.award_amount_display) || asString(b.bid_value_display), rank: asString(b.rank), status: asString(b.status), awarded: Boolean(b.is_awarded) })),
+      documents: options.aocDocuments.filter((d) => !(asString(d.document_name) === "AOC Documents" && !asString(d.file_name) && !asString(d.storage_url))).map((d) => ({ id: String(d.id), name: asString(d.document_name) || "Document", fileName: asString(d.file_name), type: asString(d.document_type), description: asString(d.description), sourceUrl: undefined, storageUrl: asString(d.storage_url), downloadStatus: asString(d.download_status) || "NA" })),
+    } : null,
   };
 }

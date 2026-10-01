@@ -664,6 +664,9 @@ export async function countVisibleTenders(): Promise<number> {
 export async function getTenderById(id: string): Promise<{
   tender: Record<string, unknown>;
   qualification: Record<string, unknown> | null;
+  result: Record<string, unknown> | null;
+  bidders: Record<string, unknown>[];
+  aocDocuments: Record<string, unknown>[];
 } | null> {
   const supabase = getServerSupabase();
   const tender = assertSupabaseOk(
@@ -683,7 +686,13 @@ export async function getTenderById(id: string): Promise<{
     .eq("tender_id", id)
     .maybeSingle();
 
-  return { tender, qualification: qualification ?? null };
+  const [{ data: result }, { data: bidders }, { data: aocDocuments }] = await Promise.all([
+    supabase.from("agenttender_tender_results").select("*").eq("tender_id", id).maybeSingle(),
+    supabase.from("agenttender_tender_bidders").select("*").eq("tender_id", id).order("is_awarded", { ascending: false }).order("rank"),
+    supabase.from("agenttender_tender_aoc_documents").select("*").eq("tender_id", id).order("document_name"),
+  ]);
+
+  return { tender, qualification: qualification ?? null, result: result ?? null, bidders: bidders ?? [], aocDocuments: aocDocuments ?? [] };
 }
 
 export async function getFilterFacets(): Promise<{

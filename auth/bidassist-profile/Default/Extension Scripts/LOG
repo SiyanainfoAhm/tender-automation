@@ -1,2 +1,3 @@
-2026/08/05-16:17:54.382 6dbc Creating DB C:\Users\goura\OneDrive\Desktop\tender-automation\auth\bidassist-profile\Default\Extension Scripts since it was missing.
-2026/08/05-16:17:54.398 6dbc Reusing MANIFEST C:\Users\goura\OneDrive\Desktop\tender-automation\auth\bidassist-profile\Default\Extension Scripts/MANIFEST-000001
+2026/10/01-17:09:01.065 7b0 Reusing MANIFEST C:\Users\goura\Desktop\tender-automation\auth\bidassist-profile\Default\Extension Scripts/MANIFEST-000001
+2026/10/01-17:09:01.065 7b0 Recovering log #3
+2026/10/01-17:09:01.066 7b0 Reusing old log C:\Users\goura\Desktop\tender-automation\auth\bidassist-profile\Default\Extension Scripts/000003.log 

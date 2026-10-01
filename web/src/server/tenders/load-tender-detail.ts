@@ -141,6 +141,9 @@ export async function loadTenderDetailSafe(options: {
     const tender = mapTenderDetail({
       tender: data.tender,
       qualification: data.qualification,
+      result: data.result,
+      bidders: data.bidders,
+      aocDocuments: data.aocDocuments,
       submitted: workspace?.submissionStatus === "submitted",
       workspaceId: workspace?.id ?? null,
       activity,

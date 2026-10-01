@@ -124,9 +124,18 @@ export type TenderDetailDTO = {
   duplicateOfSourceTenderId: string | null;
   duplicateOfTenderId: string | null;
   duplicateMatchKind: string | null;
+  result: TenderResultDTO | null;
+};
+
+export type TenderResultDTO = {
+  stage: string | null; contractDate: string | null; contractAmountDisplay: string | null;
+  numberOfBids: number | null; sourceUrl: string | null; checkedAt: string | null;
+  bidders: Array<{ id: string; name: string; address: string | null; displayAmount: string | null; rank: string | null; status: string | null; awarded: boolean }>;
+  documents: Array<{ id: string; name: string; fileName: string | null; type: string | null; description: string | null; sourceUrl: string | null; storageUrl: string | null; downloadStatus: string }>;
 };
 
 export function displayDash(value: string | null | undefined): string {
   const text = value?.trim();
+  if (!text) return "NA";
   return text ? text : "—";
 }

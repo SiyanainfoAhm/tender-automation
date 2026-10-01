@@ -129,6 +129,7 @@ import {
 const TABS = [
   { id: "overview", label: "Overview", icon: LayoutGrid },
   { id: "documents", label: "Documents", icon: FolderOpen },
+  { id: "result", label: "Result / AOC", icon: Trophy },
 ] as const;
 type TabId = (typeof TABS)[number]["id"];
 
@@ -664,7 +665,7 @@ export function TenderDetailClient({
   const canManageDocuments = canUploadDocuments ?? canEdit;
   const router = useRouter();
   const [tab, setTab] = useState<TabId>(
-    initialTab === "documents" ? "documents" : "overview",
+    initialTab === "documents" || initialTab === "result" ? initialTab : "overview",
   );
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<EditDraft>(() => buildDraft(tender));
@@ -2052,6 +2053,29 @@ export function TenderDetailClient({
             />
           ) : null}
         </div>
+      ) : null}
+
+      {tab === "result" ? (
+        tender.result ? (
+          <div className="space-y-5">
+            <SectionCard title="Tender Result" icon={Trophy}>
+              <InfoGrid>
+                <InfoRow label="Result Stage" icon={Gavel}>{displayDash(tender.result.stage)}</InfoRow>
+                <InfoRow label="Contract Date" icon={Clock}>{tender.result.contractDate ? formatDate(tender.result.contractDate) : "NA"}</InfoRow>
+                <InfoRow label="Contract Amount" icon={Wallet}>{displayDash(tender.result.contractAmountDisplay)}</InfoRow>
+                <InfoRow label="Number of Bids" icon={Users}>{tender.result.numberOfBids ?? "NA"}</InfoRow>
+                <InfoRow label="Last Checked" icon={Clock}>{tender.result.checkedAt ? formatDate(tender.result.checkedAt) : "NA"}</InfoRow>
+                <InfoRow label="Source" icon={Link2}>{tender.result.sourceUrl ? <a className="text-sky-700 hover:underline" href={tender.result.sourceUrl} target="_blank" rel="noreferrer">BidAssist</a> : "BidAssist"}</InfoRow>
+              </InfoGrid>
+            </SectionCard>
+            <SectionCard title="Bidders" icon={Users}>
+              {tender.result.bidders.length ? <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="border-b text-left text-xs text-muted-foreground"><tr><th className="p-2">Bidder Name</th><th className="p-2">Bid Value / Award Amount</th><th className="p-2">Rank</th><th className="p-2">Status</th><th className="p-2">Awarded</th></tr></thead><tbody>{tender.result.bidders.map((bidder) => <tr key={bidder.id} className={cn("border-b", bidder.awarded && "bg-emerald-50/60")}><td className="p-2 font-medium">{bidder.name}{bidder.address ? <p className="text-xs font-normal text-muted-foreground">{bidder.address}</p> : null}</td><td className="p-2">{displayDash(bidder.displayAmount)}</td><td className="p-2">{displayDash(bidder.rank)}</td><td className="p-2"><span className="rounded-full bg-background-200 px-2 py-0.5 text-xs">{displayDash(bidder.status)}</span></td><td className="p-2">{bidder.awarded ? <span className="font-semibold text-emerald-700">AWARDED</span> : "NA"}</td></tr>)}</tbody></table></div> : <p className="text-sm text-muted-foreground">No bidder details are available yet.</p>}
+            </SectionCard>
+            <SectionCard title="AOC Documents" icon={FileText}>
+              {tender.result.documents.length ? <ul className="space-y-2">{tender.result.documents.map((doc) => { const url = doc.storageUrl; return <li key={doc.id} className="flex items-center justify-between gap-3 rounded-lg border p-3"><div><p className="font-medium">{doc.name}</p><p className="text-xs text-muted-foreground">{[doc.fileName, doc.type, doc.description].filter(Boolean).join(" / ") || doc.downloadStatus}</p></div>{url ? <a className="text-sm font-medium text-sky-700 hover:underline" href={url} target="_blank" rel="noreferrer">View</a> : <span className="text-xs text-muted-foreground">NA</span>}</li>; })}</ul> : <p className="text-sm text-muted-foreground">No AOC documents are available yet.</p>}
+            </SectionCard>
+          </div>
+        ) : <SectionCard title="Tender Result / AOC" icon={Trophy}><p className="text-sm text-muted-foreground">No BidAssist result has been recorded for this tender.</p></SectionCard>
       ) : null}
 
       <StatusChangeCommentDialog

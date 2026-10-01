@@ -18,6 +18,34 @@ export interface BidassistBrowserSession {
   context: BrowserContext;
   page: Page;
   persistent: true;
+  releaseProfileLock: () => void;
+}
+
+function acquireBidassistProfileLock(profileDir: string): () => void {
+  const lockPath = path.join(profileDir, ".bidassist-browser.lock");
+  const token = `${process.pid}-${Date.now()}`;
+  try {
+    fs.writeFileSync(lockPath, token, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      const owner = fs.readFileSync(lockPath, "utf8").trim() || "another process";
+      throw new AutomationError(
+        "BIDASSIST_SESSION_ALREADY_RUNNING",
+        `BidAssist browser profile is already in use (${owner}). Wait for that run to finish before starting another.`,
+      );
+    }
+    throw error;
+  }
+
+  return () => {
+    try {
+      if (fs.readFileSync(lockPath, "utf8").trim() === token) {
+        fs.unlinkSync(lockPath);
+      }
+    } catch {
+      // The lock is best-effort cleanup; never hide a browser-close error.
+    }
+  };
 }
 
 export async function launchBidassistPersistentSession(options: {
@@ -26,9 +54,14 @@ export async function launchBidassistPersistentSession(options: {
   downloadPath?: string;
 }): Promise<BidassistBrowserSession> {
   const { config, logger } = options;
+  // Keep Playwright downloads in a persistent controlled folder. This prevents
+  // a page/navigation race from deleting a completed BidAssist download before
+  // the result agent can save and extract it.
+  const downloadPath = options.downloadPath || path.resolve(config.downloadRoot, "bidassist-playwright-downloads");
   const profileDir = resolveBidassistProfilePath(config);
   ensureDir(profileDir);
   ensureDir(path.dirname(resolveBidassistStorageStatePath(config)));
+  const releaseProfileLock = acquireBidassistProfileLock(profileDir);
 
   // OTP login requires a visible browser
   const headless = false;
@@ -43,31 +76,39 @@ export async function launchBidassistPersistentSession(options: {
       chromiumSandbox: true,
       acceptDownloads: true,
       viewport: null,
-      ...(options.downloadPath
-        ? { downloadsPath: options.downloadPath }
-        : {}),
+      downloadsPath: downloadPath,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (/profile is already in use|opening in existing browser session/i.test(message)) {
+      releaseProfileLock();
+      throw new AutomationError(
+        "BIDASSIST_PROFILE_IN_USE",
+        "The BidAssist Chrome profile is already open. Close the other BidAssist browser/run, then retry.",
+      );
+    }
     logger.warn(
       `Chrome channel launch failed (${message}); falling back to Chromium`,
     );
-    context = await chromium.launchPersistentContext(profileDir, {
-      headless,
-      chromiumSandbox: true,
-      acceptDownloads: true,
-      viewport: null,
-      ...(options.downloadPath
-        ? { downloadsPath: options.downloadPath }
-        : {}),
-    });
+    try {
+      context = await chromium.launchPersistentContext(profileDir, {
+        headless,
+        chromiumSandbox: true,
+        acceptDownloads: true,
+        viewport: null,
+        downloadsPath: downloadPath,
+      });
+    } catch (fallbackError) {
+      releaseProfileLock();
+      throw fallbackError;
+    }
   }
 
   context.setDefaultTimeout(Math.max(config.pageTimeoutMs, 60_000));
   const page = context.pages()[0] ?? (await context.newPage());
   page.setDefaultTimeout(Math.max(config.pageTimeoutMs, 60_000));
 
-  return { context, page, persistent: true };
+  return { context, page, persistent: true, releaseProfileLock };
 }
 
 export async function closeBidassistSession(
@@ -80,6 +121,8 @@ export async function closeBidassistSession(
     await session.context.close();
   } catch {
     // ignore
+  } finally {
+    session.releaseProfileLock();
   }
 }
 

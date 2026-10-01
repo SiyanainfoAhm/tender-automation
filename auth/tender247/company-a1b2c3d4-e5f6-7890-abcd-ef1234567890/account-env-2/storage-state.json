@@ -65,7 +65,7 @@
       "value": "1YmohJhudxTDR6Y",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1821865598,
+      "expires": 1822383134,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -95,7 +95,7 @@
       "value": "3EBC4E0C52D7673D130D59AB537F665A",
       "domain": ".bing.com",
       "path": "/",
-      "expires": 1823225754.947577,
+      "expires": 1824338181.465846,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
@@ -105,7 +105,7 @@
       "value": "3EBC4E0C52D7673D130D59AB537F665A",
       "domain": ".c.bing.com",
       "path": "/",
-      "expires": 1823613608.899985,
+      "expires": 1824338181.46599,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
@@ -115,7 +115,7 @@
       "value": "3EBC4E0C52D7673D130D59AB537F665A",
       "domain": ".clarity.ms",
       "path": "/",
-      "expires": 1823916955.888708,
+      "expires": 1824338180.654718,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
@@ -125,57 +125,7 @@
       "value": "fb.1.1790101905899.182093629219920524",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1798105581,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "fr",
-      "value": "0L9J7QbHwoDI63Sdf..BqssmS...1.0.BqssmS.AWcrjqZOjeaQ_C2p6xLXqAUQHvc",
-      "domain": ".facebook.com",
-      "path": "/",
-      "expires": 1797877906.032302,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "_gid",
-      "value": "GA1.2.1345879776.1790220933",
-      "domain": ".tender247.com",
-      "path": "/",
-      "expires": 1790415980,
-      "httpOnly": false,
-      "secure": false,
-      "sameSite": "Lax"
-    },
-    {
-      "name": "SM",
-      "value": "T",
-      "domain": ".c.clarity.ms",
-      "path": "/",
-      "expires": -1,
-      "httpOnly": false,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "CLID",
-      "value": "61d97370639341c2b0cee41879f65b8b.20260731.20270925",
-      "domain": "www.clarity.ms",
-      "path": "/",
-      "expires": 1821842142.207988,
-      "httpOnly": true,
-      "secure": true,
-      "sameSite": "None"
-    },
-    {
-      "name": "_clck",
-      "value": "mzjoox%5E2%5Eg9r%5E0%5E2402",
-      "domain": ".tender247.com",
-      "path": "/",
-      "expires": 1821842142,
+      "expires": 1798623089,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
@@ -191,41 +141,121 @@
       "sameSite": "None"
     },
     {
-      "name": "_ga",
-      "value": "GA1.2.1744748255.1785411924",
+      "name": "MR",
+      "value": "0",
+      "domain": ".c.bing.com",
+      "path": "/",
+      "expires": 1791246981.46596,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "SM",
+      "value": "C",
+      "domain": ".c.clarity.ms",
+      "path": "/",
+      "expires": -1,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "MR",
+      "value": "0",
+      "domain": ".c.clarity.ms",
+      "path": "/",
+      "expires": 1791246980.65478,
+      "httpOnly": false,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "fr",
+      "value": "0L9J7QbHwoDI63Sdf..BqssmS...1.0.BqvAQg.AWfUfbuiikMmgseQHK_waIVtW9A",
+      "domain": ".facebook.com",
+      "path": "/",
+      "expires": 1798482720.320874,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_gid",
+      "value": "GA1.2.1603257123.1790793131",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1824889580.250847,
+      "expires": 1790933489,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
     },
     {
       "name": "_clsk",
-      "value": "ox9cg7%5E1790329582164%5E1%5E1%5Eb.clarity.ms%2Fcollect",
+      "value": "18xi19u%5E1790793131996%5E1%5E1%5Ef.clarity.ms%2Fcollect",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1790415982,
+      "expires": 1790879531,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "CLID",
+      "value": "61d97370639341c2b0cee41879f65b8b.20260731.20271001",
+      "domain": "www.clarity.ms",
+      "path": "/",
+      "expires": 1822351041.42,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None"
+    },
+    {
+      "name": "_clck",
+      "value": "mzjoox%5E2%5Eg9x%5E0%5E2402",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1822351041,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_ga",
+      "value": "GA1.2.1744748255.1785411924",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1825407089.017299,
+      "httpOnly": false,
+      "secure": false,
+      "sameSite": "Lax"
+    },
+    {
+      "name": "_gat",
+      "value": "1",
+      "domain": ".tender247.com",
+      "path": "/",
+      "expires": 1790847149,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
     },
     {
       "name": "_ga_3FYV8W34LF",
-      "value": "GS2.1.s1790328660$o76$g1$t1790329583$j56$l0$h1722600110",
+      "value": "GS2.1.s1790847088$o91$g0$t1790847092$j56$l0$h1904628880",
       "domain": ".tender247.com",
       "path": "/",
-      "expires": 1824889583.681841,
+      "expires": 1825407092.816394,
       "httpOnly": false,
       "secure": false,
       "sameSite": "Lax"
     },
     {
       "name": "AWSALBCORS",
-      "value": "5IJ/K4Xw9KoJMSIuqJzzi66IjJ4/9w9jcQn7gX/1aykDAqVgrl4wmkvqvr7tNl4v8EzNPIKTXrSjBfUa+kE49GkZmMUNshtTOZpo+QiUDKImi/1JHVQlIZc9fhOIDoj5LWRyrs8R+zRXa5oWzzDs9OGj0/WD9gRYDaZTbhwYJt4HCJJhhcTGc2UgF6E+iw==",
+      "value": "TfGJ0kpRUtbMHO6ByKxxQMj7+fkc4z7YeGM4FRJlcZ2uS6UNmOwCRHX/3ijgQ5b8NpFaeMcruePShLs0wCOz+HSfrQ/0UdBLlVmUTZS8LFcwu9eBp3LFVZYW+Iquj/OIYbIkLHWvSYvDgaqLOKtTzXDQAK21aFjkNk3Mhj4phrWhiidhawlhgifdRhBpOA==",
       "domain": "widget-mediator.zopim.com",
       "path": "/",
-      "expires": 1790934398.670397,
+      "expires": 1791451933.840266,
       "httpOnly": false,
       "secure": true,
       "sameSite": "None"
@@ -241,15 +271,15 @@
         },
         {
           "name": "ZD-suid",
-          "value": "{\"id\":\"5a046c58c04440748c2d8fadaa86ce7f\",\"expiry\":1790330498323,\"tabs\":{\"count\":2,\"expiry\":0}}"
+          "value": "{\"id\":\"8dd98eff83c641fd813fd4f3bd49659d\",\"expiry\":1790848033480,\"tabs\":{\"count\":1,\"expiry\":0}}"
         },
         {
           "name": "lastExternalReferrerTime",
-          "value": "1790329581056"
+          "value": "1790847089650"
         },
         {
           "name": "userData",
-          "value": "{\"person_name\":\"Jaimin Shah\",\"user_id\":1582623,\"company_service_id\":\"1,2\",\"email_id\":\"Jaimin.Shah@thinfo.in\",\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJVc2VyU3RhdXMiOjEsIlBlcnNvbk5hbWUiOiJKYWltaW4gU2hhaCIsIlVzZXJJZCI6MTU4MjYyMywiQ29tcGFueVNlcnZpY2VpZHMiOiIxLDIiLCJXb3JkSGlnaGxpZ2h0IjoiQ29tcHV0ZXIgSGFyZHdhcmUiLCJiaWRkZXJfbmFtZSI6IlNpeWFuYSBJbmZvIFNvbHV0aW9ucyIsImlzX2JpZGRlcl9leGlzdHMiOnRydWUsImlhdCI6MTc5MDMyOTU4MSwiZXhwIjoxNzkwMzYwOTk5fQ.NJbFXKVo7HUiVVAW_W5CIOQLGm8l_jQmM6r6VfnWSio\",\"encryptKey\":\"\",\"mail_date\":\"2026-09-25\",\"user_query_id\":0,\"tab\":0,\"isChange\":0,\"grace_period_status\":false,\"bidder_name\":\"Siyana Info Solutions\",\"is_bidder_exists\":true}"
+          "value": "{\"person_name\":\"Jaimin Shah\",\"user_id\":1582623,\"company_service_id\":\"1,2\",\"email_id\":\"Jaimin.Shah@thinfo.in\",\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJVc2VyU3RhdXMiOjEsIlBlcnNvbk5hbWUiOiJKYWltaW4gU2hhaCIsIlVzZXJJZCI6MTU4MjYyMywiQ29tcGFueVNlcnZpY2VpZHMiOiIxLDIiLCJXb3JkSGlnaGxpZ2h0IjoiQ29tcHV0ZXIgSGFyZHdhcmUiLCJiaWRkZXJfbmFtZSI6IlNpeWFuYSBJbmZvIFNvbHV0aW9ucyIsImlzX2JpZGRlcl9leGlzdHMiOnRydWUsImlhdCI6MTc5MDg0NzA5MCwiZXhwIjoxNzkwODc5Mzk5fQ.6Z6HMoS1i7zmE0yUoTkvY-Yf77zy9mnrDi-wcL4n8yY\",\"encryptKey\":\"\",\"mail_date\":\"2026-10-01\",\"user_query_id\":0,\"tab\":0,\"isChange\":0,\"grace_period_status\":false,\"bidder_name\":\"Siyana Info Solutions\",\"is_bidder_exists\":true}"
         },
         {
           "name": "ZD-buid",
@@ -261,7 +291,7 @@
         },
         {
           "name": "_gcl_ls",
-          "value": "{\"schema\":\"gcl\",\"version\":1,\"gsid_dc\":{\"value\":{\"joinId\":\"Q0SR5NpPmNCP0GdjWlh7xl-hhDyOOLGSLg\",\"lastJoinedTimeMs\":1790329579972},\"expires\":1790329879972},\"gcl_ctr\":{\"value\":{\"value\":0,\"timeouts\":0,\"errors\":0,\"eopCount\":0,\"creationTimeMs\":1785411924387},\"expires\":1793187924387},\"last_convs\":{\"value\":[],\"expires\":1796007710160}}"
+          "value": "{\"schema\":\"gcl\",\"version\":1,\"gsid_dc\":{\"value\":{\"joinId\":\"AZLYGahHOwEI7NNyaHrQ9Ilnh8ojUCWdmg\",\"lastJoinedTimeMs\":1790847088947},\"expires\":1790847388947},\"gcl_ctr\":{\"value\":{\"value\":0,\"timeouts\":0,\"errors\":0,\"eopCount\":0,\"creationTimeMs\":1785411924387},\"expires\":1793187924387},\"last_convs\":{\"value\":[],\"expires\":1796007710160}}"
         },
         {
           "name": "popup_settings",
@@ -273,7 +303,7 @@
         },
         {
           "name": "__zlcstore",
-          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1790329598855,\"account_status\":\"online\"}}"
+          "value": "{\"2pQL1WoOgPcWywsBL5OhjguA4GOOluma\":{\"web_sdk_last_host\":\"widget-mediator.zopim.com\",\"timestamp\":1790847134029,\"account_status\":\"online\"}}"
         }
       ],
       "indexedDB": []

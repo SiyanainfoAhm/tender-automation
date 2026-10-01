@@ -227,6 +227,24 @@ async function invokeUploadTenderArtifact(options: {
   return { ok: true, storageUrl: body.storageUrl, error: null };
 }
 
+/** Upload one crawler-owned source file using the same SharePoint Edge Function
+ * and TenderDocs layout as Tender247 artifacts.  Callers persist their own
+ * source-specific metadata rows. */
+export async function uploadTenderSourceFileToSharePoint(options: {
+  sourcePortal: "TENDER247" | "BIDASSIST" | "MANUAL";
+  sourceTenderId: string;
+  runDate: string;
+  filePath: string;
+  fileName: string;
+}): Promise<{ ok: boolean; storageUrl: string | null; error: string | null }> {
+  return invokeUploadTenderArtifact({
+    ...options,
+    // The Edge Function's artifact kind is an upload transport concern; the
+    // source-specific AOC document type remains in its own database row.
+    kind: "documents_zip",
+  });
+}
+
 function readExistingUrls(
   tenderFolder: string,
 ): TenderArtifactUploadResult["urls"] {

@@ -35,6 +35,7 @@
     "test:pipeline:tender247": "tsx src/pipeline/runTender247CompletePipeline.ts --mode=smoke --limit=5 --chatgpt-limit=1",
     "auth:bidassist": "tsx src/bidassist/bidassistAuth.ts",
     "crawl:bidassist": "tsx src/bidassist/runBidassistCrawler.ts",
+    "results:bidassist": "tsx src/bidassist/runBidassistResultsAgent.ts",
     "test:supabase:tender247": "tsx src/supabase/testTender247Connection.ts",
     "backfill:tender247:supabase": "tsx src/supabase/backfillTender247Metadata.ts",
     "backfill:deadline-emd": "tsx scripts/backfillDeadlineEmdFromExcel.ts",
