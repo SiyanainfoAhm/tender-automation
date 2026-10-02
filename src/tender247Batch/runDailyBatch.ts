@@ -264,6 +264,7 @@ async function runDailyBatch(): Promise<void> {
           runContext,
           dryRunDate: batchArgs.dryRunDate,
           excelFile: batchArgs.excelFile,
+          profileDir: account.profileDir,
           preScreened: batchArgs.preScreened,
           applyMailDateFilter:
             !batchArgs.excelFile || batchArgs.dateExplicit,
@@ -304,6 +305,8 @@ async function runDailyBatchBody(options: {
   runContext: ReturnType<typeof createTender247RunContext>;
   dryRunDate?: boolean;
   excelFile?: string | null;
+  /** Account-scoped persistent Chrome profile used for manual-style access. */
+  profileDir: string;
   preScreened?: boolean | "auto";
   /**
    * When true (default for --date runs, or --file + explicit --date):
@@ -315,7 +318,7 @@ async function runDailyBatchBody(options: {
   /** Stop after Phase-1 screening + notify (no Tender247 detail crawl). */
   skipDetailCrawl?: boolean;
 }): Promise<void> {
-  const { config, logger, dateIso, runContext } = options;
+  const { config, logger, dateIso, runContext, profileDir } = options;
   const dryRunDate = options.dryRunDate === true;
   const uploadedExcel = options.excelFile?.trim() || null;
   const applyMailDateFilter = options.applyMailDateFilter !== false;
@@ -366,6 +369,7 @@ async function runDailyBatchBody(options: {
     session = await launchBrowserSession({
       headless: config.headless,
       storageStatePath: authPath,
+      profileDir,
       downloadPath: playwrightTemp,
       pageTimeoutMs: config.pageTimeoutMs,
     });

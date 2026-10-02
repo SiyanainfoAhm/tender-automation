@@ -91,7 +91,7 @@ TENDER247_PASSWORD=
 
 Do not commit `.env`.
 
-`TENDER247_EMAIL` and `TENDER247_PASSWORD` stay only in your local `.env`. They are used **only** when Tender247 shows the actual LOGIN modal (heading LOGIN + Email Id + Password + Submit) on a detail page. Prefer the saved Playwright session from `npm run auth:tender247` for normal runs. Never put credentials in source code or commit them.
+`TENDER247_EMAIL` and `TENDER247_PASSWORD` stay only in your local `.env`. They are used **only** when Tender247 shows the actual LOGIN modal (heading LOGIN + Email Id + Password + Submit) on a detail page. `npm run auth:tender247` and the Tender247 crawler share an account-specific, persistent installed-Chrome profile, so normal runs use the same cookies, local storage, and visible browser state as manual access. Never put credentials in source code or commit them.
 
 ---
 
@@ -119,11 +119,14 @@ npm run auth:tender247
 
 This will:
 
-1. Open a visible Chromium window
+1. Open a visible installed-Chrome window using that account's persistent profile
 2. Navigate to the Tender247 tender page
 3. Let you log in manually
 4. Wait for you to press Enter in the terminal
 5. Save the session to `auth/tender247.json`
+
+Close any Tender247 Chrome window using that account profile before starting a
+batch; Chrome profiles cannot be safely used by two processes at once.
 
 If `auth/tender247.json` is missing, downloads fail with `TENDER247_AUTH_NOT_FOUND`.
 

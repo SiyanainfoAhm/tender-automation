@@ -117,6 +117,8 @@ export type AiSummaryQueueRow = {
   title: string | null;
   documentsZipUrl: string | null;
   aiSummaryUrl: string | null;
+  /** Authenticated Tender247 detail URL from the source workbook/metadata. */
+  detailUrl: string | null;
   /**
    * Feed to open first. Prefer detailUrl region over the DB `source_region`
    * column when the same id was wrongly upserted into both INDIAN and GLOBAL.
@@ -184,6 +186,7 @@ function mapDbRowToQueueRow(
     title: row.title ? String(row.title) : null,
     documentsZipUrl,
     aiSummaryUrl,
+    detailUrl: detailUrlFromRawMetadata(row.raw_metadata),
     sourceRegion: resolveQueueOpenRegion(row, fallbackRegion),
     scrapedDate: row.scraped_date ? String(row.scraped_date).trim() || null : null,
   };
@@ -203,6 +206,7 @@ export function buildIdsOnlySyntheticQueueRow(
     title: null,
     documentsZipUrl: null,
     aiSummaryUrl: null,
+    detailUrl: null,
     sourceRegion: preferredRegion,
     scrapedDate: null,
   };
@@ -1395,6 +1399,11 @@ export async function runAiSummaryFirstDocumentPipeline(
         const sourceRegionById = new Map<string, Tender247SourceRegion>(
           queue.map((row) => [row.sourceTenderId, row.sourceRegion]),
         );
+        const detailUrlById = new Map(
+          queue
+            .filter((row) => Boolean(row.detailUrl))
+            .map((row) => [row.sourceTenderId, row.detailUrl!]),
+        );
         // Local metadata detailUrl overrides wrong DB region (resume path).
         for (const id of survivorIds) {
           const metaPath = path.join(dateFolder, `T247-${id}`, "metadata.json");
@@ -1453,6 +1462,7 @@ export async function runAiSummaryFirstDocumentPipeline(
           aiSummaryRequired,
           phase1ScreeningAuthoritative: true,
           screeningStatusById,
+          detailUrlById,
           excelValueById,
           existingArtifactUrlsById,
           sourceRegion: args.region,

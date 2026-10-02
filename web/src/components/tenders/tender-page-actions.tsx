@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Download, Plus } from "lucide-react";
+import { Download, FileSpreadsheet, Plus } from "lucide-react";
 
+import { AddFromExcelDialog } from "@/components/tenders/add-from-excel-dialog";
 import { AddManualTenderModal } from "@/components/tenders/add-manual-tender-modal";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +33,7 @@ export function TenderPageActions({
   onCreated,
 }: TenderPageActionsProps) {
   const [manualOpen, setManualOpen] = useState(false);
+  const [excelOpen, setExcelOpen] = useState(false);
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -65,19 +67,31 @@ export function TenderPageActions({
         </Button>
       ) : null}
       {canImport ? (
-        <Button asChild={!disabled} className="text-sm" disabled={disabled}>
-          {disabled ? (
-            "Import Tenders"
-          ) : (
-            <Link href="/tenders/import">Import Tenders</Link>
-          )}
-        </Button>
+        <>
+          <Button
+            type="button"
+            className="text-sm"
+            disabled={disabled}
+            onClick={() => setExcelOpen(true)}
+          >
+            <FileSpreadsheet className="size-4" />
+            Add from Excel
+          </Button>
+          <Button asChild={!disabled} variant="secondary" className="text-sm" disabled={disabled}>
+            {disabled ? "Import Tenders" : <Link href="/tenders/import">Import Tenders</Link>}
+          </Button>
+        </>
       ) : null}
 
       <AddManualTenderModal
         open={manualOpen}
         onOpenChange={setManualOpen}
         onCreated={() => onCreated?.()}
+      />
+      <AddFromExcelDialog
+        open={excelOpen}
+        onOpenChange={setExcelOpen}
+        onImported={() => onCreated?.()}
       />
     </div>
   );

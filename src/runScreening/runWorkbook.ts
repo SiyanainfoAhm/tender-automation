@@ -65,6 +65,8 @@ export type RunWorkbookRow = {
   estimatedCost: string;
   emdAmount: string;
   sourceRefs: string;
+  /** Tender247 detail hyperlink embedded in the source Excel tender brief. */
+  detailUrl?: string;
   screeningStatus: Phase1ScreeningStatus | "";
   screeningReason: string;
   /** Free-text tender category from uploaded / portal Excel. */
@@ -497,6 +499,22 @@ function parseWorkbookRows(
     if (isHelperScreeningSheetName(sheetName)) continue;
     const sheet = workbook.Sheets[sheetName];
     if (!sheet) continue;
+    // Tender247 places the authenticated detail route in a Tender Brief cell
+    // hyperlink. `sheet_to_json` keeps its text but drops `.l.Target`.
+    const detailUrlByTenderId = new Map<string, string>();
+    const range = sheet["!ref"] ? XLSX.utils.decode_range(sheet["!ref"]) : null;
+    if (range) {
+      for (let r = range.s.r; r <= range.e.r; r += 1) {
+        for (let c = range.s.c; c <= range.e.c; c += 1) {
+          const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+          const target = String(cell?.l?.Target || "").trim();
+          const match = target.match(
+            /^https:\/\/(?:www\.)?tender247\.com\/auth\/(?:globaltender|tender)\/(\d+)\/[0-9a-f-]{8,}/i,
+          );
+          if (match?.[1]) detailUrlByTenderId.set(match[1], target);
+        }
+      }
+    }
     const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
       header: 1,
       defval: "",
@@ -507,6 +525,7 @@ function parseWorkbookRows(
     // Headerless Final_Aug-style: first row is data (T247 id), not titles.
     if (matrixLooksHeaderlessPrescreened(matrix)) {
       const rows = parseHeaderlessPrescreenedRows(matrix, defaultSource);
+      for (const row of rows) row.detailUrl = detailUrlByTenderId.get(row.tender247Id);
       if (!rows.length) continue;
       candidates.push({
         sheetName,
@@ -521,6 +540,7 @@ function parseWorkbookRows(
     const headerMap = buildHeaderMap(headers);
     if (!sheetLooksLikeTenders(headerMap)) continue;
     const rows = parseSheetRows(matrix, defaultSource);
+    for (const row of rows) row.detailUrl = detailUrlByTenderId.get(row.tender247Id);
     if (!rows.length) continue;
     candidates.push({
       sheetName,
@@ -557,6 +577,7 @@ function mergeRows(left: RunWorkbookRow, right: RunWorkbookRow): RunWorkbookRow 
     estimatedCost: left.estimatedCost || right.estimatedCost,
     emdAmount: left.emdAmount || right.emdAmount,
     sourceRefs: [left.sourceRefs, right.sourceRefs].filter(Boolean).join("; "),
+    detailUrl: left.detailUrl || right.detailUrl,
     screeningStatus: left.screeningStatus || right.screeningStatus,
     screeningReason: left.screeningReason || right.screeningReason,
     tenderCategory: left.tenderCategory || right.tenderCategory,

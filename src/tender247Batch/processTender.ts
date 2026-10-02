@@ -120,6 +120,12 @@ export interface ProcessLiveTenderOptions {
    */
   securityCodeOverride?: string | null;
   /**
+   * Authenticated Tender247 detail URL captured from the daily Excel/DB.
+   * This avoids a per-tender list search; it is never opened outside the
+   * Playwright browser session.
+   */
+  detailUrlOverride?: string | null;
+  /**
    * Use production single-tender direct open (same as crawl:tender247:one).
    * Preferred for kept-pipeline — no search-tender API.
    */
@@ -654,7 +660,34 @@ export async function processLiveTender(
     let titleHint = options.titleHint ?? null;
     let card: Awaited<ReturnType<typeof findVisibleLiveTenderCards>>[number] | undefined;
 
-    if (options.openViaSingleTenderDirect) {
+    const directDetailUrl = String(options.detailUrlOverride || "").trim();
+    const directRoute = directDetailUrl.match(
+      /^https:\/\/(?:www\.)?tender247\.com\/auth\/(globaltender|tender)\/(\d+)\/([0-9a-f-]{8,})(?:[/?#]|$)/i,
+    );
+    if (directRoute?.[2] === t247Id && directRoute[3]) {
+      const urlRegion = /globaltender/i.test(directRoute[1])
+        ? "GLOBAL"
+        : "INDIAN";
+      logger.info(
+        `TENDER247_OPEN_DETAIL_BY_EXCEL_URL=T247-${t247Id} region=${urlRegion}`,
+      );
+      detailPage = await context.newPage();
+      await detailPage.goto(directDetailUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: config.pageTimeoutMs,
+      });
+      await detailPage
+        .waitForLoadState("networkidle", {
+          timeout: Math.min(config.pageTimeoutMs, 20_000),
+        })
+        .catch(() => undefined);
+      await dismissForTenderPage(detailPage, logger, config);
+      sourceRegion = urlRegion;
+      securityCode = directRoute[3];
+      securityCodeCaptured = true;
+      logger.info("SECURITY_CODE_CAPTURED");
+      logger.info(`T247_DETAIL_ROUTE region=${sourceRegion} code=${securityCode}`);
+    } else if (options.openViaSingleTenderDirect) {
       const resolved = await resolveTender247Tender({
         listPage,
         context,

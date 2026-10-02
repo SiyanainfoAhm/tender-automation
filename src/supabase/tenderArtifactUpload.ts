@@ -455,12 +455,57 @@ export async function uploadTenderArtifactsAndPersistUrls(options: {
         if (options.sourcePortal === "TENDER247" && options.sourceRegion) {
           update = update.eq("source_region", options.sourceRegion);
         }
-        const { error } = await update;
+        // Ask PostgREST to return updated rows.  A successful HTTP request with
+        // zero rows is not a successful persistence operation: it commonly
+        // means Tender247 resolved the tender in a different region from the
+        // one recorded during the initial list import.
+        const { data: updatedRows, error } = await update.select("id");
         if (error) {
           result.errors.push(`db_url_persist: ${error.message}`);
           options.logger?.warn?.(
             `ARTIFACT_URL_DB_UPDATE_FAILED=${error.message}`,
           );
+        } else if ((updatedRows?.length || 0) === 0) {
+          // A Tender247 ID is normally unique for a source date.  If the
+          // originally recorded region differs from the portal-resolved region,
+          // recover by updating that single exact tender row.  Never fall back
+          // when there is more than one candidate: that would risk attaching an
+          // archive to the wrong tender.
+          const { data: candidates, error: lookupError } = await client
+            .from("agenttender_tenders")
+            .select("id, source_region")
+            .eq("source_portal", options.sourcePortal)
+            .eq("source_tender_id", options.sourceTenderId)
+            .eq("scraped_date", scrapedDate)
+            .limit(2);
+          if (lookupError) {
+            result.errors.push(`db_url_persist_lookup: ${lookupError.message}`);
+            options.logger?.warn?.(
+              `ARTIFACT_URL_DB_FALLBACK_LOOKUP_FAILED=${lookupError.message}`,
+            );
+          } else if ((candidates?.length || 0) === 1) {
+            const candidate = candidates![0];
+            const { error: fallbackError } = await client
+              .from("agenttender_tenders")
+              .update(patch)
+              .eq("id", candidate.id);
+            if (fallbackError) {
+              result.errors.push(`db_url_persist_fallback: ${fallbackError.message}`);
+              options.logger?.warn?.(
+                `ARTIFACT_URL_DB_FALLBACK_UPDATE_FAILED=${fallbackError.message}`,
+              );
+            } else {
+              options.logger?.info?.(
+                `ARTIFACT_URL_DB_REGION_FALLBACK_OK=tender=${options.sourceTenderId} stored_region=${candidate.source_region || "none"} resolved_region=${options.sourceRegion || "none"}`,
+              );
+            }
+          } else {
+            const message = `zero rows updated; candidate_rows=${candidates?.length || 0}`;
+            result.errors.push(`db_url_persist: ${message}`);
+            options.logger?.warn?.(
+              `ARTIFACT_URL_DB_UPDATE_ZERO_ROWS=tender=${options.sourceTenderId} ${message}`,
+            );
+          }
         }
       }
     }

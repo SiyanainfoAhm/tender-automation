@@ -1,0 +1,91 @@
+0:03:38 Tab2 FinishNav41
+0:03:38 Tab2 PageLoad
+0:03:38 Tab2 StartNav42 #renderer-script #auto_subframe
+0:03:38 Tab2 FinishNav42
+0:03:38 Tab2 PageLoad
+0:03:39 Browser1 Switch from Tab2 to Tab1 at 0
+0:03:39 SwitchTab_Click
+0:03:39 Tab2 StartNav43 #renderer-script #auto_subframe
+0:03:39 Tab2 FinishNav43
+0:03:39 Tab2 PageLoad
+0:03:39 Tab2 StartNav44 #renderer-script #auto_subframe
+0:03:39 Tab2 FinishNav44
+0:03:39 Tab2 PageLoad
+0:03:40 Tab2 StartNav45 #renderer-script #auto_subframe
+0:03:40 Tab2 StartNav46 #renderer-script #auto_subframe
+0:03:40 Tab2 FinishNav46
+0:03:40 Tab2 PageLoad
+0:03:40 Tab2 FinishNav45
+0:03:40 Tab2 PageLoad #failure
+0:03:40 Tab2 StartNav47 #renderer-script #auto_subframe
+0:03:40 Tab2 FinishNav47
+0:03:40 Tab2 PageLoad
+0:03:40 Tab2 StartNav48 #renderer-script #auto_subframe
+0:03:40 Tab2 FinishNav48
+0:03:40 Tab2 PageLoad
+0:03:47 PasswordManager_LoginPassed
+0:06:15 Tab2 StartNav49 #renderer-script #link
+0:06:34 Widget Closed: PasswordSaveUpdateView
+0:06:35 Browser1 Switch from Tab1 to Tab2 at 1
+0:06:35 SwitchTab_Click
+0:06:36 CloseTab_Active
+0:06:36 CloseTab_NoAlertIndicator
+0:06:36 Browser1 Close Tab2 at 1
+0:06:37 Tab2 FinishNav49 ERR_ABORTED
+0:06:38 Browser1 Close Tab1 at 0
+0:00:00 Startup
+0:00:00 Tab1 StartNav3 #auto_toplevel
+0:00:00 Browser1 Insert active Tab1 at 0
+0:00:00 TouchMode.EnteredNonTouchMode
+0:00:00 Tab1 FinishNav3
+0:00:00 Tab1 PageLoad
+0:00:00 Tab1 StartNav4 #typed
+0:00:01 Tab1 FinishNav4
+0:00:01 Tab1 StartNav5 #renderer-script #link
+0:00:01 Tab1 FinishNav5
+0:00:01 Tab1 PageLoad
+0:00:01 Tab1 StartNav6 #renderer-script #link
+0:00:33 Tab1 FinishNav6
+0:00:33 Tab1 StartNav7 #renderer-script #link
+0:00:33 Tab1 FinishNav7
+0:00:54 Tab1 PageLoad
+0:01:18 Tab1 StartNav8 #renderer-script #auto_subframe
+0:01:18 Tab1 FinishNav8
+0:01:18 Tab1 PageLoad
+0:01:18 Tab1 StartNav9 #renderer-user #auto_subframe
+0:01:19 Tab1 FinishNav9
+0:01:19 Tab1 PageLoad
+0:01:20 Autofill_SelectedSuggestion
+0:01:20 Widget Closed: PopupViewViews
+0:01:28 Tab1 StartNav10 #renderer-script #auto_subframe
+0:01:28 Tab1 FinishNav10
+0:01:28 Tab1 PageLoad
+0:01:28 Tab1 StartNav11 #renderer-user #auto_subframe
+0:01:28 Tab1 FinishNav11
+0:01:28 Tab1 PageLoad
+0:01:28 Widget Closed: StatusBubble
+0:01:28 Tab1 StartNav12 #renderer-user #link
+0:01:29 PasswordManager_LoginPassed
+0:01:29 Tab1 FinishNav12
+0:01:29 Tab1 StartNav13 #renderer-script #link
+0:01:29 Tab1 FinishNav13
+0:01:29 Tab1 PageLoad
+0:01:29 Tab1 StartNav14 #renderer-script #link
+0:01:29 Tab1 FinishNav14
+0:01:31 Widget Closed: PasswordSaveUpdateView
+0:01:32 Tab1 StartNav15 #renderer-script #auto_subframe
+0:01:32 Tab1 FinishNav15
+0:01:32 Tab1 PageLoad
+0:01:32 Tab1 StartNav16 #renderer-script #auto_subframe
+0:01:32 Tab1 FinishNav16
+0:01:32 Tab1 PageLoad
+0:01:34 Tab2 StartNav17 #auto_toplevel
+0:01:34 Browser1 Insert active Tab2 at 1
+0:01:34 Tab2 FinishNav17
+0:01:34 Tab2 PageLoad
+0:01:34 Tab2 StartNav18 #typed
+0:01:35 Tab2 FinishNav18
+0:01:35 Tab2 PageLoad
+0:01:35 Tab2 RenderProcessGone
+0:01:35 Browser1 Close Tab2 at 1
+0:01:35 Browser1 Close Tab1 at 0

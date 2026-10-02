@@ -33,6 +33,7 @@ import {
   writeCrawlReport,
 } from "./tenderDetails/processingReport.js";
 import type { CrawlOptions, TenderListItem } from "./tenderDetails/types.js";
+import { resolveTender247RunAccount } from "./company/tender247Accounts.js";
 
 /** Parse --name=value or --name value from process.argv.slice(2). */
 function getCliArgument(name: string): string | undefined {
@@ -235,6 +236,8 @@ async function runCrawl(args: {
     );
   }
   logger.info(`Using auth storage: ${path.relative(process.cwd(), authPath)}`);
+  const account = await resolveTender247RunAccount();
+  logger.info(`Using persistent Tender247 Chrome profile: ${account.profileDir}`);
 
   acquireLock(config.crawlLockFilePath);
   let session: Awaited<ReturnType<typeof launchBrowserSession>> | undefined;
@@ -243,6 +246,7 @@ async function runCrawl(args: {
     session = await launchBrowserSession({
       headless: config.headless,
       storageStatePath: authPath,
+      profileDir: account.profileDir,
       downloadPath: dateFolder,
       pageTimeoutMs: config.pageTimeoutMs,
     });

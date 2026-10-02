@@ -54,9 +54,16 @@ async function main(): Promise<void> {
   logger.info(`ACCOUNT=${account.accountLabel} (${account.accountId})`);
   logger.info(`STORAGE_STATE=${paths.storageStatePath}`);
 
-  const browser = await chromium.launch({ headless: false });
-  const context = await browser.newContext();
-  const page = await context.newPage();
+  // The manual login and the crawler deliberately share this Chrome profile.
+  // Tender247 therefore sees the same long-lived browser storage as it does
+  // when the account is accessed interactively.
+  const context = await chromium.launchPersistentContext(paths.profileDir, {
+    headless: false,
+    channel: "chrome",
+    chromiumSandbox: true,
+    viewport: null,
+  });
+  const page = context.pages()[0] ?? (await context.newPage());
 
   try {
     await page.goto(config.tender247Url, { waitUntil: "domcontentloaded" });
@@ -123,7 +130,6 @@ async function main(): Promise<void> {
     process.exitCode = 1;
   } finally {
     await context.close().catch(() => undefined);
-    await browser.close().catch(() => undefined);
   }
 }
 

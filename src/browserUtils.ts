@@ -12,6 +12,12 @@ export interface LaunchOptions {
   headless: boolean;
   storageStatePath?: string;
   /**
+   * Chrome user-data directory for a human-style, persistent session. When it
+   * is supplied, the browser uses this profile instead of an ephemeral
+   * storageState-only context.
+   */
+  profileDir?: string;
+  /**
    * Destination used for Playwright Chromium downloadsPath.
    * Must NOT be the daily tender output root — use a .playwright-downloads subdir.
    */
@@ -20,15 +26,56 @@ export interface LaunchOptions {
 }
 
 export interface BrowserSession {
-  browser: Browser;
+  /** Undefined for a persistent context, which owns its browser lifecycle. */
+  browser?: Browser;
   context: BrowserContext;
   page: Page;
+  persistent: boolean;
 }
 
 export async function launchBrowserSession(
   options: LaunchOptions,
 ): Promise<BrowserSession> {
   ensureDir(options.downloadPath);
+
+  if (options.profileDir) {
+    ensureDir(options.profileDir);
+    let context: BrowserContext;
+    try {
+      // Use installed Chrome and a dedicated profile. This keeps the same
+      // cookies, local storage, and browser UI state that a manual Tender247
+      // session uses instead of recreating an anonymous automation context.
+      context = await chromium.launchPersistentContext(options.profileDir, {
+        headless: false,
+        channel: "chrome",
+        chromiumSandbox: true,
+        acceptDownloads: true,
+        viewport: null,
+        downloadsPath: options.downloadPath,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      try {
+        context = await chromium.launchPersistentContext(options.profileDir, {
+          headless: false,
+          chromiumSandbox: true,
+          acceptDownloads: true,
+          viewport: null,
+          downloadsPath: options.downloadPath,
+        });
+      } catch {
+        throw new AutomationError(
+          "BROWSER_LAUNCH_FAILED",
+          `Failed to launch persistent Tender247 browser: ${message}`,
+        );
+      }
+    }
+
+    context.setDefaultTimeout(options.pageTimeoutMs);
+    const page = context.pages()[0] ?? (await context.newPage());
+    page.setDefaultTimeout(options.pageTimeoutMs);
+    return { context, page, persistent: true };
+  }
 
   let browser: Browser;
   try {
@@ -55,7 +102,7 @@ export async function launchBrowserSession(
   const page = await context.newPage();
   page.setDefaultTimeout(options.pageTimeoutMs);
 
-  return { browser, context, page };
+  return { browser, context, page, persistent: false };
 }
 
 export async function closeBrowserSession(
@@ -69,10 +116,12 @@ export async function closeBrowserSession(
   } catch {
     // context may already be closed
   }
-  try {
-    await session.browser.close();
-  } catch {
-    // browser may already be closed
+  if (session.browser) {
+    try {
+      await session.browser.close();
+    } catch {
+      // browser may already be closed
+    }
   }
 }
 

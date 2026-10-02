@@ -635,6 +635,7 @@ export async function persistGptScreenedWorkbookToDatabase(options: {
           : effectiveReason,
         source: row.source,
         sourceRefs: row.sourceRefs || null,
+        ...(row.detailUrl ? { detailUrl: row.detailUrl } : {}),
         tenderCategory: preservedTenderCategory,
         msmeExemption:
           row.msmeExemption != null ? row.msmeExemption : null,

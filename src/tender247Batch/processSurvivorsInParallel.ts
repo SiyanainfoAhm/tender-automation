@@ -274,6 +274,8 @@ export async function processSurvivorsInParallel(options: {
   phase1ScreeningAuthoritative?: boolean;
   /** Per-tender Phase-1 status override (Supabase Verify/May Bid document queue). */
   screeningStatusById?: Map<string, string>;
+  /** Valid Tender247 detail URLs captured from the source workbook/DB. */
+  detailUrlById?: Map<string, string>;
   /** Bypass local ALREADY_COMPLETED_SKIP in the underlying downloader. */
   force?: boolean;
   /** Download documents only when AI Summary is missing. */
@@ -376,19 +378,34 @@ export async function processSurvivorsInParallel(options: {
         options.logger,
       );
 
-      // Preflight: do not start a tender while Select Mail Date is missing.
       const tenderRegion = resolveTenderRegion(t247Id);
-      options.logger.info(
-        `T247_OPEN_USING_STORED_REGION id=${t247Id} region=${tenderRegion}`,
-      );
-      await recoverListPageBetweenTenders(
-        options.listPage,
-        options.context,
-        options.config,
-        options.logger,
-        options.dateFolder,
-        tenderRegion,
-      );
+      const detailUrl = options.detailUrlById?.get(t247Id) ?? null;
+      const hasExcelDetailUrl = new RegExp(
+        `^https:\\/\\/(?:www\\.)?tender247\\.com\\/auth\\/(?:globaltender|tender)\\/${t247Id}\\/[0-9a-f-]{8,}(?:[\\/?#]|$)`,
+        "i",
+      ).test(detailUrl || "");
+      if (hasExcelDetailUrl) {
+        // The daily Excel has a canonical detail route.  Stay in the already
+        // authenticated browser context and go straight to it; do not reset to
+        // /auth/tender or use a Search By ID request for this tender.
+        options.logger.info(
+          `T247_EXCEL_URL_DIRECT_OPEN id=${t247Id} region=${tenderRegion} skip_list_recovery=true`,
+        );
+      } else {
+        // No usable hyperlink: restore the dated list before the search-based
+        // fallback path.
+        options.logger.info(
+          `T247_OPEN_USING_STORED_REGION id=${t247Id} region=${tenderRegion}`,
+        );
+        await recoverListPageBetweenTenders(
+          options.listPage,
+          options.context,
+          options.config,
+          options.logger,
+          options.dateFolder,
+          tenderRegion,
+        );
+      }
 
       const excel = options.excelValueById.get(t247Id);
       const existingUrls = options.existingArtifactUrlsById?.get(t247Id);
@@ -405,6 +422,7 @@ export async function processSurvivorsInParallel(options: {
         excelTenderValue: excel?.parsedTenderValueInr ?? null,
         excelEmd: excel?.parsedEmdInr ?? null,
         excelDeadline: excel?.deadline ?? null,
+        detailUrlOverride: detailUrl,
         openViaSingleTenderDirect: true,
         force: options.force === true,
         documentsOnlyIfAiMissing: options.documentsOnlyIfAiMissing === true,
