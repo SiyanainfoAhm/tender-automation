@@ -1,3 +1,6 @@
-2026/10/01-18:24:50.119 3a78 Reusing MANIFEST C:\Users\goura\Desktop\tender-automation\auth\bidassist-profile\Default\Local Storage\leveldb/MANIFEST-000001
-2026/10/01-18:24:50.121 3a78 Recovering log #4
-2026/10/01-18:24:50.127 3a78 Reusing old log C:\Users\goura\Desktop\tender-automation\auth\bidassist-profile\Default\Local Storage\leveldb/000004.log 
+2026/10/02-11:54:24.223 448c Reusing MANIFEST C:\Users\goura\Desktop\tender-automation\auth\bidassist-profile\Default\Local Storage\leveldb/MANIFEST-000001
+2026/10/02-11:54:24.225 448c Recovering log #4
+2026/10/02-11:54:24.228 448c Reusing old log C:\Users\goura\Desktop\tender-automation\auth\bidassist-profile\Default\Local Storage\leveldb/000004.log 
+2026/10/02-11:55:24.236 6104 Level-0 table #7: started
+2026/10/02-11:55:24.241 6104 Level-0 table #7: 20383 bytes OK
+2026/10/02-11:55:24.244 6104 Delete type=0 #4

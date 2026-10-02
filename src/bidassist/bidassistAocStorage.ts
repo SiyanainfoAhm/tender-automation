@@ -13,6 +13,42 @@ import type { ResultDocument } from "./bidassistResultStore.js";
 const SAFE_FILE = /\.(pdf|html?|docx?|xlsx?|xls|csv|txt|zip|png|jpe?g)$/i;
 function mimeType(fileName:string){const ext=path.extname(fileName).toLowerCase();return ext===".pdf"?"application/pdf":ext===".html"||ext===".htm"?"text/html":ext===".zip"?"application/zip":"application/octet-stream";}
 
+type FileSnapshot = Map<string, { size: number; mtimeMs: number }>;
+
+function snapshotDownloadDirectory(dir: string): FileSnapshot {
+ const snapshot: FileSnapshot = new Map();
+ if (!fs.existsSync(dir)) return snapshot;
+ for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  if (!entry.isFile()) continue;
+  const file = path.join(dir, entry.name);
+  const stat = fs.statSync(file);
+  snapshot.set(file, { size: stat.size, mtimeMs: stat.mtimeMs });
+ }
+ return snapshot;
+}
+
+/** A browser crash can invalidate Playwright's Download object after Chrome has
+ * already finished writing the file. Recover only a new, stable, non-partial
+ * file from this tender's private staging directory. */
+async function recoverCompletedStagedDownload(dir: string, before: FileSnapshot): Promise<string | null> {
+ for (let pass = 0; pass < 2; pass += 1) {
+  const candidates = Array.from(snapshotDownloadDirectory(dir).entries())
+   .filter(([file, stat]) => {
+    const old = before.get(file);
+    return !/\.crdownload$/i.test(file) && stat.size > 0 &&
+      (!old || old.size !== stat.size || old.mtimeMs !== stat.mtimeMs);
+   })
+   .sort((a, b) => b[1].mtimeMs - a[1].mtimeMs);
+  if (candidates.length) {
+   const [file, initial] = candidates[0]!;
+   await new Promise<void>((resolve) => setTimeout(resolve, 750));
+   const settled = fs.statSync(file, { throwIfNoEntry: false });
+   if (settled && settled.isFile() && settled.size === initial.size && settled.size > 0) return file;
+  }
+ }
+ return null;
+}
+
 /** CLI counterpart of Tender Details' create-direct-upload → Graph PUT →
  * complete-direct-upload flow. The artifact endpoint rejects these non-archive
  * source files (403); this uses the established TenderDocs upload protocol. */
@@ -26,9 +62,9 @@ async function uploadTenderDocumentFile(options:{tenderId:string;awardId:string;
 }
 
 export async function downloadAndStoreBidassistAoc(options:{
- page:Page; tenderId:string; awardId:string; detailUrl:string; config:BidassistConfig; logger:Logger; documents:ResultDocument[];
+ page:Page; tenderId:string; awardId:string; detailUrl:string; config:BidassistConfig; logger:Logger; documents:ResultDocument[]; downloadStagingDir:string;
 }):Promise<ResultDocument[]>{
- const {page,tenderId,awardId,detailUrl,config,logger}=options;
+ const {page,tenderId,awardId,detailUrl,config,logger,downloadStagingDir}=options;
  const control=page.getByRole("button",{name:/download all/i}).or(page.getByRole("link",{name:/download all/i})).or(page.getByText(/download all/i)).last();
  if(!await control.isVisible().catch(()=>false)) return options.documents.map(d=>({...d,sourceUrl:d.sourceUrl===detailUrl?null:d.sourceUrl,downloadStatus:"SOURCE_RESTRICTED"}));
  logger.info(`[BidAssist] Download All control: ${await control.evaluate((el)=>JSON.stringify({tag:el.tagName,href:el.getAttribute("href"),onclick:el.getAttribute("onclick"),html:el.outerHTML.slice(0,600)})).catch(()=>"unavailable")}`);
@@ -46,27 +82,40 @@ export async function downloadAndStoreBidassistAoc(options:{
  // the CLI process alive through saveAs so its outer finally cannot close the
  // persistent context between the browser download event and disk persistence.
  const keepAlive=setInterval(()=>undefined,1000);
- const event=page.waitForEvent("download",{timeout:config.downloadTimeoutMs}).catch(()=>null);
- await control.click({timeout:15000});
- const download=await event;
- if(!download){clearInterval(keepAlive);return options.documents.map(d=>({...d,sourceUrl:d.sourceUrl===detailUrl?null:d.sourceUrl,downloadStatus:"DOWNLOAD_FAILED"}));}
- const zipName=sanitizeWindowsFileName(download.suggestedFilename()||`${awardId}.zip`);
- const zipPath=path.join(root,zipName);
- try { await download.saveAs(zipPath); } catch (error) {
-   // With the persistent downloadsPath above, a completed download can still
-   // be recovered even when BidAssist closes/navigates its triggering page.
-   const capturedPath=await download.path().catch(()=>null);
-   if(!capturedPath || !fs.existsSync(capturedPath)) throw error;
-   fs.copyFileSync(capturedPath,zipPath);
+ let zipName:string;
+ let zipPath:string;
+ try {
+   const stagingBefore=snapshotDownloadDirectory(downloadStagingDir);
+   const event=page.waitForEvent("download",{timeout:config.downloadTimeoutMs}).catch(()=>null);
+   await control.click({timeout:15000});
+   const download=await event;
+   if(!download) return options.documents.map(d=>({...d,sourceUrl:d.sourceUrl===detailUrl?null:d.sourceUrl,downloadStatus:"DOWNLOAD_FAILED"}));
+   zipName=sanitizeWindowsFileName(download.suggestedFilename()||`${awardId}.zip`);
+   zipPath=path.join(root,zipName);
+   try { await download.saveAs(zipPath); } catch (error) {
+     // With the persistent downloadsPath above, a completed download can still
+     // be recovered even when BidAssist closes/navigates its triggering page.
+     const capturedPath=await download.path().catch(()=>null);
+     const recoveredPath=capturedPath&&fs.existsSync(capturedPath)
+      ? capturedPath
+      : await recoverCompletedStagedDownload(downloadStagingDir,stagingBefore);
+     if(!recoveredPath) throw error;
+     fs.copyFileSync(recoveredPath,zipPath);
+     logger.warn(`[BidAssist] recovered completed download after Playwright disconnect: ${path.basename(recoveredPath)}`);
+   }
+ } finally {
+   // Never leave a timer alive when Playwright reports a closed browser or a
+   // failed download. A leaked timer otherwise keeps a failed agent running.
+   clearInterval(keepAlive);
  }
- clearInterval(keepAlive); logger.info(`[BidAssist] AOC download captured: ${zipName}`);
+ logger.info(`[BidAssist] AOC download captured: ${zipName!}`);
  const files:string[]=[];
- if(/\.zip$/i.test(zipName)){
+ if(/\.zip$/i.test(zipName!)){
    const extracted=path.join(root,"extracted");ensureDir(extracted);await extractZipArchive(zipPath,extracted);
    for(const file of listFilesRecursive(extracted)){const rel=path.relative(extracted,file);if(isSafeZipEntryName(rel)&&SAFE_FILE.test(file))files.push(file);}
- }else if(SAFE_FILE.test(zipPath)) files.push(zipPath);
+ }else if(SAFE_FILE.test(zipPath!)) files.push(zipPath!);
  logger.info(`[BidAssist] AOC extracted files: ${files.length}`);
  const stored:ResultDocument[]=[];
- for(const file of files){const fileName=path.basename(file);const upload=await uploadTenderDocumentFile({tenderId,awardId,filePath:file,fileName});stored.push({name:fileName,fileName,type:path.extname(fileName).slice(1).toUpperCase()||null,mimeType:mimeType(fileName),sourceUrl:null,storageUrl:upload.storageUrl,downloadStatus:upload.ok?"DOWNLOADED":"DOWNLOAD_FAILED",raw:{sourcePageUrl:detailUrl,sourceZip:zipName,localFile:fileName,uploadError:upload.error}});logger.info(`[BidAssist] SharePoint upload ${upload.ok?"success":"failed"}: ${fileName}`);}
+ for(const file of files){const fileName=path.basename(file);const upload=await uploadTenderDocumentFile({tenderId,awardId,filePath:file,fileName});stored.push({name:fileName,fileName,type:path.extname(fileName).slice(1).toUpperCase()||null,mimeType:mimeType(fileName),sourceUrl:null,storageUrl:upload.storageUrl,downloadStatus:upload.ok?"DOWNLOADED":"DOWNLOAD_FAILED",raw:{sourcePageUrl:detailUrl,sourceZip:zipName!,localFile:fileName,uploadError:upload.error}});logger.info(`[BidAssist] SharePoint upload ${upload.ok?"success":"failed"}: ${fileName}`);}
  return stored.length?stored:options.documents.map(d=>({...d,sourceUrl:d.sourceUrl===detailUrl?null:d.sourceUrl,downloadStatus:"DOWNLOAD_FAILED"}));
 }

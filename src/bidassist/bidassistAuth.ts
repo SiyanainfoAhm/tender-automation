@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { BrowserContext, Page } from "playwright";
+import type { Browser, BrowserContext, Page } from "playwright";
 import { chromium } from "playwright";
 import { AutomationError } from "../browserUtils.js";
 import { ensureDir } from "../fileUtils.js";
@@ -19,6 +19,62 @@ export interface BidassistBrowserSession {
   page: Page;
   persistent: true;
   releaseProfileLock: () => void;
+  /** Present for an isolated (non-profile) context, which owns its browser. */
+  browser?: Browser;
+}
+
+/**
+ * Launch a clean, authenticated context for a result download.
+ *
+ * Result downloads are intentionally not run in the long-lived Chrome profile:
+ * if Chromium crashes while a portal ZIP is being written, a fresh context keeps
+ * the failure contained to that tender and avoids a corrupted profile restart
+ * loop. The previously persisted storage state supplies the authenticated
+ * cookies, and a dedicated download directory lets the caller safely inspect
+ * only files produced by this tender.
+ */
+export async function launchBidassistIsolatedSession(options: {
+  config: BidassistConfig;
+  logger: Logger;
+  downloadPath: string;
+}): Promise<BidassistBrowserSession> {
+  const { config, logger, downloadPath } = options;
+  ensureDir(downloadPath);
+  const storageStatePath = resolveBidassistStorageStatePath(config);
+  const storageState = fs.existsSync(storageStatePath)
+    ? storageStatePath
+    : undefined;
+
+  logger.info(`BIDASSIST_ISOLATED_BROWSER_OPENED downloads=${downloadPath}`);
+  const browser = await chromium.launch({
+    // Keep a visible browser for a session-expiry OTP fallback. This is also
+    // less likely to be challenged by the portal than a headless download.
+    headless: false,
+    chromiumSandbox: true,
+    downloadsPath: downloadPath,
+    // GPU process crashes should not take down a document-download worker.
+    args: ["--disable-gpu", "--disable-software-rasterizer"],
+  });
+  try {
+    const context = await browser.newContext({
+      acceptDownloads: true,
+      storageState,
+      viewport: null,
+    });
+    context.setDefaultTimeout(Math.max(config.pageTimeoutMs, 60_000));
+    const page = await context.newPage();
+    page.setDefaultTimeout(Math.max(config.pageTimeoutMs, 60_000));
+    return {
+      context,
+      page,
+      persistent: true,
+      browser,
+      releaseProfileLock: () => undefined,
+    };
+  } catch (error) {
+    await browser.close().catch(() => undefined);
+    throw error;
+  }
 }
 
 function acquireBidassistProfileLock(profileDir: string): () => void {
@@ -118,7 +174,11 @@ export async function closeBidassistSession(
     return;
   }
   try {
-    await session.context.close();
+    if (session.browser) {
+      await session.browser.close();
+    } else {
+      await session.context.close();
+    }
   } catch {
     // ignore
   } finally {
