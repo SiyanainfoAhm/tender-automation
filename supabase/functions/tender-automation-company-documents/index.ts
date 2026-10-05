@@ -3437,7 +3437,16 @@ async function handleCompleteWorkspaceDirectUpload(
     if (error) throw new HttpError(500, "Unable to save workspace document. Please try again.");
     const oldPath = String(existing.blob_name || "");
     if (oldPath && oldPath !== upload.storagePath) {
-      await deleteSharePointFile({ path: oldPath, storageUrl: String(existing.storage_url || "") || null }).catch(() => null);
+      const oldUrl = String(existing.storage_url || "") || null;
+      if (isSharePointStorageUrl(oldUrl) || !oldUrl) {
+        await deleteSharePointFile({ path: oldPath, storageUrl: oldUrl }).catch(() => null);
+      } else {
+        try {
+          await deleteAzureBlob(requireAzureConfig(), oldPath);
+        } catch {
+          // Legacy Azure cleanup is best-effort after a successful replace.
+        }
+      }
     }
   } else {
     const { error } = await supabase.from("agenttender_bid_workspace_documents").insert({
