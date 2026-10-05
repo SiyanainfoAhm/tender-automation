@@ -21,6 +21,25 @@ type CreateUploadResponse = {
 
 // Graph fragments must be a multiple of 320 KiB and below 60 MiB.
 export const SHAREPOINT_UPLOAD_CHUNK_BYTES = 10 * 1024 * 1024;
+const MAX_CHUNK_UPLOAD_ATTEMPTS = 3;
+
+function canRetryChunk(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function waitForChunkRetry(attempt: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(resolve, 500 * 2 ** attempt);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        window.clearTimeout(timer);
+        reject(signal.reason || new DOMException("Upload cancelled.", "AbortError"));
+      },
+      { once: true },
+    );
+  });
+}
 
 export async function uploadChunksToSharePoint(options: {
   uploadUrl: string;
@@ -35,14 +54,35 @@ export async function uploadChunksToSharePoint(options: {
     start += SHAREPOINT_UPLOAD_CHUNK_BYTES
   ) {
     const end = Math.min(total, start + SHAREPOINT_UPLOAD_CHUNK_BYTES);
-    const response = await fetch(options.uploadUrl, {
-      method: "PUT",
-      headers: {
-        "Content-Range": `bytes ${start}-${end - 1}/${total}`,
-      },
-      body: options.file.slice(start, end),
-      signal: options.signal,
-    });
+    let response: Response | null = null;
+    let lastNetworkError: unknown = null;
+    for (let attempt = 0; attempt < MAX_CHUNK_UPLOAD_ATTEMPTS; attempt += 1) {
+      try {
+        response = await fetch(options.uploadUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Range": `bytes ${start}-${end - 1}/${total}`,
+          },
+          body: options.file.slice(start, end),
+          signal: options.signal,
+        });
+        if (!canRetryChunk(response.status) || attempt === MAX_CHUNK_UPLOAD_ATTEMPTS - 1) {
+          break;
+        }
+      } catch (error) {
+        lastNetworkError = error;
+        if (options.signal?.aborted || attempt === MAX_CHUNK_UPLOAD_ATTEMPTS - 1) {
+          throw error;
+        }
+      }
+      await waitForChunkRetry(attempt, options.signal);
+    }
+    if (!response) {
+      return {
+        ok: false,
+        error: lastNetworkError instanceof Error ? lastNetworkError.message : "SharePoint upload failed.",
+      };
+    }
     if (response.status === 409) {
       return { ok: true, duplicate: true };
     }

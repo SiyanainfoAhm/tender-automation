@@ -284,14 +284,25 @@ export async function uploadSharePointFile(
   for (let start = 0; start < file.size; start += chunkBytes) {
     const end = Math.min(file.size, start + chunkBytes);
     // Upload-session URLs are preauthenticated; do not send Graph bearer token.
-    const response = await fetch(session.uploadUrl, {
-      method: "PUT",
-      headers: {
-        "Content-Length": String(end - start),
-        "Content-Range": `bytes ${start}-${end - 1}/${file.size}`,
-      },
-      body: file.slice(start, end),
-    });
+    let response: Response | null = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      response = await fetch(session.uploadUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Length": String(end - start),
+          "Content-Range": `bytes ${start}-${end - 1}/${file.size}`,
+        },
+        body: file.slice(start, end),
+      });
+      if (
+        ![408, 429, 500, 501, 502, 503, 504].includes(response.status) ||
+        attempt === 2
+      ) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500 * 2 ** attempt));
+    }
+    if (!response) throw new Error("SharePoint upload failed.");
     const body = await response.json().catch(() => ({})) as SharePointItem & {
       error?: { code?: string; message?: string };
     };
