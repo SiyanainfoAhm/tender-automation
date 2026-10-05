@@ -751,6 +751,7 @@ export function BidWorkspaceClient({
                     tenderId={tender.id}
                     tenderTitle={tender.title}
                     tenderValue={tender.tenderValue}
+                    currentStatus={tender.qualificationStatus}
                     canEdit={canUpdateStatus}
                   />
                 ) : null}

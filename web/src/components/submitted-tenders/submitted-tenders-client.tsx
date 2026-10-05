@@ -331,7 +331,7 @@ export function SubmittedTendersClient({
               <thead className="border-b border-border bg-background-50 text-xs uppercase tracking-wide text-foreground-500">
                 <tr>
                   <th className="px-4 py-3 font-medium">Tender</th>
-                  <th className="px-4 py-3 font-medium">Outcome</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 font-medium">Value</th>
                   <th className="px-4 py-3 font-medium">Type</th>
                   <th className="px-4 py-3 font-medium">Lost reason</th>
@@ -391,6 +391,7 @@ export function SubmittedTendersClient({
                           tenderId={item.id}
                           tenderTitle={item.title}
                           tenderValue={item.tenderValue}
+                          currentStatus={item.qualificationStatus}
                           teamMembers={teamMembers}
                           canEdit={canEdit}
                         />

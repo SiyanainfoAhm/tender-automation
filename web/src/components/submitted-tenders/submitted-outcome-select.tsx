@@ -2,20 +2,13 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { MoreHorizontal } from "lucide-react";
 import { toast } from "sonner";
 
+import { QualificationStatusSelect } from "@/components/status/qualification-status-select";
 import { MarkAsLostDialog } from "@/components/submitted-tenders/mark-as-lost-dialog";
 import { StatusChangeCommentDialog } from "@/components/tenders/status-change-comment-dialog";
 import { MarkAsWonDialog } from "@/components/won-tenders/mark-as-won-dialog";
-import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { STATUS_DISPLAY_LABELS } from "@/lib/tender-status";
+import { STATUS_DISPLAY_LABELS, TENDER_STATUSES, type TenderStatus } from "@/lib/tender-status";
 import { updateTenderDetailsAction } from "@/server/actions/tender-update";
 
 type TeamMemberOption = { id: string; fullName: string };
@@ -24,6 +17,7 @@ type SubmittedOutcomeSelectProps = {
   tenderId: string;
   tenderTitle: string;
   tenderValue?: number | null;
+  currentStatus: string | null | undefined;
   teamMembers?: TeamMemberOption[];
   canEdit: boolean;
 };
@@ -32,6 +26,7 @@ export function SubmittedOutcomeSelect({
   tenderId,
   tenderTitle,
   tenderValue = null,
+  currentStatus,
   teamMembers = [],
   canEdit,
 }: SubmittedOutcomeSelectProps) {
@@ -40,33 +35,38 @@ export function SubmittedOutcomeSelect({
   const [wonOpen, setWonOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
   const [deleteStatusOpen, setDeleteStatusOpen] = useState(false);
+  const rawStatus = String(currentStatus || "SUBMITTED").trim().toUpperCase();
+  const value = (TENDER_STATUSES as readonly string[]).includes(rawStatus)
+    ? (rawStatus as TenderStatus)
+    : "SUBMITTED";
+  const statuses = [
+    value,
+    ...(["WON", "LOST", "DELETE"] as const).filter((status) => status !== value),
+  ] as readonly TenderStatus[];
+
+  function onStatusChange(next: TenderStatus) {
+    if (!canEdit || pending || next === value) return;
+    if (next === "WON") {
+      setWonOpen(true);
+      return;
+    }
+    if (next === "LOST") {
+      setLostOpen(true);
+      return;
+    }
+    if (next === "DELETE") setDeleteStatusOpen(true);
+  }
 
   return (
     <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={!canEdit || pending}
-            className="h-8 min-w-[6.5rem] justify-between text-xs"
-            aria-label={`Actions for ${tenderTitle}`}
-          >
-            Actions <MoreHorizontal className="size-3.5" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onSelect={() => setWonOpen(true)}>Won</DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setLostOpen(true)}>Lost</DropdownMenuItem>
-          <DropdownMenuItem
-            className="text-rose-700 focus:text-rose-700"
-            onSelect={() => setDeleteStatusOpen(true)}
-          >
-            Delete
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <QualificationStatusSelect
+        value={value}
+        statuses={statuses}
+        onValueChange={onStatusChange}
+        disabled={!canEdit || pending}
+        className="h-8 w-[9.5rem] text-xs"
+        ariaLabel={`Update status for ${tenderTitle}`}
+      />
 
       <MarkAsWonDialog
         open={wonOpen}
