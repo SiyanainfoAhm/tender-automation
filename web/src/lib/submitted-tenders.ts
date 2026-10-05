@@ -32,6 +32,8 @@ export type SubmittedTenderListItem = {
   /** Calendar date the tender was scraped (`scraped_date`). */
   scrapedDate: string | null;
   tenderValue: number | null;
+  /** Latest persisted BidAssist procurement/result stage, separate from submission status. */
+  resultStage: string | null;
   /** Effective qualification status (SUBMITTED / WON / LOST, etc.). */
   qualificationStatus: TenderStatus | string;
   /** Bid workspace submission timestamp when available. */

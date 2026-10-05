@@ -25,6 +25,7 @@ function item(
     evaluationMethod: null,
     scrapedDate: null,
     tenderValue: null,
+    resultStage: null,
     submittedAt: null,
     submissionReference: null,
     lostReason: null,

@@ -153,6 +153,7 @@ export function SubmittedTendersClient({
         item.location,
         item.evaluationMethod,
         item.tenderType,
+        item.resultStage,
       ]
         .filter(Boolean)
         .join(" ")
@@ -368,6 +369,11 @@ export function SubmittedTendersClient({
                           {isDuplicate ? (
                             <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
                               Duplicate
+                            </span>
+                          ) : null}
+                          {item.resultStage ? (
+                            <span className="inline-flex items-center rounded-md border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold text-sky-800">
+                              Result: {item.resultStage}
                             </span>
                           ) : null}
                         </div>

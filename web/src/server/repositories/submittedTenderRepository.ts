@@ -118,7 +118,7 @@ export async function listSubmittedTenders(
   }
 
   const idBatches = batches(ids, SUPABASE_IN_BATCH_SIZE);
-  const [tenderResults, workspaceResults, wonResults] = await Promise.all([
+  const [tenderResults, resultRows, workspaceResults, wonResults] = await Promise.all([
     Promise.all(
       idBatches.map((idBatch) =>
         supabase
@@ -127,6 +127,14 @@ export async function listSubmittedTenders(
             "id, title, reference_no, organization, source_portal, source_region, city, location_text, closing_date, tender_value, tender_type, category, project_category, scraped_date, qualification_status, raw_metadata, updated_at",
           )
           .in("id", idBatch),
+      ),
+    ),
+    Promise.all(
+      idBatches.map((idBatch) =>
+        supabase
+          .from("agenttender_tender_results")
+          .select("tender_id, result_stage")
+          .in("tender_id", idBatch),
       ),
     ),
     Promise.all(
@@ -157,6 +165,8 @@ export async function listSubmittedTenders(
 
   const wonError = wonResults.find((result) => result.error)?.error;
   if (wonError) throw new Error(wonError.message);
+  const resultError = resultRows.find((result) => result.error)?.error;
+  if (resultError) throw new Error(resultError.message);
 
   type TenderRow = {
     id: string;
@@ -204,6 +214,14 @@ export async function listSubmittedTenders(
     }
   }
 
+  const resultStageByTender = new Map<string, string | null>();
+  for (const result of resultRows) {
+    for (const row of result.data || []) {
+      const tenderId = asString(row.tender_id);
+      if (tenderId) resultStageByTender.set(tenderId, asString(row.result_stage));
+    }
+  }
+
   const items: SubmittedTenderListItem[] = tenderRows.map((row) => {
     const meta =
       row.raw_metadata && typeof row.raw_metadata === "object"
@@ -230,6 +248,7 @@ export async function listSubmittedTenders(
       evaluationMethod: normalizeL1QcbsMethod(asString(row.tender_type)),
       scrapedDate: asString(row.scraped_date)?.slice(0, 10) ?? null,
       tenderValue: asNumber(row.tender_value),
+      resultStage: resultStageByTender.get(tenderId) ?? null,
       qualificationStatus: status,
       submittedAt: workspace?.submittedAt ?? null,
       submissionReference: workspace?.submissionReference ?? null,
