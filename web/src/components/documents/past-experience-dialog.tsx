@@ -89,7 +89,7 @@ function PdfDropzone({
       return;
     }
     if (next.size > MAX_SINGLE_SHOT_UPLOAD_BYTES) {
-      toast.error(`${label} exceeds the 25 MB limit.`);
+      toast.error(`${label} exceeds the 200 MB limit.`);
       return;
     }
     onFileChange(next);
@@ -142,7 +142,7 @@ function PdfDropzone({
               Drag & drop or browse
             </span>
             <span className="mt-1 text-xs text-foreground-400">
-              PDF up to 25 MB
+              PDF up to 200 MB
             </span>
           </>
         )}
@@ -654,7 +654,7 @@ export function PastExperienceDialog({
                   disabled={readOnly || ongoing}
                   disabledMessage={
                     ongoing
-                      ? "Upload available after marking project as completed. PDF up to 25 MB"
+                      ? "Upload available after marking project as completed. PDF up to 200 MB"
                       : undefined
                   }
                   file={completionFile}

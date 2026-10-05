@@ -131,10 +131,9 @@ describe("tender direct SharePoint upload", () => {
     expect(validateDocumentFile(makeFile(1 * 1024 * 1024))).toBeNull();
     expect(validateDocumentFile(makeFile(10 * 1024 * 1024))).toBeNull();
     expect(validateDocumentFile(makeFile(50 * 1024 * 1024))).toBeNull();
-    expect(validateDocumentFile(makeFile(100 * 1024 * 1024))).toBeNull();
+    expect(validateDocumentFile(makeFile(200 * 1024 * 1024))).toBeNull();
     expect(
-      validateDocumentFile(makeFile(100 * 1024 * 1024 + 1))?.message,
+      validateDocumentFile(makeFile(200 * 1024 * 1024 + 1))?.message,
     ).toMatch(/maximum size/i);
   });
 });
-

@@ -89,7 +89,7 @@ async function uploadLinkedAttachment(options: {
   tenderRow?: Record<string, unknown> | null;
 }): Promise<void> {
   if (options.file.size > MAX_SINGLE_SHOT_UPLOAD_BYTES) {
-    throw new Error("File exceeds the 25 MB limit.");
+    throw new Error("File exceeds the 200 MB limit.");
   }
   if (!extensionAllowed(options.file.name)) {
     throw new Error("File type not allowed. Use PDF, Office, or image files.");

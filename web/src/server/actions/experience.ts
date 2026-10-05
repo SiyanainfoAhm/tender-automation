@@ -25,7 +25,7 @@ function getOptionalFile(formData: FormData, name: string): File | null {
 
 function validateExperiencePdf(file: File, label: string): string | null {
   if (file.size > MAX_SINGLE_SHOT_UPLOAD_BYTES) {
-    return `${label} exceeds the 25 MB limit.`;
+    return `${label} exceeds the 200 MB limit.`;
   }
   const lower = file.name.toLowerCase();
   if (!lower.endsWith(".pdf")) {

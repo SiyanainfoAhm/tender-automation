@@ -21,13 +21,13 @@ const nextConfig: NextConfig = {
   // Keep pdf-parse + native canvas out of the bundler (DOMMatrix / worker).
   serverExternalPackages: ["pdf-parse", "@napi-rs/canvas"],
   experimental: {
-    // Bid Workspace sends its allowed (up to 25 MB) document to the document
+    // Bid Workspace sends its allowed (up to 200 MB) document to the document
     // service through a Server Action before the service writes it to
     // SharePoint.  Keep this in sync with MAX_SINGLE_SHOT_UPLOAD_BYTES.
     // A smaller value rejects the multipart request before the action can
     // return a useful upload error, which surfaces as React error #441.
     serverActions: {
-      bodySizeLimit: "25mb",
+      bodySizeLimit: "200mb",
     },
   },
   async headers() {

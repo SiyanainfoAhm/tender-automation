@@ -108,7 +108,7 @@ describe("UploadDocumentDialog copy", () => {
     render(
       <UploadDocumentDialog open onOpenChange={() => undefined} kind="general" />,
     );
-    expect(screen.getAllByText(/up to 100 MB/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/up to 200 MB/i).length).toBeGreaterThan(0);
     expect(screen.queryByText(/up to 25 MB/i)).toBeNull();
   });
 

@@ -23,8 +23,8 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const MAX_BYTES = 25 * 1024 * 1024;
-const MAX_COMPANY_DOCUMENT_BYTES = 100 * 1024 * 1024;
+const MAX_BYTES = 200 * 1024 * 1024;
+const MAX_COMPANY_DOCUMENT_BYTES = 200 * 1024 * 1024;
 const CHUNK_SIZE = 5 * 1024 * 1024;
 const UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const ALLOWED_EXT = [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".png", ".jpg", ".jpeg", ".zip"];
@@ -1723,7 +1723,7 @@ async function handleUpload(req: Request, form: FormData) {
   if (!(file instanceof File) || file.size <= 0) {
     throw new HttpError(400, "Please select a file to upload");
   }
-  if (file.size > MAX_BYTES) throw new HttpError(400, "File exceeds the 25 MB limit");
+  if (file.size > MAX_BYTES) throw new HttpError(400, "File exceeds the 200 MB limit");
   const lowerName = file.name.toLowerCase();
   if (!ALLOWED_EXT.some((ext) => lowerName.endsWith(ext))) {
     throw new HttpError(400, "File type not allowed. Use PDF, DOC, DOCX, XLS, or XLSX.");
@@ -2334,7 +2334,7 @@ function validateExperiencePdf(file: File, label: string) {
     throw new HttpError(400, `${label} file is empty.`);
   }
   if (file.size > MAX_BYTES) {
-    throw new HttpError(400, `${label} exceeds the 25 MB limit.`);
+    throw new HttpError(400, `${label} exceeds the 200 MB limit.`);
   }
   if (!file.name.toLowerCase().endsWith(".pdf")) {
     throw new HttpError(400, `${label} must be a PDF.`);
@@ -2660,7 +2660,7 @@ function buildWorkspaceDocumentPrefix(
 
 function validateWorkspaceFile(file: File) {
   if (file.size <= 0) throw new HttpError(400, "File is empty.");
-  if (file.size > MAX_BYTES) throw new HttpError(400, "File exceeds the 25 MB limit.");
+  if (file.size > MAX_BYTES) throw new HttpError(400, "File exceeds the 200 MB limit.");
   const lower = file.name.toLowerCase();
   if (!ALLOWED_EXT.some((ext) => lower.endsWith(ext))) {
     throw new HttpError(400, "Unsupported file type.");

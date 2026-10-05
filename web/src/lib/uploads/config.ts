@@ -11,12 +11,15 @@ export const UPLOAD_CHUNK_TIMEOUT_MS = 120_000;
 export const CHUNK_RETRY_BACKOFF_MS = [1_000, 2_000, 4_000] as const;
 
 /** Configurable company-document size cap (chunked uploads). */
-export const MAX_DOCUMENT_UPLOAD_SIZE_MB = 100;
+export const MAX_DOCUMENT_UPLOAD_SIZE_MB = 200;
 export const MAX_DOCUMENT_UPLOAD_BYTES =
   MAX_DOCUMENT_UPLOAD_SIZE_MB * 1024 * 1024;
 
 /** Single-request uploads (experience / workspace) stay smaller. */
-export const MAX_SINGLE_SHOT_UPLOAD_BYTES = 25 * 1024 * 1024;
+// Legacy server-mediated uploads use the same product limit. New SharePoint
+// uploads are chunked; keep this only for compatibility paths.
+export const MAX_SINGLE_SHOT_UPLOAD_BYTES =
+  MAX_DOCUMENT_UPLOAD_SIZE_MB * 1024 * 1024;
 
 export const UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 

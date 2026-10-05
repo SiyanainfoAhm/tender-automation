@@ -17,6 +17,7 @@ import {
 } from "@/lib/bid-ai-prompts";
 import {
   DOCUMENT_CATEGORIES,
+  MAX_DOCUMENT_UPLOAD_SIZE_MB,
   MAX_SINGLE_SHOT_UPLOAD_BYTES,
   type DocumentCategory,
 } from "@/lib/company/types";
@@ -306,7 +307,10 @@ export async function uploadWorkspaceDocumentAction(formData: FormData): Promise
       return { ok: false, error: "Choose a file to upload." };
     }
     if (file.size > MAX_SINGLE_SHOT_UPLOAD_BYTES) {
-      return { ok: false, error: "File exceeds the 25 MB limit." };
+      return {
+        ok: false,
+        error: `File exceeds the ${MAX_DOCUMENT_UPLOAD_SIZE_MB} MB limit.`,
+      };
     }
     const title = String(formData.get("title") || file.name).trim();
     const documentType = String(formData.get("documentType") || "Other").trim();
@@ -1341,7 +1345,10 @@ export async function uploadChecklistDocumentAction(
       return { ok: false, error: "Choose a file to upload." };
     }
     if (file.size > MAX_SINGLE_SHOT_UPLOAD_BYTES) {
-      return { ok: false, error: "File exceeds the 25 MB limit." };
+      return {
+        ok: false,
+        error: `File exceeds the ${MAX_DOCUMENT_UPLOAD_SIZE_MB} MB limit.`,
+      };
     }
 
     const checklistItemId = String(formData.get("checklistItemId") || "").trim();
@@ -1520,7 +1527,7 @@ export async function addChecklistRequirementAction(
     if (file instanceof File && file.size > 0) {
       if (file.size > MAX_SINGLE_SHOT_UPLOAD_BYTES) {
         uploadFailed = true;
-        uploadError = "File exceeds the 25 MB limit.";
+        uploadError = `File exceeds the ${MAX_DOCUMENT_UPLOAD_SIZE_MB} MB limit.`;
       } else {
         try {
           const result = await invokeWorkspaceDocumentSave({
