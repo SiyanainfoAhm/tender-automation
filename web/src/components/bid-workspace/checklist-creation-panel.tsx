@@ -471,10 +471,17 @@ export function RequirementListPanel({
                       "border-border bg-white",
                   )}
                 >
-                  <button
-                    type="button"
+                  <div
+                    role="button"
+                    tabIndex={0}
                     className="flex w-full items-start gap-2.5 text-left hover:opacity-90"
                     onClick={() => {
+                      setSelectedId(item.id);
+                      setGeneratePromptOpen(false);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
                       setSelectedId(item.id);
                       setGeneratePromptOpen(false);
                     }}
@@ -524,7 +531,7 @@ export function RequirementListPanel({
                         </span>
                       ) : null}
                     </span>
-                  </button>
+                  </div>
 
                   {!readOnly ? (
                     <div

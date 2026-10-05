@@ -167,6 +167,9 @@ export function BidWorkspaceClient({
   const showPrepLoader =
     isWillBid &&
     !readOnly &&
+    // A preparation status can lag behind the transaction that persisted the
+    // checklist. Existing work must stay usable while that status is repaired.
+    items.length === 0 &&
     (prepStatus === "PROCESSING" ||
       prepStatus === "NOT_STARTED" ||
       shouldAutoRetryFailed);
@@ -189,7 +192,14 @@ export function BidWorkspaceClient({
 
     async function run() {
       let transientRetried = false;
-      if (prepStatus === "NOT_STARTED" || retryTransientFailure) {
+      // Also call ensure for PROCESSING. It is normally a no-op while another
+      // request owns the lock, but it lets the server reclaim a stale lock and
+      // mark an already-persisted checklist as READY.
+      if (
+        prepStatus === "NOT_STARTED" ||
+        prepStatus === "PROCESSING" ||
+        retryTransientFailure
+      ) {
         setPrepStatus("PROCESSING");
         setPrepError(null);
         transientRetried = retryTransientFailure;

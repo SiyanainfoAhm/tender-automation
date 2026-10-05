@@ -60,10 +60,8 @@ import { getTenderById } from "@/server/repositories/tenderRepository";
 import { loadTenderDetail } from "@/server/tenders/load-tender-detail";
 import {
   invokeDocumentDelete,
-  invokeDocumentUpload,
   invokeWorkspaceDocumentDelete,
   invokeWorkspaceDocumentSave,
-  resolveUploadedDocumentId,
 } from "@/server/storage/tenderAutomationDocumentFunctions";
 import { uploadCompanyDocumentToSharePoint } from "@/server/storage/uploadCompanyDocumentToSharePoint";
 
@@ -759,19 +757,44 @@ export async function ensureWillBidWorkspacePreparedAction(
     if (workspace.checklistPreparationStatus === "READY") {
       return { ok: true, status: "ALREADY_READY", skipped: true };
     }
-    if (workspace.checklistPreparationStatus === "PROCESSING") {
-      return { ok: true, status: "PROCESSING" };
-    }
-
+    // A browser/server restart can leave the preparation lock in PROCESSING.
+    // Ask the claim helper to reclaim it only after its stale timeout; an
+    // active preparation remains owned by the original caller.
     const claim = await tryClaimChecklistPreparation({
       workspaceId: workspace.id,
       companyId: session.companyId,
+      // Initial preparation normally finishes well within two minutes. This
+      // path is only invoked when opening the workspace, so recover a hung
+      // browser/request promptly instead of keeping saved work blocked for
+      // the repository's broader fifteen-minute default lock period.
+      staleAfterSeconds: 2 * 60,
     });
     if (!claim.claimed) {
       if (claim.status === "READY") {
         return { ok: true, status: "ALREADY_READY", skipped: true };
       }
       return { ok: true, status: "PROCESSING" };
+    }
+
+    if (workspace.checklistPreparationStatus === "PROCESSING") {
+      // A stale lock may have been left behind after the ingestion wrote its
+      // checklist rows but before it recorded READY. Do not run AI a second
+      // time or overwrite those rows; finish the state transition instead.
+      const { count, error: countError } = await getServerSupabase()
+        .from("agenttender_bid_checklist_items")
+        .select("id", { count: "exact", head: true })
+        .eq("workspace_id", workspace.id)
+        .eq("company_id", session.companyId);
+      if (countError) throw new Error(countError.message);
+      if ((count || 0) > 0) {
+        await setChecklistPreparationStatus({
+          workspaceId: workspace.id,
+          companyId: session.companyId,
+          status: "READY",
+        });
+        revalidateWorkspace(tenderId);
+        return { ok: true, status: "READY", skipped: true };
+      }
     }
 
     const result = await ingestTenderDocumentsAction(tenderId, {
