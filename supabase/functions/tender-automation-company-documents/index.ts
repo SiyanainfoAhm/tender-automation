@@ -3026,6 +3026,13 @@ async function handleCreateDirectUpload(
   if (!documentName) throw new HttpError(400, "Document name is required");
   validateCompanyDocumentFile(fileName, mimeType, fileSizeBytes);
 
+  const workspaceContext = String(body.context || "").trim();
+  if (workspaceContext === "bid-workspace" || workspaceContext === "bid-workspace-checklist") {
+    return handleCreateWorkspaceDirectUpload(user, sharePoint, body, {
+      fileName, mimeType, fileSizeBytes, documentName,
+    });
+  }
+
   // Company Documents library — same Graph session pattern as tender docs,
   // but paths under {company}/companydocs/{General|Certificate|Other}/…
   if (isCompanyLibrary) {
@@ -3213,6 +3220,53 @@ async function handleCreateDirectUpload(
   });
 }
 
+async function handleCreateWorkspaceDirectUpload(
+  user: Awaited<ReturnType<typeof authenticate>>,
+  sharePoint: ReturnType<typeof requireSharePointConfig>,
+  body: Record<string, unknown>,
+  file: { fileName: string; mimeType: string; fileSizeBytes: number; documentName: string },
+) {
+  const workspaceId = String(body.workspaceId || "").trim();
+  const tenderId = String(body.tenderId || "").trim();
+  const tenderReference = String(body.tenderReference || tenderId).trim();
+  const existingId = String(body.workspaceDocumentId || "").trim();
+  const documentType = String(body.documentType || "Other").trim() || "Other";
+  const title = String(body.title || file.documentName).trim();
+  if (!workspaceId || !tenderId || !title) throw new HttpError(400, "Workspace upload context is incomplete.");
+  assertSafeId(workspaceId, "workspaceId");
+  assertSafeId(tenderId, "tenderId");
+  if (existingId) assertSafeId(existingId, "workspaceDocumentId");
+
+  const supabase = serviceSupabase();
+  const { data: workspace, error: workspaceError } = await supabase
+    .from("agenttender_bid_workspaces")
+    .select("id, company_id, tender_id, submission_status")
+    .eq("id", workspaceId).maybeSingle();
+  if (workspaceError) throw new Error(workspaceError.message);
+  if (!workspace || String(workspace.company_id) !== user.companyId || String(workspace.tender_id) !== tenderId) {
+    throw new HttpError(403, "Invalid bid workspace.");
+  }
+  if (workspace.submission_status === "submitted") throw new HttpError(400, "This bid has been marked submitted. Editing is disabled.");
+
+  if (existingId) {
+    const { data: existing, error } = await supabase
+      .from("agenttender_bid_workspace_documents")
+      .select("id").eq("id", existingId).eq("workspace_id", workspaceId).eq("company_id", user.companyId).maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!existing) throw new HttpError(404, "Workspace document not found.");
+  }
+  const documentId = existingId || crypto.randomUUID();
+  const storagePath = `${buildWorkspaceDocumentPrefix(user.companyName, user.companyId, tenderReference, tenderId)}/${slugify(documentType)}/${documentId}/${sanitizeFileName(file.fileName)}`;
+  const upload = await createSharePointUploadSession(storagePath, sharePoint, { overwrite: Boolean(existingId) });
+  return json({
+    success: true, documentId, blobPath: storagePath, blobName: storagePath,
+    storageUrl: upload.existed ? upload.item.webUrl : null,
+    uploadUrl: upload.existed ? null : upload.session.uploadUrl,
+    expiresAt: upload.existed ? null : upload.session.expirationDateTime,
+    duplicate: upload.existed, headers: {},
+  });
+}
+
 async function handleCompleteDirectUpload(
   req: Request,
   body: Record<string, unknown>,
@@ -3235,6 +3289,13 @@ async function handleCompleteDirectUpload(
   assertSafeId(documentId, "documentId");
   if (!storagePath || storagePath.includes("..")) {
     throw new HttpError(400, "blobPath is required");
+  }
+
+  const workspaceContext = String(body.context || "").trim();
+  if (workspaceContext === "bid-workspace" || workspaceContext === "bid-workspace-checklist") {
+    return handleCompleteWorkspaceDirectUpload(user, sharePoint, body, {
+      documentId, storagePath, mimeType, fileSizeBytes, originalFileName,
+    });
   }
 
   const supabase = serviceSupabase();
@@ -3316,6 +3377,78 @@ async function handleCompleteDirectUpload(
   });
 }
 
+async function handleCompleteWorkspaceDirectUpload(
+  user: Awaited<ReturnType<typeof authenticate>>,
+  sharePoint: ReturnType<typeof requireSharePointConfig>,
+  body: Record<string, unknown>,
+  upload: { documentId: string; storagePath: string; mimeType: string; fileSizeBytes: number; originalFileName: string },
+) {
+  const workspaceId = String(body.workspaceId || "").trim();
+  const tenderId = String(body.tenderId || "").trim();
+  const tenderReference = String(body.tenderReference || tenderId).trim();
+  const documentType = String(body.documentType || "Other").trim() || "Other";
+  const title = String(body.title || upload.originalFileName).trim();
+  const checklistItemId = String(body.checklistItemId || "").trim() || null;
+  if (!workspaceId || !tenderId || !title) throw new HttpError(400, "Workspace upload context is incomplete.");
+  assertSafeId(workspaceId, "workspaceId");
+  assertSafeId(tenderId, "tenderId");
+  assertSafeId(upload.documentId, "workspaceDocumentId");
+  const expectedPath = `${buildWorkspaceDocumentPrefix(user.companyName, user.companyId, tenderReference, tenderId)}/${slugify(documentType)}/${upload.documentId}/${sanitizeFileName(upload.originalFileName)}`;
+  if (upload.storagePath !== expectedPath) throw new HttpError(400, "blobPath does not match the workspace upload session.");
+
+  const supabase = serviceSupabase();
+  const { data: workspace, error: workspaceError } = await supabase
+    .from("agenttender_bid_workspaces")
+    .select("id, company_id, tender_id, submission_status")
+    .eq("id", workspaceId).maybeSingle();
+  if (workspaceError) throw new Error(workspaceError.message);
+  if (!workspace || String(workspace.company_id) !== user.companyId || String(workspace.tender_id) !== tenderId) {
+    throw new HttpError(403, "Invalid bid workspace.");
+  }
+  if (workspace.submission_status === "submitted") throw new HttpError(400, "This bid has been marked submitted. Editing is disabled.");
+  if (checklistItemId) {
+    const { data: item, error } = await supabase.from("agenttender_bid_checklist_items")
+      .select("id").eq("id", checklistItemId).eq("workspace_id", workspaceId).eq("company_id", user.companyId).maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!item) throw new HttpError(404, "Checklist item not found.");
+  }
+  const item = await getSharePointItemByPath(upload.storagePath, sharePoint);
+  if (!item?.webUrl) throw new HttpError(400, "SharePoint upload was not found. Upload the file again before saving metadata.");
+
+  const { data: existing, error: existingError } = await supabase
+    .from("agenttender_bid_workspace_documents")
+    .select("id, company_id, workspace_id, blob_name, storage_url, version_label")
+    .eq("id", upload.documentId).maybeSingle();
+  if (existingError) throw new Error(existingError.message);
+  const common = {
+    document_type: documentType, title, file_name: upload.originalFileName,
+    file_size_bytes: Number.isFinite(upload.fileSizeBytes) ? upload.fileSizeBytes : null,
+    mime_type: upload.mimeType || "application/octet-stream", storage_url: item.webUrl,
+    blob_name: upload.storagePath, status: "ready", updated_by: user.id,
+    updated_at: new Date().toISOString(),
+  };
+  if (existing) {
+    if (String(existing.company_id) !== user.companyId || String(existing.workspace_id) !== workspaceId) {
+      throw new HttpError(403, "Workspace document does not belong to this workspace.");
+    }
+    const { error } = await supabase.from("agenttender_bid_workspace_documents").update({
+      ...common, version_label: nextWorkspaceVersion(existing.version_label as string | null),
+    }).eq("id", upload.documentId).eq("company_id", user.companyId);
+    if (error) throw new HttpError(500, "Unable to save workspace document. Please try again.");
+    const oldPath = String(existing.blob_name || "");
+    if (oldPath && oldPath !== upload.storagePath) {
+      await deleteSharePointFile({ path: oldPath, storageUrl: String(existing.storage_url || "") || null }).catch(() => null);
+    }
+  } else {
+    const { error } = await supabase.from("agenttender_bid_workspace_documents").insert({
+      id: upload.documentId, workspace_id: workspaceId, company_id: user.companyId, tender_id: tenderId,
+      ...common, is_required: false, version_label: "v1", created_by: user.id,
+    });
+    if (error) throw new HttpError(500, "Unable to save workspace document. Please try again.");
+  }
+  return json({ success: true, documentId: upload.documentId, workspaceDocumentId: upload.documentId, storageUrl: item.webUrl, storagePath: upload.storagePath });
+}
+
 async function handleAbortDirectUpload(
   req: Request,
   body: Record<string, unknown>,
@@ -3328,6 +3461,12 @@ async function handleAbortDirectUpload(
 
   const documentId = String(body.documentId || "").trim();
   if (!documentId) throw new HttpError(400, "documentId is required");
+  // Bid Workspace direct sessions have no Company Document row. An incomplete
+  // Graph upload session expires on its own; there is no business metadata to
+  // delete until completion has atomically persisted the workspace document.
+  if (String(body.context || "").trim().startsWith("bid-workspace")) {
+    return json({ success: true, documentId });
+  }
   assertSafeId(documentId, "documentId");
 
   const supabase = serviceSupabase();

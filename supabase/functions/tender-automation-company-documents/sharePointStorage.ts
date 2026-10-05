@@ -327,13 +327,14 @@ export async function uploadSharePointFile(
 export async function createSharePointUploadSession(
   path: string,
   config = requireSharePointConfig(),
+  options?: { overwrite?: boolean },
 ): Promise<
   | { existed: true; item: SharePointItem; path: string }
   | { existed: false; session: SharePointUploadSession; path: string }
 > {
   const clean = cleanPath(path);
   const existing = await getSharePointItemByPath(clean, config);
-  if (existing) return { existed: true, item: existing, path: clean };
+  if (existing && !options?.overwrite) return { existed: true, item: existing, path: clean };
 
   await ensureSharePointFolder(clean.slice(0, clean.lastIndexOf("/")), config);
   const driveId = await resolveSharePointDriveId(config);
@@ -344,7 +345,7 @@ export async function createSharePointUploadSession(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        item: { "@microsoft.graph.conflictBehavior": "fail" },
+        item: { "@microsoft.graph.conflictBehavior": options?.overwrite ? "replace" : "fail" },
       }),
     },
   );

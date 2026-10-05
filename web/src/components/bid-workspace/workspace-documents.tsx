@@ -30,10 +30,11 @@ import {
 } from "@/lib/bid-workspace";
 import { formatBytes } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { uploadTenderDocumentDirectToSharePoint } from "@/lib/uploads/directSharePointUpload";
 import {
   deleteWorkspaceDocumentAction,
   updateWorkspaceDocumentStatusAction,
-  uploadWorkspaceDocumentAction,
+  finalizeWorkspaceDirectUploadAction,
 } from "@/server/actions/bid-workspace";
 import type { WorkspaceDocumentRow } from "@/lib/bid-workspace";
 
@@ -82,13 +83,25 @@ export function WorkspaceDocuments({
     }
     setUploading(true);
     try {
-      const form = new FormData();
-      form.set("tenderId", tenderId);
-      form.set("title", title.trim() || file.name);
-      form.set("documentType", documentType);
-      if (replaceId) form.set("documentId", replaceId);
-      form.set("file", file);
-      const result = await uploadWorkspaceDocumentAction(form);
+      const uploaded = await uploadTenderDocumentDirectToSharePoint({
+        tenderId,
+        section: "bidding",
+        file,
+        context: "bid-workspace",
+        workspaceDocumentId: replaceId,
+        title: title.trim() || file.name,
+        documentType,
+      });
+      if (!uploaded.ok) {
+        toast.error(uploaded.error);
+        return;
+      }
+      const result = await finalizeWorkspaceDirectUploadAction({
+        tenderId,
+        sourceDocumentId: uploaded.documentId,
+        title: title.trim() || file.name,
+        documentType,
+      });
       if (!result.ok) {
         toast.error(result.error);
         return;

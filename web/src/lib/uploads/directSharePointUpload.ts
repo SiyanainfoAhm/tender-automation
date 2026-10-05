@@ -100,13 +100,17 @@ export async function uploadChunksToSharePoint(options: {
   return { ok: true };
 }
 
-async function abortUpload(tenderId: string, documentId: string): Promise<void> {
+async function abortUpload(
+  tenderId: string,
+  documentId: string,
+  context?: Pick<Parameters<typeof uploadTenderDocumentDirectToSharePoint>[0], "context" | "workspaceDocumentId" | "checklistItemId">,
+): Promise<void> {
   await fetch(
     `/api/tenders/${encodeURIComponent(tenderId)}/documents/direct-upload`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ intent: "abort", documentId }),
+      body: JSON.stringify({ intent: "abort", documentId, ...(context || {}) }),
     },
   ).catch(() => null);
 }
@@ -130,6 +134,12 @@ export async function uploadTenderDocumentDirectToSharePoint(options: {
   section: TenderDocumentSection;
   file: File;
   feeId?: string | null;
+  /** Server-validated business destination for Bid Workspace uploads. */
+  context?: "bid-workspace" | "bid-workspace-checklist";
+  workspaceDocumentId?: string | null;
+  checklistItemId?: string | null;
+  title?: string | null;
+  documentType?: string | null;
   signal?: AbortSignal;
 }): Promise<DirectUploadResult> {
   const validation = validateDocumentFile(
@@ -147,6 +157,11 @@ export async function uploadTenderDocumentDirectToSharePoint(options: {
       intent: "create",
       section: options.section,
       feeId: options.feeId || null,
+      context: options.context || null,
+      workspaceDocumentId: options.workspaceDocumentId || null,
+      checklistItemId: options.checklistItemId || null,
+      title: options.title || null,
+      documentType: options.documentType || null,
       fileName: options.file.name,
       originalFileName: options.file.name,
       mimeType: options.file.type || "application/octet-stream",
@@ -167,7 +182,7 @@ export async function uploadTenderDocumentDirectToSharePoint(options: {
   const storagePath = String(created.blobPath || created.blobName || "");
   if (!created.duplicate) {
     if (!created.uploadUrl) {
-      await abortUpload(options.tenderId, documentId);
+      await abortUpload(options.tenderId, documentId, options);
       return { ok: false, error: "SharePoint upload session was not created." };
     }
     try {
@@ -177,11 +192,11 @@ export async function uploadTenderDocumentDirectToSharePoint(options: {
         signal: options.signal,
       });
       if (!upload.ok) {
-        await abortUpload(options.tenderId, documentId);
+        await abortUpload(options.tenderId, documentId, options);
         return upload;
       }
     } catch (error) {
-      await abortUpload(options.tenderId, documentId);
+      await abortUpload(options.tenderId, documentId, options);
       return {
         ok: false,
         error:
@@ -199,6 +214,11 @@ export async function uploadTenderDocumentDirectToSharePoint(options: {
       intent: "complete",
       section: options.section,
       feeId: options.feeId || null,
+      context: options.context || null,
+      workspaceDocumentId: options.workspaceDocumentId || null,
+      checklistItemId: options.checklistItemId || null,
+      title: options.title || null,
+      documentType: options.documentType || null,
       documentId,
       blobPath: storagePath,
       fileName: options.file.name,

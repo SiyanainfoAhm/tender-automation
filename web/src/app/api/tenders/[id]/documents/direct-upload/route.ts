@@ -15,6 +15,8 @@ import {
 import {
   insertTenderDocument,
 } from "@/server/repositories/bidFeeRepository";
+import { getOrCreateWorkspace } from "@/server/repositories/bidWorkspaceRepository";
+import { loadTenderDetail } from "@/server/tenders/load-tender-detail";
 import { getTenderById } from "@/server/repositories/tenderRepository";
 import {
   indexTenderDocumentById,
@@ -111,7 +113,8 @@ async function requireDocumentUploadSession() {
   const session = await requireCompanySession();
   if (
     !sessionHasPermission(session, "tenders.edit") &&
-    !sessionHasPermission(session, "documents.upload")
+    !sessionHasPermission(session, "documents.upload") &&
+    !sessionHasPermission(session, "bids.edit")
   ) {
     throw new CompanyAccessError(
       "FORBIDDEN",
@@ -119,6 +122,55 @@ async function requireDocumentUploadSession() {
     );
   }
   return session;
+}
+
+type WorkspaceUploadContext = "bid-workspace" | "bid-workspace-checklist";
+
+async function resolveWorkspaceUploadContext(
+  session: Awaited<ReturnType<typeof requireDocumentUploadSession>>,
+  tenderId: string,
+  body: Record<string, unknown>,
+) {
+  const context = String(body.context || "").trim() as WorkspaceUploadContext;
+  if (context !== "bid-workspace" && context !== "bid-workspace-checklist") {
+    return null;
+  }
+  if (!sessionHasPermission(session, "bids.edit")) {
+    throw new CompanyAccessError("FORBIDDEN", "Missing permission: bids.edit");
+  }
+  const detail = await loadTenderDetail({ tenderId, companyId: session.companyId });
+  if (!detail) throw new Error("Tender not found.");
+  if (detail.qualificationStatus === "NO_GO" || detail.submitted) {
+    throw new Error("This bid is not editable.");
+  }
+  const workspace = await getOrCreateWorkspace({
+    tenderId,
+    companyId: session.companyId,
+    userId: session.user.id,
+    missingDocuments: detail.qualification?.missingDocuments ?? [],
+  });
+  const checklistItemId = String(body.checklistItemId || "").trim() || null;
+  if (context === "bid-workspace-checklist") {
+    if (!checklistItemId) throw new Error("checklistItemId is required.");
+    const { data: item, error } = await getServerSupabase()
+      .from("agenttender_bid_checklist_items")
+      .select("id")
+      .eq("id", checklistItemId)
+      .eq("workspace_id", workspace.workspaceId)
+      .eq("company_id", session.companyId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!item) throw new Error("Checklist item not found.");
+  }
+  return {
+    context,
+    workspaceId: workspace.workspaceId,
+    tenderReference: detail.sourceTenderId || detail.id,
+    workspaceDocumentId: String(body.workspaceDocumentId || "").trim() || null,
+    checklistItemId,
+    title: String(body.title || body.fileName || "").trim(),
+    documentType: String(body.documentType || "Other").trim() || "Other",
+  };
 }
 
 /** Create a short-lived Microsoft Graph upload session (no file bytes). */
@@ -164,6 +216,7 @@ export async function POST(request: Request, context: RouteContext) {
     const tenderLookup = await getTenderById(tenderId);
     if (!tenderLookup) return jsonError("Tender not found.", 404);
 
+    const workspaceContext = await resolveWorkspaceUploadContext(session, tenderId, body);
     const payload: Record<string, unknown> = {
       tenderId,
       section,
@@ -175,6 +228,9 @@ export async function POST(request: Request, context: RouteContext) {
       fileSizeBytes,
       notes: `tender:${tenderId}|section:${section}${feeId ? `|fee:${feeId}` : ""}`,
     };
+    if (workspaceContext) {
+      Object.assign(payload, workspaceContext);
+    }
     applyTenderArtifactFields(payload, tenderLookup.tender);
 
     const created = await invokeCreateDirectUpload(payload);
@@ -243,6 +299,8 @@ async function completeDirectUpload(
   const fileSizeBytes = Number(body.fileSizeBytes);
   const feeId = String(body.feeId || "").trim() || null;
 
+  const workspaceContext = await resolveWorkspaceUploadContext(session, tenderId, body);
+
   if (!documentId || !blobPath) {
     return jsonError("documentId and blobPath are required.");
   }
@@ -256,7 +314,18 @@ async function completeDirectUpload(
     fileSizeBytes,
     originalFileName: fileName,
     fileName,
+    ...(workspaceContext || {}),
   });
+
+  // Workspace direct uploads persist their workspace metadata in the storage
+  // function. They deliberately do not create a Tender/Company Document row.
+  if (workspaceContext) {
+    if (!completed.success || !completed.documentId) {
+      return jsonError(completed.error || "Unable to save workspace document.", completed.status || 500);
+    }
+    revalidate(tenderId);
+    return NextResponse.json({ success: true, documentId: completed.documentId, message: "Workspace document uploaded." });
+  }
 
   if (!completed.success || !completed.documentId) {
     // Metadata failed after SharePoint upload — attempt cleanup of pending row/file.
@@ -366,7 +435,10 @@ async function abortDirectUpload(
 ) {
   const documentId = String(body.documentId || "").trim();
   if (!documentId) return jsonError("documentId is required.");
-  const aborted = await invokeAbortDirectUpload({ documentId });
+  const aborted = await invokeAbortDirectUpload({
+    documentId,
+    context: String(body.context || "").trim() || null,
+  });
   if (!aborted.success) {
     console.error("[tenders/direct-upload] abort failed", {
       tenderId,

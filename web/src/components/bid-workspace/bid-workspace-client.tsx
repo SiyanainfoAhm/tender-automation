@@ -52,6 +52,7 @@ import {
 import { getCalendarDaysUntilDeadline } from "@/lib/tender-deadline";
 import type { TenderDetailDTO } from "@/lib/tender-detail";
 import { cn } from "@/lib/utils";
+import { uploadTenderDocumentDirectToSharePoint } from "@/lib/uploads/directSharePointUpload";
 import {
   ensureWillBidWorkspacePreparedAction,
   generateChecklistDocumentAction,
@@ -61,7 +62,7 @@ import {
   markBidSubmittedAction,
   toggleChecklistItemCompleteAction,
   unlinkChecklistDocumentAction,
-  uploadChecklistDocumentAction,
+  finalizeChecklistDirectUploadAction,
 } from "@/server/actions/bid-workspace";
 import type {
   ChecklistItemRow,
@@ -487,60 +488,34 @@ export function BidWorkspaceClient({
       };
     },
   ) {
-    const formData = new FormData();
-    formData.set("tenderId", tender.id);
-    formData.set("file", file);
-    formData.set("title", item.requirementName);
-    formData.set("checklistItemId", item.id);
-    const docType =
-      item.category === "TECHNICAL"
-        ? "Technical"
-        : item.category === "ANNEXURE" ||
-            item.category === "DECLARATION" ||
-            item.category === "AUTHORIZATION"
-          ? "Annexure"
-          : "Pre-Qualification";
-    formData.set("documentType", docType);
-    if (options?.saveAsCompanyDocument) {
-      formData.set("saveAsCompanyDocument", "1");
-      const companyDocument = options.companyDocument;
-      if (companyDocument) {
-        formData.set("companyDocumentName", companyDocument.name);
-        formData.set("companyDocumentCategory", companyDocument.category);
-        formData.set("certificateType", companyDocument.certificateType || "");
-        formData.set("issuingAuthority", companyDocument.issuingAuthority || "");
-        formData.set("issueDate", companyDocument.issueDate || "");
-        formData.set("expiryDate", companyDocument.expiryDate || "");
-        formData.set("financialYear", companyDocument.financialYear || "");
-        formData.set("financialDocumentType", companyDocument.documentType || "");
-      }
-    }
-    const result = await uploadChecklistDocumentAction(formData);
+    const uploaded = await uploadTenderDocumentDirectToSharePoint({
+      tenderId: tender.id,
+      section: "bidding",
+      file,
+      context: "bid-workspace-checklist",
+      checklistItemId: item.id,
+      title: file.name,
+      documentType: "Other",
+    });
+    if (!uploaded.ok) { toast.error(uploaded.error); return; }
+    const result = await finalizeChecklistDirectUploadAction({ tenderId: tender.id, checklistItemId: item.id, sourceDocumentId: uploaded.documentId });
     if (!result.ok) {
       toast.error(result.error);
       return;
     }
     toast.success(
-      options?.saveAsCompanyDocument
-        ? "Uploaded and saved to Company Documents."
-        : "Document uploaded and requirement completed.",
+      "Document uploaded and requirement completed.",
     );
     setItems((prev) => {
       const next = prev.map((row) =>
         row.id === item.id
           ? {
               ...row,
-              completionStatus: options?.saveAsCompanyDocument
-                ? ("COMPLETED_COMPANY_DOCUMENT" as const)
-                : ("COMPLETED_TENDER_DOCUMENT" as const),
-              matchedDocumentSource: options?.saveAsCompanyDocument
-                ? ("COMPANY" as const)
-                : ("TENDER" as const),
+              completionStatus: "COMPLETED_TENDER_DOCUMENT" as const,
+              matchedDocumentSource: "TENDER" as const,
               matchedBy: "USER" as const,
               isCompleted: true,
-              completionSource: options?.saveAsCompanyDocument
-                ? ("COMPANY_DOCUMENT" as const)
-                : ("UPLOADED" as const),
+              completionSource: "UPLOADED" as const,
             }
           : row,
       );

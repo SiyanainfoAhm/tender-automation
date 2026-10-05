@@ -362,6 +362,44 @@ export async function uploadWorkspaceDocumentAction(formData: FormData): Promise
   }
 }
 
+/** Register a file already uploaded through the browser-to-SharePoint flow. */
+export async function finalizeWorkspaceDirectUploadAction(input: {
+  tenderId: string;
+  sourceDocumentId: string;
+  title: string;
+  documentType: string;
+}): Promise<ActionResult> {
+  try {
+    const { session, detail, workspaceId } = await requireEditableWorkspace(input.tenderId, "bids.edit");
+    const supabase = getServerSupabase();
+    const { data: source, error: sourceError } = await supabase
+      .from("agenttender_bid_workspace_documents")
+      .select("id")
+      .eq("id", input.sourceDocumentId)
+      .eq("company_id", session.companyId)
+      .eq("workspace_id", workspaceId)
+      .eq("tender_id", detail.id)
+      .eq("status", "ready")
+      .maybeSingle();
+    if (sourceError) throw new Error(sourceError.message);
+    if (!source) {
+      return { ok: false, error: "SharePoint upload was not found." };
+    }
+    await insertTenderActivity({
+      tenderId: input.tenderId,
+      companyId: session.companyId,
+      eventType: "workspace_document_uploaded",
+      summary: "Workspace document uploaded",
+      payload: { title: input.title },
+      actorUserId: session.user.id,
+    });
+    revalidateWorkspace(input.tenderId);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Unable to register uploaded document." };
+  }
+}
+
 export async function deleteWorkspaceDocumentAction(input: {
   tenderId: string;
   documentId: string;
@@ -1465,6 +1503,36 @@ export async function uploadChecklistDocumentAction(
         error instanceof Error ? error.message : "Unable to upload document.",
     };
   }
+}
+
+/** Link a completed direct SharePoint upload to a checklist item. */
+export async function finalizeChecklistDirectUploadAction(input: {
+  tenderId: string;
+  checklistItemId: string;
+  sourceDocumentId: string;
+}): Promise<ActionResult> {
+  try {
+    const { session, detail, workspaceId } = await requireEditableWorkspace(input.tenderId, "bids.edit");
+    const supabase = getServerSupabase();
+    const { data: item, error: itemError } = await supabase
+      .from("agenttender_bid_checklist_items")
+      .select("id")
+      .eq("id", input.checklistItemId).eq("workspace_id", workspaceId)
+      .eq("company_id", session.companyId).maybeSingle();
+    if (itemError) throw new Error(itemError.message);
+    if (!item) return { ok: false, error: "Checklist item not found." };
+    const { data: document, error: documentError } = await supabase
+      .from("agenttender_bid_workspace_documents").select("id, title")
+      .eq("id", input.sourceDocumentId).eq("company_id", session.companyId)
+      .eq("workspace_id", workspaceId).eq("tender_id", detail.id)
+      .eq("status", "ready").maybeSingle();
+    if (documentError) throw new Error(documentError.message);
+    if (!document) return { ok: false, error: "SharePoint upload was not found." };
+    await setChecklistManualMatch({ itemId: input.checklistItemId, workspaceId, companyId: session.companyId, workspaceDocumentId: document.id });
+    await insertTenderActivity({ tenderId: input.tenderId, companyId: session.companyId, eventType: "workspace_document_uploaded", summary: "Workspace document uploaded", payload: { title: document.title, checklistItemId: input.checklistItemId }, actorUserId: session.user.id });
+    revalidateWorkspace(input.tenderId);
+    return { ok: true };
+  } catch (error) { return { ok: false, error: error instanceof Error ? error.message : "Unable to register checklist document." }; }
 }
 
 export type AddChecklistRequirementResult =
