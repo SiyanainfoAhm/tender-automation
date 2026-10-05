@@ -21,10 +21,6 @@ import {
   type DocumentCategory,
 } from "@/lib/company/types";
 import { getServerSupabase } from "@/lib/db/server";
-import {
-  CLASSIFICATION_DECISION_LABELS,
-  CLASSIFICATION_REQUIRED_ACTIONS,
-} from "@/lib/tender-classification";
 import { resolveTenderArtifactUrls } from "@/lib/tenders/resolve-document-urls";
 import { CompanyAccessError } from "@/server/auth/company-access";
 import { requirePermissionStrict } from "@/server/auth/permissions";
@@ -502,16 +498,10 @@ export async function markBidSubmittedAction(input: {
       })
       .eq("id", input.tenderId);
 
-    // qualification_results can still hold Will Bid / GO. Detail and analysis
-    // read that row, so replace it once the bid is submitted.
-    await supabase
-      .from("agenttender_qualification_results")
-      .update({
-        status: "SUBMITTED",
-        decision_label: CLASSIFICATION_DECISION_LABELS.SUBMITTED,
-        required_action: CLASSIFICATION_REQUIRED_ACTIONS.SUBMITTED,
-      })
-      .eq("tender_id", input.tenderId);
+    // Keep the AI qualification result unchanged. SUBMITTED is a manual bid
+    // lifecycle event, and deployments may enforce a confidence threshold on
+    // updates to AI qualification rows. Tender qualification_status above is
+    // the canonical status used by the detail page, lists, and dashboards.
 
     await insertTenderActivity({
       tenderId: input.tenderId,

@@ -235,7 +235,11 @@ export async function updateTenderDetailsAction(
           if (clearQualificationError) {
             throw new Error(clearQualificationError.message);
           }
-        } else {
+        // SUBMITTED is a human lifecycle event, not an automated
+        // qualification. Some deployments enforce an AI-confidence rule on
+        // qualification_results; keep that AI record intact and make the
+        // tender row the source of truth for the submitted status.
+        } else if (status !== "SUBMITTED") {
           const { error: qualError } = await supabase
             .from("agenttender_qualification_results")
             .update({
