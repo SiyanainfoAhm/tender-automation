@@ -370,7 +370,7 @@ export async function finalizeWorkspaceDirectUploadAction(input: {
   documentType: string;
 }): Promise<ActionResult> {
   try {
-    const { session, detail, workspaceId } = await requireEditableWorkspace(input.tenderId, "bids.edit");
+    const { session, workspaceId } = await requireEditableWorkspace(input.tenderId, "bids.edit");
     const supabase = getServerSupabase();
     const { data: source, error: sourceError } = await supabase
       .from("agenttender_bid_workspace_documents")
@@ -378,7 +378,9 @@ export async function finalizeWorkspaceDirectUploadAction(input: {
       .eq("id", input.sourceDocumentId)
       .eq("company_id", session.companyId)
       .eq("workspace_id", workspaceId)
-      .eq("tender_id", detail.id)
+      // Direct completion stores the route tender ID, which is also the
+      // workspace's tender ID. Do not compare it to a mapped detail DTO ID.
+      .eq("tender_id", input.tenderId)
       .eq("status", "ready")
       .maybeSingle();
     if (sourceError) throw new Error(sourceError.message);
@@ -1512,7 +1514,7 @@ export async function finalizeChecklistDirectUploadAction(input: {
   sourceDocumentId: string;
 }): Promise<ActionResult> {
   try {
-    const { session, detail, workspaceId } = await requireEditableWorkspace(input.tenderId, "bids.edit");
+    const { session, workspaceId } = await requireEditableWorkspace(input.tenderId, "bids.edit");
     const supabase = getServerSupabase();
     const { data: item, error: itemError } = await supabase
       .from("agenttender_bid_checklist_items")
@@ -1524,7 +1526,7 @@ export async function finalizeChecklistDirectUploadAction(input: {
     const { data: document, error: documentError } = await supabase
       .from("agenttender_bid_workspace_documents").select("id, title")
       .eq("id", input.sourceDocumentId).eq("company_id", session.companyId)
-      .eq("workspace_id", workspaceId).eq("tender_id", detail.id)
+      .eq("workspace_id", workspaceId).eq("tender_id", input.tenderId)
       .eq("status", "ready").maybeSingle();
     if (documentError) throw new Error(documentError.message);
     if (!document) return { ok: false, error: "SharePoint upload was not found." };

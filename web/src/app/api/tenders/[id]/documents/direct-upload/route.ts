@@ -307,6 +307,10 @@ async function completeDirectUpload(
   if (!SECTIONS.has(section)) return jsonError("Invalid document section.");
 
   const completed = await invokeCompleteDirectUpload({
+    // The Edge Function recomputes and validates the workspace path on
+    // completion, so it needs the canonical route tender ID as well as the
+    // server-derived workspace context.
+    tenderId,
     documentId,
     blobPath,
     blobName: blobPath,
