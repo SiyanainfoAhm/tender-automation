@@ -31,22 +31,20 @@ type V2Evidence = {
   ref?: string;
   document?: string;
   page?: number | null;
+  section?: string | null;
 };
 
 type V2ChatResponse = {
   ok?: boolean;
   route?: string;
-  status?: "ANSWERED" | "PREPARING" | string;
+  status?: string;
   answer?: string | null;
-  readiness?: {
-    readiness?: string;
-    message?: string | null;
-  } | null;
   evidence?: V2Evidence[];
   company_evidence?: V2Evidence[];
+  historical_evidence?: V2Evidence[];
+  historical_positive_evidence?: V2Evidence[];
   partial_document_evidence?: boolean;
   model?: string;
-  reason?: string;
   error?: string;
 };
 
@@ -55,130 +53,134 @@ function sseErrorResponse(options: {
   message: string;
   retryable: boolean;
 }): Response {
-  const body =
+  return new Response(
     encodeSseEvent({
       type: "error",
       code: options.code,
       message: options.message,
       retryable: options.retryable,
-    }) + encodeSseEvent({ type: "done" });
-
-  return new Response(body, {
-    status: options.code === "BAD_REQUEST" ? 400 : 429,
-    headers: {
-      "Content-Type": "text/event-stream; charset=utf-8",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
+    }) + encodeSseEvent({ type: "done" }),
+    {
+      status: options.code === "BAD_REQUEST" ? 400 : 429,
+      headers: {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
+      },
     },
-  });
+  );
 }
 
 function getV2Config() {
   const url = process.env.SUPABASE_URL?.replace(/\/$/, "");
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
   if (!url || !serviceRoleKey) {
     throw new Error(
-      "Orchestrator V2 chat is not configured. SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.",
+      "Lightweight Orchestrator V2 chat is not configured. SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.",
     );
   }
-
   return { url, serviceRoleKey };
 }
 
-async function callOrchestratorV2Chat(options: {
+async function callLightV2Chat(options: {
   tenderId: string;
   companyId: string;
   question: string;
+  conversation: Array<{ role: "user" | "assistant"; content: string }>;
   signal?: AbortSignal;
 }): Promise<V2ChatResponse> {
   const { url, serviceRoleKey } = getV2Config();
-  const response = await fetch(
-    `${url}/functions/v1/agenttender-orch-v2-worker`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${serviceRoleKey}`,
-        apikey: serviceRoleKey,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        action: "chat",
-        tender_id: options.tenderId,
-        company_id: options.companyId,
-        question: options.question,
-      }),
-      cache: "no-store",
-      signal: options.signal,
+  const response = await fetch(`${url}/functions/v1/agenttender-orch-v2-chat`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+      "Content-Type": "application/json",
     },
-  );
+    body: JSON.stringify({
+      tender_id: options.tenderId,
+      company_id: options.companyId,
+      question: options.question,
+      conversation: options.conversation,
+    }),
+    cache: "no-store",
+    signal: options.signal,
+  });
 
   const payload = (await response.json().catch(() => ({}))) as V2ChatResponse;
   if (!response.ok || payload.ok === false) {
     throw new Error(
-      payload.error ||
-        `Orchestrator V2 chat failed with HTTP ${response.status}.`,
+      payload.error || `Lightweight V2 chat failed with HTTP ${response.status}.`,
     );
   }
-
   return payload;
 }
 
-function mapV2Sources(options: {
+function evidenceToSources(options: {
   tenderId: string;
   companyId: string;
-  tenderEvidence?: V2Evidence[];
-  companyEvidence?: V2Evidence[];
+  evidence?: V2Evidence[];
+  sourceType: string;
+  fallbackName: string;
 }): AskAiSource[] {
-  const tenderSources = (options.tenderEvidence || []).map((item, index) => {
-    const ref = item.ref || `R${index + 1}`;
-    const documentName = item.document || "Tender document";
+  return (options.evidence || []).map((item, index) => {
+    const ref = item.ref || `${options.sourceType}-${index + 1}`;
+    const documentName = item.document || options.fallbackName;
     return {
       id: ref,
       fileName: documentName,
       pageCount: null,
-      sourceType: "TENDER_DOCUMENT",
+      sourceType: options.sourceType,
       sourceId: ref,
       documentName,
       pageNumber: item.page ?? null,
+      section: item.section ?? null,
       tenderId: options.tenderId,
       companyId: options.companyId,
     } satisfies AskAiSource;
   });
-
-  const companySources = (options.companyEvidence || []).map((item, index) => {
-    const ref = item.ref || `C${index + 1}`;
-    const documentName = item.document || "Company record";
-    return {
-      id: ref,
-      fileName: documentName,
-      pageCount: null,
-      sourceType: "COMPANY_DOCUMENT",
-      sourceId: ref,
-      documentName,
-      pageNumber: item.page ?? null,
-      tenderId: options.tenderId,
-      companyId: options.companyId,
-    } satisfies AskAiSource;
-  });
-
-  return [...tenderSources, ...companySources];
 }
 
-function buildRetrievalMeta(options: {
+function mapSources(result: V2ChatResponse, tenderId: string, companyId: string) {
+  return [
+    ...evidenceToSources({
+      tenderId,
+      companyId,
+      evidence: result.evidence,
+      sourceType: "TENDER_DOCUMENT",
+      fallbackName: "Tender document",
+    }),
+    ...evidenceToSources({
+      tenderId,
+      companyId,
+      evidence: result.company_evidence,
+      sourceType: "COMPANY_DOCUMENT",
+      fallbackName: "Company document",
+    }),
+    ...evidenceToSources({
+      tenderId,
+      companyId,
+      evidence: result.historical_evidence,
+      sourceType: "SUBMITTED_BID_DOCUMENT",
+      fallbackName: "Submitted bid evidence",
+    }),
+    ...evidenceToSources({
+      tenderId,
+      companyId,
+      evidence: result.historical_positive_evidence,
+      sourceType: "HISTORICAL_POSITIVE_RFP",
+      fallbackName: "Historical positive tender evidence",
+    }),
+  ];
+}
+
+function buildMeta(options: {
   action: AskAiAction;
   startedAt: number;
-  result?: V2ChatResponse;
+  result: V2ChatResponse;
+  streamed: boolean;
 }): AskAiRetrievalMeta {
-  const result = options.result;
-  const indexStatus =
-    result?.status === "PREPARING"
-      ? "indexing"
-      : result?.partial_document_evidence
-        ? "partial"
-        : "ready";
-
   return {
     action: options.action,
     queryEmbeddingMs: 0,
@@ -190,20 +192,21 @@ function buildRetrievalMeta(options: {
     promptBuildMs: 0,
     llmMs: 0,
     totalMs: Date.now() - options.startedAt,
-    tenderChunks: result?.evidence?.length || 0,
-    companyChunks: result?.company_evidence?.length || 0,
+    tenderChunks: options.result.evidence?.length || 0,
+    companyChunks: options.result.company_evidence?.length || 0,
     contextTokensApprox: 0,
-    indexStatus,
-    streamed: true,
-    promptVersion: "ORCHESTRATOR_V2_CHAT",
-    retrievalVersion: result?.route || "ORCHESTRATOR_V2_CHAT",
+    indexStatus: options.result.partial_document_evidence ? "partial" : "ready",
+    streamed: options.streamed,
+    promptVersion: "ORCHESTRATOR_V2_LIGHT_CHAT",
+    retrievalVersion: options.result.route || "ORCHESTRATOR_V2_LIGHT_CHAT",
   };
 }
 
-function createV2SseResponse(options: {
+function createSseResponse(options: {
   tenderId: string;
   companyId: string;
   question: string;
+  conversation: Array<{ role: "user" | "assistant"; content: string }>;
   action: AskAiAction;
   requestSignal: AbortSignal;
   release: () => void;
@@ -211,112 +214,73 @@ function createV2SseResponse(options: {
   const encoder = new TextEncoder();
   const abort = new AbortController();
   const startedAt = Date.now();
-
   const onDisconnect = () => abort.abort();
   options.requestSignal.addEventListener("abort", onDisconnect, { once: true });
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
-      const send = (event: Parameters<typeof encodeSseEvent>[0]) => {
+      const send = (event: Parameters<typeof encodeSseEvent>[0]) =>
         controller.enqueue(encoder.encode(encodeSseEvent(event)));
-      };
 
       try {
         send({
           type: "status",
           stage: "retrieving",
-          message: "Searching Orchestrator V2 evidence...",
+          message: "Checking tender, company and past-bid evidence...",
         });
 
-        const result = await callOrchestratorV2Chat({
+        const result = await callLightV2Chat({
           tenderId: options.tenderId,
           companyId: options.companyId,
           question: options.question,
+          conversation: options.conversation,
           signal: abort.signal,
         });
-
-        if (result.status === "PREPARING") {
-          send({
-            type: "status",
-            stage: "indexing",
-            message:
-              result.readiness?.message ||
-              result.reason ||
-              "Preparing Orchestrator V2 evidence for this tender...",
-          });
-          send({
-            type: "done",
-            retrievalMeta: buildRetrievalMeta({
-              action: options.action,
-              startedAt,
-              result,
-            }),
-          });
-          return;
-        }
 
         if (result.status !== "ANSWERED" || !result.answer) {
           send({
             type: "error",
             code: "INTERNAL_ERROR",
-            message:
-              result.error ||
-              result.reason ||
-              "Orchestrator V2 did not return an answer.",
+            message: result.error || "V2 chat did not return an answer.",
             retryable: true,
           });
           send({ type: "done" });
           return;
         }
 
-        const sources = mapV2Sources({
-          tenderId: options.tenderId,
-          companyId: options.companyId,
-          tenderEvidence: result.evidence,
-          companyEvidence: result.company_evidence,
-        });
-
+        const sources = mapSources(result, options.tenderId, options.companyId);
         const warnings = result.partial_document_evidence
           ? [
-              "Orchestrator V2 answered from partial document evidence; verify missing attachments before making a final bid decision.",
+              "Current tender evidence is limited. The answer uses available evidence only; no OCR, extraction, indexing or embedding job was started.",
             ]
           : [];
 
         send({
           type: "status",
           stage: "generating",
-          message: "Preparing Orchestrator V2 answer...",
+          message: "Preparing answer...",
         });
         send({ type: "delta", text: result.answer });
         send({ type: "sources", sources, warnings });
         send({
           type: "done",
-          retrievalMeta: buildRetrievalMeta({
+          retrievalMeta: buildMeta({
             action: options.action,
             startedAt,
             result,
+            streamed: true,
           }),
         });
       } catch (error) {
-        if (abort.signal.aborted) {
-          send({
-            type: "error",
-            code: "REQUEST_CANCELLED",
-            message: "Request cancelled.",
-            retryable: false,
-          });
-          send({ type: "done" });
-          return;
-        }
-
         send({
           type: "error",
-          code: "INTERNAL_ERROR",
-          message:
-            error instanceof Error
+          code: abort.signal.aborted ? "REQUEST_CANCELLED" : "INTERNAL_ERROR",
+          message: abort.signal.aborted
+            ? "Request cancelled."
+            : error instanceof Error
               ? error.message
-              : "Orchestrator V2 chat failed.",
-          retryable: true,
+              : "V2 chat failed.",
+          retryable: !abort.signal.aborted,
         });
         send({ type: "done" });
       } finally {
@@ -374,22 +338,14 @@ export async function POST(request: Request, context: RouteContext) {
       const wantsStream =
         body.stream !== false &&
         (request.headers.get("accept") || "").includes("text/event-stream");
-
       if (wantsStream) {
-        return sseErrorResponse({
-          code: "BAD_REQUEST",
-          message,
-          retryable: false,
-        });
+        return sseErrorResponse({ code: "BAD_REQUEST", message, retryable: false });
       }
       return NextResponse.json({ error: message }, { status: 400 });
     }
 
     if (!id) {
-      return NextResponse.json(
-        { error: "Tender id and message are required." },
-        { status: 400 },
-      );
+      return NextResponse.json({ error: "Tender id is required." }, { status: 400 });
     }
 
     const tender = await getTenderById(id);
@@ -401,7 +357,6 @@ export async function POST(request: Request, context: RouteContext) {
       (typeof body.action === "string" && body.action.trim()
         ? body.action.trim()
         : "GENERAL") as AskAiAction;
-
     const wantsStream =
       body.stream !== false &&
       (request.headers.get("accept") || "").includes("text/event-stream");
@@ -412,29 +367,21 @@ export async function POST(request: Request, context: RouteContext) {
       requestId,
       tenderId: id,
     });
-
     if (!rate.ok) {
       if (wantsStream) {
         return sseErrorResponse({
-          code:
-            rate.code === "CONCURRENT_REQUEST"
-              ? "CONCURRENT_REQUEST"
-              : "RATE_LIMITED",
+          code: rate.code === "CONCURRENT_REQUEST" ? "CONCURRENT_REQUEST" : "RATE_LIMITED",
           message: rate.message,
           retryable: true,
         });
       }
-      return NextResponse.json(
-        { error: rate.message, code: rate.code },
-        { status: 429 },
-      );
+      return NextResponse.json({ error: rate.message, code: rate.code }, { status: 429 });
     }
 
     const concurrency = acquireAskAiConcurrency({
       companyId: session.companyId,
       userId: session.user.id,
     });
-
     if (!concurrency.ok) {
       await insertAiUsageLog({
         requestId,
@@ -445,7 +392,6 @@ export async function POST(request: Request, context: RouteContext) {
         status: "concurrent",
         errorCode: "CONCURRENT_REQUEST",
       });
-
       if (wantsStream) {
         return sseErrorResponse({
           code: "CONCURRENT_REQUEST",
@@ -453,13 +399,11 @@ export async function POST(request: Request, context: RouteContext) {
           retryable: true,
         });
       }
-
       return NextResponse.json(
         { error: concurrency.message, code: concurrency.code },
         { status: 429 },
       );
     }
-
     concurrencyHeld = true;
 
     const release = () => {
@@ -470,10 +414,11 @@ export async function POST(request: Request, context: RouteContext) {
     };
 
     if (wantsStream) {
-      return createV2SseResponse({
+      return createSseResponse({
         tenderId: id,
         companyId: session.companyId,
         question: validated.message,
+        conversation: validated.conversation,
         action,
         requestSignal: request.signal,
         release,
@@ -482,60 +427,33 @@ export async function POST(request: Request, context: RouteContext) {
 
     const startedAt = Date.now();
     try {
-      const result = await callOrchestratorV2Chat({
+      const result = await callLightV2Chat({
         tenderId: id,
         companyId: session.companyId,
         question: validated.message,
+        conversation: validated.conversation,
         signal: request.signal,
       });
-
-      const sources = mapV2Sources({
-        tenderId: id,
-        companyId: session.companyId,
-        tenderEvidence: result.evidence,
-        companyEvidence: result.company_evidence,
-      });
-
-      const retrievalMeta = buildRetrievalMeta({
-        action,
-        startedAt,
-        result,
-      });
-
-      if (result.status === "PREPARING") {
-        return NextResponse.json({
-          answer: null,
-          warnings: [
-            result.readiness?.message ||
-              result.reason ||
-              "Preparing Orchestrator V2 evidence for this tender.",
-          ],
-          sources,
-          retrievalMeta,
-        });
-      }
-
       if (result.status !== "ANSWERED" || !result.answer) {
         return NextResponse.json(
-          {
-            error:
-              result.error ||
-              result.reason ||
-              "Orchestrator V2 did not return an answer.",
-          },
+          { error: result.error || "V2 chat did not return an answer." },
           { status: 502 },
         );
       }
-
       return NextResponse.json({
         answer: result.answer,
         warnings: result.partial_document_evidence
           ? [
-              "Orchestrator V2 answered from partial document evidence; verify missing attachments before making a final bid decision.",
+              "Current tender evidence is limited. The answer uses available evidence only; no OCR, extraction, indexing or embedding job was started.",
             ]
           : [],
-        sources,
-        retrievalMeta,
+        sources: mapSources(result, id, session.companyId),
+        retrievalMeta: buildMeta({
+          action,
+          startedAt,
+          result,
+          streamed: false,
+        }),
       });
     } finally {
       release();
@@ -545,15 +463,12 @@ export async function POST(request: Request, context: RouteContext) {
       releaseAskAiConcurrency({ companyId, userId });
       concurrencyHeld = false;
     }
-
     if (error instanceof CompanyAccessError) {
       return NextResponse.json({ error: error.message }, { status: 403 });
     }
-
     const message =
-      error instanceof Error ? error.message : "Unable to assess this tender.";
-    console.error("[AskAI:OrchestratorV2]", { requestId, error: message });
-
+      error instanceof Error ? error.message : "Unable to answer this tender question.";
+    console.error("[AskAI:V2LightChat]", { requestId, error: message });
     return NextResponse.json(
       { error: message },
       { status: message.toLowerCase().includes("not found") ? 404 : 500 },
