@@ -54,7 +54,7 @@ export function AskAiEmptyState({
         Ask AI about this tender
       </h3>
       <p className="mt-1 text-[12px] leading-relaxed text-slate-500">
-        Ask questions using indexed tender documents and company evidence.
+        Ask using current tender evidence, company documents, and relevant past bid/project evidence.
       </p>
       <div className="mt-3">
         <AskAiQuickActions disabled={disabled} onSelect={onSelect} />
