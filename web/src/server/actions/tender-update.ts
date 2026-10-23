@@ -10,7 +10,9 @@ import {
 import { TENDER_STATUSES, isPostSubmissionStatus, tenderDetailStatusChoices, type TenderStatus } from "@/lib/tender-status";
 import { CompanyAccessError } from "@/server/auth/company-access";
 import { requirePermissionStrict } from "@/server/auth/permissions";
-import { getServerSupabase } from "@/lib/db/server";
+import {
+  getHumanActorServerSupabase,
+} from "@/lib/db/server";
 import { markRefundableFeesPendingRefund } from "@/server/repositories/bidFeeRepository";
 import { insertTenderActivity } from "@/server/repositories/tenderActivityRepository";
 import { getTenderById } from "@/server/repositories/tenderRepository";
@@ -75,7 +77,11 @@ export async function updateTenderDetailsAction(
     const existing = await getTenderById(tenderId);
     if (!existing) return { ok: false, error: "Tender not found." };
 
-    const supabase = getServerSupabase();
+    // `requirePermissionStrict` above validates the custom hashed session,
+    // active membership, and role before this request-scoped service client is
+    // created.  Terminal-status DB guards use these headers to distinguish a
+    // browser-initiated human action from automation.
+    const humanActorSupabase = getHumanActorServerSupabase(session);
     const prevMeta =
       existing.tender.raw_metadata &&
       typeof existing.tender.raw_metadata === "object"
@@ -227,7 +233,7 @@ export async function updateTenderDetailsAction(
            * agenttender_web_tender_list can continue showing the previous
            * qualification status (e.g. DUPLICATE / NO_GO / GO).
            */
-          const { error: clearQualificationError } = await supabase
+          const { error: clearQualificationError } = await humanActorSupabase
             .from("agenttender_qualification_results")
             .delete()
             .eq("tender_id", tenderId);
@@ -240,7 +246,7 @@ export async function updateTenderDetailsAction(
         // qualification_results; keep that AI record intact and make the
         // tender row the source of truth for the submitted status.
         } else if (status !== "SUBMITTED") {
-          const { error: qualError } = await supabase
+          const { error: qualError } = await humanActorSupabase
             .from("agenttender_qualification_results")
             .update({
               status,
@@ -261,7 +267,7 @@ export async function updateTenderDetailsAction(
       }
     }
 
-    const { error } = await supabase
+    const { error } = await humanActorSupabase
       .from("agenttender_tenders")
       .update(patch)
       .eq("id", tenderId);
@@ -278,11 +284,29 @@ export async function updateTenderDetailsAction(
       });
     }
 
+    const statusChanged =
+      payload.qualificationStatus !== undefined &&
+      String(existing.tender.qualification_status || "").toUpperCase() !==
+        String(payload.qualificationStatus || "").toUpperCase();
+    const auditComment = [
+      payload.decisionReason,
+      payload.lostReason,
+      payload.disqualificationReason,
+    ]
+      .map((value) => (typeof value === "string" ? value.trim() : ""))
+      .find(Boolean);
     await insertTenderActivity({
       tenderId,
       companyId: session.companyId,
       eventType: "tender_updated",
-      summary: "Tender details updated",
+      summary: statusChanged ? "Tender status changed" : "Tender details updated",
+      payload: statusChanged
+        ? {
+            previousStatus: existing.tender.qualification_status ?? null,
+            status: payload.qualificationStatus ?? null,
+            comment: auditComment || null,
+          }
+        : undefined,
       actorUserId: session.user.id,
     });
 
