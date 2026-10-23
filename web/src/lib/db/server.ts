@@ -19,6 +19,7 @@ function resolveServiceKey(): string {
 }
 
 let cached: SupabaseClient | null = null;
+let tender247MirrorCached: SupabaseClient | null = null;
 
 /** Server-only Supabase client with service role. Never import from client components. */
 export function getServerSupabase(): SupabaseClient {
@@ -38,6 +39,25 @@ export function getServerSupabase(): SupabaseClient {
     },
   });
   return cached;
+}
+
+/**
+ * Service-role client for the separate Tender247 integration database. It is
+ * deliberately distinct from the canonical application database client.
+ */
+export function getTender247MirrorSupabase(): SupabaseClient {
+  if (tender247MirrorCached) return tender247MirrorCached;
+  const url = requireEnv("TENDER247_MIRROR_SUPABASE_URL");
+  const key = process.env.TENDER247_MIRROR_SUPABASE_SERVICE_ROLE_KEY?.trim();
+  if (!key) {
+    throw new Error(
+      "Missing TENDER247_MIRROR_SUPABASE_SERVICE_ROLE_KEY",
+    );
+  }
+  tender247MirrorCached = createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  });
+  return tender247MirrorCached;
 }
 
 /** @deprecated Prefer `@/lib/errors/app-error` — kept for compatibility. */

@@ -12,6 +12,8 @@
     "create-admin": "tsx scripts/create-admin.ts",
     "seed-initial-admins": "tsx scripts/seed-initial-admins.ts",
     "sync-env": "tsx scripts/sync-env-from-root.ts",
+    "tender247:resume-saved": "tsx scripts/resume-tender247-saved-run.ts",
+    "tender247:audit-historical-gap": "tsx scripts/audit-tender247-historical-gap.ts",
     "index-ai-source": "tsx scripts/index-ai-source.ts",
     "ask-ai-rag-smoke": "tsx scripts/ask-ai-rag-smoke.ts",
     "ask-ai-stream-smoke": "tsx scripts/ask-ai-stream-smoke.ts",

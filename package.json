@@ -31,6 +31,7 @@
     "pipeline:tender247:ai-summary": "tsx src/pipeline/runAiSummaryFirstDocumentPipeline.ts",
     "pipeline:tender247:ai-summary:global": "tsx src/pipeline/runAiSummaryFirstDocumentPipeline.ts --region=GLOBAL",
     "pipeline:tender247:ai-summary:indian": "tsx src/pipeline/runAiSummaryFirstDocumentPipeline.ts --region=INDIAN",
+    "tender247:resume-saved": "npm --prefix web run tender247:resume-saved --",
     "reupsert:screening": "tsx scripts/reupsert-screening-excel.ts",
     "test:pipeline:tender247": "tsx src/pipeline/runTender247CompletePipeline.ts --mode=smoke --limit=5 --chatgpt-limit=1",
     "auth:bidassist": "tsx src/bidassist/bidassistAuth.ts",

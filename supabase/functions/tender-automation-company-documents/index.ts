@@ -5,16 +5,33 @@ import {
 } from "./directUploadSas.ts";
 import {
   createSharePointUploadSession,
+  deleteEmptySharePointFolder,
   deleteSharePointFile,
+  getSharePointItemById,
   getSharePointItemByPath,
   isSharePointStorageUrl,
+  listSharePointFolderRecursive,
+  moveSharePointItem,
   putSharePointUploadChunk,
   readSharePointFile,
   requireSharePointConfig,
   resolveSharePointItem,
+  SharePointGraphError,
   tenderArtifactPath,
   uploadSharePointFile,
 } from "./sharePointStorage.ts";
+
+/** Test-only seams. They are unset in the Edge runtime and therefore do not alter production behavior. */
+type Tender247TestDependencies = {
+  serviceSupabase?: () => ReturnType<typeof createClient>;
+  createSharePointUploadSession?: typeof createSharePointUploadSession;
+  putSharePointUploadChunk?: typeof putSharePointUploadChunk;
+  getSharePointItemByPath?: typeof getSharePointItemByPath;
+};
+let tender247TestDependencies: Tender247TestDependencies | null = null;
+export function __setTender247TestDependenciesForTests(dependencies: Tender247TestDependencies | null) {
+  tender247TestDependencies = dependencies;
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -27,7 +44,41 @@ const MAX_BYTES = 200 * 1024 * 1024;
 const MAX_COMPANY_DOCUMENT_BYTES = 200 * 1024 * 1024;
 const CHUNK_SIZE = 5 * 1024 * 1024;
 const UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
-const ALLOWED_EXT = [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".png", ".jpg", ".jpeg", ".zip"];
+export const TENDER247_SHAREPOINT_SAFE_PATH_LENGTH = 390;
+
+function tender247RecoveryLog(event: string, fields: Record<string, unknown>) {
+  console.info("[tender247-recovery]", { event, ...fields });
+}
+
+function redactedGraphBody(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactedGraphBody);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
+    key,
+    /(?:authorization|token|secret|uploadurl|downloadurl)/i.test(key) ? "[redacted]" : redactedGraphBody(nested),
+  ]));
+}
+
+function tender247RecoveryError(error: unknown) {
+  return {
+    message: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack : undefined,
+    ...(error instanceof SharePointGraphError
+      ? { graphStatus: error.status, graphBody: redactedGraphBody(error.body) }
+      : {}),
+  };
+}
+
+function sanitizedGraphFailureForClient(error: unknown): string {
+  if (!(error instanceof SharePointGraphError)) return "Unable to start SharePoint upload session.";
+  const graphError = error.body && typeof error.body === "object"
+    ? (error.body as { error?: { code?: unknown; message?: unknown } }).error
+    : undefined;
+  const code = typeof graphError?.code === "string" ? graphError.code.slice(0, 120) : null;
+  const message = typeof graphError?.message === "string" ? graphError.message.slice(0, 500) : error.message.slice(0, 500);
+  return `Microsoft Graph createUploadSession failed (HTTP ${error.status}${code ? `, ${code}` : ""}): ${message}`;
+}
+const ALLOWED_EXT = [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".png", ".jpg", ".jpeg", ".zip", ".html", ".htm", ".txt", ".csv", ".xml"];
 const ALLOWED_MIME = [
   "application/pdf",
   "application/msword",
@@ -40,6 +91,11 @@ const ALLOWED_MIME = [
   "image/png",
   "image/jpeg",
   "image/jpg",
+  "text/html",
+  "text/plain",
+  "text/csv",
+  "application/xml",
+  "text/xml",
   "application/octet-stream",
 ];
 const TEMPLATE_SIGN_STAMP_EXTENSIONS = [
@@ -468,7 +524,7 @@ async function uploadAzureBlob(
       "x-ms-blob-content-disposition": `${disposition}; filename="${safeName}"`,
       "x-ms-version": "2020-10-02",
     },
-    body: bytes,
+    body: Uint8Array.from(bytes).buffer,
   });
 
   if (!put.ok) {
@@ -528,13 +584,15 @@ async function stageAzureBlock(
     blobName,
     `comp=block&blockid=${encodeURIComponent(blockId)}`,
   );
+  const chunkBuffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(chunkBuffer).set(bytes);
   const put = await fetch(url, {
     method: "PUT",
     headers: {
       "x-ms-version": "2020-10-02",
       "Content-Length": String(bytes.byteLength),
     },
-    body: bytes,
+    body: chunkBuffer,
   });
   if (!put.ok) {
     const body = await put.text();
@@ -824,7 +882,7 @@ async function listAzureBlobsUnderPrefix(
   const names: ListedBlob[] = [];
   for await (const blob of container.listBlobsFlat({
     prefix,
-    include: includeDeleted ? ["deleted"] : undefined,
+    includeDeleted,
   })) {
     if (!blob.name) continue;
     names.push({
@@ -1061,6 +1119,9 @@ async function handleBlobResolve(
 }
 
 function serviceSupabase() {
+  if (tender247TestDependencies?.serviceSupabase) {
+    return tender247TestDependencies.serviceSupabase();
+  }
   const url = Deno.env.get("SUPABASE_URL")?.trim();
   const key =
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")?.trim() ||
@@ -3526,6 +3587,375 @@ function requireServiceRole(req: Request) {
   }
 }
 
+const TENDER247_SOURCE = "TENDER247";
+
+function requireUuid(value: unknown, label: string) {
+  const text = String(value || "").trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)) {
+    throw new HttpError(400, `Invalid ${label}.`);
+  }
+  return text;
+}
+
+function tender247ExternalDocumentId(value: unknown) {
+  const id = String(value || "").trim().replace(/[\r\n]/g, "");
+  if (!id || id.length > 256 || /[\\/]|\.\./.test(id)) {
+    throw new HttpError(400, "Invalid externalDocumentId.");
+  }
+  return id;
+}
+
+function tender247FileName(value: unknown) {
+  // Tender247 filenames are external display data, not paths. Never use them
+  // as paths, but do not reject an otherwise uploadable document merely
+  // because its source label has a slash, reserved name, or punctuation.
+  const raw = String(value || "").trim().replace(/[\r\n\x00-\x1f]/g, "");
+  if (!raw) throw new HttpError(400, "Invalid filename.");
+  const pathSegments = raw.split(/[\\/]+/).filter(Boolean);
+  // A real traversal component remains a request-integrity error; only the
+  // final display segment is eligible for source-name sanitization.
+  if (pathSegments.some((segment) => segment === "." || segment === "..")) throw new HttpError(400, "Invalid filename.");
+  const fileName = pathSegments.pop() || raw;
+  // Tender247 supplies filenames from many external portals. Keep the
+  // extension but normalize unsafe SharePoint characters instead of failing
+  // an otherwise valid document because its display name contains a path-ish
+  // sequence or punctuation.
+  // Do not pre-truncate here: the path-aware resolver below preserves the
+  // extension and applies the actual SharePoint relative-path budget.
+  const sanitized = sanitizeTenderArtifactFileName(fileName).replace(/[. ]+$/g, "");
+  if (!sanitized || sanitized === "." || sanitized === "..") return "tender247-document";
+  // Windows/SharePoint reserved device names are invalid even with ordinary
+  // extensions. Prefixing is stable and retains the source extension.
+  const stem = sanitized.replace(/\.[^.]*$/, "").toUpperCase();
+  return /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/.test(stem) ? `_${sanitized}` : sanitized;
+}
+
+function tender247ScrapedDate(value: unknown) {
+  const date = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new HttpError(400, "Invalid scrapedDate.");
+  return date;
+}
+
+function tender247PathWithStoredFileName(tenderId: string, storedFileName: string, scrapedDate: string, config = requireSharePointConfig()) {
+  return tenderArtifactPath(config, {
+    portal: "tender247",
+    // This is the persisted pipeline run date, never the Edge runtime date.
+    date: scrapedDate,
+    tenderId,
+    fileName: storedFileName,
+  });
+}
+
+function stableTender247FilenameHash(value: string) {
+  // Stable, non-secret 64-bit FNV-1a: sufficient to disambiguate truncated
+  // external document names without adding a random value to the path.
+  let hash = 0xcbf29ce484222325n;
+  for (const character of value) {
+    hash ^= BigInt(character.codePointAt(0) || 0);
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return hash.toString(16).padStart(16, "0").slice(0, 12);
+}
+
+export function resolveTender247StoredFilename(tenderId: string, externalId: string, originalFilename: string, scrapedDate: string) {
+  const config = requireSharePointConfig();
+  const sanitized = sanitizeTenderArtifactFileName(originalFilename);
+  const placeholder = tender247PathWithStoredFileName(tenderId, "x", scrapedDate, config);
+  const parentLength = placeholder.length - 1;
+  const available = TENDER247_SHAREPOINT_SAFE_PATH_LENGTH - parentLength;
+  if (sanitized.length <= available) {
+    return { originalFilename, storedFilename: sanitized, filenameShortened: false, targetRelativePathLength: parentLength + sanitized.length };
+  }
+  const lastDot = sanitized.lastIndexOf(".");
+  const base = lastDot > 0 ? sanitized.slice(0, lastDot) : sanitized;
+  const extension = lastDot > 0 ? sanitized.slice(lastDot) : "";
+  const suffix = `__${stableTender247FilenameHash(`${externalId}\u0000${sanitized}`)}${extension}`;
+  const baseLength = available - suffix.length;
+  if (baseLength < 1) throw new HttpError(400, "Tender247 SharePoint path is too long to preserve the file extension.");
+  const storedFilename = `${base.slice(0, baseLength)}${suffix}`;
+  return { originalFilename, storedFilename, filenameShortened: true, targetRelativePathLength: parentLength + storedFilename.length };
+}
+
+export function tender247DocumentPath(tenderId: string, externalId: string, fileName: string, scrapedDate: string) {
+  return tender247PathWithStoredFileName(tenderId, resolveTender247StoredFilename(tenderId, externalId, fileName, scrapedDate).storedFilename, scrapedDate);
+}
+
+function tender247StageMetadata(value: unknown) {
+  const stage = value && typeof value === "object" ? value as Record<string, unknown> : null;
+  const stagedId = String(stage?.staged_id || "");
+  const stagedSize = Number(stage?.staged_size);
+  const stagedFilename = String(stage?.staged_filename || "");
+  const stagedContentType = String(stage?.staged_content_type || "");
+  const stagedExpiresAt = String(stage?.staged_expires_at || "");
+  if (!stage) return null;
+  if (!/^[0-9a-f-]{36}$/i.test(stagedId) || !Number.isSafeInteger(stagedSize) || stagedSize <= 0 || !stagedFilename || stagedFilename.length > 255 || !stagedContentType || stagedContentType.length > 255 || !Number.isFinite(Date.parse(stagedExpiresAt))) throw new HttpError(400, "Invalid staged document metadata.");
+  return { staged_id: stagedId, staged_size: stagedSize, staged_filename: stagedFilename, staged_content_type: stagedContentType, staged_expires_at: stagedExpiresAt };
+}
+
+function publicTenderDocument(doc: Record<string, unknown>) {
+  const { graph_upload_url: _graphUploadUrl, ...safe } = doc;
+  return safe;
+}
+
+async function failTender247Upload(supabase: ReturnType<typeof serviceSupabase>, sessionId: string, documentId: string, message: string) {
+  const now = new Date().toISOString();
+  await supabase.from("agenttender_tender_document_upload_sessions")
+    .update({ status: "FAILED", updated_at: now })
+    .eq("id", sessionId).neq("status", "COMPLETED");
+  await supabase.from("agenttender_tender_documents")
+    .update({ storage_status: "FAILED", updated_at: now })
+    .eq("id", documentId).neq("storage_status", "COMPLETED");
+  console.error("[tender247-upload] failed", { sessionId, documentId, message });
+}
+
+function tender247CorrectionPath(value: unknown, date: "2026-10-08" | "2026-10-09") {
+  const path = String(value || "").trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const root = `${requireSharePointConfig().rootFolder}/tender247/${date}/`;
+  if (!path.startsWith(root) || path.includes("..")) throw new HttpError(400, "Invalid Tender247 correction path.");
+  return path;
+}
+
+/** Graph-only operations for the audited wrong-date repair worker. */
+export async function handleTender247Correction(req: Request, body: Record<string, unknown>) {
+  requireServiceRole(req);
+  const action = String(body.action || "");
+  const config = requireSharePointConfig();
+  if (action === "tender247-correction-inspect") {
+    const itemId = String(body.driveItemId || "").trim();
+    if (!itemId) throw new HttpError(400, "Missing driveItemId.");
+    return json({ item: await getSharePointItemById(itemId, config) });
+  }
+  if (action === "tender247-correction-move") {
+    const itemId = String(body.driveItemId || "").trim();
+    const targetFolderPath = tender247CorrectionPath(body.targetFolderPath, "2026-10-08");
+    const targetName = tender247FileName(body.targetName);
+    if (!itemId) throw new HttpError(400, "Missing driveItemId.");
+    const source = await getSharePointItemById(itemId, config);
+    if (!source) throw new HttpError(404, "Source drive item not found.");
+    const target = await getSharePointItemByPath(`${targetFolderPath}/${targetName}`, config);
+    if (target && target.id !== source.id) return json({ status: "COLLISION", source, target });
+    const moved = target?.id === source.id ? source : await moveSharePointItem(itemId, targetFolderPath, targetName, config);
+    const verified = await getSharePointItemById(moved.id || itemId, config);
+    if (!verified) throw new HttpError(502, "Moved drive item could not be verified.");
+    return json({ status: target ? "ALREADY_CORRECT" : "MOVED", item: verified });
+  }
+  if (action === "tender247-correction-list-old") {
+    const oldFolder = tender247CorrectionPath(`${config.rootFolder}/tender247/2026-10-09`, "2026-10-09");
+    return json({ items: await listSharePointFolderRecursive(oldFolder, config) });
+  }
+  if (action === "tender247-correction-delete-old") {
+    const oldFolder = tender247CorrectionPath(`${config.rootFolder}/tender247/2026-10-09`, "2026-10-09");
+    const deleted = await deleteEmptySharePointFolder(oldFolder, config);
+    return json({ deleted, remaining: deleted ? 0 : (await listSharePointFolderRecursive(oldFolder, config)).length });
+  }
+  throw new HttpError(400, "Unsupported Tender247 correction action.");
+}
+
+export async function handleCreateTender247UploadSession(req: Request, body: Record<string, unknown>) {
+  tender247RecoveryLog("create-session.action-entered", {});
+  requireServiceRole(req);
+  const tenderId = requireUuid(body.tenderId, "tenderId");
+  const scrapedDate = tender247ScrapedDate(body.scrapedDate);
+  const externalDocumentId = tender247ExternalDocumentId(body.externalDocumentId);
+  const existingDocumentId = body.existingCanonicalDocumentId == null ? null : requireUuid(body.existingCanonicalDocumentId, "existingCanonicalDocumentId");
+  const filename = tender247FileName(body.filename);
+  const mimeType = String(body.mimeType || "application/octet-stream").trim().toLowerCase();
+  const expectedBytes = Number(body.expectedBytes);
+  const stagedMetadata = tender247StageMetadata(body.stagedMetadata);
+  const logFields = { canonicalDocumentId: existingDocumentId, canonicalTenderId: tenderId, externalDocumentId };
+  tender247RecoveryLog("create-session.request-accepted", logFields);
+  tender247RecoveryLog("create-session.existing-canonical-document-id-received", logFields);
+  if (stagedMetadata && Number.isSafeInteger(expectedBytes) && expectedBytes > 0 && (stagedMetadata.staged_size !== expectedBytes || new Date(stagedMetadata.staged_expires_at).getTime() <= Date.now())) {
+    throw new HttpError(400, "Staged document metadata does not match the upload.");
+  }
+  const supabase = serviceSupabase();
+  const { data: tender, error: tenderError } = await supabase.from("agenttender_tenders")
+    .select("id").eq("id", tenderId).maybeSingle();
+  tender247RecoveryLog("create-session.canonical-tender-lookup", { ...logFields, found: Boolean(tender), error: tenderError?.message || null });
+  if (tenderError) throw new Error(tenderError.message);
+  if (!tender) throw new HttpError(404, "Tender not found.");
+
+  let documentQuery = supabase.from("agenttender_tender_documents")
+    .select("*").eq("tender_id", tenderId).eq("external_source", TENDER247_SOURCE)
+    .eq("external_document_id", externalDocumentId);
+  if (existingDocumentId) documentQuery = documentQuery.eq("id", existingDocumentId);
+  let { data: document, error: documentError } = await documentQuery.maybeSingle();
+  if (documentError) throw new Error(documentError.message);
+  tender247RecoveryLog("create-session.canonical-row-guard-lookup", {
+    ...logFields, found: Boolean(document), matchedExistingCanonicalDocumentId: Boolean(existingDocumentId && document?.id === existingDocumentId),
+  });
+  // Recovery is allowed to mutate one identified canonical row, never create
+  // a substitute row if its legacy identity no longer resolves.
+  if (existingDocumentId && (!document || document.id !== existingDocumentId)) {
+    throw new HttpError(409, "DOCUMENT_CREATION_GUARD: existing canonical Tender247 document was not found.");
+  }
+  if (document?.storage_status === "COMPLETED" && String(document.storage_url || "").trim() && String(document.sharepoint_drive_item_id || "").trim()) {
+    return json({ status: "ALREADY_STORED", document: publicTenderDocument(document) });
+  }
+  // Allow the web worker to check the durable document identity before it
+  // downloads a manifest item whose upstream response omits Content-Length.
+  // A new/resumed Graph session still requires a verified positive byte count.
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes <= 0) {
+    const { data: existingSession } = document ? await supabase.from("agenttender_tender_document_upload_sessions").select("*")
+      .eq("tender_document_id", document.id).eq("status", "ACTIVE").maybeSingle() : { data: null };
+    if (existingSession && (!existingSession.expires_at || new Date(existingSession.expires_at).getTime() > Date.now())) {
+      return json({ status: "UPLOAD_REQUIRED", documentId: document.id, sessionId: existingSession.id, chunkSize: CHUNK_SIZE, expectedBytes: Number(existingSession.expected_bytes), nextExpectedByte: Number(existingSession.next_expected_byte || 0), stagedMetadata: existingSession.staging_metadata || null });
+    }
+    return json({ status: "NEEDS_SIZE" });
+  }
+  validateCompanyDocumentFile(filename, mimeType, expectedBytes, MAX_BYTES);
+
+  if (!document) {
+    if (existingDocumentId) throw new HttpError(409, "DOCUMENT_CREATION_GUARD: refusing to create a canonical Tender247 document.");
+    const companyId = (Deno.env.get("COMPANY_ID") || Deno.env.get("SIYANA_COMPANY_ID") || "a1b2c3d4-e5f6-7890-abcd-ef1234567890").trim();
+    const { data, error } = await supabase.from("agenttender_tender_documents").insert({
+      tender_id: tenderId, company_id: companyId, section: "tender", entity_type: "manual",
+      file_name: filename, original_name: filename, mime_type: mimeType, file_size_bytes: expectedBytes,
+      storage_provider: "sharepoint", external_source: TENDER247_SOURCE,
+      external_document_id: externalDocumentId, storage_status: "PENDING",
+    }).select("*").maybeSingle();
+    if (error && !/duplicate|unique/i.test(error.message)) throw new Error(error.message);
+    document = data;
+    if (!document) {
+      const replay = await supabase.from("agenttender_tender_documents").select("*")
+        .eq("tender_id", tenderId).eq("external_source", TENDER247_SOURCE).eq("external_document_id", externalDocumentId).maybeSingle();
+      if (replay.error) throw new Error(replay.error.message);
+      document = replay.data;
+    }
+  }
+  if (!document) throw new HttpError(500, "Unable to create tender document.");
+
+  const now = Date.now();
+  const { data: active } = await supabase.from("agenttender_tender_document_upload_sessions").select("*")
+    .eq("tender_document_id", document.id).eq("status", "ACTIVE").maybeSingle();
+  tender247RecoveryLog("create-session.upload-session-db-lookup", { ...logFields, documentId: document.id, activeSessionFound: Boolean(active), activeSessionId: active?.id || null });
+  if (active && (!active.expires_at || new Date(active.expires_at).getTime() > now)) {
+    if (stagedMetadata) await supabase.from("agenttender_tender_document_upload_sessions").update({ staging_metadata: stagedMetadata, updated_at: new Date().toISOString() }).eq("id", active.id).eq("status", "ACTIVE");
+    return json({ status: "UPLOAD_REQUIRED", documentId: document.id, sessionId: active.id, chunkSize: CHUNK_SIZE, expectedBytes: Number(active.expected_bytes || expectedBytes), nextExpectedByte: Number(active.next_expected_byte || 0), stagedMetadata: stagedMetadata || active.staging_metadata || null });
+  }
+  if (active) await supabase.from("agenttender_tender_document_upload_sessions").update({ status: "EXPIRED", updated_at: new Date().toISOString() }).eq("id", active.id).eq("status", "ACTIVE");
+
+  const sharePoint = requireSharePointConfig();
+  const storedFile = resolveTender247StoredFilename(tenderId, externalDocumentId, filename, scrapedDate);
+  const targetPath = tender247DocumentPath(tenderId, externalDocumentId, filename, scrapedDate);
+  tender247RecoveryLog("create-session.target-date-resolved", { ...logFields, scrapedDate });
+  tender247RecoveryLog("create-session.target-filename-resolved", {
+    ...logFields, originalFilename: storedFile.originalFilename, storedFilename: storedFile.storedFilename,
+    filenameShortened: storedFile.filenameShortened, targetRelativePathLength: storedFile.targetRelativePathLength,
+  });
+  tender247RecoveryLog("create-session.target-sharepoint-path-resolved", {
+    ...logFields, targetPath, graphRequestPath: `/drives/{resolved-drive-id}/root:/${targetPath}:/createUploadSession`,
+  });
+  // A prior interrupted finalize may have left a physical item but incomplete
+  // canonical metadata. Reuse only the deterministic canonical path; never
+  // search by filename or create a second SharePoint file.
+  const existingItem = tender247TestDependencies
+    ? await tender247TestDependencies.getSharePointItemByPath?.(targetPath, sharePoint) || null
+    : await getSharePointItemByPath(targetPath, sharePoint);
+  tender247RecoveryLog("create-session.existing-sharepoint-item-lookup", { ...logFields, found: Boolean(existingItem), itemId: existingItem?.id || null });
+  if (existingItem?.id && existingItem.webUrl) {
+    const nowIso = new Date().toISOString();
+    const { data: reconciled, error: reconcileError } = await supabase.from("agenttender_tender_documents").update({
+      storage_url: existingItem.webUrl, sharepoint_drive_item_id: existingItem.id, storage_provider: "sharepoint",
+      storage_status: "COMPLETED", completed_at: nowIso, updated_at: nowIso,
+    }).eq("id", document.id).neq("storage_status", "COMPLETED").select("*").single();
+    if (reconcileError || !reconciled) throw new Error(reconcileError?.message || "Unable to reconcile existing SharePoint item.");
+    return json({ status: "ALREADY_STORED", document: publicTenderDocument(reconciled) });
+  }
+  let created;
+  try {
+    tender247RecoveryLog("create-session.graph-upload-session-request-starting", logFields);
+    created = await (tender247TestDependencies?.createSharePointUploadSession || createSharePointUploadSession)(targetPath, sharePoint, {
+      overwrite: true,
+      onGraphResponse: ({ operation, status, body }) => tender247RecoveryLog("create-session.graph-upload-session-response", {
+        ...logFields, operation, graphStatus: status, graphBody: redactedGraphBody(body),
+      }),
+    });
+    if (created.existed) throw new Error("Unexpected existing SharePoint item.");
+  } catch (error) {
+    tender247RecoveryLog("create-session.graph-upload-session-exception", { ...logFields, ...tender247RecoveryError(error) });
+    await supabase.from("agenttender_tender_documents").update({ storage_status: "FAILED" }).eq("id", document.id).neq("storage_status", "COMPLETED");
+    tender247RecoveryLog("create-session.http-500-returned", { ...logFields, point: "createSharePointUploadSession", ...tender247RecoveryError(error) });
+    throw new HttpError(500, sanitizedGraphFailureForClient(error));
+  }
+  const expiration = created.session.expirationDateTime || new Date(now + UPLOAD_SESSION_TTL_MS).toISOString();
+  tender247RecoveryLog("create-session.upload-session-db-create-starting", { ...logFields, documentId: document.id });
+  const { data: session, error: sessionError } = await supabase.from("agenttender_tender_document_upload_sessions").insert({
+    tender_document_id: document.id, tender_id: tenderId, external_document_id: externalDocumentId,
+    graph_upload_url: created.session.uploadUrl, next_expected_byte: 0, expected_bytes: expectedBytes,
+    expires_at: expiration, status: "ACTIVE", staging_metadata: stagedMetadata,
+  }).select("*").single();
+  if (sessionError) throw new Error(sessionError.message);
+  tender247RecoveryLog("create-session.upload-session-db-create-completed", { ...logFields, documentId: document.id, sessionId: session.id });
+  await supabase.from("agenttender_tender_documents").update({ storage_status: "UPLOADING", updated_at: new Date().toISOString() }).eq("id", document.id).neq("storage_status", "COMPLETED");
+  return json({ status: "UPLOAD_REQUIRED", documentId: document.id, sessionId: session.id, chunkSize: CHUNK_SIZE, expectedBytes, nextExpectedByte: 0, stagedMetadata: session.staging_metadata || null });
+}
+
+export async function handleUploadTender247Chunk(req: Request) {
+  requireServiceRole(req);
+  const sessionId = requireUuid(req.headers.get("x-tender247-session-id"), "sessionId");
+  const documentId = requireUuid(req.headers.get("x-tender247-document-id"), "documentId");
+  const startByte = Number(req.headers.get("x-tender247-start-byte"));
+  const endByte = Number(req.headers.get("x-tender247-end-byte"));
+  const totalBytes = Number(req.headers.get("x-tender247-total-bytes"));
+  if (!Number.isSafeInteger(startByte) || startByte < 0 || !Number.isSafeInteger(endByte) || endByte < startByte || !Number.isSafeInteger(totalBytes) || totalBytes <= 0 || endByte >= totalBytes) throw new HttpError(400, "Invalid chunk range.");
+  const bytes = new Uint8Array(await req.arrayBuffer());
+  if (bytes.byteLength !== endByte - startByte + 1) throw new HttpError(400, "Chunk length does not match range.");
+  const supabase = serviceSupabase();
+  const { data: session, error } = await supabase.from("agenttender_tender_document_upload_sessions").select("*").eq("id", sessionId).maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!session || session.tender_document_id !== documentId) throw new HttpError(404, "Upload session not found.");
+  if (session.status !== "ACTIVE") throw new HttpError(409, "Upload session is not active.");
+  if (session.expires_at && new Date(session.expires_at).getTime() <= Date.now()) { await supabase.from("agenttender_tender_document_upload_sessions").update({ status: "EXPIRED" }).eq("id", sessionId); throw new HttpError(410, "Upload session expired."); }
+  if (Number(session.expected_bytes) !== totalBytes || Number(session.next_expected_byte) !== startByte) throw new HttpError(409, "Unexpected chunk range.");
+  const { data: document } = await supabase.from("agenttender_tender_documents").select("*").eq("id", documentId).maybeSingle();
+  if (!document || document.external_source !== TENDER247_SOURCE) throw new HttpError(404, "Tender247 document not found.");
+  if (document.storage_status === "COMPLETED") throw new HttpError(409, "Document is already completed.");
+  const logFields = { sessionId, canonicalDocumentId: documentId, canonicalTenderId: session.tender_id, externalDocumentId: session.external_document_id, sessionStatus: session.status, nextExpectedByte: Number(session.next_expected_byte || 0), requestedByteRange: `${startByte}-${endByte}`, currentOffset: startByte, totalSize: totalBytes };
+  tender247RecoveryLog("chunk.request-accepted", logFields);
+  try {
+    const result = await (tender247TestDependencies?.putSharePointUploadChunk || putSharePointUploadChunk)({ uploadUrl: String(session.graph_upload_url), bytes, start: startByte, totalSize: totalBytes });
+    const nextExpectedByte = Number.isSafeInteger(result.nextExpectedByte) ? result.nextExpectedByte : endByte + 1;
+    await supabase.from("agenttender_tender_document_upload_sessions").update({ next_expected_byte: nextExpectedByte, completion_metadata: result.complete ? result.item : null, updated_at: new Date().toISOString() }).eq("id", sessionId).eq("status", "ACTIVE");
+    tender247RecoveryLog("chunk.graph-upload-completed", { ...logFields, nextExpectedByte, complete: result.complete });
+    return json(result.complete ? { status: "UPLOAD_COMPLETE" } : { status: "CONTINUE", nextExpectedByte });
+  } catch (cause) {
+    // A Graph 429/5xx is normally transient. Leave this durable session ACTIVE
+    // so the web worker can retry the exact range; marking it FAILED makes a
+    // recoverable interruption require a whole new upload session.
+    console.error("[tender247-upload] SharePoint chunk failed", { ...logFields, ...tender247RecoveryError(cause) });
+    throw new HttpError(502, "SharePoint chunk upload failed.");
+  }
+}
+
+export async function handleFinalizeTender247Upload(req: Request, body: Record<string, unknown>) {
+  requireServiceRole(req);
+  const tenderId = requireUuid(body.tenderId, "tenderId");
+  const documentId = requireUuid(body.documentId, "documentId");
+  const sessionId = requireUuid(body.sessionId, "sessionId");
+  const externalDocumentId = tender247ExternalDocumentId(body.externalDocumentId);
+  const supabase = serviceSupabase();
+  const { data: document, error } = await supabase.from("agenttender_tender_documents").select("*").eq("id", documentId).maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!document || document.tender_id !== tenderId || document.external_source !== TENDER247_SOURCE || document.external_document_id !== externalDocumentId) throw new HttpError(404, "Tender247 document not found.");
+  if (document.storage_status === "COMPLETED") return json({ status: "COMPLETED", document: publicTenderDocument(document) });
+  const { data: session, error: sessionError } = await supabase.from("agenttender_tender_document_upload_sessions").select("*").eq("id", sessionId).maybeSingle();
+  if (sessionError) throw new Error(sessionError.message);
+  if (!session || session.tender_document_id !== documentId || session.tender_id !== tenderId || session.external_document_id !== externalDocumentId) throw new HttpError(403, "Upload session does not belong to document.");
+  const item = session.completion_metadata as Record<string, unknown> | null;
+  if (!item || !String(item.webUrl || "").trim() || !String(item.id || "").trim()) throw new HttpError(409, "Upload is not complete.");
+  const now = new Date().toISOString();
+  const { data: updated, error: updateError } = await supabase.from("agenttender_tender_documents").update({
+    storage_url: String(item.webUrl), sharepoint_drive_item_id: String(item.id), storage_provider: "sharepoint",
+    // `item.name` may be the deterministic shortened SharePoint filename.
+    // Keep the source filename already persisted on the canonical row.
+    file_name: String(document.file_name), file_size_bytes: Number(item.size || document.file_size_bytes), storage_status: "COMPLETED", completed_at: now, updated_at: now,
+  }).eq("id", documentId).neq("storage_status", "COMPLETED").select("*").single();
+  if (updateError) throw new Error(updateError.message);
+  await supabase.from("agenttender_tender_document_upload_sessions").update({ status: "COMPLETED", staging_metadata: null, completed_at: now, updated_at: now }).eq("id", sessionId).neq("status", "COMPLETED");
+  return json({ status: "COMPLETED", document: publicTenderDocument(updated) });
+}
+
 function sanitizeTenderArtifactFileName(fileName: string) {
   const trimmed = fileName.trim().replace(/[/\\]/g, "");
   const lastDot = trimmed.lastIndexOf(".");
@@ -3691,7 +4121,7 @@ class ConfigError extends Error {
   }
 }
 
-Deno.serve(async (req) => {
+export async function handleCompanyDocumentsRequest(req: Request) {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
@@ -3703,6 +4133,9 @@ Deno.serve(async (req) => {
     const contentType = req.headers.get("content-type") ?? "";
     const uploadAction = req.headers.get("x-upload-action") ?? "";
 
+    if (uploadAction === "tender247-upload-chunk") {
+      return await handleUploadTender247Chunk(req);
+    }
     if (uploadAction === "upload-chunk" || contentType.includes("application/octet-stream")) {
       return await handleUploadChunk(req);
     }
@@ -3727,6 +4160,15 @@ Deno.serve(async (req) => {
     }
 
     const body = await req.json().catch(() => ({}));
+    if (String(body?.action || "").startsWith("tender247-correction-")) {
+      return await handleTender247Correction(req, body);
+    }
+    if (body?.action === "createTender247UploadSession") {
+      return await handleCreateTender247UploadSession(req, body);
+    }
+    if (body?.action === "finalizeTender247Upload") {
+      return await handleFinalizeTender247Upload(req, body);
+    }
     if (body?.action === "create-upload-session") {
       return await handleCreateUploadSession(req, body);
     }
@@ -3801,4 +4243,8 @@ Deno.serve(async (req) => {
       500,
     );
   }
-});
+}
+
+if (import.meta.main) {
+  Deno.serve(handleCompanyDocumentsRequest);
+}
