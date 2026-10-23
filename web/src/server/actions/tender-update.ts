@@ -10,6 +10,7 @@ import {
 import { TENDER_STATUSES, isPostSubmissionStatus, tenderDetailStatusChoices, type TenderStatus } from "@/lib/tender-status";
 import { CompanyAccessError } from "@/server/auth/company-access";
 import { requirePermissionStrict } from "@/server/auth/permissions";
+import { getCurrentSessionToken } from "@/server/auth/session";
 import {
   getHumanActorServerSupabase,
 } from "@/lib/db/server";
@@ -73,6 +74,10 @@ export async function updateTenderDetailsAction(
     const session = await requirePermissionStrict("tenders.edit");
     const tenderId = payload.tenderId?.trim();
     if (!tenderId) return { ok: false, error: "Tender id is required." };
+    const sessionToken = await getCurrentSessionToken();
+    if (!sessionToken) {
+      return { ok: false, error: "Authentication is required to change tender status." };
+    }
 
     const existing = await getTenderById(tenderId);
     if (!existing) return { ok: false, error: "Tender not found." };
@@ -81,7 +86,7 @@ export async function updateTenderDetailsAction(
     // active membership, and role before this request-scoped service client is
     // created.  Terminal-status DB guards use these headers to distinguish a
     // browser-initiated human action from automation.
-    const humanActorSupabase = getHumanActorServerSupabase(session);
+    const humanActorSupabase = getHumanActorServerSupabase(session, sessionToken);
     const prevMeta =
       existing.tender.raw_metadata &&
       typeof existing.tender.raw_metadata === "object"

@@ -56,6 +56,7 @@ export function getServerSupabase(): SupabaseClient {
  */
 export function humanActorHeaders(
   session: Pick<AuthSession, "sessionId" | "user">,
+  sessionToken: string,
 ): Record<string, string> {
   return {
     "x-agenttender-actor": "human",
@@ -64,11 +65,15 @@ export function humanActorHeaders(
     "x-agenttender-user-id": session.user.id,
     "x-agenttender-actor-user-id": session.user.id,
     "x-agenttender-session-id": session.sessionId,
+    // The database validates this opaque token by hash.  Do not place it in
+    // a browser request or log it.
+    "x-agenttender-session-token": sessionToken,
   };
 }
 
 export function getHumanActorServerSupabase(
   session: Pick<AuthSession, "sessionId" | "user">,
+  sessionToken: string,
 ): SupabaseClient {
   const url = requireEnv("SUPABASE_URL");
   const key = resolveServiceKey();
@@ -86,7 +91,7 @@ export function getHumanActorServerSupabase(
       autoRefreshToken: false,
       detectSessionInUrl: false,
     },
-    global: { headers: humanActorHeaders(session) },
+    global: { headers: humanActorHeaders(session, sessionToken) },
   });
 }
 

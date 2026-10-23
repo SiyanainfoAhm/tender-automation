@@ -454,6 +454,17 @@ export async function getSession(): Promise<AuthSession | null> {
   };
 }
 
+/**
+ * The opaque token is only used server-to-database for guarded writes.  It is
+ * never returned to a client component or browser API.  The database hashes
+ * and validates it against `agenttender_user_sessions` before accepting a
+ * terminal tender status transition.
+ */
+export async function getCurrentSessionToken(): Promise<string | null> {
+  const cookieStore = await cookies();
+  return cookieStore.get(COOKIE_NAME)?.value || null;
+}
+
 export async function requireSession(options?: {
   allowMustChangePassword?: boolean;
 }): Promise<AuthSession> {

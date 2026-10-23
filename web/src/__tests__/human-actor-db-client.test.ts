@@ -9,7 +9,7 @@ describe("humanActorHeaders", () => {
       humanActorHeaders({
         sessionId: "a0ca55d8-5f5a-4e58-b356-8b7ee07bf9fe",
         user: { id: "2f5b1776-c2d9-4265-94bd-5e5d12f96784" },
-      } as never),
+      } as never, "opaque-cookie-token"),
     ).toMatchObject({
       "x-agenttender-actor": "human",
       "x-agenttender-actor-type": "human",
@@ -17,6 +17,7 @@ describe("humanActorHeaders", () => {
       "x-agenttender-user-id": "2f5b1776-c2d9-4265-94bd-5e5d12f96784",
       "x-agenttender-actor-user-id": "2f5b1776-c2d9-4265-94bd-5e5d12f96784",
       "x-agenttender-session-id": "a0ca55d8-5f5a-4e58-b356-8b7ee07bf9fe",
+      "x-agenttender-session-token": "opaque-cookie-token",
     });
   });
 });
