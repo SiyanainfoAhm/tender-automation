@@ -15,35 +15,6 @@ export type AskAiQuickActionDef = {
   primary?: boolean;
 };
 
-export type AskAiQuestionCategory =
-  | "GENERAL_TENDER_INFO"
-  | "SCOPE_OF_WORK"
-  | "EMD"
-  | "DO_WE_QUALIFY"
-  | "REQUIRED_DOCUMENTS"
-  | "TURNOVER"
-  | "EXPERIENCE"
-  | "CERTIFICATIONS"
-  | "PROJECT_COST"
-  | "SUBMISSION_READINESS";
-
-export const ASK_AI_SMART_QUESTIONS: Array<{
-  label: string;
-  category: AskAiQuestionCategory;
-  question: string;
-}> = [
-  { label: "Tender Summary", category: "GENERAL_TENDER_INFO", question: "Summarize this tender, including its estimated value, our eligibility, key requirements and scope of work." },
-  { label: "Scope of Work", category: "SCOPE_OF_WORK", question: "Explain the complete scope of work and what we must actually develop, implement, deliver and maintain." },
-  { label: "EMD Details", category: "EMD", question: "What is the EMD amount, payable amount, applicable exemption and impact on our bidding eligibility?" },
-  { label: "Do We Qualify?", category: "DO_WE_QUALIFY", question: "Evaluate every mandatory pre-qualification condition against our company documents and explain whether we qualify." },
-  { label: "Required Documents", category: "REQUIRED_DOCUMENTS", question: "List every mandatory document required to submit this tender and compare it with our available company documents and checklist." },
-  { label: "Turnover Check", category: "TURNOVER", question: "Do our audited financial statements satisfy the tender's turnover and financial eligibility requirements?" },
-  { label: "Experience Check", category: "EXPERIENCE", question: "Do our past projects and completion certificates satisfy the tender's similar-work experience criteria?" },
-  { label: "Certifications", category: "CERTIFICATIONS", question: "Do we possess all mandatory certifications, registrations and authorizations required by this tender?" },
-  { label: "Project Cost & Profit", category: "PROJECT_COST", question: "Estimate the cost to deliver this tender, suggest a realistic bid price and calculate our expected profit." },
-  { label: "Submission Readiness", category: "SUBMISSION_READINESS", question: "Are we ready to submit this tender? Check every mandatory document, checklist item, signing requirement and submission blocker." },
-];
-
 export const ASK_AI_QUICK_ACTIONS: AskAiQuickActionDef[] = [
   {
     action: "ASSESS_TENDER",
