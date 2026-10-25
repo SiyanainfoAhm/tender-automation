@@ -7,6 +7,8 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
   ASK_AI_PREPARING_KNOWLEDGE_MESSAGE,
+  fetchAskAiUiConfig,
+  type AskAiUiConfig,
   streamAskAiRequest,
   waitForAiIndexReady,
   type AskAiPhase,
@@ -45,6 +47,8 @@ export function TenderAskAiDrawer({
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<AskAiMessage[]>([]);
+  const [uiConfig, setUiConfig] = useState<AskAiUiConfig | null>(null);
+  const [uiConfigStatus, setUiConfigStatus] = useState<"loading" | "ready" | "error">("loading");
   const [phase, setPhase] = useState<AskAiPhase>("idle");
   const [stickToBottom, setStickToBottom] = useState(true);
   const [reindexState, setReindexState] = useState<
@@ -79,6 +83,25 @@ export function TenderAskAiDrawer({
       abortRef.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setUiConfigStatus("loading");
+    fetchAskAiUiConfig(tenderId)
+      .then((config) => {
+        if (cancelled) return;
+        if (!Array.isArray(config.smart_questions)) throw new Error("Invalid V2 chat UI config.");
+        setUiConfig(config);
+        setUiConfigStatus("ready");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setUiConfig(null);
+        setUiConfigStatus("error");
+      });
+    return () => { cancelled = true; };
+  }, [open, tenderId]);
 
   useEffect(() => {
     if (!open) return;
@@ -656,7 +679,7 @@ export function TenderAskAiDrawer({
             Ask AI — {tenderTitle}
           </span>
           <div className="flex shrink-0 items-start border-b border-slate-200">
-            <div className="min-w-0 flex-1"><AskAiHeader tenderTitle={tenderTitle} /></div>
+            <div className="min-w-0 flex-1"><AskAiHeader tenderTitle={tenderTitle} title={uiConfig?.title} subtitle={uiConfig?.subtitle} /></div>
             <div className="flex shrink-0 items-center gap-1 px-3 pt-3">
               <Button variant="outline" size="sm" className="hidden h-7 text-[11px] sm:inline-flex" onClick={newChat}><Plus className="mr-1 size-3" />New Chat</Button>
               <Button variant="ghost" size="icon" className="size-7 lg:hidden" onClick={() => setHistoryOpen((v) => !v)} aria-label="Conversation history"><History className="size-4" /></Button>
@@ -672,7 +695,7 @@ export function TenderAskAiDrawer({
             </aside>
             <main className="flex min-w-0 flex-1 flex-col">
               <AskAiMessageList messages={messages} busy={busy} stickToBottom={stickToBottom} onStickToBottomChange={setStickToBottom} showJumpToLatest={showJumpToLatest} onJumpToLatest={() => setStickToBottom(true)} onQuickAction={onQuickAction} onRetry={(index) => void retryAssistant(index)} onReindex={() => void handleReindex()} reindexState={reindexState} />
-              <AskAiComposer value={input} onChange={setInput} onSend={() => void ask(input)} onSmartQuestion={(question, category) => void ask(question, category)} onStop={stopGenerating} busy={busy} />
+              <AskAiComposer value={input} onChange={setInput} onSend={() => void ask(input)} onSmartQuestion={(question, category) => void ask(question, category)} smartQuestions={uiConfig?.smart_questions ?? []} smartQuestionsStatus={uiConfigStatus} onStop={stopGenerating} busy={busy} />
             </main>
           </div>
           {sessionDialog ? (
