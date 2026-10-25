@@ -209,6 +209,7 @@ function createSseResponse(options: {
   sessionToken: string;
   conversation: Array<{ role: "user" | "assistant"; content: string }>;
   action: AskAiAction;
+  questionCategory?: string | null;
   requestSignal: AbortSignal;
   release: () => void;
 }): Response {
@@ -236,6 +237,7 @@ function createSseResponse(options: {
           question: options.question,
           sessionToken: options.sessionToken,
           conversation: options.conversation,
+          questionCategory: options.questionCategory,
           signal: abort.signal,
         });
 
@@ -437,6 +439,7 @@ export async function POST(request: Request, context: RouteContext) {
         sessionToken,
         conversation: validated.conversation,
         action,
+        questionCategory: SMART_QUESTION_CATEGORIES.has(action) ? action : null,
         requestSignal: request.signal,
         release,
       });
