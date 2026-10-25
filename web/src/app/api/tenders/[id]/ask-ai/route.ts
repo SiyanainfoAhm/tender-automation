@@ -255,7 +255,7 @@ function createSseResponse(options: {
         const sources = mapSources(result, options.tenderId, options.companyId);
         const warnings = result.partial_document_evidence
           ? [
-              "Current tender evidence is limited. The answer uses available evidence only; no OCR, extraction, indexing or embedding job was started.",
+              "Some tender source material could not be verified; review the cited documents before relying on the answer.",
             ]
           : [];
 
@@ -466,7 +466,7 @@ export async function POST(request: Request, context: RouteContext) {
         answer: result.answer,
         warnings: result.partial_document_evidence
           ? [
-              "Current tender evidence is limited. The answer uses available evidence only; no OCR, extraction, indexing or embedding job was started.",
+              "Some tender source material could not be verified; review the cited documents before relying on the answer.",
             ]
           : [],
         sources: mapSources(result, id, session.companyId),
