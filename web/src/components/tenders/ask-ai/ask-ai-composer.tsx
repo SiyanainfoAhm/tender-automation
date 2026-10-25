@@ -3,8 +3,8 @@
 import { Send, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { ASK_AI_SMART_QUESTIONS } from "@/lib/ai/ask-ai-actions";
 import type { AskAiAction } from "@/lib/ai/ask-ai-stream";
+import type { AskAiSmartQuestion } from "@/lib/ai/ask-ai-client";
 
 export function AskAiComposer({
   value,
@@ -12,6 +12,8 @@ export function AskAiComposer({
   onSend,
   onStop,
   onSmartQuestion,
+  smartQuestions,
+  smartQuestionsStatus,
   busy,
   disabled,
 }: {
@@ -20,12 +22,14 @@ export function AskAiComposer({
   onSend: () => void;
   onStop: () => void;
   onSmartQuestion: (question: string, category: AskAiAction) => void;
+  smartQuestions: AskAiSmartQuestion[];
+  smartQuestionsStatus: "loading" | "ready" | "error";
   busy: boolean;
   disabled?: boolean;
 }) {
   return (
     <form
-      className="shrink-0 border-t border-slate-200 bg-white px-3 pb-3 pt-2"
+      className="shrink-0 border-t border-slate-200 bg-white px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2 sm:px-3"
       onSubmit={(event) => {
         event.preventDefault();
         if (busy) {
@@ -36,14 +40,26 @@ export function AskAiComposer({
       }}
       data-testid="ask-ai-composer"
     >
-      <div className="mb-2 flex flex-wrap gap-1.5" role="group" aria-label="Smart questions">
-        {ASK_AI_SMART_QUESTIONS.map((item) => (
+      <div
+        className="mb-2 flex min-w-0 touch-pan-x snap-x snap-mandatory flex-nowrap gap-2 overflow-x-auto overscroll-x-contain pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        role="group"
+        aria-label="V2 smart questions"
+      >
+        {smartQuestionsStatus === "loading" ? (
+          <span className="px-1 py-2 text-xs text-slate-500" role="status">Loading suggested questions…</span>
+        ) : null}
+        {smartQuestionsStatus === "error" ? (
+          <span className="px-1 py-2 text-xs text-slate-500" role="alert">
+            Suggestions are unavailable. You can still type a question.
+          </span>
+        ) : null}
+        {smartQuestions.map((item) => (
           <button
             key={item.category}
             type="button"
             disabled={disabled || busy}
             onClick={() => onSmartQuestion(item.question, item.category)}
-            className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
+            className="min-h-10 shrink-0 snap-start whitespace-nowrap rounded-full border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-700 transition hover:border-slate-400 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
             aria-label={item.label}
             data-testid={`ask-ai-smart-${item.category.toLowerCase()}`}
           >
@@ -72,7 +88,7 @@ export function AskAiComposer({
             type="button"
             size="sm"
             variant="outline"
-            className="h-8 shrink-0 gap-1 px-2.5 text-[11px]"
+            className="h-10 shrink-0 gap-1 px-2.5 text-[11px]"
             onClick={onStop}
             aria-label="Stop generating"
             data-testid="ask-ai-stop"
@@ -84,12 +100,12 @@ export function AskAiComposer({
           <Button
             type="submit"
             size="icon"
-            className="size-8 shrink-0 rounded-lg bg-slate-900 text-white hover:bg-slate-800"
+            className="size-10 shrink-0 rounded-lg bg-slate-900 text-white hover:bg-slate-800"
             disabled={!value.trim() || disabled}
             aria-label="Send question"
             data-testid="ask-ai-send"
           >
-            <Send className="size-3.5" />
+            <Send className="size-4" />
           </Button>
         )}
       </div>
