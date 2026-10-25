@@ -1,5 +1,5 @@
 import {selectEvidenceText} from "./step3-evidence.mjs";
-export const DECISION_VERSION="V2_PROGRESSIVE_DECISIONS_20261025_2";
+export const DECISION_VERSION="V2_PROGRESSIVE_DECISIONS_20261025_3";
 export function cleanAssessment(raw,context){
  const allowed=new Set((context.owner_rules||[]).map(r=>r.code));
  const allowedKnowledge=new Set(context.continuous_learning?.knowledge_ids||[]);

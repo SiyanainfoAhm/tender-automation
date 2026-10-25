@@ -1,7 +1,7 @@
 import {activeRules} from "./policy.mjs";
 
 export const isSummary=(x)=>x.document_kind==="AI_SUMMARY"||/ai[\s_-]*summary/i.test(x.file_name||"");
-export const SCREEN_VERSION="PROGRESSIVE_SCREEN_20261025_2";
+export const SCREEN_VERSION="PROGRESSIVE_SCREEN_20261025_3";
 const norm=s=>String(s||"").replace(/\s+/g," ").trim().toLowerCase();
 export function validateAssessment(raw,sources,rules){
  const evidence=(Array.isArray(raw.evidence)?raw.evidence:[]).filter(e=>{
@@ -12,7 +12,7 @@ export function validateAssessment(raw,sources,rules){
  const unresolved=Array.isArray(raw.unresolved_questions)?raw.unresolved_questions.map(String).slice(0,20):["Assessment incomplete"];
  const requirements=(Array.isArray(raw.requirements)?raw.requirements:[]).filter(r=>sources.some(s=>s.ref===r.ref&&s.document_kind!=="AI_SUMMARY"&&norm(r.quote).length>=25&&norm(s.text).includes(norm(r.quote)))).slice(0,60);
  const scopeCodes=new Set(["HARDWARE","MANPOWER","NON_IT_SERVICES","TRAINING_ONLY","SOFTWARE_RESALE","STANDALONE_SOFTWARE_AMC","KIOSK","PROPRIETARY_ONLY","PAC_PROPRIETARY_PRODUCT","CCTV_GPS_CONTROL_ROOM","GIS_SURVEY_PROCESSING","TELECOM_NETWORK_INFRASTRUCTURE","SPEECH_DATA_COLLECTION_TRANSCRIPTION","CYBER_SECURITY","SOFTWARE_LICENSE_SUBSCRIPTION_RENEWAL","INDUSTRIAL_MONITORING_DATA_TRANSMISSION_AMC","ICCC_EXISTING_O_AND_M","READY_MADE_SOFTWARE"]);
- const scopeExclusions=exclusions.filter(e=>scopeCodes.has(e.rule_code)&&e.exceptions_checked===true&&(e.rule_code!=="KIOSK"||/kiosk|self[ -]?service/i.test(e.quote))&&(!["PROPRIETARY_ONLY","PAC_PROPRIETARY_PRODUCT"].includes(e.rule_code)||/proprietary|\bPAC\b|exclusiv|OEM.only|only.authori[sz]ed/i.test(e.quote))&&sources.some(s=>s.ref===e.ref&&s.document_kind!=="AI_SUMMARY"));
+ const scopeExclusions=exclusions.filter(e=>scopeCodes.has(e.rule_code)&&e.exceptions_checked===true&&(e.rule_code!=="MANPOWER"||/manpower|staffing|staff augmentation|resource.based|person.month|personnel deployment|deployment of.{0,30}(staff|personnel)/i.test(e.quote))&&(!["SOFTWARE_LICENSE_SUBSCRIPTION_RENEWAL","SOFTWARE_RESALE","READY_MADE_SOFTWARE"].includes(e.rule_code)||/software|licen[cs]e|SaaS|Microsoft|MS Office|Office 20/i.test(e.quote))&&(e.rule_code!=="KIOSK"||/kiosk|self[ -]?service/i.test(e.quote))&&(!["PROPRIETARY_ONLY","PAC_PROPRIETARY_PRODUCT"].includes(e.rule_code)||/proprietary|\bPAC\b|exclusiv|OEM.only|only.authori[sz]ed/i.test(e.quote))&&sources.some(s=>s.ref===e.ref&&s.document_kind!=="AI_SUMMARY"));
  const positive=evidence.some(e=>rules.some(r=>r.code===e.rule_code&&r.code.startsWith("FIT_")&&r.decision!=="NO_GO")&&sources.some(s=>s.ref===e.ref&&s.document_kind!=="AI_SUMMARY"));
  const disposition=raw.disposition==="CLEAR_EXCLUSION"&&scopeExclusions.length&&raw.primary_scope_clear===true&&raw.conflict!==true
   ?"CLEAR_EXCLUSION":raw.disposition==="SCOPE_ESTABLISHED"&&positive&&raw.primary_scope_clear===true&&raw.conflict!==true?"SCOPE_ESTABLISHED":raw.disposition==="REQUIREMENTS_SUFFICIENT"&&requirements.length&&evidence.length&&
@@ -100,7 +100,7 @@ export async function inspectStep3({db,tender,aiKey,allowAI,allowPrepare,call,ur
  const {data:saved,error:saveError}=await db.from("agenttender_orch_v2_tasks").update({checkpoint:{...checkpoint,step3_screen_cache:{fingerprint,result},progressive_evidence_request:request}}).eq("tender_id",id).eq("lease_token",leaseToken).eq("state","RUNNING").select("tender_id");
  if(saveError)throw saveError;if(!saved?.length)throw Error("STALE_LEASE_BEFORE_ACQUISITION");
  const {data:work,error:workError}=await db.rpc("agenttender_orch_document_worklist",{p_tender_id:id});if(workError)throw workError;
- const pending=(work?.documents||[]).filter(d=>d.requires_extraction&&d.sharepoint_drive_item_id);
+ const pending=(work?.documents||[]).filter(d=>d.requires_extraction&&d.sharepoint_drive_item_id&&!docs.some(x=>String(x.document_id)===String(d.document_id)));
  const words=(request.next_document+" "+questions.join(" ")).toLowerCase().match(/[a-z]{4,}/g)||[];
  const candidates=pending.map(d=>({...d,score:words.reduce((n,w)=>n+(String(d.file_name).toLowerCase().includes(w)?1:0),0)})).sort((a,b)=>b.score-a.score);
  if(candidates.length){
