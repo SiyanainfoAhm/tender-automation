@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 
 import { CompanyAccessError } from "@/server/auth/company-access";
 import { requirePermissionStrict } from "@/server/auth/permissions";
@@ -74,34 +75,31 @@ function sseErrorResponse(options: {
 
 function getV2Config() {
   const url = process.env.SUPABASE_URL?.replace(/\/$/, "");
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !serviceRoleKey) {
-    throw new Error(
-      "Lightweight Orchestrator V2 chat is not configured. SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required.",
-    );
+  if (!url) {
+    throw new Error("Orchestrator V2 chat is not configured. SUPABASE_URL is required.");
   }
-  return { url, serviceRoleKey };
+  return { url };
 }
 
 async function callLightV2Chat(options: {
   tenderId: string;
   companyId: string;
   question: string;
+  sessionToken: string;
   conversation: Array<{ role: "user" | "assistant"; content: string }>;
   signal?: AbortSignal;
 }): Promise<V2ChatResponse> {
-  const { url, serviceRoleKey } = getV2Config();
-  const response = await fetch(`${url}/functions/v1/agenttender-orch-v2-chat`, {
+  const { url } = getV2Config();
+  const response = await fetch(`${url}/functions/v1/agenttender-db-chat`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${serviceRoleKey}`,
-      apikey: serviceRoleKey,
+      "x-agenttender-session": options.sessionToken,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
       tender_id: options.tenderId,
       company_id: options.companyId,
-      question: options.question,
+      message: options.question,
       conversation: options.conversation,
     }),
     cache: "no-store",
@@ -206,6 +204,7 @@ function createSseResponse(options: {
   tenderId: string;
   companyId: string;
   question: string;
+  sessionToken: string;
   conversation: Array<{ role: "user" | "assistant"; content: string }>;
   action: AskAiAction;
   requestSignal: AbortSignal;
@@ -233,6 +232,7 @@ function createSseResponse(options: {
           tenderId: options.tenderId,
           companyId: options.companyId,
           question: options.question,
+          sessionToken: options.sessionToken,
           conversation: options.conversation,
           signal: abort.signal,
         });
@@ -315,6 +315,14 @@ export async function POST(request: Request, context: RouteContext) {
     const session = await requirePermissionStrict("tenders.view");
     companyId = session.companyId;
     userId = session.user.id;
+    // Read the same HttpOnly cookie validated by requirePermissionStrict.
+    // V2 resolves the user from this session; no request-body user_id is trusted.
+    const cookieStore = await cookies();
+    const cookieName = process.env.AGENTTENDER_SESSION_COOKIE?.trim() || "agenttender_session";
+    const sessionToken = cookieStore.get(cookieName)?.value;
+    if (!sessionToken) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    }
 
     const { id } = await context.params;
     const body = (await request.json().catch(() => ({}))) as {
@@ -418,6 +426,7 @@ export async function POST(request: Request, context: RouteContext) {
         tenderId: id,
         companyId: session.companyId,
         question: validated.message,
+        sessionToken,
         conversation: validated.conversation,
         action,
         requestSignal: request.signal,
@@ -431,6 +440,7 @@ export async function POST(request: Request, context: RouteContext) {
         tenderId: id,
         companyId: session.companyId,
         question: validated.message,
+        sessionToken,
         conversation: validated.conversation,
         signal: request.signal,
       });
