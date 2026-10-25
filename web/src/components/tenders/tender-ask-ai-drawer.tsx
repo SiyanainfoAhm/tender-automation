@@ -18,7 +18,7 @@ import {
   saveAskAiMessage,
   type AskAiChatSession,
 } from "@/lib/ai/ask-ai-client";
-import { actionStatusText } from "@/lib/ai/ask-ai-actions";
+import { actionStatusText, ASK_AI_SMART_QUESTIONS } from "@/lib/ai/ask-ai-actions";
 import type { AskAiAction } from "@/lib/ai/ask-ai-stream";
 import { AskAiHeader } from "@/components/tenders/ask-ai/ask-ai-header";
 import { AskAiMessageList } from "@/components/tenders/ask-ai/ask-ai-message-list";
@@ -665,7 +665,7 @@ export function TenderAskAiDrawer({
             </aside>
             <main className="flex min-w-0 flex-1 flex-col">
               <AskAiMessageList messages={messages} busy={busy} stickToBottom={stickToBottom} onStickToBottomChange={setStickToBottom} showJumpToLatest={showJumpToLatest} onJumpToLatest={() => setStickToBottom(true)} onQuickAction={onQuickAction} onRetry={(index) => void retryAssistant(index)} onReindex={() => void handleReindex()} reindexState={reindexState} />
-              <AskAiComposer value={input} onChange={setInput} onSend={() => void ask(input)} onStop={stopGenerating} busy={busy} />
+              <AskAiComposer value={input} onChange={setInput} onSend={() => void ask(input)} onSmartQuestion={(question, category) => void ask(question, category)} onStop={stopGenerating} busy={busy} />
             </main>
           </div>
           {sessionDialog ? (
