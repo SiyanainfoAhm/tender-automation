@@ -18,7 +18,7 @@ import {
   saveAskAiMessage,
   type AskAiChatSession,
 } from "@/lib/ai/ask-ai-client";
-import { actionStatusText, ASK_AI_SMART_QUESTIONS } from "@/lib/ai/ask-ai-actions";
+import { actionStatusText } from "@/lib/ai/ask-ai-actions";
 import type { AskAiAction } from "@/lib/ai/ask-ai-stream";
 import { AskAiHeader } from "@/components/tenders/ask-ai/ask-ai-header";
 import { AskAiMessageList } from "@/components/tenders/ask-ai/ask-ai-message-list";
