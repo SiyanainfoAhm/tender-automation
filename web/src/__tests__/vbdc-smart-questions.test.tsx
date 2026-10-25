@@ -1,3 +1,6 @@
+/**
+ * @vitest-environment jsdom
+ */
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { AskAiComposer } from "@/components/tenders/ask-ai/ask-ai-composer";
@@ -51,7 +54,7 @@ describe("VBDC smart questions", () => {
       />,
     );
     for (const item of ASK_AI_SMART_QUESTIONS) {
-      expect(screen.getByRole("button", { name: item.label })).toBeDisabled();
+      expect((screen.getByRole("button", { name: item.label }) as HTMLButtonElement).disabled).toBe(true);
     }
   });
 });
