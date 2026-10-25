@@ -421,7 +421,7 @@ export async function changePasswordAction(formData: FormData): Promise<{
   revalidatePath("/change-password");
 
   if (session.user.mustChangePassword) {
-    redirect("/dashboard");
+    redirect("/tenders/indian?date=yesterday&status=may_bid");
   }
   return { ok: true };
 }
