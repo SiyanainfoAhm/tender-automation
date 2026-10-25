@@ -21,3 +21,12 @@ enabled = true
 
 [functions.tender-automation-company-documents]
 verify_jwt = true
+
+[functions.agenttender-orch-v2-worker]
+verify_jwt = false
+
+[functions.agenttender-orch-document-worker]
+verify_jwt = true
+
+[functions.agenttender-orch-ai-evaluation-worker]
+verify_jwt = true
