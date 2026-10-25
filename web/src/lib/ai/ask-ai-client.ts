@@ -7,8 +7,14 @@ import {
   type AskAiSource,
   type AskAiStreamEvent,
   type AskAiStreamStage,
+  type AskAiAction,
 } from "@/lib/ai/ask-ai-stream";
 
+export type AskAiSmartQuestion = { category: AskAiAction; label: string; question: string };
+export type AskAiUiConfig = { title: string; subtitle: string; smart_questions: AskAiSmartQuestion[] };
+export function fetchAskAiUiConfig(tenderId: string) {
+  return chatJson<AskAiUiConfig>(`/api/tenders/${tenderId}/ask-ai/config`, { method: "GET", headers: { Accept: "application/json" } });
+}
 export type AskAiChatSession = { id: string; title: string; createdAt: string; updatedAt: string; lastMessageAt: string };
 export type AskAiStoredMessage = { id: string; role: "user" | "assistant"; content: string; action?: string | null; sources?: AskAiSource[]; warnings?: string[]; status: "complete" | "interrupted" | "cancelled" | "error"; createdAt: string };
 async function chatJson<T>(url: string, init?: RequestInit): Promise<T> { const response=await fetch(url,{...init,headers:{"Content-Type":"application/json",...(init?.headers||{})},cache:"no-store"}); if(!response.ok){const data=await response.json().catch(()=>null) as {error?:string}|null;throw new Error(data?.error||"Unable to update conversation.");} return (response.status===204 ? undefined : await response.json()) as T; }
