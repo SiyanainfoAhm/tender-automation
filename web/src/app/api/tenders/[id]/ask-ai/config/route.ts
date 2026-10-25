@@ -45,7 +45,7 @@ export async function GET(_request: Request, context: RouteContext) {
     if (!response.ok || config.ok !== true) {
       return NextResponse.json(
         { error: config.error || "V2 chat configuration could not be loaded." },
-        { status: response.status || 502 },
+        { status: response.ok ? 502 : response.status },
       );
     }
 
