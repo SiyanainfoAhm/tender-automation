@@ -88,6 +88,7 @@ async function callLightV2Chat(options: {
   sessionToken: string;
   conversation: Array<{ role: "user" | "assistant"; content: string }>;
   signal?: AbortSignal;
+  questionCategory?: string | null;
 }): Promise<V2ChatResponse> {
   const { url } = getV2Config();
   const response = await fetch(`${url}/functions/v1/agenttender-db-chat`, {
@@ -101,6 +102,7 @@ async function callLightV2Chat(options: {
       company_id: options.companyId,
       message: options.question,
       conversation: options.conversation,
+      question_category: options.questionCategory || undefined,
     }),
     cache: "no-store",
     signal: options.signal,
@@ -305,6 +307,12 @@ function createSseResponse(options: {
   });
 }
 
+const SMART_QUESTION_CATEGORIES = new Set([
+  "GENERAL_TENDER_INFO", "SCOPE_OF_WORK", "EMD", "DO_WE_QUALIFY",
+  "REQUIRED_DOCUMENTS", "TURNOVER", "EXPERIENCE", "CERTIFICATIONS",
+  "PROJECT_COST", "SUBMISSION_READINESS",
+]);
+
 export async function POST(request: Request, context: RouteContext) {
   const requestId = createAskAiRequestId();
   let concurrencyHeld = false;
@@ -442,6 +450,7 @@ export async function POST(request: Request, context: RouteContext) {
         question: validated.message,
         sessionToken,
         conversation: validated.conversation,
+        questionCategory: SMART_QUESTION_CATEGORIES.has(action) ? action : null,
         signal: request.signal,
       });
       if (result.status !== "ANSWERED" || !result.answer) {
