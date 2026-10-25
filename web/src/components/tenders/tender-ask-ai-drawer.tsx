@@ -60,6 +60,7 @@ export function TenderAskAiDrawer({
   } | null>(null);
   const [sessionTitleDraft, setSessionTitleDraft] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const submittingRef = useRef(false);
   const messagesRef = useRef(messages);
   const pendingRetryRef = useRef<{
     text: string;
@@ -466,7 +467,9 @@ export function TenderAskAiDrawer({
 
   async function ask(raw: string, action?: AskAiAction | null) {
     const text = raw.trim();
-    if (!text || busy) return;
+    if (!text || busy || submittingRef.current) return;
+    submittingRef.current = true;
+    setPhase("retrieving");
 
     const conversation = messagesRef.current
       .filter(
@@ -485,7 +488,7 @@ export function TenderAskAiDrawer({
     let sessionId = activeSessionId;
     if (!sessionId) {
       try { if (typeof createAskAiSession === "function") { const created = await createAskAiSession(tenderId, text, action); sessionId = created.session.id; setActiveSessionId(sessionId); addOrUpdateSession(created.session); } else { sessionId = createMessageId("session"); setActiveSessionId(sessionId); } }
-      catch { return; }
+      catch { submittingRef.current = false; setPhase("idle"); return; }
     }
     if (typeof saveAskAiMessage === "function") await saveAskAiMessage(tenderId, sessionId, { role: "user", content: text, action: action || null, status: "complete" }).catch(() => undefined);
     const assistantId = createMessageId("assistant");
@@ -506,7 +509,11 @@ export function TenderAskAiDrawer({
     setInput("");
     setStickToBottom(true);
 
-    await runStream({ text, conversation, assistantId, action, sessionId });
+    try {
+      await runStream({ text, conversation, assistantId, action, sessionId });
+    } finally {
+      submittingRef.current = false;
+    }
   }
 
   async function retryAssistant(assistantIndex: number) {
