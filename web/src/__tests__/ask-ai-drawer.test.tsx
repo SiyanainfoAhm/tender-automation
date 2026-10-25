@@ -12,9 +12,27 @@ import {
 import userEvent from "@testing-library/user-event";
 
 const streamAskAiRequest = vi.fn();
+const mockSmartQuestions = [
+  { category: "GENERAL_TENDER_INFO", label: "Tender Summary", question: "Summarize this tender, including its estimated value, our eligibility, key requirements and scope of work." },
+  { category: "SCOPE_OF_WORK", label: "Scope of Work", question: "Explain the complete scope of work and what we must actually develop, implement, deliver and maintain." },
+  { category: "EMD", label: "EMD Details", question: "What is the EMD amount, payable amount, applicable exemption and impact on our bidding eligibility?" },
+  { category: "DO_WE_QUALIFY", label: "Do We Qualify?", question: "Evaluate every mandatory pre-qualification condition against our company documents and explain whether we qualify." },
+  { category: "REQUIRED_DOCUMENTS", label: "Required Documents", question: "List every mandatory document required to submit this tender and compare it with our available company documents and checklist." },
+  { category: "TURNOVER", label: "Turnover Check", question: "Do our audited financial statements satisfy the tender's turnover and financial eligibility requirements?" },
+  { category: "EXPERIENCE", label: "Experience Check", question: "Do our past projects and completion certificates satisfy the tender's similar-work experience criteria?" },
+  { category: "CERTIFICATIONS", label: "Certifications", question: "Do we possess all mandatory certifications, registrations and authorizations required by this tender?" },
+  { category: "PROJECT_COST", label: "Project Cost & Profit", question: "Estimate the cost to deliver this tender, suggest a realistic bid price and calculate our expected profit." },
+  { category: "SUBMISSION_READINESS", label: "Submission Readiness", question: "Are we ready to submit this tender? Check every mandatory document, checklist item, signing requirement and submission blocker." },
+];
+const fetchAskAiUiConfig = vi.fn(async () => ({
+  title: "VBDC Tender Assistant",
+  subtitle: "Grounded in tender and company evidence",
+  smart_questions: mockSmartQuestions,
+}));
 
 vi.mock("@/lib/ai/ask-ai-client", () => ({
   streamAskAiRequest: (...args: unknown[]) => streamAskAiRequest(...args),
+  fetchAskAiUiConfig: (...args: unknown[]) => fetchAskAiUiConfig(...args),
   fetchAskAiSessions: vi.fn(async () => ({ sessions: [], total: 0 })),
   createAskAiSession: vi.fn(async () => ({ session: { id: "session-1", title: "Test", createdAt: "2026-01-01", updatedAt: "2026-01-01", lastMessageAt: "2026-01-01" } })),
   fetchAskAiSessionMessages: vi.fn(async () => ({ messages: [] })),
@@ -114,6 +132,35 @@ describe("AskAiSources", () => {
 });
 
 describe("TenderAskAiDrawer streaming UX", () => {
+  it("loads the V2 smart-question catalog for the current tender and keeps it phone-scrollable", async () => {
+    const user = userEvent.setup();
+    streamAskAiRequest.mockImplementation(async (options: {
+      action?: string;
+      message: string;
+      handlers: { onDelta?: (text: string) => void; onDone?: () => void };
+    }) => {
+      options.handlers.onDelta?.("Tender value is not stated in the indexed evidence.");
+      options.handlers.onDone?.();
+    });
+
+    render(<TenderAskAiDrawer tenderId="tender-42" tenderTitle="Sample Tender" />);
+    await user.click(screen.getByRole("button", { name: /Ask AI about/i }));
+
+    expect(fetchAskAiUiConfig).toHaveBeenCalledWith("tender-42");
+    await screen.findByRole("button", { name: "Tender Summary" });
+    expect(screen.getByRole("button", { name: "Submission Readiness" })).toBeTruthy();
+    expect(screen.getByTestId("ask-ai-composer").querySelector(".overflow-x-auto")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Tender Summary" }));
+    await waitFor(() => expect(streamAskAiRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenderId: "tender-42",
+        action: "GENERAL_TENDER_INFO",
+        message: mockSmartQuestions[0].question,
+      }),
+    ));
+  });
+
   it("sends message immediately and streams deltas with stop/retry/copy", async () => {
     const user = userEvent.setup();
     let handlers: {
