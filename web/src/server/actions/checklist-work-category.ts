@@ -11,26 +11,33 @@ export type ChecklistWorkCategory = "company" | "ai" | "manual";
 
 const CATEGORY_CONFIG: Record<
   ChecklistWorkCategory,
-  { processingType: string; generationAllowed: boolean; label: string }
+  {
+    requirementKind: "EXISTING_EVIDENCE" | "TEMPLATE_OR_DRAFT" | "MANUAL_ACTION";
+    generationAllowed: boolean;
+    label: string;
+  }
 > = {
   company: {
-    processingType: "COMPANY_DOC",
+    requirementKind: "EXISTING_EVIDENCE",
     generationAllowed: false,
     label: "Company Docs",
   },
   ai: {
-    processingType: "AI_DRAFT",
+    requirementKind: "TEMPLATE_OR_DRAFT",
     generationAllowed: true,
     label: "AI Draft",
   },
   manual: {
-    processingType: "MANUAL_ENTRY",
+    requirementKind: "MANUAL_ACTION",
     generationAllowed: false,
     label: "Manual",
   },
 };
 
-function resolveCategory(processingType: unknown, generationAllowed: unknown): ChecklistWorkCategory {
+function resolveCategory(
+  processingType: unknown,
+  generationAllowed: unknown,
+): ChecklistWorkCategory {
   const type = String(processingType || "").toUpperCase();
   if (type === "COMPANY_DOC" || type === "COMPANY_DOCUMENT") return "company";
   if (type === "AI_DRAFT") return "ai";
@@ -68,7 +75,9 @@ export async function changeChecklistWorkCategoryAction(input: {
     const db = getServerSupabase();
     const { data: item, error: itemError } = await db
       .from("agenttender_bid_checklist_items")
-      .select("id, requirement_name, processing_type, generation_allowed")
+      .select(
+        "id, requirement_name, requirement_kind, processing_type, generation_allowed",
+      )
       .eq("id", input.itemId)
       .eq("workspace_id", detail.workspaceId)
       .eq("company_id", session.companyId)
@@ -85,19 +94,40 @@ export async function changeChecklistWorkCategoryAction(input: {
     if (previousCategory === input.category) return { ok: true };
 
     const next = CATEGORY_CONFIG[input.category];
-    const { error: updateError } = await db
+
+    // processing_type is a PostgreSQL GENERATED ALWAYS column. Do not update it
+    // directly. Its value is derived automatically from requirement_kind and
+    // generation_allowed:
+    //   EXISTING_EVIDENCE                       -> COMPANY_DOC
+    //   TEMPLATE_OR_DRAFT + generation_allowed -> AI_DRAFT
+    //   MANUAL_ACTION                           -> MANUAL_ENTRY
+    const { data: updated, error: updateError } = await db
       .from("agenttender_bid_checklist_items")
       .update({
-        processing_type: next.processingType,
+        requirement_kind: next.requirementKind,
         generation_allowed: next.generationAllowed,
         updated_by: session.user.id,
         updated_at: new Date().toISOString(),
       })
       .eq("id", input.itemId)
       .eq("workspace_id", detail.workspaceId)
-      .eq("company_id", session.companyId);
+      .eq("company_id", session.companyId)
+      .select("processing_type")
+      .maybeSingle();
 
     if (updateError) throw new Error(updateError.message);
+    if (!updated) return { ok: false, error: "Checklist item could not be updated." };
+
+    const expectedProcessingType =
+      input.category === "company"
+        ? "COMPANY_DOC"
+        : input.category === "ai"
+          ? "AI_DRAFT"
+          : "MANUAL_ENTRY";
+
+    if (String(updated.processing_type || "") !== expectedProcessingType) {
+      throw new Error("Checklist category did not update correctly. Please try again.");
+    }
 
     await insertTenderActivity({
       tenderId: input.tenderId,
@@ -109,6 +139,9 @@ export async function changeChecklistWorkCategoryAction(input: {
         requirementName: item.requirement_name,
         fromCategory: previousCategory,
         toCategory: input.category,
+        previousRequirementKind: item.requirement_kind,
+        requirementKind: next.requirementKind,
+        processingType: updated.processing_type,
       },
       actorUserId: session.user.id,
     });
