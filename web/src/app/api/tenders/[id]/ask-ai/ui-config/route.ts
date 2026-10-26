@@ -7,9 +7,9 @@ import { parseSmartQuestions } from "@/lib/ai/tender-chat-ui";
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
-    const session = await requirePermissionStrict("tenders.view");
     const token = (await cookies()).get(process.env.AGENTTENDER_SESSION_COOKIE?.trim() || "agenttender_session")?.value;
     if (!token) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    const session = await requirePermissionStrict("tenders.view");
     const { id } = await context.params;
     if (!await getTenderById(id)) return NextResponse.json({ error: "Tender not found" }, { status: 404 });
     const url = process.env.SUPABASE_URL?.replace(/\/$/, "");
