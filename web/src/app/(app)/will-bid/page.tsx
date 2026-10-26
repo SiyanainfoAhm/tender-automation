@@ -24,12 +24,22 @@ export default async function WillBidPage({ searchParams }: { searchParams: Prom
             {tenders.length} tenders · Prepare documents and track submission readiness.
           </p>
         </div>
-        <Link
-          href="/will-bid-test"
-          className="rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-medium text-violet-700 hover:bg-violet-100"
-        >
-          Open test view
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          {selected ? (
+            <Link
+              href={`/tenders/${selected.id}/bid-workspace/organize`}
+              className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100"
+            >
+              Organize checklist
+            </Link>
+          ) : null}
+          <Link
+            href="/will-bid-test"
+            className="rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-medium text-violet-700 hover:bg-violet-100"
+          >
+            Open test view
+          </Link>
+        </div>
       </header>
 
       {tenders.length === 0 ? (
