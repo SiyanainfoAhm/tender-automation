@@ -1,3 +1,4 @@
+import type { ChatFeedbackReceipt } from "@/lib/ai/chat-feedback";
 import type { AskAiSource } from "@/lib/ai/ask-ai-stream";
 import type { AskAiPhase } from "@/lib/ai/ask-ai-client";
 import {
@@ -7,6 +8,8 @@ import {
 
 export type AskAiMessage = {
   id: string;
+  backendMessageId?: string;
+  feedback?: ChatFeedbackReceipt;
   role: "user" | "assistant";
   content: string;
   questionCategory?: string;
@@ -93,4 +96,5 @@ export function humanizeAskAiWarning(warning: string): string {
   }
   return warning;
 }
+
 

@@ -114,7 +114,7 @@ export function TenderAskAiDrawer({
     try {
       const result = await fetchAskAiSessionMessages(tenderId, sessionId);
       setActiveSessionId(sessionId);
-      setMessages(result.messages.map((item) => ({ id:item.id, role:item.role, content:item.content, questionCategory:item.action || undefined, sources:item.sources, warnings:item.warnings, incomplete:item.status !== "complete", cancelled:item.status === "cancelled", error:item.status === "error" })));
+      setMessages(result.messages.map((item) => ({ id:item.id, backendMessageId:item.id, feedback:item.feedback, role:item.role, content:item.content, questionCategory:item.action || undefined, sources:item.sources, warnings:item.warnings, incomplete:item.status !== "complete", cancelled:item.status === "cancelled", error:item.status === "error" })));
       setHistoryOpen(false);
       setStickToBottom(true);
     } catch { /* history remains available on a transient request failure */ }
@@ -281,6 +281,7 @@ export function TenderAskAiDrawer({
             );
           },
           onDone(meta) {
+            if (meta?.messageId) setMessages(current => current.map(item => item.id === options.assistantId ? { ...item, backendMessageId: meta.messageId } : item));
             if (meta?.indexStatus === "indexing" || indexingStarted) {
               indexingStarted = true;
               markAssistantIndexing(
@@ -677,7 +678,7 @@ export function TenderAskAiDrawer({
               <div className="mt-1 max-h-[calc(100%-90px)] space-y-1 overflow-y-auto">{sessions.map((item) => <div key={item.id} className={cn("group flex items-center rounded-md", activeSessionId === item.id ? "bg-slate-200" : "hover:bg-slate-100")}><button type="button" onClick={() => void selectSession(item.id)} className="min-w-0 flex-1 px-2 py-2 text-left"><p className="truncate text-[12px] font-medium text-slate-700">{item.title}</p><p className="mt-0.5 text-[10px] text-slate-400">{new Date(item.lastMessageAt).toLocaleDateString()}</p></button><div className="mr-1 hidden items-center gap-0.5 group-hover:flex"><button type="button" onClick={() => { setSessionTitleDraft(item.title); setSessionDialog({ kind: "rename", session: item }); }} className="rounded px-1.5 py-1 text-[10px] text-slate-400 hover:bg-white hover:text-slate-700" aria-label={`Rename ${item.title}`}>Rename</button><button type="button" onClick={() => setSessionDialog({ kind: "delete", session: item })} className="rounded px-1.5 py-1 text-[10px] text-slate-400 hover:bg-white hover:text-red-600" aria-label={`Delete ${item.title}`}>Delete</button></div></div>)}{sessions.length === 0 ? <p className="px-2 py-3 text-[11px] text-slate-400">No saved conversations.</p> : null}</div>
             </aside>
             <main className="flex min-w-0 flex-1 flex-col">
-              <AskAiMessageList questions={questions} messages={messages} busy={busy} stickToBottom={stickToBottom} onStickToBottomChange={setStickToBottom} showJumpToLatest={showJumpToLatest} onJumpToLatest={() => setStickToBottom(true)} onQuickAction={onQuickAction} onRetry={(index) => void retryAssistant(index)} onReindex={() => void handleReindex()} reindexState={reindexState} />
+              <AskAiMessageList tenderId={tenderId} questions={questions} messages={messages} busy={busy} stickToBottom={stickToBottom} onStickToBottomChange={setStickToBottom} showJumpToLatest={showJumpToLatest} onJumpToLatest={() => setStickToBottom(true)} onQuickAction={onQuickAction} onRetry={(index) => void retryAssistant(index)} onReindex={() => void handleReindex()} reindexState={reindexState} />
               {configError ? <p role="status" className="px-3 py-2 text-xs text-slate-500">Quick questions could not be loaded. <button type="button" className="underline" onClick={() => setConfigAttempt(n => n + 1)}>Retry</button></p> : null}
               <AskAiComposer value={input} onChange={setInput} onSend={() => void ask(input)} onStop={stopGenerating} busy={busy} />
             </main>
@@ -696,4 +697,5 @@ export function TenderAskAiDrawer({
     </>
   );
 }
+
 

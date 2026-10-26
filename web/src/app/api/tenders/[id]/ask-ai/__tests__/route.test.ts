@@ -40,7 +40,7 @@ beforeEach(() => {
   mocks.cookie.mockReturnValue({ value: "authenticated-cookie-token" });
   mocks.permission.mockResolvedValue({ companyId: "company-id", user: { id: "user-id" } });
   mocks.tender.mockResolvedValue({ id: "tender-id" });
-  fetchMock.mockResolvedValue(Response.json({ ok: true, status: "ANSWERED", answer: "Verified answer" }));
+  fetchMock.mockResolvedValue(Response.json({ ok: true, status: "ANSWERED", answer: "Verified answer", message_id: "saved-answer-id", request_id: "exchange-id" }));
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
@@ -51,6 +51,7 @@ describe("Ask AI session forwarding", () => {
       const text = await result.text();
       expect(result.status).toBe(200);
       expect(text).toContain("Verified answer");
+      expect(text).toContain("saved-answer-id");
       expect(text).not.toContain("authenticated-cookie-token");
       expect(text).not.toContain("must-never-forward");
       expect(mocks.permission).toHaveBeenCalledWith("tenders.view");
@@ -105,4 +106,5 @@ describe("authenticated UI configuration", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
 

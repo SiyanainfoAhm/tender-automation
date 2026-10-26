@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { ArrowDown } from "lucide-react";
 import { AskAiEmptyState, AskAiQuickActions } from "@/components/tenders/ask-ai/ask-ai-empty-state";
+import { AskAiFeedback } from "@/components/tenders/ask-ai/ask-ai-feedback";
 import { AskAiMessageView } from "@/components/tenders/ask-ai/ask-ai-message";
 import type {
   AskAiMessage,
@@ -11,6 +12,7 @@ import type {
 import type { TenderSmartQuestion } from "@/lib/ai/tender-chat-ui";
 
 export function AskAiMessageList({
+  tenderId,
   messages,
   busy,
   stickToBottom,
@@ -23,6 +25,7 @@ export function AskAiMessageList({
   onReindex,
   reindexState,
 }: {
+  tenderId?: string;
   messages: AskAiMessage[];
   busy: boolean;
   stickToBottom: boolean;
@@ -79,6 +82,7 @@ export function AskAiMessageList({
                   onReindex={onReindex}
                   reindexState={reindexState}
                 />
+                {tenderId && message.backendMessageId && message.role === "assistant" && !message.incomplete && !message.error && !message.cancelled ? <div className="ml-8"><AskAiFeedback tenderId={tenderId} messageId={message.backendMessageId} answer={message.content} initialFeedback={message.feedback} /></div> : null}
                 {message.role === "assistant" && message.content && !message.incomplete && !message.error && !message.cancelled ? <div className="ml-8 mt-3"><AskAiQuickActions questions={questions} disabled={busy} onSelect={onQuickAction} /></div> : null}
               </div>
             ))}
@@ -101,4 +105,5 @@ export function AskAiMessageList({
     </div>
   );
 }
+
 

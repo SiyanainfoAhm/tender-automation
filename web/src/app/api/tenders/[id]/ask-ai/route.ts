@@ -40,6 +40,8 @@ type V2Evidence = {
 
 type V2ChatResponse = {
   ok?: boolean;
+  message_id?: string;
+  request_id?: string;
   success?: boolean;
   readiness_warnings?: string[];
   route?: string;
@@ -191,6 +193,8 @@ function buildMeta(options: {
 }): AskAiRetrievalMeta {
   return {
     action: options.action,
+    messageId: options.result.message_id,
+    requestId: options.result.request_id,
     queryEmbeddingMs: 0,
     tenderVectorMs: 0,
     tenderFtsMs: 0,
@@ -505,4 +509,5 @@ export async function POST(request: Request, context: RouteContext) {
     );
   }
 }
+
 

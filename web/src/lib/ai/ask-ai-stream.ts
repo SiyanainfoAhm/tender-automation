@@ -57,6 +57,7 @@ export type AskAiRetrievalMeta = {
   /** Development / smoke only — never required by UI. */
   cacheHit?: boolean;
   requestId?: string;
+  messageId?: string;
   inputTokens?: number;
   outputTokens?: number;
   estimatedCostUsd?: number;
@@ -144,3 +145,4 @@ export function parseSseChunk(
 
   return { events, rest };
 }
+

@@ -1,4 +1,5 @@
 import "server-only";
+import type { ChatFeedbackReceipt } from "@/lib/ai/chat-feedback";
 
 import { normalizeV2Sources } from "@/lib/ai/v2-sources";
 import { randomUUID } from "node:crypto";
@@ -7,7 +8,7 @@ import type { AskAiSource } from "@/lib/ai/ask-ai-stream";
 
 export type ChatScope = { companyId: string; userId: string; tenderId: string };
 export type ChatSession = { id: string; title: string; createdAt: string; updatedAt: string; lastMessageAt: string };
-export type ChatMessage = { id: string; role: "user" | "assistant"; content: string; action?: string | null; sources?: AskAiSource[]; warnings?: string[]; status: "complete" | "interrupted" | "cancelled" | "error"; createdAt: string };
+export type ChatMessage = { id: string; feedback?: ChatFeedbackReceipt; role: "user" | "assistant"; content: string; action?: string | null; sources?: AskAiSource[]; warnings?: string[]; status: "complete" | "interrupted" | "cancelled" | "error"; createdAt: string };
 
 function titleFor(question: string, action?: string | null) {
   const labels: Record<string, string> = { ASSESS_TENDER: "Tender assessment", CHECK_ELIGIBILITY: "Eligibility assessment", CHECK_TURNOVER: "Turnover requirement", CHECK_EMD_MSME: "EMD and MSME exemption", CHECK_SIMILAR_EXPERIENCE: "Similar experience", CHECK_REQUIRED_DOCUMENTS: "Required documents", SUMMARIZE_TENDER: "Tender summary" };
@@ -45,13 +46,18 @@ export async function getChatMessages(scope: ChatScope, id: string) {
     .select("request_id,response_body").eq("session_id", id).eq("company_id", scope.companyId)
     .eq("user_id", scope.userId).eq("tender_id", scope.tenderId);
   if (receiptError) throw new Error("Unable to load conversation evidence.");
+  const { data: feedbackRows, error: feedbackError } = await db.from("agenttender_chat_corrections")
+    .select("id,message_id,feedback_type,verification_status").eq("session_id", id).eq("company_id", scope.companyId)
+    .eq("user_id", scope.userId).eq("tender_id", scope.tenderId).order("created_at", { ascending: true });
+  if (feedbackError) throw new Error("Unable to load answer feedback.");
+  const feedbackByMessage = new Map((feedbackRows || []).map(f => [f.message_id, {id:f.id, status:f.verification_status, kind:f.feedback_type} as ChatFeedbackReceipt]));
   const receiptByRequest = new Map((receipts || []).map(r => [r.request_id, r.response_body]));
   return (data || []).map(r => {
     const receipt = r.role === "assistant" ? receiptByRequest.get(r.request_id) : null;
     const historical = receipt && typeof receipt === "object"
       ? [...(Array.isArray(receipt.historical_evidence) ? receipt.historical_evidence : []),
          ...(Array.isArray(receipt.historical_positive_evidence) ? receipt.historical_positive_evidence : [])] : [];
-    return { id:r.id, role:r.role as ChatMessage["role"], content:r.content, action:r.action,
+    return { id:r.id, feedback:feedbackByMessage.get(r.id), role:r.role as ChatMessage["role"], content:r.content, action:r.action,
       sources:[...normalizeV2Sources(r.sources), ...normalizeV2Sources(historical)],
       warnings:Array.isArray(r.warnings) ? r.warnings as string[] : undefined,
       status:r.status as ChatMessage["status"], createdAt:r.created_at };
@@ -60,4 +66,5 @@ export async function getChatMessages(scope: ChatScope, id: string) {
 export async function addChatMessage(scope: ChatScope, sessionId: string, message: Omit<ChatMessage, "id" | "createdAt">) { const db = await ownedSession(scope, sessionId); const now = new Date().toISOString(); const { data,error } = await db.from("agenttender_ai_chat_messages").insert({ session_id:sessionId, company_id:scope.companyId,user_id:scope.userId,tender_id:scope.tenderId,role:message.role,content:message.content,action:message.action || null,sources:message.sources || null,warnings:message.warnings || null,status:message.status }).select("id").single(); if(error) throw new Error(error.message); await db.from("agenttender_ai_chat_sessions").update({updated_at:now,last_message_at:now}).eq("id",sessionId); return data.id as string; }
 export async function renameChatSession(scope: ChatScope, id: string, title: string) { const db = await ownedSession(scope,id); const clean=title.trim().slice(0,160); if(!clean) throw new Error("A title is required."); const {error}=await db.from("agenttender_ai_chat_sessions").update({title:clean,updated_at:new Date().toISOString()}).eq("id",id); if(error) throw new Error(error.message); }
 export async function deleteChatSession(scope: ChatScope, id: string) { const db=await ownedSession(scope,id); const {error}=await db.from("agenttender_ai_chat_sessions").delete().eq("id",id); if(error) throw new Error(error.message); }
+
 
