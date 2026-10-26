@@ -143,6 +143,8 @@ export async function streamAskAiRequest(options: {
   message: string;
   conversation: Array<{ role: "user" | "assistant"; content: string }>;
   action?: string | null;
+  questionCategory?: string;
+  sessionId?: string;
   signal?: AbortSignal;
   handlers: StreamAskAiHandlers;
 }): Promise<void> {
@@ -156,6 +158,8 @@ export async function streamAskAiRequest(options: {
       message: options.message,
       conversation: options.conversation,
       action: options.action ?? undefined,
+      question_category: options.questionCategory,
+      session_id: options.sessionId,
       stream: true,
     }),
     signal: options.signal,
@@ -287,3 +291,4 @@ function dispatchEvent(
       break;
   }
 }
+

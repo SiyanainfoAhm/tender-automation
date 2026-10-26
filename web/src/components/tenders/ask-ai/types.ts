@@ -9,6 +9,7 @@ export type AskAiMessage = {
   id: string;
   role: "user" | "assistant";
   content: string;
+  questionCategory?: string;
   statusText?: string;
   warnings?: string[];
   sources?: AskAiSource[];
@@ -92,3 +93,4 @@ export function humanizeAskAiWarning(warning: string): string {
   }
   return warning;
 }
+

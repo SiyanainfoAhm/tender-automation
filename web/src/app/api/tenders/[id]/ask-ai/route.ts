@@ -33,10 +33,15 @@ type V2Evidence = {
   document?: string;
   page?: number | null;
   section?: string | null;
+  chunk_id?: string | null;
+  source_id?: string | null;
+  document_url?: string | null;
 };
 
 type V2ChatResponse = {
   ok?: boolean;
+  success?: boolean;
+  readiness_warnings?: string[];
   route?: string;
   status?: string;
   answer?: string | null;
@@ -87,6 +92,8 @@ async function callLightV2Chat(options: {
   question: string;
   sessionToken: string;
   conversation: Array<{ role: "user" | "assistant"; content: string }>;
+  sessionId?: string;
+  questionCategory?: string;
   signal?: AbortSignal;
 }): Promise<V2ChatResponse> {
   const { url } = getV2Config();
@@ -100,6 +107,8 @@ async function callLightV2Chat(options: {
       tender_id: options.tenderId,
       company_id: options.companyId,
       message: options.question,
+      session_id: options.sessionId,
+      question_category: options.questionCategory,
       conversation: options.conversation,
     }),
     cache: "no-store",
@@ -107,7 +116,7 @@ async function callLightV2Chat(options: {
   });
 
   const payload = (await response.json().catch(() => ({}))) as V2ChatResponse;
-  if (!response.ok || payload.ok === false) {
+  if (!response.ok || payload.ok === false || payload.success === false) {
     throw new Error(
       payload.error || `Lightweight V2 chat failed with HTTP ${response.status}.`,
     );
@@ -130,7 +139,8 @@ function evidenceToSources(options: {
       fileName: documentName,
       pageCount: null,
       sourceType: options.sourceType,
-      sourceId: ref,
+      sourceId: item.source_id || item.chunk_id || ref,
+      documentUrl: item.document_url && /^https?:\/\//i.test(item.document_url) ? item.document_url : null,
       documentName,
       pageNumber: item.page ?? null,
       section: item.section ?? null,
@@ -206,6 +216,8 @@ function createSseResponse(options: {
   question: string;
   sessionToken: string;
   conversation: Array<{ role: "user" | "assistant"; content: string }>;
+  sessionId?: string;
+  questionCategory?: string;
   action: AskAiAction;
   requestSignal: AbortSignal;
   release: () => void;
@@ -233,6 +245,8 @@ function createSseResponse(options: {
           companyId: options.companyId,
           question: options.question,
           sessionToken: options.sessionToken,
+          sessionId: options.sessionId,
+          questionCategory: options.questionCategory,
           conversation: options.conversation,
           signal: abort.signal,
         });
@@ -249,11 +263,11 @@ function createSseResponse(options: {
         }
 
         const sources = mapSources(result, options.tenderId, options.companyId);
-        const warnings = result.partial_document_evidence
+        const warnings = result.readiness_warnings || (result.partial_document_evidence
           ? [
               "Current tender evidence is limited. The answer uses available evidence only; no OCR, extraction, indexing or embedding job was started.",
             ]
-          : [];
+          : []);
 
         send({
           type: "status",
@@ -330,6 +344,8 @@ export async function POST(request: Request, context: RouteContext) {
       conversation?: unknown;
       action?: unknown;
       stream?: unknown;
+      session_id?: unknown;
+      question_category?: unknown;
     };
 
     let validated;
@@ -428,6 +444,8 @@ export async function POST(request: Request, context: RouteContext) {
         question: validated.message,
         sessionToken,
         conversation: validated.conversation,
+        sessionId: typeof body.session_id === "string" ? body.session_id : undefined,
+        questionCategory: typeof body.question_category === "string" ? body.question_category : undefined,
         action,
         requestSignal: request.signal,
         release,
@@ -442,6 +460,8 @@ export async function POST(request: Request, context: RouteContext) {
         question: validated.message,
         sessionToken,
         conversation: validated.conversation,
+        sessionId: typeof body.session_id === "string" ? body.session_id : undefined,
+        questionCategory: typeof body.question_category === "string" ? body.question_category : undefined,
         signal: request.signal,
       });
       if (result.status !== "ANSWERED" || !result.answer) {
@@ -452,11 +472,11 @@ export async function POST(request: Request, context: RouteContext) {
       }
       return NextResponse.json({
         answer: result.answer,
-        warnings: result.partial_document_evidence
+        warnings: result.readiness_warnings || (result.partial_document_evidence
           ? [
               "Current tender evidence is limited. The answer uses available evidence only; no OCR, extraction, indexing or embedding job was started.",
             ]
-          : [],
+          : []),
         sources: mapSources(result, id, session.companyId),
         retrievalMeta: buildMeta({
           action,
@@ -485,3 +505,4 @@ export async function POST(request: Request, context: RouteContext) {
     );
   }
 }
+

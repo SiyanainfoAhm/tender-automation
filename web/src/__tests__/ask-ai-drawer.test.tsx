@@ -12,6 +12,7 @@ import {
 import userEvent from "@testing-library/user-event";
 
 const streamAskAiRequest = vi.fn();
+const questions = Array.from({length:10}, (_, i) => ({label:`Question ${i+1}`, category:`CATEGORY_${String.fromCharCode(65+i)}`, question:`Full configured question ${i+1}?`}));
 
 vi.mock("@/lib/ai/ask-ai-client", () => ({
   streamAskAiRequest: (...args: unknown[]) => streamAskAiRequest(...args),
@@ -36,9 +37,11 @@ import { humanizeAskAiWarning } from "@/components/tenders/ask-ai/types";
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({smart_questions:questions})));
   Object.defineProperty(navigator, "clipboard", {
     configurable: true,
     value: { writeText: vi.fn(async () => undefined) },
@@ -46,13 +49,16 @@ beforeEach(() => {
 });
 
 describe("Ask AI empty state", () => {
-  it("renders compact quick actions", () => {
+  it("renders the ten configured labels and sends full question/category", () => {
     const onSelect = vi.fn();
-    render(<AskAiEmptyState onSelect={onSelect} />);
-    expect(screen.getByText("Ask AI about this tender")).toBeTruthy();
-    expect(screen.getByTestId("ask-ai-quick-actions").children.length).toBe(9);
-    expect(screen.getByText("Assess Tender")).toBeTruthy();
-    expect(screen.getByText("Turnover")).toBeTruthy();
+    render(<AskAiEmptyState questions={questions} onSelect={onSelect} />);
+    expect(screen.getAllByRole("button")).toHaveLength(10);
+    fireEvent.click(screen.getByText("Question 3"));
+    expect(onSelect).toHaveBeenCalledWith(questions[2]);
+  });
+  it("does not invent fallback questions", () => {
+    render(<AskAiEmptyState onSelect={vi.fn()} />);
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
   });
 });
 
@@ -155,23 +161,25 @@ describe("TenderAskAiDrawer streaming UX", () => {
     await user.click(screen.getByRole("button", { name: /Ask AI about/i }));
     expect(screen.getByTestId("ask-ai-empty-state")).toBeTruthy();
 
-    await user.click(screen.getByText("Eligibility"));
+    await user.click(await screen.findByText("Question 1"));
 
     await waitFor(() => {
       expect(screen.getByTestId("ask-ai-user-message").textContent).toContain(
-        "Check the eligibility requirements and how our available evidence compares.",
+        "Full configured question 1?",
       );
     });
     expect(screen.queryByTestId("ask-ai-empty-state")).toBeNull();
     expect(
-      screen.getByText(/Checking eligibility requirements/i),
+      screen.getByText(/Searching indexed evidence/i),
     ).toBeTruthy();
 
     expect(streamAskAiRequest).toHaveBeenCalledWith(
       expect.objectContaining({
-        action: "CHECK_ELIGIBILITY",
+        action: undefined,
+        questionCategory: "CATEGORY_A",
+        sessionId: "session-1",
         message:
-          "Check the eligibility requirements and how our available evidence compares.",
+          "Full configured question 1?",
       }),
     );
 
@@ -233,7 +241,7 @@ describe("TenderAskAiDrawer streaming UX", () => {
     });
   });
 
-  it("sends structured action separately from display text (J) and uses streaming (K)", async () => {
+  it("sends the configured full question through the existing stream", async () => {
     const user = userEvent.setup();
     streamAskAiRequest.mockImplementation(async (options: {
       action?: string;
@@ -245,8 +253,8 @@ describe("TenderAskAiDrawer streaming UX", () => {
         onDone?: () => void;
       };
     }) => {
-      expect(options.action).toBe("CHECK_TURNOVER");
-      expect(options.message).toMatch(/turnover requirement/i);
+      expect(options.action).toBeUndefined();
+      expect(options.message).toBe("Full configured question 2?");
       expect(options.message).not.toBe("Turnover");
       options.handlers.onStatus?.(
         "Checking financial eligibility...",
@@ -271,7 +279,7 @@ describe("TenderAskAiDrawer streaming UX", () => {
       <TenderAskAiDrawer tenderId="tender-1" tenderTitle="Sample Tender" />,
     );
     await user.click(screen.getByRole("button", { name: /Ask AI about/i }));
-    await user.click(screen.getByText("Turnover"));
+    await user.click(await screen.findByText("Question 2"));
 
     await waitFor(() => {
       expect(screen.getByText(/Needs Verification/i)).toBeTruthy();
@@ -311,7 +319,7 @@ describe("TenderAskAiDrawer streaming UX", () => {
       <TenderAskAiDrawer tenderId="tender-1" tenderTitle="Sample Tender" />,
     );
     await user.click(screen.getByRole("button", { name: /Ask AI about/i }));
-    await user.click(screen.getByText("Turnover"));
+    await user.click(await screen.findByText("Question 2"));
     await waitFor(() => {
       expect(screen.getByText(/Turnover analysis/i)).toBeTruthy();
     });
@@ -359,7 +367,7 @@ describe("TenderAskAiDrawer streaming UX", () => {
       <TenderAskAiDrawer tenderId="tender-1" tenderTitle="Tender" />,
     );
     await user.click(screen.getByRole("button", { name: /Ask AI about/i }));
-    await user.click(screen.getByText("Summarize"));
+    await user.click(await screen.findByText("Question 3"));
 
     await waitFor(() => expect(streamAskAiRequest).toHaveBeenCalledTimes(1));
     expect(screen.getByTestId("ask-ai-stop")).toBeTruthy();
@@ -393,3 +401,4 @@ describe("long tender title", () => {
     expect(header).toBeTruthy();
   });
 });
+

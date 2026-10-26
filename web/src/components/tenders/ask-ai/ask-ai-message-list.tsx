@@ -2,12 +2,13 @@
 
 import { useEffect, useRef } from "react";
 import { ArrowDown } from "lucide-react";
-import { AskAiEmptyState } from "@/components/tenders/ask-ai/ask-ai-empty-state";
+import { AskAiEmptyState, AskAiQuickActions } from "@/components/tenders/ask-ai/ask-ai-empty-state";
 import { AskAiMessageView } from "@/components/tenders/ask-ai/ask-ai-message";
 import type {
   AskAiMessage,
-  AskAiQuickAction,
 } from "@/components/tenders/ask-ai/types";
+
+import type { TenderSmartQuestion } from "@/lib/ai/tender-chat-ui";
 
 export function AskAiMessageList({
   messages,
@@ -17,6 +18,7 @@ export function AskAiMessageList({
   showJumpToLatest,
   onJumpToLatest,
   onQuickAction,
+  questions = [],
   onRetry,
   onReindex,
   reindexState,
@@ -27,7 +29,8 @@ export function AskAiMessageList({
   onStickToBottomChange: (value: boolean) => void;
   showJumpToLatest: boolean;
   onJumpToLatest: () => void;
-  onQuickAction: (action: AskAiQuickAction) => void;
+  onQuickAction: (question: TenderSmartQuestion) => void;
+  questions?: TenderSmartQuestion[];
   onRetry: (assistantIndex: number) => void;
   onReindex?: () => void;
   reindexState?: "idle" | "indexing" | "indexed" | "failed";
@@ -59,7 +62,7 @@ export function AskAiMessageList({
         data-testid="ask-ai-message-list"
       >
         {messages.length === 0 ? (
-          <AskAiEmptyState disabled={busy} onSelect={onQuickAction} />
+          <AskAiEmptyState questions={questions} disabled={busy} onSelect={onQuickAction} />
         ) : (
           <div className="space-y-4">
             {messages.map((message, index) => (
@@ -76,6 +79,7 @@ export function AskAiMessageList({
                   onReindex={onReindex}
                   reindexState={reindexState}
                 />
+                {message.role === "assistant" && message.content && !message.incomplete && !message.error && !message.cancelled ? <div className="ml-8 mt-3"><AskAiQuickActions questions={questions} disabled={busy} onSelect={onQuickAction} /></div> : null}
               </div>
             ))}
             <div ref={bottomRef} />
@@ -97,3 +101,4 @@ export function AskAiMessageList({
     </div>
   );
 }
+

@@ -1,5 +1,6 @@
 "use client";
 
+import { withoutSuggestedFollowups } from "@/lib/ai/tender-chat-ui";
 import { useState } from "react";
 import { Bot, Check, Copy, Loader2, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -74,7 +75,7 @@ export function AskAiMessageView({
             <span>{message.statusText}</span>
           </p>
         ) : message.content ? (
-          <AskAiMarkdown content={message.content} />
+          <AskAiMarkdown content={withoutSuggestedFollowups(message.content)} />
         ) : null}
 
         {message.cancelled ? (
@@ -158,3 +159,4 @@ export function AskAiMessageView({
     </div>
   );
 }
+

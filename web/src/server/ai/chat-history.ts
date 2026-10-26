@@ -1,5 +1,6 @@
 import "server-only";
 
+import { normalizeV2Sources } from "@/lib/ai/v2-sources";
 import { randomUUID } from "node:crypto";
 import { getServerSupabase } from "@/lib/db/server";
 import type { AskAiSource } from "@/lib/ai/ask-ai-stream";
@@ -31,7 +32,32 @@ async function ownedSession(scope: ChatScope, id: string) {
   const db = getServerSupabase(); const { data, error } = await db.from("agenttender_ai_chat_sessions").select("id").eq("id", id).eq("company_id", scope.companyId).eq("user_id", scope.userId).eq("tender_id", scope.tenderId).maybeSingle();
   if (error) throw new Error(error.message); if (!data) throw new Error("Conversation not found."); return db;
 }
-export async function getChatMessages(scope: ChatScope, id: string) { const db = await ownedSession(scope, id); const { data, error } = await db.from("agenttender_ai_chat_messages").select("id,role,content,action,sources,warnings,status,created_at").eq("session_id", id).eq("company_id", scope.companyId).eq("user_id", scope.userId).eq("tender_id", scope.tenderId).order("created_at"); if (error) throw new Error(error.message); return (data || []).map((r) => ({ id:r.id, role:r.role as ChatMessage["role"], content:r.content, action:r.action, sources:Array.isArray(r.sources) ? r.sources as AskAiSource[] : undefined, warnings:Array.isArray(r.warnings) ? r.warnings as string[] : undefined, status:r.status as ChatMessage["status"], createdAt:r.created_at })); }
+export async function getChatMessages(scope: ChatScope, id: string) {
+  const db = await ownedSession(scope, id);
+  const { data, error } = await db.from("agenttender_ai_chat_messages")
+    .select("id,role,content,action,sources,warnings,status,created_at,request_id")
+    .eq("session_id", id).eq("company_id", scope.companyId).eq("user_id", scope.userId)
+    .eq("tender_id", scope.tenderId).order("created_at");
+  if (error) throw new Error(error.message);
+  // V2 stores tender/company references in messages and the full evidence set
+  // in its existing exchange receipt. Restore historical evidence from that receipt.
+  const { data: receipts, error: receiptError } = await db.from("agenttender_chat_exchange_audit")
+    .select("request_id,response_body").eq("session_id", id).eq("company_id", scope.companyId)
+    .eq("user_id", scope.userId).eq("tender_id", scope.tenderId);
+  if (receiptError) throw new Error("Unable to load conversation evidence.");
+  const receiptByRequest = new Map((receipts || []).map(r => [r.request_id, r.response_body]));
+  return (data || []).map(r => {
+    const receipt = r.role === "assistant" ? receiptByRequest.get(r.request_id) : null;
+    const historical = receipt && typeof receipt === "object"
+      ? [...(Array.isArray(receipt.historical_evidence) ? receipt.historical_evidence : []),
+         ...(Array.isArray(receipt.historical_positive_evidence) ? receipt.historical_positive_evidence : [])] : [];
+    return { id:r.id, role:r.role as ChatMessage["role"], content:r.content, action:r.action,
+      sources:[...normalizeV2Sources(r.sources), ...normalizeV2Sources(historical)],
+      warnings:Array.isArray(r.warnings) ? r.warnings as string[] : undefined,
+      status:r.status as ChatMessage["status"], createdAt:r.created_at };
+  });
+}
 export async function addChatMessage(scope: ChatScope, sessionId: string, message: Omit<ChatMessage, "id" | "createdAt">) { const db = await ownedSession(scope, sessionId); const now = new Date().toISOString(); const { data,error } = await db.from("agenttender_ai_chat_messages").insert({ session_id:sessionId, company_id:scope.companyId,user_id:scope.userId,tender_id:scope.tenderId,role:message.role,content:message.content,action:message.action || null,sources:message.sources || null,warnings:message.warnings || null,status:message.status }).select("id").single(); if(error) throw new Error(error.message); await db.from("agenttender_ai_chat_sessions").update({updated_at:now,last_message_at:now}).eq("id",sessionId); return data.id as string; }
 export async function renameChatSession(scope: ChatScope, id: string, title: string) { const db = await ownedSession(scope,id); const clean=title.trim().slice(0,160); if(!clean) throw new Error("A title is required."); const {error}=await db.from("agenttender_ai_chat_sessions").update({title:clean,updated_at:new Date().toISOString()}).eq("id",id); if(error) throw new Error(error.message); }
 export async function deleteChatSession(scope: ChatScope, id: string) { const db=await ownedSession(scope,id); const {error}=await db.from("agenttender_ai_chat_sessions").delete().eq("id",id); if(error) throw new Error(error.message); }
+

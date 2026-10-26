@@ -21,13 +21,14 @@ vi.mock("@/server/ai/rag/usage-log", () => ({
   createAskAiRequestId: () => "request-id", insertAiUsageLog: vi.fn(),
 }));
 import { POST } from "../route";
+import { GET as getUiConfig } from "../ui-config/route";
 
 const fetchMock = vi.fn();
 const context = { params: Promise.resolve({ id: "tender-id" }) };
 function request(stream = false) {
   return new Request("https://app.example/api/tenders/tender-id/ask-ai", {
     method: "POST", headers: { "Content-Type": "application/json", Accept: stream ? "text/event-stream" : "application/json" },
-    body: JSON.stringify({ message: "What is the EMD?", stream, user_id: "forged-user", company_id: "forged-company" }),
+    body: JSON.stringify({ message: "What is the EMD?", stream, session_id: "conversation-id", question_category: "EMD", user_id: "forged-user", company_id: "forged-company" }),
   });
 }
 beforeEach(() => {
@@ -60,7 +61,7 @@ describe("Ask AI session forwarding", () => {
       expect(headers.get("x-agenttender-session")).toBe("authenticated-cookie-token");
       expect(headers.has("Authorization")).toBe(false);
       expect(headers.has("apikey")).toBe(false);
-      expect(JSON.parse(init.body)).toEqual({ tender_id: "tender-id", company_id: "company-id", message: "What is the EMD?", conversation: [] });
+      expect(JSON.parse(init.body)).toEqual({ tender_id: "tender-id", company_id: "company-id", message: "What is the EMD?", session_id: "conversation-id", question_category: "EMD", conversation: [] });
       expect(mocks.release).toHaveBeenCalledTimes(1);
     });
   }
@@ -80,3 +81,28 @@ describe("Ask AI session forwarding", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe("authenticated UI configuration", () => {
+  it("loads ten questions through the existing session without exposing the token", async () => {
+    const questions = Array.from({length:10}, (_, i) => ({label:`Label ${i}`,category:`CATEGORY_${String.fromCharCode(65+i)}`,question:`Full question ${i}?`}));
+    fetchMock.mockResolvedValue(Response.json({ok:true,smart_questions:questions,revision:7}));
+    const response = await getUiConfig(new Request("https://app.example"), context);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({smart_questions:questions,revision:7});
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://project.supabase.co/functions/v1/agenttender-chat-ui");
+    expect(JSON.parse(init.body)).toEqual({tender_id:"tender-id",company_id:"company-id"});
+    expect(new Headers(init.headers).get("x-agenttender-session")).toBe("authenticated-cookie-token");
+    expect(response.headers.get("cache-control")).toContain("no-store");
+  });
+  it("rejects malformed config and never invents questions", async () => {
+    fetchMock.mockResolvedValue(Response.json({ok:true,smart_questions:[]}));
+    expect((await getUiConfig(new Request("https://app.example"), context)).status).toBe(503);
+  });
+  it("requires the authenticated cookie", async () => {
+    mocks.cookie.mockReturnValue(undefined);
+    expect((await getUiConfig(new Request("https://app.example"), context)).status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+

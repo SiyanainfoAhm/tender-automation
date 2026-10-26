@@ -15,7 +15,6 @@ import {
   fetchAskAiSessionMessages,
   fetchAskAiSessions,
   renameAskAiSession,
-  saveAskAiMessage,
   type AskAiChatSession,
 } from "@/lib/ai/ask-ai-client";
 import { actionStatusText } from "@/lib/ai/ask-ai-actions";
@@ -25,9 +24,10 @@ import { AskAiMessageList } from "@/components/tenders/ask-ai/ask-ai-message-lis
 import { AskAiComposer } from "@/components/tenders/ask-ai/ask-ai-composer";
 import type {
   AskAiMessage,
-  AskAiQuickAction,
 } from "@/components/tenders/ask-ai/types";
 import { reindexAiKnowledgeAction } from "@/server/actions/ai-reindex";
+
+import { parseSmartQuestions, type TenderSmartQuestion } from "@/lib/ai/tender-chat-ui";
 
 function createMessageId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -42,6 +42,10 @@ export function TenderAskAiDrawer({
   tenderTitle: string;
   compact?: boolean;
 }) {
+  const [questions, setQuestions] = useState<TenderSmartQuestion[]>([]);
+  const [configError, setConfigError] = useState(false);
+  const sendingRef = useRef(false);
+  const [configAttempt, setConfigAttempt] = useState(0);
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<AskAiMessage[]>([]);
@@ -65,6 +69,7 @@ export function TenderAskAiDrawer({
     text: string;
     conversation: Array<{ role: "user" | "assistant"; content: string }>;
     action?: AskAiAction | null;
+    questionCategory?: string;
     assistantId: string;
   } | null>(null);
   const titleId = useId();
@@ -88,6 +93,17 @@ export function TenderAskAiDrawer({
     return () => window.clearTimeout(timer);
   }, [open, tenderId, historySearch]);
 
+  useEffect(() => {
+    if (!open) return;
+    const abort = new AbortController();
+    setQuestions([]); setConfigError(false);
+    void fetch(`/api/tenders/${tenderId}/ask-ai/ui-config`, { cache: "no-store", signal: abort.signal })
+      .then(async response => { if (!response.ok) throw new Error("Config unavailable"); return response.json(); })
+      .then(data => setQuestions(parseSmartQuestions(data.smart_questions)))
+      .catch(() => { if (!abort.signal.aborted) setConfigError(true); });
+    return () => abort.abort();
+  }, [open, tenderId, configAttempt]);
+
   function addOrUpdateSession(session: AskAiChatSession) {
     setSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
   }
@@ -98,7 +114,7 @@ export function TenderAskAiDrawer({
     try {
       const result = await fetchAskAiSessionMessages(tenderId, sessionId);
       setActiveSessionId(sessionId);
-      setMessages(result.messages.map((item) => ({ id:item.id, role:item.role, content:item.content, sources:item.sources, warnings:item.warnings, incomplete:item.status !== "complete", cancelled:item.status === "cancelled", error:item.status === "error" })));
+      setMessages(result.messages.map((item) => ({ id:item.id, role:item.role, content:item.content, questionCategory:item.action || undefined, sources:item.sources, warnings:item.warnings, incomplete:item.status !== "complete", cancelled:item.status === "cancelled", error:item.status === "error" })));
       setHistoryOpen(false);
       setStickToBottom(true);
     } catch { /* history remains available on a transient request failure */ }
@@ -192,6 +208,7 @@ export function TenderAskAiDrawer({
     conversation: Array<{ role: "user" | "assistant"; content: string }>;
     assistantId: string;
     action?: AskAiAction | null;
+    questionCategory?: string;
     /** Prevent recursive auto-retry after index becomes ready. */
     afterIndexRetry?: boolean;
     sessionId: string;
@@ -203,14 +220,12 @@ export function TenderAskAiDrawer({
       text: options.text,
       conversation: options.conversation,
       action: options.action,
+      questionCategory: options.questionCategory,
       assistantId: options.assistantId,
     };
 
     let sawDelta = false;
     let indexingStarted = false;
-    let streamedContent = "";
-    let streamedSources: AskAiMessage["sources"];
-    let streamedWarnings: AskAiMessage["warnings"];
 
     try {
       await streamAskAiRequest({
@@ -218,6 +233,8 @@ export function TenderAskAiDrawer({
         message: options.text,
         conversation: options.conversation,
         action: options.action ?? undefined,
+        questionCategory: options.questionCategory,
+        sessionId: options.sessionId,
         signal: abort.signal,
         handlers: {
           onStatus(statusMessage, stage) {
@@ -237,7 +254,6 @@ export function TenderAskAiDrawer({
           },
           onDelta(delta) {
             sawDelta = true;
-            streamedContent += delta;
             setPhase("generating");
             setMessages((current) =>
               current.map((item) =>
@@ -256,8 +272,6 @@ export function TenderAskAiDrawer({
             );
           },
           onSources(sources, warnings) {
-            streamedSources = sources;
-            streamedWarnings = warnings;
             setMessages((current) =>
               current.map((item) =>
                 item.id === options.assistantId
@@ -303,7 +317,6 @@ export function TenderAskAiDrawer({
                   : item,
               ),
             );
-            if (typeof saveAskAiMessage === "function") void saveAskAiMessage(tenderId, options.sessionId, { role: "assistant", content: streamedContent, sources: streamedSources, warnings: streamedWarnings, status: "complete" });
             setPhase("idle");
           },
           onError(error) {
@@ -323,7 +336,6 @@ export function TenderAskAiDrawer({
                 ),
               );
               setPhase("idle");
-              if (typeof saveAskAiMessage === "function") void saveAskAiMessage(tenderId, options.sessionId, { role: "assistant", content: streamedContent, sources: streamedSources, warnings: streamedWarnings, status: "cancelled" });
               return;
             }
 
@@ -370,7 +382,6 @@ export function TenderAskAiDrawer({
               ),
             );
             setPhase("idle");
-            if (typeof saveAskAiMessage === "function") void saveAskAiMessage(tenderId, options.sessionId, { role: "assistant", content: streamedContent || error.message || "", sources: streamedSources, warnings: streamedWarnings, status: sawDelta ? "interrupted" : "error" });
           },
         },
       });
@@ -464,9 +475,11 @@ export function TenderAskAiDrawer({
     }
   }
 
-  async function ask(raw: string, action?: AskAiAction | null) {
+  async function ask(raw: string, action?: AskAiAction | null, questionCategory?: string) {
     const text = raw.trim();
-    if (!text || busy) return;
+    if (!text || busy || sendingRef.current) return;
+    sendingRef.current = true;
+    setPhase("retrieving");
 
     const conversation = messagesRef.current
       .filter(
@@ -485,16 +498,15 @@ export function TenderAskAiDrawer({
     let sessionId = activeSessionId;
     if (!sessionId) {
       try { if (typeof createAskAiSession === "function") { const created = await createAskAiSession(tenderId, text, action); sessionId = created.session.id; setActiveSessionId(sessionId); addOrUpdateSession(created.session); } else { sessionId = createMessageId("session"); setActiveSessionId(sessionId); } }
-      catch { return; }
+      catch { sendingRef.current = false; setPhase("idle"); return; }
     }
-    if (typeof saveAskAiMessage === "function") await saveAskAiMessage(tenderId, sessionId, { role: "user", content: text, action: action || null, status: "complete" }).catch(() => undefined);
     const assistantId = createMessageId("assistant");
     const initialStatus = action
       ? actionStatusText(action)
       : "Searching indexed evidence...";
     setMessages((current) => [
       ...current,
-      { id: createMessageId("user"), role: "user", content: text },
+      { id: createMessageId("user"), role: "user", content: text, questionCategory },
       {
         id: assistantId,
         role: "assistant",
@@ -506,7 +518,7 @@ export function TenderAskAiDrawer({
     setInput("");
     setStickToBottom(true);
 
-    await runStream({ text, conversation, assistantId, action, sessionId });
+    try { await runStream({ text, conversation, assistantId, action, questionCategory, sessionId }); } finally { sendingRef.current = false; }
   }
 
   async function retryAssistant(assistantIndex: number) {
@@ -549,7 +561,7 @@ export function TenderAskAiDrawer({
     setStickToBottom(true);
 
     if (!activeSessionId) return;
-    await runStream({ text, conversation, assistantId, sessionId: activeSessionId });
+    await runStream({ text, conversation, assistantId, sessionId: activeSessionId, questionCategory: prior.questionCategory });
   }
 
   async function handleReindex() {
@@ -607,6 +619,7 @@ export function TenderAskAiDrawer({
         text: pending.text,
         conversation: pending.conversation,
         action: pending.action,
+        questionCategory: pending.questionCategory,
         assistantId,
         sessionId: activeSessionId || "",
         afterIndexRetry: true,
@@ -614,8 +627,8 @@ export function TenderAskAiDrawer({
     }
   }
 
-  function onQuickAction(action: AskAiQuickAction) {
-    void ask(action.message, action.action);
+  function onQuickAction(question: TenderSmartQuestion) {
+    void ask(question.question, undefined, question.category);
   }
 
   return (
@@ -664,7 +677,8 @@ export function TenderAskAiDrawer({
               <div className="mt-1 max-h-[calc(100%-90px)] space-y-1 overflow-y-auto">{sessions.map((item) => <div key={item.id} className={cn("group flex items-center rounded-md", activeSessionId === item.id ? "bg-slate-200" : "hover:bg-slate-100")}><button type="button" onClick={() => void selectSession(item.id)} className="min-w-0 flex-1 px-2 py-2 text-left"><p className="truncate text-[12px] font-medium text-slate-700">{item.title}</p><p className="mt-0.5 text-[10px] text-slate-400">{new Date(item.lastMessageAt).toLocaleDateString()}</p></button><div className="mr-1 hidden items-center gap-0.5 group-hover:flex"><button type="button" onClick={() => { setSessionTitleDraft(item.title); setSessionDialog({ kind: "rename", session: item }); }} className="rounded px-1.5 py-1 text-[10px] text-slate-400 hover:bg-white hover:text-slate-700" aria-label={`Rename ${item.title}`}>Rename</button><button type="button" onClick={() => setSessionDialog({ kind: "delete", session: item })} className="rounded px-1.5 py-1 text-[10px] text-slate-400 hover:bg-white hover:text-red-600" aria-label={`Delete ${item.title}`}>Delete</button></div></div>)}{sessions.length === 0 ? <p className="px-2 py-3 text-[11px] text-slate-400">No saved conversations.</p> : null}</div>
             </aside>
             <main className="flex min-w-0 flex-1 flex-col">
-              <AskAiMessageList messages={messages} busy={busy} stickToBottom={stickToBottom} onStickToBottomChange={setStickToBottom} showJumpToLatest={showJumpToLatest} onJumpToLatest={() => setStickToBottom(true)} onQuickAction={onQuickAction} onRetry={(index) => void retryAssistant(index)} onReindex={() => void handleReindex()} reindexState={reindexState} />
+              <AskAiMessageList questions={questions} messages={messages} busy={busy} stickToBottom={stickToBottom} onStickToBottomChange={setStickToBottom} showJumpToLatest={showJumpToLatest} onJumpToLatest={() => setStickToBottom(true)} onQuickAction={onQuickAction} onRetry={(index) => void retryAssistant(index)} onReindex={() => void handleReindex()} reindexState={reindexState} />
+              {configError ? <p role="status" className="px-3 py-2 text-xs text-slate-500">Quick questions could not be loaded. <button type="button" className="underline" onClick={() => setConfigAttempt(n => n + 1)}>Retry</button></p> : null}
               <AskAiComposer value={input} onChange={setInput} onSend={() => void ask(input)} onStop={stopGenerating} busy={busy} />
             </main>
           </div>
@@ -682,3 +696,4 @@ export function TenderAskAiDrawer({
     </>
   );
 }
+
