@@ -18,6 +18,10 @@ export function knownPlan(question) {
 export function cleanPlan(value,allowedIds=[]) {
  const intents=['counts','ranking','pq','conditional','usa_ai','verify','missing','closing','today','priorities','search'];
  const statuses=['GO','NO_GO','VERIFY','REVIEW','CONDITIONAL_GO','MAY_BID','WILL_BID','SUBMITTED','WON','DUPLICATE','LOST','PARTNER_BID'];
+ const ids=Array.isArray(value?.ids)?value.ids.filter(id=>allowedIds.includes(id)).slice(0,10):[];
+ // A resolved conversation reference is the retrieval scope. Analytical words
+ // such as "PQ" or "country" must not become extra full-text filters on it.
+ if(ids.length)return {intent:'search',search:'',status:'',region:'',country:'',ids};
  return {intent:intents.includes(value?.intent)?value.intent:'search',search:String(value?.search||'').slice(0,200),status:statuses.includes(value?.status)?value.status:'',region:['INDIAN','GLOBAL'].includes(value?.region)?value.region:'',country:value?.country==='USA'?'USA':'',ids:Array.isArray(value?.ids)?value.ids.filter(id=>allowedIds.includes(id)).slice(0,10):[]};
 }
 export function safeAnswer(value,tenders) {

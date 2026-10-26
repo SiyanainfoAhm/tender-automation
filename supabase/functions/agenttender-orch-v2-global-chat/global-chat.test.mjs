@@ -22,6 +22,9 @@ test('malformed or empty AI responses fail safely',()=>{
  assert.throws(()=>safeAnswer({summary:'',details:'{}'},[]));
  assert.throws(()=>safeAnswer(null,[]));
 });
+test('resolved follow-up IDs take precedence over contradictory search filters',()=>{
+ assert.deepEqual(cleanPlan({intent:'pq',search:'PQ country days remaining',status:'GO',region:'INDIAN',ids:['first-tender']},['first-tender']),{intent:'search',search:'',status:'',region:'',country:'',ids:['first-tender']});
+});
 test('database-owned memory preserves user/assistant order and follow-up context',()=>{
  const rows=[{id:'1',role:'user',content:'Show Conditional Go tenders',created_at:'2026-10-26T10:00:00.000Z'},{id:'2',role:'assistant',content:'First: Tender A. Second: Tender B.',created_at:'2026-10-26T10:00:00.001Z'}];
  const memory=boundedMemory(rows,'Check the first one');
