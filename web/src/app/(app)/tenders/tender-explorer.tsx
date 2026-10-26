@@ -26,6 +26,7 @@ import { TenderLoadingOverlay } from "@/components/tenders/tender-loading-overla
 import { TenderStatsCards } from "@/components/tenders/tender-stats-cards";
 import { TenderExportButtons } from "@/components/tenders/tender-export-buttons";
 import { TenderPageActions } from "@/components/tenders/tender-page-actions";
+import { TenderDecisionPreview } from "@/components/tenders/tender-decision-preview";
 import { TenderListStatusSelect } from "@/components/tenders/tender-list-status-select";
 import { TenderAskAiDrawer } from "@/components/tenders/tender-ask-ai-drawer";
 import {
@@ -1544,26 +1545,7 @@ export function TenderExplorer({
                             className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] leading-snug text-foreground-500"
                             onClick={(event) => event.stopPropagation()}
                           >
-                            {chatgpt ? (
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <p className="min-w-0 max-w-full truncate sm:max-w-[28rem]">
-                                    <span className="font-medium text-foreground-600">
-                                      ChatGPT:
-                                    </span>{" "}
-                                    <span>{chatgpt}</span>
-                                  </p>
-                                </TooltipTrigger>
-                                <TooltipContent className="max-w-sm text-xs leading-relaxed">
-                                  {chatgpt}
-                                </TooltipContent>
-                              </Tooltip>
-                            ) : null}
-                            {chatgpt && (hasDocs || hasAi) ? (
-                              <span className="text-foreground-300" aria-hidden>
-                                |
-                              </span>
-                            ) : null}
+                            {chatgpt ? <TenderDecisionPreview comment={chatgpt} /> : null}
                             {hasDocs ? (
                               <Tooltip>
                                 <TooltipTrigger asChild>
