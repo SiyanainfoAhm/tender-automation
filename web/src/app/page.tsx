@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
 export default function HomePage() {
-  redirect("/dashboard");
+  redirect("/tenders/indian?date=yesterday&status=may_bid");
 }

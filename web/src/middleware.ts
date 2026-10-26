@@ -21,6 +21,8 @@ const PROTECTED_PREFIXES = [
 ];
 
 const PASSWORD_CHANGE_PATH = "/change-password";
+const DEFAULT_LANDING_PATH = "/tenders/indian";
+const DEFAULT_LANDING_QUERY = "date=yesterday&status=may_bid";
 
 function isProtectedPath(pathname: string): boolean {
   return PROTECTED_PREFIXES.some(
@@ -62,7 +64,8 @@ export function middleware(request: NextRequest) {
   ) {
     if (hasSession && (pathname === "/login" || pathname === "/signup")) {
       const url = request.nextUrl.clone();
-      url.pathname = "/dashboard";
+      url.pathname = DEFAULT_LANDING_PATH;
+      url.search = DEFAULT_LANDING_QUERY;
       return applySecurityHeaders(NextResponse.redirect(url));
     }
     return applySecurityHeaders(NextResponse.next());
@@ -79,7 +82,8 @@ export function middleware(request: NextRequest) {
 
   if (pathname === "/") {
     const url = request.nextUrl.clone();
-    url.pathname = hasSession ? "/dashboard" : "/login";
+    url.pathname = hasSession ? DEFAULT_LANDING_PATH : "/login";
+    if (hasSession) url.search = DEFAULT_LANDING_QUERY;
     return applySecurityHeaders(NextResponse.redirect(url));
   }
 

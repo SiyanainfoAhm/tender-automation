@@ -96,7 +96,7 @@ export async function loginAction(
     if (result.mustChangePassword) {
       redirect("/change-password");
     }
-    redirect(safeInternalPath(parsed.data.next) || "/dashboard");
+    redirect(safeInternalPath(parsed.data.next) || "/tenders/indian?date=yesterday&status=may_bid");
   } catch (error) {
     if (isRedirectError(error)) throw error;
     return { error: "Unable to sign in with those credentials." };
@@ -421,7 +421,7 @@ export async function changePasswordAction(formData: FormData): Promise<{
   revalidatePath("/change-password");
 
   if (session.user.mustChangePassword) {
-    redirect("/dashboard");
+    redirect("/tenders/indian?date=yesterday&status=may_bid");
   }
   return { ok: true };
 }
