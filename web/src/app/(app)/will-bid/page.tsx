@@ -12,7 +12,7 @@ export default async function WillBidPage({ searchParams }: { searchParams: Prom
   const requested = (await searchParams).tender;
   const selected = tenders.find((tender) => tender.id === requested) ?? tenders[0];
   return <div className="space-y-5">
-    <header><h1 className="text-2xl font-semibold">Will Bid</h1><p className="mt-1 text-sm text-foreground-500">{tenders.length} tenders · Prepare documents and track submission readiness.</p></header>
+    <header className="flex flex-wrap items-start justify-between gap-3"><div><h1 className="text-2xl font-semibold">Will Bid</h1><p className="mt-1 text-sm text-foreground-500">{tenders.length} tenders · Prepare documents and track submission readiness.</p></div><Link href="/will-bid-test" className="rounded-md border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-medium text-violet-700 hover:bg-violet-100">Open test view</Link></header>
     {tenders.length === 0 ? <div className="rounded-lg border bg-card p-8 text-center">
       <h2 className="font-semibold">No Will Bid tenders yet</h2><p className="my-3 text-sm text-foreground-500">Mark a tender Will Bid to start preparing its checklist.</p><Link href="/tenders" className="text-primary-700 underline">Browse tenders</Link>
     </div> : <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
