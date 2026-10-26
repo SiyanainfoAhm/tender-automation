@@ -6,6 +6,7 @@ import {
   FileText,
   Globe2,
   LayoutDashboard,
+  MessageSquare,
   MapPinned,
   Trophy,
   Users,
@@ -53,6 +54,13 @@ export const APP_MAIN_NAV: AppNavItem[] = [
     label: "Dashboard",
     icon: LayoutDashboard,
     section: "main",
+  },
+  {
+    href: "/ask-ai",
+    label: "Ask AI",
+    icon: MessageSquare,
+    section: "main",
+    permission: "tenders.view",
   },
   {
     href: "/tenders",

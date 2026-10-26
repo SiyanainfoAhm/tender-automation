@@ -30,3 +30,7 @@ verify_jwt = true
 
 [functions.agenttender-orch-ai-evaluation-worker]
 verify_jwt = true
+[functions.agenttender-orch-v2-global-chat]
+# AgentTender uses opaque sessions validated inside the function.
+verify_jwt = false
+
