@@ -176,7 +176,7 @@ export function BidWorkspaceClient({
       prepStatus === "NOT_STARTED" ||
       shouldAutoRetryFailed);
   const showPrepFailed =
-    isWillBid && prepStatus === "FAILED" && !shouldAutoRetryFailed;
+    isWillBid && items.length === 0 && prepStatus === "FAILED" && !shouldAutoRetryFailed;
 
   // Auto-initialize WILL_BID workspaces that are not ready yet.
   useEffect(() => {
