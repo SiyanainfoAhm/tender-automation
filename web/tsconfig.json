@@ -23,6 +23,9 @@
       }
     ],
     "paths": {
+      "@/components/bid-workspace/checklist-creation-panel": [
+        "./src/components/bid-workspace/checklist-creation-panel-v2.tsx"
+      ],
       "@/*": [
         "./src/*"
       ]
