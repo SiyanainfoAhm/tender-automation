@@ -6,6 +6,7 @@ const COOKIE_NAME =
 
 const PROTECTED_PREFIXES = [
   "/dashboard",
+  "/ask-ai",
   "/tenders",
   "/bid-fees",
   "/will-bid",
