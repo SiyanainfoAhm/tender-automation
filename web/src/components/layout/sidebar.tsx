@@ -49,6 +49,7 @@ type AppSidebarProps = {
   globalTenderCount?: number | null;
   submittedTenderCount?: number | null;
   wonTenderCount?: number | null;
+  willBidTenderCount?: number | null;
 };
 
 function navItemCount(
@@ -59,8 +60,10 @@ function navItemCount(
     global: number | null;
     submitted: number | null;
     won: number | null;
+    willBid: number | null;
   },
 ): number | null {
+  if (countKey === "willBidTenders") return counts.willBid;
   if (countKey === "wonTenders") return counts.won;
   if (countKey === "submittedTenders") return counts.submitted;
   if (countKey === "indianTenders") return counts.indian;
@@ -132,6 +135,7 @@ export function AppSidebar({
   globalTenderCount = null,
   submittedTenderCount = null,
   wonTenderCount = null,
+  willBidTenderCount = null,
 }: AppSidebarProps) {
   const pathname = usePathname();
   const tendersHref = useTendersListReturnHref();
@@ -141,6 +145,7 @@ export function AppSidebar({
     global: globalTenderCount,
     submitted: submittedTenderCount,
     won: wonTenderCount,
+    willBid: willBidTenderCount,
   };
   const mainItems = APP_MAIN_NAV.filter((item) => {
     if (item.permission) {

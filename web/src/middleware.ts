@@ -8,6 +8,7 @@ const PROTECTED_PREFIXES = [
   "/dashboard",
   "/tenders",
   "/bid-fees",
+  "/will-bid",
   "/submitted-tenders",
   "/won-tenders",
   "/analytics",

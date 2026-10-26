@@ -1,5 +1,6 @@
 "use client";
 
+import { checklistWorkCategory, WORK_CATEGORIES } from "@/lib/will-bid";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -917,13 +918,21 @@ export function BidWorkspaceClient({
             </div>
 
             {tab === "checklist" ? (
-              <RequirementListPanel
-                {...sharedPanelProps}
-                title="Checklist Creation"
-                items={items}
-                progress={progress}
-                addSection={null}
-              />
+              <div className="space-y-5">
+                {WORK_CATEGORIES.map((category) => {
+                  const categoryItems = items.filter((item) => checklistWorkCategory(item) === category.key);
+                  return <RequirementListPanel
+                    key={category.key}
+                    {...sharedPanelProps}
+                    title={category.label}
+                    subtitle={category.description}
+                    items={categoryItems}
+                    progress={calculateSectionProgress(categoryItems)}
+                    emptyMessage="No requirements in this category."
+                    addSection={null}
+                  />;
+                })}
+              </div>
             ) : null}
 
             {tab === "cost" ? (

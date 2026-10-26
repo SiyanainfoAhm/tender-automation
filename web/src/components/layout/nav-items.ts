@@ -17,7 +17,8 @@ export type NavCountKey =
   | "indianTenders"
   | "globalTenders"
   | "submittedTenders"
-  | "wonTenders";
+  | "wonTenders"
+  | "willBidTenders";
 
 export type AppNavChildItem = {
   href: string;
@@ -83,6 +84,15 @@ export const APP_MAIN_NAV: AppNavItem[] = [
     icon: Wallet,
     section: "main",
     permission: "bids.view",
+  },
+  {
+    href: "/will-bid",
+    label: "Will Bid",
+    icon: FileCheck2,
+    section: "main",
+    permission: "bids.view",
+    showCount: true,
+    countKey: "willBidTenders",
   },
   {
     href: "/submitted-tenders",

@@ -114,6 +114,7 @@ export default async function BidWorkspacePage({
 
   return (
     <BidWorkspaceClient
+      key={tender.id}
       tender={refreshed.ok ? refreshed.tender : tender}
       workspace={workspace}
       checklistItems={checklistItems}

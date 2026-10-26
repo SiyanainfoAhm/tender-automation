@@ -1,5 +1,6 @@
 "use client";
 
+import { WillBidRefresh } from "@/components/bid-workspace/will-bid-refresh";
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -32,6 +33,7 @@ type AppShellProps = {
   globalTenderCount?: number | null;
   submittedTenderCount?: number | null;
   wonTenderCount?: number | null;
+  willBidTenderCount?: number | null;
   children: React.ReactNode;
 };
 
@@ -45,6 +47,7 @@ export function AppShell({
   globalTenderCount = null,
   submittedTenderCount = null,
   wonTenderCount = null,
+  willBidTenderCount = null,
   children,
 }: AppShellProps) {
   const router = useRouter();
@@ -79,6 +82,7 @@ export function AppShell({
 
   return (
     <TooltipProvider delayDuration={200}>
+      <WillBidRefresh />
       <div className="flex h-screen overflow-hidden bg-background">
         <div className="hidden lg:flex">
           <AppSidebar
@@ -90,6 +94,7 @@ export function AppShell({
             globalTenderCount={globalTenderCount}
             submittedTenderCount={submittedTenderCount}
             wonTenderCount={wonTenderCount}
+            willBidTenderCount={willBidTenderCount}
           />
         </div>
 
@@ -102,6 +107,7 @@ export function AppShell({
               globalTenderCount={globalTenderCount}
               submittedTenderCount={submittedTenderCount}
               wonTenderCount={wonTenderCount}
+            willBidTenderCount={willBidTenderCount}
             />
             <span className="font-heading text-sm font-semibold text-text-primary">
               TenderFlow

@@ -30,6 +30,7 @@ type MobileNavProps = {
   globalTenderCount?: number | null;
   submittedTenderCount?: number | null;
   wonTenderCount?: number | null;
+  willBidTenderCount?: number | null;
 };
 
 function navItemCount(
@@ -40,8 +41,10 @@ function navItemCount(
     global: number | null;
     submitted: number | null;
     won: number | null;
+    willBid: number | null;
   },
 ): number | null {
+  if (countKey === "willBidTenders") return counts.willBid;
   if (countKey === "wonTenders") return counts.won;
   if (countKey === "submittedTenders") return counts.submitted;
   if (countKey === "indianTenders") return counts.indian;
@@ -56,6 +59,7 @@ export function MobileNav({
   globalTenderCount = null,
   submittedTenderCount = null,
   wonTenderCount = null,
+  willBidTenderCount = null,
 }: MobileNavProps) {
   const pathname = usePathname();
   const tendersHref = useTendersListReturnHref();
@@ -65,6 +69,7 @@ export function MobileNav({
     global: globalTenderCount,
     submitted: submittedTenderCount,
     won: wonTenderCount,
+    willBid: willBidTenderCount,
   };
   const mainItems = APP_MAIN_NAV.filter((item) => {
     if (item.permission) {

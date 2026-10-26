@@ -45,6 +45,7 @@ export type ChecklistItemRow = {
   mandatory: boolean;
   documentType: string | null;
   generationAllowed: boolean;
+  processingType?: string | null;
   sourcePage: number | null;
   sourceClause: string | null;
   sourceText: string | null;
@@ -133,6 +134,7 @@ function mapChecklistRow(
   });
 
   return {
+    processingType: row.processing_type ? String(row.processing_type) : null,
     id: String(row.id),
     requirementKey: String(row.requirement_key),
     requirementName: String(row.requirement_name),

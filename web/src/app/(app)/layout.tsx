@@ -1,3 +1,4 @@
+import { listWillBidTenders } from "@/server/repositories/willBidRepository";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/layout/app-shell";
@@ -42,6 +43,7 @@ export default async function AppLayout({
     regionCounts,
     submittedTenderCount,
     wonTenderCount,
+    willBidTenders,
     memberships,
     activeCompany,
   ] = await Promise.all([
@@ -70,6 +72,7 @@ export default async function AppLayout({
       companyId
         ? countWonProjects(companyId).catch(() => null)
         : Promise.resolve(null),
+      companyId ? listWillBidTenders(companyId).catch(() => null) : Promise.resolve(null),
       listMembershipsForUser(session.user.id).catch(() => []),
       companyId
         ? getCompanyById(companyId).catch(() => null)
@@ -97,6 +100,7 @@ export default async function AppLayout({
       globalTenderCount={regionCounts?.global ?? null}
       submittedTenderCount={submittedTenderCount}
       wonTenderCount={wonTenderCount}
+      willBidTenderCount={willBidTenders?.length ?? null}
     >
       {children}
     </AppShell>
