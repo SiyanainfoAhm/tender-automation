@@ -1,3 +1,5 @@
+export const maxDuration = 300;
+
 import { notFound, redirect } from "next/navigation";
 
 import { BidWorkspaceClient } from "@/components/bid-workspace/bid-workspace-client";

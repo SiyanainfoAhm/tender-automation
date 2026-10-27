@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { AddRequirementDialog } from "@/components/bid-workspace/add-requirement-dialog";
 import { CompanyDocumentPickerDialog } from "@/components/bid-workspace/company-document-picker-dialog";
 import { Button } from "@/components/ui/button";
+import { ChecklistItemAiChat } from "@/components/bid-workspace/checklist-item-ai-chat";
 import { checklistWorkCategory, WORK_CATEGORIES } from "@/lib/will-bid";
 import type { RequirementDestinationSection } from "@/lib/bid-checklist";
 import type { DocumentCategory } from "@/lib/company/types";
@@ -238,6 +239,7 @@ export function RequirementListPanel({
 
                 {!readOnly ? (
                   <div className="flex flex-wrap justify-start gap-1.5 lg:justify-end">
+                    <ChecklistItemAiChat tenderId={tenderId} item={item} disabled={busy} onSaved={onRequirementsChanged} />
                     {currentCategory === "company" ? (
                       <Button
                         type="button"

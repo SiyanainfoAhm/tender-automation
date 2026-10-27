@@ -29,6 +29,7 @@ import { CompanyDocumentPickerDialog } from "@/components/bid-workspace/company-
 import { ChecklistDocumentPreviewDialog } from "@/components/bid-workspace/checklist-document-preview-dialog";
 import { EditAiPromptDialog } from "@/components/bid-workspace/edit-ai-prompt-dialog";
 import { Button } from "@/components/ui/button";
+import { ChecklistItemAiChat } from "@/components/bid-workspace/checklist-item-ai-chat";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import {
@@ -538,6 +539,7 @@ export function RequirementListPanel({
                       className="flex flex-wrap gap-1.5 border-t border-border/60 pt-2"
                       onClick={(e) => e.stopPropagation()}
                     >
+                      <ChecklistItemAiChat tenderId={tenderId} item={item} disabled={itemBusy || itemGenerating} onSaved={onRequirementsChanged} />
                       <Button
                         type="button"
                         variant="outline"

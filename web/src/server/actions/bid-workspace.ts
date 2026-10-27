@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { CHECKLIST_DOCUMENT_MODES, type ChecklistDocumentChatOptions } from "@/lib/ai/checklist-document-chat";
 
 import {
   BOQ_CATEGORIES,
@@ -917,6 +918,7 @@ export async function generateChecklistDocumentAction(input: {
   tenderId: string;
   requirementId: string;
   customInstructions?: string;
+  documentChat?: ChecklistDocumentChatOptions;
 }): Promise<GenerateChecklistDocumentActionResult> {
   try {
     const { session, detail, workspaceId } = await requireEditableWorkspace(
@@ -924,6 +926,16 @@ export async function generateChecklistDocumentAction(input: {
       "bids.edit",
     );
 
+    if (input.customInstructions && (typeof input.customInstructions !== "string" || input.customInstructions.length > 6000)) {
+      return { ok:false, error:"Instructions must be at most 6,000 characters." };
+    }
+    if (input.documentChat && (!CHECKLIST_DOCUMENT_MODES.includes(input.documentChat.mode) || !input.customInstructions?.trim())) {
+      return { ok:false, error:"Choose an editing action and enter your instructions." };
+    }
+    const source = input.documentChat?.sourceDocument;
+    if (source && (!/^[0-9a-f-]{36}$/i.test(source.id) || !["TENDER", "COMPANY"].includes(source.source))) {
+      return { ok:false, error:"Invalid attached document." };
+    }
     const supabase = getServerSupabase();
     const { data: requirement, error: reqError } = await supabase
       .from("agenttender_bid_checklist_items")
@@ -931,6 +943,7 @@ export async function generateChecklistDocumentAction(input: {
       .eq("id", input.requirementId)
       .eq("workspace_id", workspaceId)
       .eq("company_id", session.companyId)
+      .eq("is_archived", false)
       .maybeSingle();
     if (reqError) throw new Error(reqError.message);
     if (!requirement) {
@@ -963,6 +976,13 @@ export async function generateChecklistDocumentAction(input: {
       tenderReference: detail.sourceTenderId || detail.referenceNo || detail.id,
       requirementId: input.requirementId,
       customInstructions: input.customInstructions || null,
+      documentChat: input.documentChat,
+      authorizeBeforeSave: async () => {
+        const current = await requireEditableWorkspace(input.tenderId, "bids.edit");
+        if (current.session.companyId !== session.companyId || current.workspaceId !== workspaceId) {
+          throw new Error("Your workspace context changed. Please reload and try again.");
+        }
+      },
       adminCustomPrompt: categoryPrompt.template,
       itemPromptTemplate: itemPrompt.template,
     });
@@ -974,6 +994,8 @@ export async function generateChecklistDocumentAction(input: {
       summary: `AI draft generated: ${result.fileName}`,
       payload: {
         requirementId: input.requirementId,
+        documentChatMode: input.documentChat?.mode || "recreate",
+        sourceAttachmentId: input.documentChat?.sourceDocument?.id || null,
         documentId: result.documentId,
         fileName: result.fileName,
         versionLabel: result.versionLabel,

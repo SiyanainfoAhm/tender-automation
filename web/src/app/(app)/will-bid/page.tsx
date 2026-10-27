@@ -1,3 +1,5 @@
+export const maxDuration = 300;
+
 import Link from "next/link";
 import { Suspense } from "react";
 import BidWorkspacePage from "../tenders/[id]/bid-workspace/page";
