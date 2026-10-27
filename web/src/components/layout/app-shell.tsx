@@ -1,5 +1,6 @@
 "use client";
 
+import { GlobalChatLauncher } from "@/components/ai/global-chat-launcher";
 import { WillBidRefresh } from "@/components/bid-workspace/will-bid-refresh";
 import * as React from "react";
 import Link from "next/link";
@@ -148,6 +149,7 @@ export function AppShell({
           initialQuery={searchValue}
         />
 
+        <GlobalChatLauncher />
         <LogoutForm />
 
         <Link href="/profile" className="sr-only" prefetch={false}>

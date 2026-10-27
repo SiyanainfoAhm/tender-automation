@@ -20,7 +20,7 @@ function Markdown({text}:{text:string}) {
   table:({children})=><div className="max-w-full overflow-x-auto"><table className="w-full text-left">{children}</table></div>,
  }}>{text}</ReactMarkdown></div>;
 }
-export function GlobalChat() {
+export function GlobalChat({embedded=false}:{embedded?:boolean}={}) {
  const [sessions,setSessions]=useState<Session[]>([]);
  const [sessionId,setSessionId]=useState<string|null>(null);
  const [messages,setMessages]=useState<GlobalMessage[]>([]);
@@ -63,15 +63,15 @@ export function GlobalChat() {
   finally{pending.current=false;setBusy(false);}
  }
  const disabled=busy||loading;
- return <section aria-label="Global Ask AI" className="flex h-[calc(100dvh-12rem)] min-h-[420px] min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-white shadow-sm lg:h-[calc(100dvh-9rem)]">
+ return <section aria-label="Global Ask AI" className={embedded ? "flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-white" : "flex h-[calc(100dvh-12rem)] min-h-[420px] min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-white shadow-sm lg:h-[calc(100dvh-9rem)]"}>
   <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-4 py-3">
    <div><h1 className="font-heading text-lg font-semibold text-text-primary">Ask AI</h1><p className="text-xs text-text-muted">Across Indian and global tenders · VBDC V2</p></div>
-   <button type="button" className="min-h-11 rounded-lg border border-border px-3 text-sm lg:hidden" aria-expanded={historyOpen} onClick={()=>setHistoryOpen(!historyOpen)}>History</button>
+   <button type="button" className={`min-h-11 rounded-lg border border-border px-3 text-sm ${embedded?'':'lg:hidden'}`} aria-expanded={historyOpen} onClick={()=>setHistoryOpen(!historyOpen)}>History</button>
    <button type="button" disabled={disabled} onClick={newChat} className="min-h-11 rounded-lg bg-primary px-3 text-sm font-medium text-white disabled:opacity-50">New Chat</button>
   </header>
   <div className="relative flex min-h-0 flex-1">
-   <aside aria-label="Conversation history" className={`${historyOpen?'absolute inset-y-0 left-0 z-20 flex w-[min(280px,90%)] shadow-xl':'hidden'} shrink-0 flex-col border-r border-border bg-surface-secondary lg:static lg:flex lg:w-60 lg:shadow-none`}>
-    <div className="flex items-center justify-between p-4"><h2 className="text-sm font-semibold">Conversations</h2><button type="button" className="min-h-11 px-2 lg:hidden" onClick={()=>setHistoryOpen(false)} aria-label="Close history">Close</button></div>
+   <aside aria-label="Conversation history" className={`${historyOpen?'absolute inset-y-0 left-0 z-20 flex w-[min(280px,90%)] shadow-xl':'hidden'} shrink-0 flex-col border-r border-border bg-surface-secondary ${embedded?'':'lg:static lg:flex lg:w-60 lg:shadow-none'}`}>
+    <div className="flex items-center justify-between p-4"><h2 className="text-sm font-semibold">Conversations</h2><button type="button" className={`min-h-11 px-2 ${embedded?'':'lg:hidden'}`} onClick={()=>setHistoryOpen(false)} aria-label="Close history">Close</button></div>
     <div className="flex-1 space-y-1 overflow-y-auto px-2 pb-3">
      {historyError?<div className="p-2 text-xs text-red-700">{historyError}<button type="button" className="block min-h-11 underline" onClick={()=>void refresh()}>Retry history</button></div>:null}
      {!sessions.length&&!historyError?<p className="p-2 text-xs text-text-muted">Your conversations will appear here.</p>:null}
