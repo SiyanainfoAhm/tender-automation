@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {stripTypeScriptTypes} from 'node:module';
 import vm from 'node:vm';
 import {createHash} from 'node:crypto';
+import {readModelStream} from './stream.mjs';
 import {boundedMemory} from './memory.mjs';
 import {knownPlan,cleanPlan,safeAnswer,QUESTIONS} from './plan.mjs';
 
@@ -30,7 +31,7 @@ function fixture(options={}) {
   }};return q;
  }
  let handler;
- const sandbox={console:{error(){}},Request,Response,AbortSignal,TextEncoder,crypto,Date,JSON,Set,Number,String,Promise,
+ const sandbox={console:{error(){}},Request,Response,AbortSignal,TextEncoder,TextDecoder,ReadableStream,setInterval,clearInterval,AbortController,readModelStream,crypto,Date,JSON,Set,Number,String,Promise,
   Deno:{env:{get:key=>key==='DEEPSEEK_API_KEY'?'test-ai':''},serve:fn=>{handler=fn;}},
   createClient:()=>({from:query,rpc:async()=>({data:{total:7,status_counts:{GO:2,VERIFY:5},recorded_status_counts:{UNSET:7},tenders:[],matching_total:0},error:null})}),
   boundedMemory,knownPlan,cleanPlan,safeAnswer,expandedQuery:q=>q,retrieve:async()=>({tender:[],company:[],warnings:[]}),
@@ -69,4 +70,20 @@ test('bad inputs, unsupported actions and unavailable AI fail without business m
  assert.equal((await f.call({operation:'DELETE_TENDER'})).status,400);
  assert.equal((await f.call({message:'an analytical question'})).status,503);
  assert.equal(f.tables.agenttender_ai_chat_messages.length,0);
+});
+
+test('stream delivers progress and final saved history; unauthorized requests stay JSON',async()=>{
+ const f=fixture();
+ const denied=await f.call({message:QUESTIONS[0],stream:true},null);
+ assert.equal(denied.status,401);assert.match(denied.headers.get('content-type'),/json/);
+ const response=await f.call({message:QUESTIONS[0],stream:true});
+ assert.match(response.headers.get('content-type'),/text\/event-stream/);
+ const events=(await response.text()).split('\n').filter(l=>l.startsWith('data:')).map(l=>JSON.parse(l.slice(5)));
+ assert.equal(events[0].type,'status');assert.equal(events.at(-1).type,'done');
+ assert.match(events.at(-1).answer,/7 tenders/);assert.equal(f.tables.agenttender_ai_chat_messages.length,2);
+});
+test('AI stream errors are controlled and do not persist unfinished answers',async()=>{
+ const f=fixture();const response=await f.call({message:'Unrecognized question',stream:true});
+ const events=(await response.text()).split('\n').filter(l=>l.startsWith('data:')).map(l=>JSON.parse(l.slice(5)));
+ assert.equal(events.at(-1).type,'error');assert.equal(f.tables.agenttender_ai_chat_messages.length,0);
 });

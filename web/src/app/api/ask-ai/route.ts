@@ -27,9 +27,12 @@ export async function POST(request: Request) {
     if (!url) throw new Error('Missing chat configuration');
     const response = await fetch(`${url}/functions/v1/agenttender-orch-v2-global-chat`, {
       method:'POST', headers:{'Content-Type':'application/json','x-agenttender-session':token},
-      body:JSON.stringify({message:body.message,session_id:body.session_id,operation:body.operation||'chat'}),
+      body:JSON.stringify({message:body.message,session_id:body.session_id,operation:body.operation||'chat',...(body.stream===true?{stream:true}:{})}),
       cache:'no-store',signal:AbortSignal.any([request.signal,AbortSignal.timeout(110000)]),
     });
+    if(response.ok && response.headers?.get('content-type')?.includes('text/event-stream') && response.body){
+      return new Response(response.body,{headers:{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','X-Accel-Buffering':'no','X-VBDC-Commit':process.env.VERCEL_GIT_COMMIT_SHA||'local'}});
+    }
     const result = await response.json().catch(()=>null);
     if (!result) throw new Error('Invalid upstream response');
     return respond(result,{status:response.status,headers:{'Cache-Control':'no-store'}});

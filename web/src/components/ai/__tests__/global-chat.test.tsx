@@ -62,3 +62,36 @@ it('opens one explicit status form without sending the command to the AI engine'
  }
  expect(fetchMock.mock.calls.some(([url,o])=>url==='/api/ask-ai'&&JSON.parse(o?.body||'{}').message)).toBe(false);
 });
+
+it('renders partial answer before completion, then adds references and follow-ups',async()=>{
+ let controller!:ReadableStreamDefaultController<Uint8Array>;
+ const encoder=new TextEncoder();
+ const emit=(event:unknown)=>controller.enqueue(encoder.encode('data: '+JSON.stringify(event)+'\n\n'));
+ fetchMock.mockImplementation((url,options)=>{
+  if(url!=='/api/ask-ai')return ok({can_change_status:false});
+  if(JSON.parse(options.body).operation==='sessions')return ok({sessions:[]});
+  return Promise.resolve(new Response(new ReadableStream({start(c){controller=c;}}),{headers:{'Content-Type':'text/event-stream'}}));
+ });
+ render(<GlobalChat/>);fireEvent.click(screen.getByRole('button',{name:GLOBAL_QUESTIONS[1]}));
+ await waitFor(()=>expect(controller).toBeTruthy());
+ emit({type:'status',message:'Reviewing evidence…'});
+ emit({type:'partial',summary:'First words arriving',details:''});
+ await screen.findByText('First words arriving');
+ expect(screen.queryByRole('link',{name:/AI procurement/})).toBeNull();
+ expect((screen.getByRole('button',{name:'New Chat'}) as HTMLButtonElement).disabled).toBe(true);
+ emit({type:'done',session_id:'stream-session',answer:'Answer',presentation});controller.close();
+ await screen.findByText('Two active tenders.');
+ expect(screen.queryByText('First words arriving')).toBeNull();
+ expect(screen.getByRole('link',{name:/AI procurement/})).toBeTruthy();
+});
+it('restores input after a truncated stream and removes unfinished text',async()=>{
+ fetchMock.mockImplementation((url,options)=>{
+  if(url!=='/api/ask-ai')return ok({can_change_status:false});
+  if(JSON.parse(options.body).operation==='sessions')return ok({sessions:[]});
+  return Promise.resolve(new Response('data: {"type":"partial","summary":"Incomplete","details":""}\n\n',{headers:{'Content-Type':'text/event-stream'}}));
+ });
+ render(<GlobalChat/>);fireEvent.click(screen.getByRole('button',{name:GLOBAL_QUESTIONS[1]}));
+ await screen.findByRole('alert');
+ expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe(GLOBAL_QUESTIONS[1]);
+ expect(screen.queryByText('Incomplete')).toBeNull();
+});
