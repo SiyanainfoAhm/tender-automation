@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getServerSupabase } from "@/lib/db/server";
+import { roleHasPermission } from "@/lib/rbac/permissions";
 import { getSession } from "@/server/auth/session";
 import { invokeDocumentRead } from "@/server/storage/tenderAutomationDocumentFunctions";
 
@@ -20,6 +21,8 @@ export async function GET(request: Request, context: RouteContext) {
       { status: 401 },
     );
   }
+
+  if (!roleHasPermission(session.user.role, "documents.view")) return NextResponse.json({ success: false, error: "Document access denied." }, { status: 403 });
 
   const { documentId } = await context.params;
   if (!documentId) {

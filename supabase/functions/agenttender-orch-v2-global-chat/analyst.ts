@@ -26,7 +26,44 @@ export function fuse(lists:any[][],limit:number) {
  }));
  return [...rows.values()].sort((a,b)=>b.__rrf-a.__rrf).slice(0,limit);
 }
-export async function retrieve(db:any,tenderId:string,companyId:string,q:string,mode:string,category:string="") {
+
+// Shared entry point for global and tender chat; the same internal hybrid RPC
+// supplies checklist candidates. Live source eligibility is enforced in SQL.
+export function companyQuery(q:string) {
+ const terms:string[]=[];
+ if (/audited|balance sheets?|audit reports?|financial statements?/i.test(q)) terms.push('audited OR "balance sheet" OR "audit report" OR "financial statement"');
+ if (/\bgst\b|goods and services/i.test(q)) terms.push('GST OR "goods and services"');
+ if (/incorporat|memorandum|articles of association/i.test(q)) terms.push('incorporation OR "memorandum of association" OR "articles of association"');
+ if (/\biso\b/i.test(q)) terms.push('ISO OR 9001 OR 27001 OR 20000');
+ if (/completion|experience|software development/i.test(q)) terms.push('completion OR experience OR "work order" OR "software development"');
+ return terms.length?terms.join(' OR '):expandedQuery(q);
+}
+export async function retrieveCompany(db:any,companyId:string,q:string,vector:any=null) {
+ const warnings:string[]=[];
+ if (!vector) {
+  try { const task=new (globalThis as any).Supabase.ai.Session('gte-small').run(q.slice(0,1100),{mean_pool:true,normalize:true});
+   vector=await Promise.race([task,new Promise((_,reject)=>setTimeout(()=>reject(Error('query vector timeout')),8000))]);
+   if(!Array.isArray(vector)||vector.length!==384)vector=null;
+  } catch { warnings.push('Semantic company search unavailable; text and metadata search used'); }
+ }
+ const {data,error}=await db.rpc('agenttender_match_company_evidence',{p_company_id:companyId,p_query_embedding:vector,p_query_text:companyQuery(q),p_match_count:48,p_min_similarity:0.70});
+ if(error)throw Error('Company evidence search unavailable: '+error.message);
+ const rows=data||[];const ids=[...new Set(rows.map((x:any)=>x.document_id))];
+ if(!ids.length)return {company:[],warnings,semantic:!!vector};
+ const docs=await db.from('agenttender_company_documents').select('id,name,original_file_name,document_type,document_category,certificate_type,financial_year,issue_date,expiry_date,verification_status,status,storage_url').eq('company_id',companyId).eq('status','active').in('id',ids);
+ if(docs.error)throw Error('Company source verification unavailable');
+ const [companyRow,texts]=await Promise.all([
+  db.from('agenttender_companies').select('name').eq('id',companyId).maybeSingle(),
+  db.from('agenttender_company_document_texts').select('document_id,extraction_status').eq('company_id',companyId).in('document_id',ids)
+ ]);
+ if(companyRow.error||texts.error)throw Error('Company source metadata unavailable');
+ const states=new Map((texts.data||[]).map((t:any)=>[t.document_id,t.extraction_status]));
+ const byId=new Map((docs.data||[]).map((d:any)=>[d.id,d]));
+ const company=rows.filter((x:any)=>byId.has(x.document_id)).map((x:any)=>{const d:any=byId.get(x.document_id);return {...x,id:x.chunk_id,source_id:x.document_id,document_name:d.name,document_url:"/api/documents/"+d.id,document_type:d.document_type,source_type:'COMPANY_DOCUMENT',page_number:x.page_start,metadata:{...d,company_name:companyRow.data?.name||null,extraction_status:states.get(d.id)||'UNKNOWN'}};});
+ return {company,warnings,semantic:!!vector};
+}
+
+export async function retrieve(db:any,tenderId:string,companyId:string,q:string,mode:string,category:string="",allowCompany:boolean=true) {
  const warnings:string[]=[];
  const safe=async(p:any)=>{try{const {data,error}=await p;if(error)throw error;return Array.isArray(data)?data:[];}catch{warnings.push("A retrieval source was unavailable");return [];}};
  const query=expandedQuery(q);
@@ -51,37 +88,10 @@ export async function retrieve(db:any,tenderId:string,companyId:string,q:string,
  const map=new Map(allowed.filter(x=>x.document_type!=="TENDER_METADATA"&&x.metadata?.not_rfp!==true&&x.metadata?.not_rfp!=="true").map(x=>[x.id,x]));
  const project=(xs:any[])=>xs.map(x=>{const y=map.get(x.chunk_id||x.id);return y?{...y,page_number:y.page_number??y.page_start}:null;}).filter(Boolean);
  const tender=fuse([project(lex),project(sem),...pqLists.map(project)],mode==='ELIGIBILITY'?40:18);
- const companyNeeded=["SCOPE_OF_WORK","GENERAL_TENDER_INFO","EMD","DO_WE_QUALIFY","REQUIRED_DOCUMENTS","TURNOVER","EXPERIENCE","CERTIFICATIONS","PROJECT_COST","SUBMISSION_READINESS"].includes(category)||mode==="ELIGIBILITY"||mode==="BID_REVIEW"||/our company|siyana|we meet|we eligible|our documents|available documents|missing documents/i.test(q);
+ const companyNeeded=allowCompany&&(["SCOPE_OF_WORK","GENERAL_TENDER_INFO","EMD","DO_WE_QUALIFY","REQUIRED_DOCUMENTS","TURNOVER","EXPERIENCE","CERTIFICATIONS","PROJECT_COST","SUBMISSION_READINESS"].includes(category)||mode==="ELIGIBILITY"||mode==="BID_REVIEW"||/company|siyana|documents?|balance|audit|GST|incorporat|ISO|certificat|turnover|financial|completion|experience|we meet|we eligible/i.test(q));
  let company:any[]=[];
- if(companyNeeded){
-  const [cs,cl]=await Promise.all([
-   vector?safe(db.rpc("agenttender_match_local_embeddings",{p_embedding:vector,p_limit:24,p_tender_id:null,p_company_only:true,p_company_id:companyId})):Promise.resolve([]),
-   safe(db.rpc("agenttender_match_company_chunks_fts",{p_company_id:companyId,p_query:query,p_match_count:24}))
-  ]);
-  
-  const focused = /exempt|emd|msme|udyam/i.test(q) ? "udyam OR msme OR micro OR small OR enterprise"
-    : /turnover|audited|financial|balance sheet/i.test(q) ? "turnover OR revenue OR audited OR financial"
-    : /experience|similar project/i.test(q) ? "completion OR completed OR experience OR project"
-    : /iso|certif/i.test(q) ? "ISO OR certification OR certificate" : null;
-  const focusedRows=focused?await safe(db.rpc("agenttender_match_company_chunks_fts",{p_company_id:companyId,p_query:focused,p_match_count:32})):[];
-  const companyQueries=mode==="ELIGIBILITY"?["udyam OR msme OR micro OR small OR enterprise","PAN OR GST OR registration","turnover OR audited OR revenue","completion OR experience OR project","STQC OR NICSI OR MeitY OR ISO","employee OR manpower OR personnel"]:[];
-  const companyLists=await Promise.all(companyQueries.map(query=>safe(db.rpc("agenttender_match_company_chunks_fts",{p_company_id:companyId,p_query:query,p_match_count:8}))));
-  const all=fuse([focusedRows,...companyLists,cs,cl],96);
-  const companyIds=[...new Set(all.map(x=>x.chunk_id||x.id).filter(Boolean))];
-  const verifiedRows=companyIds.length?await safe(db.from("agenttender_ai_document_chunks").select("id,source_id,document_url,document_name,page_number,page_start,section,content,metadata,source_type,document_type").in("id",companyIds).eq("company_id",companyId).eq("is_active",true).in("source_type",["COMPANY_DOCUMENT","COMPANY_PROFILE"])):[];
-  const byId=new Map(verifiedRows.map(x=>[x.id,x]));
-  const enriched=all.map(x=>byId.get(x.chunk_id||x.id)).filter(Boolean);
-  const isExemption=/exempt|emd|msme|udyam/i.test(q);
-  const prioritized=enriched.map((x,i)=>({x,i,priority:isExemption&&/udyam|msme/i.test(x.document_name)&&/udyam|registration/i.test(x.content)?1:0})).sort((x,y)=>y.priority-x.priority||x.i-y.i);
-  const seenContent=new Set();const perDoc=new Map();
-  for(const {x} of prioritized){
-   const key=String(x.content).replace(/\\s+/g," ").trim();const doc=x.source_id;
-   if(seenContent.has(key)||(perDoc.get(doc)||0)>=3)continue;
-   seenContent.add(key);perDoc.set(doc,(perDoc.get(doc)||0)+1);
-   company.push({...x,page_number:x.page_number??x.page_start});
-   if(company.length>=(mode==='ELIGIBILITY'?30:18))break;
-  }
- }
+ if(companyNeeded){const found=await retrieveCompany(db,companyId,q,vector);company=found.company;warnings.push(...found.warnings);}
+
  return {tender,company,warnings,semantic:!!vector,companyNeeded};
 }
 export function analystPrompt(mode:string) {
@@ -96,13 +106,13 @@ Report exact financial amounts, years, percentages, resource counts, durations a
 Absence of a retrieved clause is not evidence that manpower, hardware, licensing, OEM, local office, training or any obligation is absent. Say UNVERIFIED when search evidence is insufficient. Explain deploy technical personnel as manpower; laptops/servers/devices as hardware; authorized partner certificate as possible authorization.
 The JSON result field uses one evidence-sufficiency label (separate from the category-specific business decision in answer): CONFIRMED (strong evidence), PARTIALLY CONFIRMED (material parts missing), NOT CONFIRMED (evidence fails to prove the proposition), UNVERIFIED (missing/incomplete/conflicting evidence). Proven tender PQ with missing company proof is never CONFIRMED. Overall eligibility requires every mandatory condition proven.
 GO Confidence is a business pursuit score, never model certainty. Only include numeric scores for Scope, Summary, Qualification or an explicit business-score request. 90–100 requires strong target fit and mandatory eligibility substantially verified; 80–89 good fit with material verification remaining; 50–79 mixed/weak; 0–49 poor fit, binding exclusion or mandatory failure. Missing mandatory proof prevents a high score; binding exclusions significantly reduce it. Do not claim completeness from a limited retrieval. For bid review distinguish proposed preparation from observed missing attachments; checklist state is unavailable unless supplied explicitly.
-Deadline facts: use current_time_utc/current_time_india, never the model clock. A date-only deadline on today does not prove expiry. Compare local hours correctly; 12:07 IST is before 14:00 IST. If time or timezone is missing/conflicting, readiness requires deadline verification. Absence of submission evidence does not prove no bid was submitted.\nEMD conflicts: a portal/RFP summary saying exemption No and an ITB MSE exemption are conflicting applicability evidence; report actual payable EMD as NOT VERIFIED pending resolution. Do not state actual payable 0 or a binding EMD exclusion while the conflict is unresolved.\nRecorded screening outcomes, rule candidates, conversation conclusions and learned decision assertions do not prove an exclusion or eligibility failure. Make the current decision from original tender and company evidence, never repeat a prior NO_GO rationale as fact. Do not call an unresolved EMD exemption both a binding exclusion and NOT VERIFIED in one answer. For narrow document, turnover, experience and certification questions, stay within the requested check; omit unrelated EMD and prior screening commentary.\nA listed EMD over a payable-EMD ceiling is only a potential blocker until tender exemption clauses and actual company registration evidence have been checked. If exemption wording conflicts or applicability is missing, payable EMD is NOT VERIFIED; never declare an EMD-based binding exclusion or claim no exemption. Do not suggest zero payable or likely exemption until eligibility is proven. Apply verified owner policy values rather than inventing thresholds. Missing retrieved company proof is NOT VERIFIED, not proof of absence or failure. Scope facts and PQ evidence must remain consistent; do not assume retrieved criteria are exhaustive.\nBefore responding, assess what the buyer procures and whether evidence proves each material conclusion. Separate confirmed facts, assumptions, missing evidence and proven failures. Do not output private deliberation. Lead with a direct business conclusion and short supported reasons, not a clause dump. Never invent requirements or company facts. End substantive category answers with exactly three tender-specific recommended next questions. Never expose diagnostics, source filenames, UUIDs, raw JSON or source IDs in visible prose. Use internal citation markers solely for validation and the Sources drawer.\nReturn a JSON object with keys answer (human-readable formatted text), result (one label above or null when no conclusion applies), evidence_state (HIGH, MEDIUM or LOW). Evidence state is qualitative evidence sufficiency, not model confidence.
+Deadline facts: use current_time_utc/current_time_india, never the model clock. A date-only deadline on today does not prove expiry. Compare local hours correctly; 12:07 IST is before 14:00 IST. If time or timezone is missing/conflicting, readiness requires deadline verification. Absence of submission evidence does not prove no bid was submitted.\nEMD conflicts: a portal/RFP summary saying exemption No and an ITB MSE exemption are conflicting applicability evidence; report actual payable EMD as NOT VERIFIED pending resolution. Do not state actual payable 0 or a binding EMD exclusion while the conflict is unresolved.\nRecorded screening outcomes, rule candidates, conversation conclusions and learned decision assertions do not prove an exclusion or eligibility failure. Make the current decision from original tender and company evidence, never repeat a prior NO_GO rationale as fact. Do not call an unresolved EMD exemption both a binding exclusion and NOT VERIFIED in one answer. For narrow document, turnover, experience and certification questions, stay within the requested check; omit unrelated EMD and prior screening commentary.\nA listed EMD over a payable-EMD ceiling is only a potential blocker until tender exemption clauses and actual company registration evidence have been checked. If exemption wording conflicts or applicability is missing, payable EMD is NOT VERIFIED; never declare an EMD-based binding exclusion or claim no exemption. Do not suggest zero payable or likely exemption until eligibility is proven. Apply verified owner policy values rather than inventing thresholds. Missing retrieved company proof is NOT VERIFIED, not proof of absence or failure. Scope facts and PQ evidence must remain consistent; do not assume retrieved criteria are exhaustive.\nBefore responding, assess what the buyer procures and whether evidence proves each material conclusion. Separate confirmed facts, assumptions, missing evidence and proven failures. Do not output private deliberation. Lead with a direct business conclusion and short supported reasons, not a clause dump. Never invent requirements or company facts. End substantive category answers with exactly three tender-specific recommended next questions. Never expose diagnostics, UUIDs, raw JSON or internal source IDs in visible prose. For company-document searches give exact source document names, company, type, financial year, verification and validity status, authorized source link, evidence-based match reason and evidence sufficiency. Missing metadata remains unknown. A catalogue match or unverified/partial extraction never proves full compliance. For last-three-year requests identify the three requested fiscal years from the RFP or current date; if only older years are available report the gap explicitly. Never substitute latest available years silently. Use internal citation markers solely for validation and the Sources drawer.\nReturn a JSON object with keys answer (human-readable formatted text), result (one label above or null when no conclusion applies), evidence_state (HIGH, MEDIUM or LOW). Evidence state is qualitative evidence sufficiency, not model confidence.
 Mode: ${mode}.
 QUICK: At most 100 words, 1-5 concise lines, RESULT label when applicable, direct answer with citations, optional short verification note. No long sections.
 ANALYSIS: Give the direct answer first, followed only by relevant supporting details, gaps and a practical next step. Use short paragraphs or bullets. Simple facts stay short.
 ELIGIBILITY: Direct answer, concise eligibility comparison, material gaps and recommended action. Compare exact tender thresholds/years against company proof, cite both internally; use human descriptions of evidence without source filenames.
 BID_REVIEW: State READY, NOT READY or NEEDS REVIEW; show only outstanding blockers and immediate next actions. Checklist completion alone never proves readiness.
-Regardless of mode, a single factual question about EMD, closing date, tender value or certificate presence must use at most 100 words and no long sections. Missing hardware procurement evidence means hardware supply is UNVERIFIED, never conclude it is a service-only tender from absence.\nKeep material factual claims cited in the internal answer string for validation; the presentation layer removes markers and preserves Sources metadata. For three-year or three-project conditions, identify three distinct qualifying years/projects with internally cited evidence, without printing source IDs or filenames. A repeated or duplicate certificate is not additional evidence. Do not conclude all PQ conditions have been found when retrieval is partial.`;
+Regardless of mode, a single factual question about EMD, closing date, tender value or certificate presence must use at most 100 words and no long sections. Missing hardware procurement evidence means hardware supply is UNVERIFIED, never conclude it is a service-only tender from absence.\nKeep material factual claims cited in the internal answer string for validation; the presentation layer removes markers and preserves Sources metadata. For three-year or three-project conditions, identify three distinct qualifying years/projects with internally cited evidence, without printing internal source IDs. A repeated or duplicate certificate is not additional evidence. Do not conclude all PQ conditions have been found when retrieval is partial.`;
 }
 
 export function questionCategoryInstructions(category:string) {
@@ -147,6 +157,3 @@ export function parseAnswer(raw:string,refs:Set<string>){
  answer=answer.replace(/([.!?])\s*[.!?]+/g,"$1");
  return {answer,result,evidence_state,structured};
 }
-
-
-

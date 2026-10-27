@@ -11,6 +11,7 @@ export const GLOBAL_QUESTIONS = [
  'What should we prioritize today?',
 ];
 export type GlobalPresentation = {
+ documents?:{id:string;title:string;href:string;financial_year:string|null;verification_status:string}[];
  summary:string; details:string;
  references:Array<{id:string;title:string;status:string;href:string}>;
  followups:string[];

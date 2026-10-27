@@ -24,12 +24,13 @@ export function cleanPlan(value,allowedIds=[]) {
  if(ids.length)return {intent:'search',search:'',status:'',region:'',country:'',ids};
  return {intent:intents.includes(value?.intent)?value.intent:'search',search:String(value?.search||'').slice(0,200),status:statuses.includes(value?.status)?value.status:'',region:['INDIAN','GLOBAL'].includes(value?.region)?value.region:'',country:value?.country==='USA'?'USA':'',ids:Array.isArray(value?.ids)?value.ids.filter(id=>allowedIds.includes(id)).slice(0,10):[]};
 }
-export function safeAnswer(value,tenders) {
+export function safeAnswer(value,tenders,companyEvidence=[]) {
  if(!value||typeof value.summary!=='string'||typeof value.details!=='string'||!value.summary.trim()||!value.details.trim())throw new Error('Invalid AI answer');
  const ids=new Set(tenders.map(t=>t.id));
  const references=[...new Set(Array.isArray(value.tender_ids)?value.tender_ids.filter(id=>ids.has(id)):[])].map(id=>{const t=tenders.find(t=>t.id===id);return {id,title:t.title,status:t.qualification_status||'NOT_EVALUATED',href:'/tenders/'+id};});
  const clean=text=>String(text).replace(/\[([^\]]+)\]\([^)]*\)/g,'$1').replace(/https?:\/\/\S+/g,'').replace(/<[^>]*>/g,'').trim();
  const followups=Array.isArray(value.followups)?value.followups.filter(q=>typeof q==='string'&&q.trim().length>5).slice(0,3):[];
  for(const q of QUESTIONS)if(followups.length<3&&!followups.includes(q))followups.push(q);
- return {summary:clean(value.summary).slice(0,1400),details:clean(value.details).slice(0,16000),references,followups};
+ const documents=[...new Set(Array.isArray(value.document_ids)?value.document_ids:[])].map(id=>companyEvidence.find(d=>d.source_id===id)).filter(Boolean).slice(0,12).map(d=>({id:d.source_id,title:d.document_name,href:'/api/documents/'+encodeURIComponent(d.source_id),financial_year:d.metadata?.financial_year||null,verification_status:d.metadata?.verification_status||'unverified'}));
+ return {documents,summary:clean(value.summary).slice(0,1400),details:clean(value.details).slice(0,16000),references,followups};
 }
