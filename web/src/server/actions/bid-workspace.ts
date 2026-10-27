@@ -1023,6 +1023,9 @@ export async function generateChecklistDocumentAction(input: {
     if (error instanceof CompanyAccessError) {
       return { ok: false, error: error.message };
     }
+    if (error instanceof Error && error.message.startsWith("NEXT_REDIRECT")) {
+      return { ok:false, error:"Your session has expired or requires attention. Please sign in again." };
+    }
     console.error("[bid-workspace] checklist document generation failed", error);
     return {
       ok: false,

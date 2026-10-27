@@ -18,5 +18,7 @@ export async function callChecklistWriter(options: {
   });
   const result = await response.json().catch(() => null);
   if (!response.ok || !result?.ok) throw new Error("AI document generation is temporarily unavailable. Please try again. Your original attachment is unchanged.");
-  return {content:generatedDocumentSchema.parse(result.document), model:String(result.model || "V2 writer"), provider:String(result.provider || "")};
+  const parsed = generatedDocumentSchema.safeParse(result.document);
+  if (!parsed.success) throw new Error("AI returned an incomplete draft. Please try again. Your original attachment is unchanged.");
+  return {content:parsed.data, model:String(result.model || "V2 writer"), provider:String(result.provider || "")};
 }
