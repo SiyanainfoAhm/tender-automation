@@ -17,6 +17,8 @@ export async function callChecklistWriter(options: {
     cache:"no-store", signal:AbortSignal.timeout(180000),
   });
   const result = await response.json().catch(() => null);
+  if (response.status === 401 || response.status === 403) throw new Error("The document writer could not authenticate this server request. Please contact your administrator. Your original attachment is unchanged.");
+  if (response.status === 400) throw new Error("The document context is too large or invalid for this request. Try a smaller attachment. Your original attachment is unchanged.");
   if (!response.ok || !result?.ok) throw new Error("AI document generation is temporarily unavailable. Please try again. Your original attachment is unchanged.");
   const parsed = generatedDocumentSchema.safeParse(result.document);
   if (!parsed.success) throw new Error("AI returned an incomplete draft. Please try again. Your original attachment is unchanged.");

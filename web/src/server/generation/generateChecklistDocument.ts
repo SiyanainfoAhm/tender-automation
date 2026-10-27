@@ -105,6 +105,7 @@ export async function generateChecklistDocument(options: {
     workspaceId: options.workspaceId,
     tenderId: options.tenderId,
     requirementId: options.requirementId,
+    preferIndexedRfp: Boolean(options.documentChat),
   });
 
   // Also allow catalog/heuristic from-scratch policy even if DB flag lags.
@@ -150,6 +151,7 @@ export async function generateChecklistDocument(options: {
     userPrompt,
   });
   const structured = written.content;
+  structured.warnings.push(...(context.evidenceWarnings || []));
   const model = written.model;
 
   if (!structured.sections.length && !structured.tables.length) {

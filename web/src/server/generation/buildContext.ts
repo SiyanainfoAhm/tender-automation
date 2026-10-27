@@ -133,6 +133,7 @@ export type GenerationContextBundle = {
   qualificationSummary: string | null;
   rfpContextText: string;
   sourceDocumentNames: string[];
+  evidenceWarnings?: string[];
   company: {
     name: string;
     industryType: string | null;
@@ -167,6 +168,7 @@ export async function buildGenerationContext(options: {
   workspaceId: string;
   tenderId: string;
   requirementId: string;
+  preferIndexedRfp?: boolean;
 }): Promise<GenerationContextBundle> {
   const supabase = getServerSupabase();
 
@@ -215,7 +217,25 @@ export async function buildGenerationContext(options: {
 
   let rfpContextText = "";
   const sourceDocumentNames: string[] = [];
-  try {
+  const evidenceWarnings: string[] = [];
+  // Interactive edits reuse V2's extracted RFP evidence. Do not download and
+  // re-extract a large tender ZIP on every follow-up document edit.
+  if (options.preferIndexedRfp) {
+    const { data: chunks, error } = await supabase.from("agenttender_ai_document_chunks")
+      .select("content, document_name, page_number, chunk_index")
+      .eq("tender_id", options.tenderId).eq("source_type", "TENDER_DOCUMENT")
+      .eq("is_active", true)
+      .or(`company_id.is.null,company_id.eq.${options.companyId}`)
+      .order("chunk_index", { ascending:true }).limit(1000);
+    if (error) throw new Error("Unable to read indexed RFP evidence. Please try again.");
+    const readable = (chunks || []).filter(row => row.content && !String(row.content).startsWith("[METADATA ONLY"));
+    for (const row of readable) {
+      if (row.document_name && !sourceDocumentNames.includes(row.document_name)) sourceDocumentNames.push(row.document_name);
+    }
+    rfpContextText = pickRelevantChunks(readable.map(row => `Source: ${row.document_name || "RFP"}, page ${row.page_number || "unknown"}\n${row.content}`).join("\n\n"), String(item.requirement_name || ""));
+    if (!rfpContextText.trim()) evidenceWarnings.push("Full RFP text was not indexed. This draft uses the checklist clause, tender metadata and any selected attachment; verify it against the original RFP.");
+  }
+  if (!options.preferIndexedRfp) try {
     const { resolveTenderArtifactUrls } = await import(
       "@/lib/tenders/resolve-document-urls"
     );
@@ -341,6 +361,7 @@ export async function buildGenerationContext(options: {
       typeof qualification?.verdict === "string" ? qualification.verdict : null,
     rfpContextText,
     sourceDocumentNames,
+    evidenceWarnings,
     company: {
       name: company.name,
       industryType: company.industryType,
@@ -379,6 +400,7 @@ export function formatContextForPrompt(bundle: GenerationContextBundle): string 
       related_checklist_sources: bundle.relatedChecklistSources,
       qualification_summary: bundle.qualificationSummary,
       source_document_names: bundle.sourceDocumentNames,
+      evidence_limitations: bundle.evidenceWarnings || [],
       rfp_relevant_excerpts: bundle.rfpContextText.slice(0, 60_000),
       company_profile: bundle.company,
       company_documents_inventory: bundle.companyDocuments,
