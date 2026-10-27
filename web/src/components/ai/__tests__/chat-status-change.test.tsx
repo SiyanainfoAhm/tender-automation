@@ -46,6 +46,14 @@ describe('one-message status chooser',()=>{
   expect(mocks.fetch.mock.calls.filter(([,o])=>o?.method==='POST')).toHaveLength(1);
   finish(response({ok:true,requires_award_details:true}));await screen.findByRole('dialog',{name:'Award details'});expect(screen.getByRole('dialog',{name:'Award details'}).textContent).toContain('Award received');expect(mocks.refresh).not.toHaveBeenCalled();
  });
+ it('clears the previous target when a new global search returns results',async()=>{
+  mocks.fetch.mockImplementation((url)=>Promise.resolve(String(url).includes('capability=1')?response({can_change_status:true}):String(url).includes('?q=')?response({tenders:[{id:'20000000-0000-0000-0000-000000000002',title:'Another tender'}]}):response({tender})));
+  render(<ChatStatusChange candidates={[{id,title:'Website tender'}]} onDismiss={vi.fn()}/>);
+  await screen.findByRole('combobox');fireEvent.change(screen.getByRole('combobox'),{target:{value:id}});await screen.findByRole('radio',{name:'May Bid (Conditional GO)'});
+  fireEvent.change(screen.getByRole('textbox',{name:'Find the tender'}),{target:{value:'Another'}});fireEvent.click(screen.getByRole('button',{name:'Find tender'}));
+  await waitFor(()=>expect((screen.getByRole('combobox') as HTMLSelectElement).value).toBe(''));
+  expect(screen.queryAllByRole('radio')).toHaveLength(0);expect(mocks.fetch.mock.calls.filter(([,o])=>o?.method==='POST')).toHaveLength(0);
+ });
  it('requires an explicit tender selection in global chat',async()=>{
   mocks.fetch.mockImplementation((url)=>Promise.resolve(String(url).includes('capability=1')?response({can_change_status:true}):response({tender})));
   render(<ChatStatusChange candidates={[{id,title:'Website tender'}]} onDismiss={vi.fn()}/>);

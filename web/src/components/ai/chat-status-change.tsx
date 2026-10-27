@@ -43,7 +43,7 @@ export function ChatStatusChange({tenderId,candidates=[],onDismiss}:{tenderId?:s
   try{
    const r=await fetch(`/api/ask-ai/status-change?q=${encodeURIComponent(search.trim())}`,{cache:'no-store'});const data=await r.json();
    if(!r.ok)throw new Error(data.error||'Tender search failed.');
-   setOptions(data.tenders||[]);if(!data.tenders?.length)setError('No matching tenders. Try the title or tender ID.');
+   setTarget('');setSnapshot(null);setSelected('');setReason('');setOptions(data.tenders||[]);if(!data.tenders?.length)setError('No matching tenders. Try the title or tender ID.');
   }catch(e){setError(e instanceof Error?e.message:'Unable to find tenders.');}finally{setSearching(false);}
  }
  function refresh(){invalidateTenderListCaches('chat-status-changed');router.refresh();}
@@ -74,7 +74,7 @@ export function ChatStatusChange({tenderId,candidates=[],onDismiss}:{tenderId?:s
     {snapshot.options.some(o=>!o.allowed)?<p className="mt-2 text-xs text-text-muted">Disabled statuses are restricted by the existing submission and outcome rules.</p>:null}
     <label htmlFor={`${group}-reason`} className="mb-1 mt-3 block text-xs font-medium">Comment (required)</label><textarea id={`${group}-reason`} value={reason} maxLength={2000} onChange={e=>setReason(e.target.value)} disabled={saving} rows={2} placeholder="Why are you changing the status?" className="w-full rounded-lg border border-border bg-white p-2 text-base"/>
     {selected==='WON'?<p className="mb-2 text-xs text-text-muted">Won continues to the existing award-details form before the status is saved.</p>:null}
-    <button type="button" disabled={saving||!selected||!reason.trim()||selected===snapshot.display_status} onClick={()=>void change()} className="mt-2 min-h-11 rounded-lg bg-primary px-4 text-sm font-medium text-white disabled:opacity-50">{saving?'Changing…':'Change Status'}</button>
+    <button type="button" disabled={saving||searching||!selected||!reason.trim()||selected===snapshot.display_status} onClick={()=>void change()} className="mt-2 min-h-11 rounded-lg bg-primary px-4 text-sm font-medium text-white disabled:opacity-50">{saving?'Changing…':'Change Status'}</button>
    </>:null}
    {error?<button type="button" onClick={()=>setAttempt(n=>n+1)} className="ml-2 min-h-11 px-2 text-xs underline">Reload status choices</button>:null}
   </>:null}
