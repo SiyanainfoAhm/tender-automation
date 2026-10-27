@@ -11,8 +11,25 @@ import { GLOBAL_QUESTIONS, type GlobalMessage, type GlobalPresentation } from '@
 
 type Session = {id:string;title:string;last_message_at:string};
 type Payload = {error?:string;sessions?:Session[];messages?:GlobalMessage[];session_id?:string;answer?:string;presentation?:GlobalPresentation};
-async function call(body:Record<string,unknown>):Promise<Payload> {
+type StreamUpdate={type:string;message?:string;summary?:string;details?:string};
+async function call(body:Record<string,unknown>,onUpdate?:(event:StreamUpdate)=>void):Promise<Payload> {
  const r=await fetch('/api/ask-ai',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+ if(r.ok&&r.headers?.get('content-type')?.includes('text/event-stream')&&r.body){
+  const reader=r.body.getReader(),decoder=new TextDecoder();let buffer='',result:Payload|undefined;
+  const consume=(line:string)=>{
+   if(!line.startsWith('data:'))return;
+   const event=JSON.parse(line.slice(5)) as StreamUpdate&Payload;
+   if(event.type==='error')throw new Error(event.message||'The response was interrupted. Please try again.');
+   if(event.type==='done')result=event;
+   else onUpdate?.(event);
+  };
+  try{
+   while(true){const next=await reader.read();buffer+=decoder.decode(next.value,{stream:!next.done});let end;while((end=buffer.indexOf('\n'))>=0){consume(buffer.slice(0,end));buffer=buffer.slice(end+1);}if(next.done)break;}
+   if(buffer.trim())consume(buffer);
+   if(!result)throw new Error('The response was interrupted. Please try again.');
+   return result;
+  }finally{reader.releaseLock();}
+ }
  const data=await r.json().catch(()=>({}));
  if(!r.ok)throw new Error(data.error||(r.status===401?'Your session has expired. Please sign in again.':'Ask AI is unavailable. Please try again.'));
  return data;
@@ -31,6 +48,8 @@ export function GlobalChat({embedded=false}:{embedded?:boolean}={}) {
  const [messages,setMessages]=useState<GlobalMessage[]>([]);
  const [input,setInput]=useState('');
  const [busy,setBusy]=useState(false);
+ const [progress,setProgress]=useState('Checking live records…');
+ const [partial,setPartial]=useState<{summary:string;details:string}|null>(null);
  const [loading,setLoading]=useState(false);
  const [historyOpen,setHistoryOpen]=useState(false);
  const [error,setError]=useState('');
@@ -43,7 +62,7 @@ export function GlobalChat({embedded=false}:{embedded?:boolean}={}) {
   catch(e){setHistoryError(e instanceof Error?e.message:'Unable to load history.');}
  },[]);
  useEffect(()=>{void refresh();},[refresh]);
- useEffect(()=>{end.current?.scrollIntoView({behavior:'smooth',block:'end'});},[messages,busy,statusRequest]);
+ useEffect(()=>{end.current?.scrollIntoView({behavior:'smooth',block:'end'});},[messages,busy,statusRequest,partial]);
  async function openSession(id:string) {
   if(pending.current)return;
   const version=++loadVersion.current;
@@ -60,17 +79,20 @@ export function GlobalChat({embedded=false}:{embedded?:boolean}={}) {
  async function send(question:string) {
   const text=question.trim();if(!text||pending.current||loading)return;
   if(isStatusChangeRequest(text)){requestStatus(text);setInput('');return;}
-  pending.current=true;setBusy(true);setError('');setInput('');
+  pending.current=true;setBusy(true);setPartial(null);setProgress('Connecting to your tender assistant…');setError('');setInput('');
   const userMessage:GlobalMessage={id:crypto.randomUUID(),role:'user',content:text};
   setMessages(prev=>[...prev,userMessage]);
   try{
-   const data=await call({message:text,session_id:sessionId});
+   const data=await call({message:text,session_id:sessionId,stream:true},event=>{
+    if(event.type==='status'&&event.message)setProgress(event.message);
+    if(event.type==='partial')setPartial({summary:event.summary||'',details:event.details||''});
+   });
    if(!data.answer||!data.session_id)throw new Error('No answer was returned. Please try again.');
    setSessionId(data.session_id);
    setMessages(prev=>[...prev,{id:crypto.randomUUID(),role:'assistant',content:data.answer!,presentation:data.presentation}]);
    void refresh();
   }catch(e){setError(e instanceof Error?e.message:'Unable to answer.');setInput(text);setMessages(prev=>prev.filter(m=>m.id!==userMessage.id));}
-  finally{pending.current=false;setBusy(false);}
+  finally{pending.current=false;setBusy(false);setPartial(null);}
  }
  const disabled=busy||loading;
  return <section aria-label="Global Ask AI" className={embedded ? "flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-white" : "flex h-[calc(100dvh-12rem)] min-h-[420px] min-w-0 flex-col overflow-hidden rounded-xl border border-border bg-white shadow-sm lg:h-[calc(100dvh-9rem)]"}>
@@ -101,7 +123,11 @@ export function GlobalChat({embedded=false}:{embedded?:boolean}={}) {
         {m.presentation.references.length?<div className="mt-4 grid min-w-0 gap-2 sm:grid-cols-2">{m.presentation.references.map(t=><Link key={t.id} href={`/tenders/${encodeURIComponent(t.id)}`} className="min-w-0 rounded-lg border border-border p-3 text-sm hover:bg-surface-secondary"><span className="block break-words font-medium">{t.title}</span><span className="mt-1 block break-all text-xs text-text-muted">{t.id}</span><span className="text-xs text-primary-700">{t.status.replace(/_/g,' ')}</span></Link>)}</div>:null}
         <div className="mt-4 flex flex-wrap gap-2">{m.presentation.followups.map(q=><button key={q} type="button" disabled={disabled} onClick={()=>void send(q)} className="min-h-11 max-w-full rounded-lg border border-border px-3 py-2 text-left text-xs hover:bg-primary-50 disabled:opacity-50">{q}</button>)}</div>
        </>:<Markdown text={m.content}/>}</article>)}
-      {busy?<div role="status" className="animate-pulse text-sm text-text-muted">Checking live records and preparing your answer…</div>:null}
+      {busy&&partial&&(partial.summary||partial.details)?<article aria-label="AI answer in progress" className="min-w-0">
+       {partial.summary?<><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-primary-700">Short answer</p><Markdown text={partial.summary}/></>:null}
+       {partial.details?<div className="mt-4 border-t border-border pt-3"><h3 className="text-sm font-semibold">Detailed analysis</h3><Markdown text={partial.details}/></div>:null}
+      </article>:null}
+      {busy?<div role="status" className="flex items-center gap-2 text-sm text-text-muted"><span aria-hidden="true" className="animate-pulse">● ● ●</span>{progress}</div>:null}
       {statusRequest?<ChatStatusChange key={statusRequest.id} tenderId={statusRequest.tenderId} candidates={statusRequest.candidates} onDismiss={()=>setStatusRequest(null)}/>:null}
       <div ref={end}/>
      </div>

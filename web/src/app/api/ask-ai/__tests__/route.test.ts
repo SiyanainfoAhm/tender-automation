@@ -27,3 +27,14 @@ describe('Global Ask AI API',()=>{
   expect(result.status).toBe(503);expect(JSON.stringify(await result.json())).not.toContain('sensitive');
  });
 });
+
+it('forwards streaming bodies without buffering and keeps server credentials private',async()=>{
+ const upstream=new Response('data: {"type":"status","message":"Searching…"}\n\n',{headers:{'Content-Type':'text/event-stream'}});
+ mocks.fetch.mockResolvedValue(upstream);
+ const result=await POST(request({message:'Best tenders?',stream:true,user_id:'evil'}));
+ expect(result.headers.get('content-type')).toContain('text/event-stream');
+ expect(result.headers.get('cache-control')).toContain('no-transform');
+ expect(result.body).toBe(upstream.body);
+ expect(JSON.parse(mocks.fetch.mock.calls[0][1].body)).toEqual({message:'Best tenders?',operation:'chat',stream:true});
+ expect(await result.text()).not.toContain('server-session');
+});
