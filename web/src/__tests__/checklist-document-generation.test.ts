@@ -124,3 +124,12 @@ describe("DOCX renderer", () => {
     expect(documentXml!).toContain("103500369");
   });
 });
+
+describe("discovered checklist document types",()=>{
+  it("uses requirement names for COVERAGE IDs rather than treating all as cover letters",async()=>{
+    const {resolveDocumentTypeKey}=await import("@/server/generation/prompts");
+    expect(resolveDocumentTypeKey("COVERAGE_123", "Detailed project implementation plan with milestones")).toBe("PROJECT_PLAN");
+    expect(resolveDocumentTypeKey("COVERAGE_123", "Technical Approach and Methodology")).toBe("TECHNICAL_APPROACH");
+    expect(resolveDocumentTypeKey("COVERAGE_123", "Covering letter")).toBe("COVERING_LETTER");
+  });
+});

@@ -59,12 +59,13 @@ Use only supplied RFP and company evidence. Prefer concrete, tender-specific wor
 over generic proposal filler. Mark missing company inputs explicitly.`,
 };
 
-export function resolveDocumentTypeKey(requirementKey: string): string {
-  const key = requirementKey.toUpperCase();
+export function resolveDocumentTypeKey(requirementKey: string, requirementName?: string): string {
+  // Discovery IDs such as COVERAGE_<uuid> are identities, not document types.
+  const key = (/^COVERAGE_/i.test(requirementKey) && requirementName ? requirementName : requirementKey).toUpperCase().replace(/[\s&-]+/g, "_");
   if (key.includes("TECHNICAL") || key.includes("METHODOLOGY") || key.includes("APPROACH")) {
     return "TECHNICAL_APPROACH";
   }
-  if (key.includes("PROJECT_PLAN") || key.includes("SCHEDULE") || key.includes("GANTT")) {
+  if (key.includes("PROJECT_PLAN") || /PROJECT.*IMPLEMENTATION.*PLAN/.test(key) || key.includes("SCHEDULE") || key.includes("GANTT")) {
     return "PROJECT_PLAN";
   }
   if (key.includes("COVER") || key.includes("COVERING")) return "COVERING_LETTER";

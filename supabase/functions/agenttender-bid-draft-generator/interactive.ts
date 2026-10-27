@@ -20,3 +20,12 @@ export async function interactiveChecklistDraft(db:any, body:any, ai:any) {
   // Never run the scheduled pipeline, signing or any DB writes for this action.
   return Response.json({ok:true,document:result.data,provider:result.provider,model:result.model});
 }
+
+/** Leave scheduled writing/review settings unchanged; reserve output for the
+ * complete document in interactive revisions, rather than hidden reasoning. */
+export function writerRequestSettings(provider:string, defaultMax:number, interactive=false) {
+  return {
+    max_tokens: interactive ? 24000 : defaultMax,
+    ...(interactive && provider === "DEEPSEEK" ? {thinking:{type:"disabled"}} : {}),
+  };
+}

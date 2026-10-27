@@ -1,5 +1,5 @@
 import {describe,expect,it,vi} from "vitest";
-import {interactiveChecklistDraft} from "../../../supabase/functions/agenttender-bid-draft-generator/interactive";
+import {interactiveChecklistDraft,writerRequestSettings} from "../../../supabase/functions/agenttender-bid-draft-generator/interactive";
 const id="11111111-1111-4111-8111-111111111111";
 const body={company_id:id,workspace_id:id,item_id:id,system_prompt:"Return the required draft schema",user_prompt:"Improve the testing plan"};
 function database(data:unknown) {const filters:unknown[][]=[];const q={select:()=>q,eq:(...args:unknown[])=>{filters.push(args);return q;},maybeSingle:async()=>({data,error:null})};return {db:{from:vi.fn(()=>q)},filters};}
@@ -19,5 +19,14 @@ describe("existing V2 writer interactive operation",()=>{
     expect((await interactiveChecklistDraft(db,{...body,company_id:"wrong"},ai)).status).toBe(400);
     expect((await interactiveChecklistDraft(db,{...body,user_prompt:"x".repeat(180001)},ai)).status).toBe(400);
     expect(db.from).not.toHaveBeenCalled();expect(ai).not.toHaveBeenCalled();
+  });
+});
+
+describe("interactive output budget",()=>{
+  it("keeps scheduled model settings unchanged and reserves output tokens for full revisions",()=>{
+    expect(writerRequestSettings("DEEPSEEK",8000)).toEqual({max_tokens:8000});
+    expect(writerRequestSettings("OPENAI",16000)).toEqual({max_tokens:16000});
+    expect(writerRequestSettings("DEEPSEEK",8000,true)).toEqual({max_tokens:24000,thinking:{type:"disabled"}});
+    expect(writerRequestSettings("OPENAI",16000,true)).toEqual({max_tokens:24000});
   });
 });

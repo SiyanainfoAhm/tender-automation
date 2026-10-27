@@ -116,7 +116,7 @@ export async function generateChecklistDocument(options: {
   });
   assertGenerationAllowed(policy);
 
-  const documentTypeKey = resolveDocumentTypeKey(context.requirement.key);
+  const documentTypeKey = resolveDocumentTypeKey(context.requirement.key, context.requirement.name);
   const mode = options.documentChat?.mode || "recreate";
   const source = options.documentChat?.sourceDocument;
   if (mode === "modify" && !source) throw new Error("Select an attached document to modify.");
