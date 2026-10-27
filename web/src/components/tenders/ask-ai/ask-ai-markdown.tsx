@@ -20,11 +20,11 @@ export function AskAiMarkdown({ content, className }: AskAiMarkdownProps) {
     return (
       <div
         className={cn(
-          "ask-ai-md text-[13px] leading-relaxed text-slate-800",
+          "ask-ai-md break-words text-sm leading-7 text-text-primary",
           "[&_h1]:mb-2 [&_h1]:mt-3 [&_h1]:text-base [&_h1]:font-semibold [&_h1]:text-slate-950",
           "[&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-[15px] [&_h2]:font-semibold [&_h2]:text-slate-950",
           "[&_h3]:mb-1 [&_h3]:mt-2.5 [&_h3]:text-sm [&_h3]:font-semibold [&_h3]:text-slate-900",
-          "[&_p]:my-1.5",
+          "[&_p]:my-2",
           "[&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:space-y-0.5 [&_ul]:pl-4",
           "[&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:space-y-0.5 [&_ol]:pl-4",
           "[&_li]:leading-relaxed",
@@ -69,7 +69,7 @@ export function AskAiMarkdown({ content, className }: AskAiMarkdownProps) {
     );
   } catch {
     return (
-      <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-slate-800">
+      <p className="whitespace-pre-wrap text-sm leading-7 text-text-primary">
         {content}
       </p>
     );

@@ -119,6 +119,24 @@ describe("AskAiSources", () => {
   });
 });
 
+describe("TenderAskAiDrawer panel controls", () => {
+  it("opens with tender context and collapsible history, then preserves the draft when reopened", async () => {
+    const user = userEvent.setup();
+    render(<TenderAskAiDrawer tenderId="tender-context" tenderTitle="Website development" />);
+    await user.click(screen.getByRole("button", {name:"Ask AI about Website development"}));
+    expect(screen.getByText("Tender assistant · VBDC V2")).toBeTruthy();
+    expect(screen.getByRole("button", {name:"Conversation history"}).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("complementary", {name:"Tender conversation history"})).toBeNull();
+    await user.click(screen.getByRole("button", {name:"Conversation history"}));
+    expect(screen.getByRole("complementary", {name:"Tender conversation history"})).toBeTruthy();
+    await user.click(screen.getByRole("button", {name:"Close conversation history"}));
+    await user.type(screen.getByRole("textbox", {name:"Ask AI message"}), "Check this tender PQ");
+    await user.click(screen.getByRole("button", {name:"Close Ask AI"}));
+    await user.click(screen.getByRole("button", {name:"Ask AI about Website development"}));
+    expect((screen.getByRole("textbox", {name:"Ask AI message"}) as HTMLTextAreaElement).value).toBe("Check this tender PQ");
+  });
+});
+
 describe("TenderAskAiDrawer streaming UX", () => {
   it("sends message immediately and streams deltas with stop/retry/copy", async () => {
     const user = userEvent.setup();
@@ -175,6 +193,7 @@ describe("TenderAskAiDrawer streaming UX", () => {
 
     expect(streamAskAiRequest).toHaveBeenCalledWith(
       expect.objectContaining({
+        tenderId: "tender-1",
         action: undefined,
         questionCategory: "CATEGORY_A",
         sessionId: "session-1",
@@ -401,4 +420,3 @@ describe("long tender title", () => {
     expect(header).toBeTruthy();
   });
 });
-

@@ -61,13 +61,13 @@ export function AskAiMessageList({
       <div
         ref={scrollerRef}
         onScroll={handleScroll}
-        className="h-full overflow-y-auto bg-slate-50/60 px-3 py-3"
+        className="h-full overflow-y-auto overflow-x-hidden overscroll-contain bg-white px-4 py-5 sm:px-5"
         data-testid="ask-ai-message-list"
       >
         {messages.length === 0 ? (
           <AskAiEmptyState questions={questions} disabled={busy} onSelect={onQuickAction} />
         ) : (
-          <div className="space-y-4">
+          <div className="mx-auto max-w-3xl space-y-6">
             {messages.map((message, index) => (
               <div key={message.id} className="group">
                 <AskAiMessageView
@@ -82,8 +82,8 @@ export function AskAiMessageList({
                   onReindex={onReindex}
                   reindexState={reindexState}
                 />
-                {tenderId && message.backendMessageId && message.role === "assistant" && !message.incomplete && !message.error && !message.cancelled ? <div className="ml-8"><AskAiFeedback tenderId={tenderId} messageId={message.backendMessageId} answer={message.content} initialFeedback={message.feedback} /></div> : null}
-                {message.role === "assistant" && message.content && !message.incomplete && !message.error && !message.cancelled ? <div className="ml-8 mt-3"><AskAiQuickActions questions={questions} disabled={busy} onSelect={onQuickAction} /></div> : null}
+                {tenderId && message.backendMessageId && message.role === "assistant" && !message.incomplete && !message.error && !message.cancelled ? <div className="mt-3"><AskAiFeedback tenderId={tenderId} messageId={message.backendMessageId} answer={message.content} initialFeedback={message.feedback} /></div> : null}
+                {message.role === "assistant" && message.content && !message.incomplete && !message.error && !message.cancelled ? <div className="mt-4"><AskAiQuickActions compact questions={questions} disabled={busy} onSelect={onQuickAction} /></div> : null}
               </div>
             ))}
             <div ref={bottomRef} />
@@ -105,5 +105,3 @@ export function AskAiMessageList({
     </div>
   );
 }
-
-

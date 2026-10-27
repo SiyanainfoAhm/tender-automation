@@ -647,14 +647,12 @@ export function TenderAskAiDrawer({
         {compact ? null : " Ask AI"}
       </Button>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={setOpen} modal={false}>
         <DialogContent
           showCloseButton={false}
           aria-labelledby={titleId}
           className={cn(
-            "flex h-dvh w-screen max-w-none flex-col gap-0 overflow-hidden rounded-none border-slate-200 bg-white p-0",
-            "sm:h-[94dvh] sm:w-[96vw] sm:rounded-lg",
-            "lg:h-[92dvh] lg:w-[80vw] lg:max-w-[1500px]",
+            "bottom-[calc(5.5rem+env(safe-area-inset-bottom))] left-auto right-3 top-auto flex h-[min(700px,calc(100dvh-7rem-env(safe-area-inset-bottom)))] w-[calc(100vw-1.5rem)] max-w-[560px] translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-2xl border-border bg-white p-0 shadow-2xl sm:right-6",
           )}
           onClick={(event) => event.stopPropagation()}
           onKeyDown={(event) => event.stopPropagation()}
@@ -662,22 +660,22 @@ export function TenderAskAiDrawer({
           <span id={titleId} className="sr-only">
             Ask AI — {tenderTitle}
           </span>
-          <div className="flex shrink-0 items-start border-b border-slate-200">
+          <div className="flex shrink-0 items-start gap-1 border-b border-border bg-white">
             <div className="min-w-0 flex-1"><AskAiHeader tenderTitle={tenderTitle} /></div>
-            <div className="flex shrink-0 items-center gap-1 px-3 pt-3">
-              <Button variant="outline" size="sm" className="hidden h-7 text-[11px] sm:inline-flex" onClick={newChat}><Plus className="mr-1 size-3" />New Chat</Button>
-              <Button variant="ghost" size="icon" className="size-7 lg:hidden" onClick={() => setHistoryOpen((v) => !v)} aria-label="Conversation history"><History className="size-4" /></Button>
-              <Button variant="ghost" size="icon" className="size-7" onClick={() => setOpen(false)} aria-label="Close Ask AI"><X className="size-4" /></Button>
+            <div className="flex shrink-0 items-center gap-1 pr-2 pt-3">
+              <Button size="sm" className="h-10 rounded-lg bg-primary px-3 text-xs text-white hover:bg-primary/90" disabled={busy} onClick={newChat}><Plus className="mr-1 size-3" />New Chat</Button>
+              <Button variant="ghost" size="icon" className="size-10 rounded-lg border border-border" onClick={() => setHistoryOpen((v) => !v)} aria-label="Conversation history" aria-expanded={historyOpen}><History className="size-4" /></Button>
+              <Button variant="ghost" size="icon" className="size-10 rounded-lg" onClick={() => setOpen(false)} aria-label="Close Ask AI"><X className="size-4" /></Button>
             </div>
           </div>
-          <div className="relative min-h-0 flex-1 lg:flex">
-            <aside className={cn("absolute inset-y-0 left-0 z-10 w-[290px] shrink-0 border-r border-slate-200 bg-slate-50 p-3 shadow-lg lg:static lg:block lg:shadow-none", historyOpen ? "block" : "hidden lg:block")}>
-              <div className="mb-2 flex gap-2"><Button size="sm" className="h-8 flex-1 text-xs" onClick={newChat}><Plus className="mr-1 size-3.5" />New Chat</Button></div>
-              <label className="relative block"><Search className="absolute left-2.5 top-2.5 size-3.5 text-slate-400" /><input value={historySearch} onChange={(e) => setHistorySearch(e.target.value)} placeholder="Search conversations..." className="h-8 w-full rounded-md border border-slate-200 bg-white pl-8 pr-2 text-[11px] outline-none focus:border-slate-400" /></label>
+          <div className="relative flex min-h-0 flex-1">
+            <aside hidden={!historyOpen} aria-label="Tender conversation history" className={cn("absolute inset-y-0 left-0 z-10 w-[min(290px,90%)] shrink-0 border-r border-border bg-surface-secondary p-3 shadow-xl", historyOpen ? "block" : "hidden")}>
+              <div className="mb-2 flex items-center justify-between"><h3 className="text-sm font-semibold text-text-primary">Conversations</h3><Button variant="ghost" size="icon" className="size-10" onClick={() => setHistoryOpen(false)} aria-label="Close conversation history"><X className="size-4" /></Button></div>
+              <label className="relative block"><Search className="absolute left-2.5 top-2.5 size-3.5 text-slate-400" /><input value={historySearch} onChange={(e) => setHistorySearch(e.target.value)} aria-label="Search tender conversations" placeholder="Search conversations..." className="h-8 w-full rounded-md border border-slate-200 bg-white pl-8 pr-2 text-[11px] outline-none focus:border-slate-400" /></label>
               <p className="mt-4 px-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Conversations</p>
-              <div className="mt-1 max-h-[calc(100%-90px)] space-y-1 overflow-y-auto">{sessions.map((item) => <div key={item.id} className={cn("group flex items-center rounded-md", activeSessionId === item.id ? "bg-slate-200" : "hover:bg-slate-100")}><button type="button" onClick={() => void selectSession(item.id)} className="min-w-0 flex-1 px-2 py-2 text-left"><p className="truncate text-[12px] font-medium text-slate-700">{item.title}</p><p className="mt-0.5 text-[10px] text-slate-400">{new Date(item.lastMessageAt).toLocaleDateString()}</p></button><div className="mr-1 hidden items-center gap-0.5 group-hover:flex"><button type="button" onClick={() => { setSessionTitleDraft(item.title); setSessionDialog({ kind: "rename", session: item }); }} className="rounded px-1.5 py-1 text-[10px] text-slate-400 hover:bg-white hover:text-slate-700" aria-label={`Rename ${item.title}`}>Rename</button><button type="button" onClick={() => setSessionDialog({ kind: "delete", session: item })} className="rounded px-1.5 py-1 text-[10px] text-slate-400 hover:bg-white hover:text-red-600" aria-label={`Delete ${item.title}`}>Delete</button></div></div>)}{sessions.length === 0 ? <p className="px-2 py-3 text-[11px] text-slate-400">No saved conversations.</p> : null}</div>
+              <div className="mt-1 max-h-[calc(100%-90px)] space-y-1 overflow-y-auto">{sessions.map((item) => <div key={item.id} className={cn("group flex items-center rounded-md", activeSessionId === item.id ? "bg-primary-50 text-primary-700" : "hover:bg-white")}><button type="button" onClick={() => void selectSession(item.id)} className="min-w-0 flex-1 px-2 py-2 text-left"><p className="truncate text-[12px] font-medium text-slate-700">{item.title}</p><p className="mt-0.5 text-[10px] text-slate-400">{new Date(item.lastMessageAt).toLocaleDateString()}</p></button><div className="mr-1 flex items-center gap-0.5 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100"><button type="button" onClick={() => { setSessionTitleDraft(item.title); setSessionDialog({ kind: "rename", session: item }); }} className="rounded px-1.5 py-1 text-[10px] text-slate-400 hover:bg-white hover:text-slate-700" aria-label={`Rename ${item.title}`}>Rename</button><button type="button" onClick={() => setSessionDialog({ kind: "delete", session: item })} className="rounded px-1.5 py-1 text-[10px] text-slate-400 hover:bg-white hover:text-red-600" aria-label={`Delete ${item.title}`}>Delete</button></div></div>)}{sessions.length === 0 ? <p className="px-2 py-3 text-[11px] text-slate-400">No saved conversations.</p> : null}</div>
             </aside>
-            <main className="flex min-w-0 flex-1 flex-col">
+            <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
               <AskAiMessageList tenderId={tenderId} questions={questions} messages={messages} busy={busy} stickToBottom={stickToBottom} onStickToBottomChange={setStickToBottom} showJumpToLatest={showJumpToLatest} onJumpToLatest={() => setStickToBottom(true)} onQuickAction={onQuickAction} onRetry={(index) => void retryAssistant(index)} onReindex={() => void handleReindex()} reindexState={reindexState} />
               {configError ? <p role="status" className="px-3 py-2 text-xs text-slate-500">Quick questions could not be loaded. <button type="button" className="underline" onClick={() => setConfigAttempt(n => n + 1)}>Retry</button></p> : null}
               <AskAiComposer value={input} onChange={setInput} onSend={() => void ask(input)} onStop={stopGenerating} busy={busy} />
@@ -697,5 +695,3 @@ export function TenderAskAiDrawer({
     </>
   );
 }
-
-

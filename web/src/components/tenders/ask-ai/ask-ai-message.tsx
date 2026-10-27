@@ -31,8 +31,8 @@ export function AskAiMessageView({
   if (message.role === "user") {
     return (
       <div className="flex justify-end" data-testid="ask-ai-user-message">
-        <div className="max-w-[80%] rounded-2xl rounded-br-md bg-slate-900 px-3 py-2 text-[13px] leading-relaxed text-white shadow-sm">
-          <p className="whitespace-pre-wrap">{message.content}</p>
+        <div className="max-w-[90%] rounded-2xl bg-primary-50 px-4 py-3 text-sm leading-7 text-text-primary">
+          <p className="whitespace-pre-wrap break-words">{message.content}</p>
         </div>
       </div>
     );
@@ -59,18 +59,18 @@ export function AskAiMessageView({
 
   return (
     <div
-      className="flex gap-2"
+      className="min-w-0"
       data-testid="ask-ai-assistant-message"
       data-incomplete={message.incomplete ? "true" : "false"}
       data-cancelled={message.cancelled ? "true" : "false"}
       data-error={message.error ? "true" : "false"}
     >
-      <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-700">
-        <Bot className="size-3.5" aria-hidden />
+      <span className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary-700">
+        <Bot className="size-3.5" aria-hidden /> Ask AI
       </span>
       <div className="min-w-0 flex-1">
         {!message.content && message.statusText ? (
-          <p className="flex items-center gap-1.5 text-[12px] text-slate-500">
+          <p className="flex items-center gap-1.5 text-sm text-text-muted">
             <Loader2 className="size-3 animate-spin" aria-hidden />
             <span>{message.statusText}</span>
           </p>
@@ -123,14 +123,14 @@ export function AskAiMessageView({
         {showActions && message.content && !message.statusText ? (
           <div
             className={cn(
-              "mt-1.5 flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100",
+              "mt-3 flex flex-wrap items-center gap-2",
               "transition-opacity",
             )}
           >
             {!message.incomplete || message.error || message.cancelled ? (
               <button
                 type="button"
-                className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+                className="inline-flex items-center gap-1 min-h-10 rounded-lg px-2 py-2 text-xs text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
                 onClick={() => void copyAnswer()}
                 aria-label="Copy response"
               >
@@ -145,7 +145,7 @@ export function AskAiMessageView({
             {(message.error || message.cancelled) && onRetry ? (
               <button
                 type="button"
-                className="inline-flex items-center gap-1 rounded px-1.5 py-1 text-[11px] text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+                className="inline-flex items-center gap-1 min-h-10 rounded-lg px-2 py-2 text-xs text-slate-500 hover:bg-slate-100 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
                 onClick={onRetry}
                 aria-label="Retry response"
               >
@@ -159,4 +159,3 @@ export function AskAiMessageView({
     </div>
   );
 }
-
