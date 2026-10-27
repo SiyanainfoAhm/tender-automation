@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import {ChatStatusChange} from './chat-status-change';
+import {useStatusChangePermission} from './use-status-change-permission';
+import {isStatusChangeRequest,tenderIdFromCommand,type StatusTenderOption} from '@/lib/ai/status-change';
 import { GLOBAL_QUESTIONS, type GlobalMessage, type GlobalPresentation } from '@/lib/ai/global-chat';
 
 type Session = {id:string;title:string;last_message_at:string};
@@ -21,6 +24,8 @@ function Markdown({text}:{text:string}) {
  }}>{text}</ReactMarkdown></div>;
 }
 export function GlobalChat({embedded=false}:{embedded?:boolean}={}) {
+ const canChangeStatus=useStatusChangePermission();
+ const [statusRequest,setStatusRequest]=useState<{id:string;tenderId?:string;candidates:StatusTenderOption[]}|null>(null);
  const [sessions,setSessions]=useState<Session[]>([]);
  const [sessionId,setSessionId]=useState<string|null>(null);
  const [messages,setMessages]=useState<GlobalMessage[]>([]);
@@ -38,18 +43,23 @@ export function GlobalChat({embedded=false}:{embedded?:boolean}={}) {
   catch(e){setHistoryError(e instanceof Error?e.message:'Unable to load history.');}
  },[]);
  useEffect(()=>{void refresh();},[refresh]);
- useEffect(()=>{end.current?.scrollIntoView({behavior:'smooth',block:'end'});},[messages,busy]);
+ useEffect(()=>{end.current?.scrollIntoView({behavior:'smooth',block:'end'});},[messages,busy,statusRequest]);
  async function openSession(id:string) {
   if(pending.current)return;
   const version=++loadVersion.current;
   setLoading(true);setError('');setHistoryOpen(false);
-  try{const data=await call({operation:'messages',session_id:id});if(version!==loadVersion.current)return;setSessionId(id);setMessages(data.messages||[]);}
+  try{const data=await call({operation:'messages',session_id:id});if(version!==loadVersion.current)return;setStatusRequest(null);setSessionId(id);setMessages(data.messages||[]);}
   catch(e){if(version===loadVersion.current)setError(e instanceof Error?e.message:'Could not load this conversation.');}
   finally{if(version===loadVersion.current)setLoading(false);}
  }
- function newChat(){if(pending.current)return;loadVersion.current++;setLoading(false);setSessionId(null);setMessages([]);setError('');setInput('');setHistoryOpen(false);}
+ function newChat(){if(pending.current)return;loadVersion.current++;setLoading(false);setStatusRequest(null);setSessionId(null);setMessages([]);setError('');setInput('');setHistoryOpen(false);}
+ function requestStatus(question='') {
+  const references=[...messages].reverse().find(m=>m.presentation?.references?.length)?.presentation?.references||[];
+  setStatusRequest({id:crypto.randomUUID(),tenderId:tenderIdFromCommand(question),candidates:references.map(t=>({id:t.id,title:t.title}))});
+ }
  async function send(question:string) {
   const text=question.trim();if(!text||pending.current||loading)return;
+  if(isStatusChangeRequest(text)){requestStatus(text);setInput('');return;}
   pending.current=true;setBusy(true);setError('');setInput('');
   const userMessage:GlobalMessage={id:crypto.randomUUID(),role:'user',content:text};
   setMessages(prev=>[...prev,userMessage]);
@@ -81,7 +91,7 @@ export function GlobalChat({embedded=false}:{embedded?:boolean}={}) {
    <div className="flex min-w-0 flex-1 flex-col">
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6" aria-live="polite" aria-busy={disabled}>
      <div className="mx-auto max-w-3xl space-y-6">
-      {loading?<p role="status" className="text-sm text-text-muted">Loading conversation…</p>:!messages.length?<div className="py-3 sm:py-6">
+      {loading?<p role="status" className="text-sm text-text-muted">Loading conversation…</p>:!messages.length&&!statusRequest?<div className="py-3 sm:py-6">
        <div className="mb-6"><span className="mb-3 inline-flex rounded-full bg-primary-50 px-3 py-1 text-xs font-medium text-primary-700">Your tender intelligence assistant</span><h2 className="font-heading text-2xl font-semibold">What should we explore?</h2><p className="mt-2 text-sm text-text-muted">Ask across the database using live records and your company’s evidence.</p></div>
        <div className="grid min-w-0 gap-2 sm:grid-cols-2">{GLOBAL_QUESTIONS.map((q,i)=><button key={q} type="button" onClick={()=>void send(q)} disabled={disabled} className="flex min-h-16 min-w-0 items-start gap-3 rounded-xl border border-border p-3 text-left text-sm transition-colors hover:border-primary hover:bg-primary-50 disabled:opacity-50"><span aria-hidden="true" className="shrink-0 text-xs text-text-muted">{String(i+1).padStart(2,'0')}</span><span className="break-words">{q}</span></button>)}</div>
       </div>:messages.map(m=><article key={m.id} aria-label={m.role==='user'?'Your question':'AI answer'} className={m.role==='user'?'ml-auto w-fit max-w-[90%] rounded-2xl bg-primary-50 px-4 py-3':'min-w-0'}>
@@ -92,17 +102,19 @@ export function GlobalChat({embedded=false}:{embedded?:boolean}={}) {
         <div className="mt-4 flex flex-wrap gap-2">{m.presentation.followups.map(q=><button key={q} type="button" disabled={disabled} onClick={()=>void send(q)} className="min-h-11 max-w-full rounded-lg border border-border px-3 py-2 text-left text-xs hover:bg-primary-50 disabled:opacity-50">{q}</button>)}</div>
        </>:<Markdown text={m.content}/>}</article>)}
       {busy?<div role="status" className="animate-pulse text-sm text-text-muted">Checking live records and preparing your answer…</div>:null}
+      {statusRequest?<ChatStatusChange key={statusRequest.id} tenderId={statusRequest.tenderId} candidates={statusRequest.candidates} onDismiss={()=>setStatusRequest(null)}/>:null}
       <div ref={end}/>
      </div>
     </div>
     <footer className="shrink-0 border-t border-border bg-white p-3 sm:px-6">
      <div className="mx-auto max-w-3xl">
+      {canChangeStatus?<button type="button" disabled={disabled} onClick={()=>requestStatus()} className="mb-2 min-h-10 rounded-lg border border-border px-3 text-xs text-primary-700 disabled:opacity-50">Change tender status</button>:null}
       {error?<p role="alert" className="mb-2 text-sm text-red-700">{error} {error.toLowerCase().includes('sign in')?<Link className="underline" href="/login?next=%2Fask-ai">Sign in</Link>:null}</p>:null}
       <form className="flex min-w-0 items-end gap-2" onSubmit={e=>{e.preventDefault();void send(input);}}>
        <textarea aria-label="Ask a question about your tenders" placeholder="Ask about tenders, deadlines, PQ or missing documents…" value={input} maxLength={4000} disabled={disabled} onChange={e=>setInput(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();void send(input);}}} rows={2} className="min-h-12 min-w-0 flex-1 resize-none rounded-xl border border-border p-3 text-base outline-none focus:ring-2 focus:ring-primary disabled:opacity-60"/>
        <button type="submit" disabled={disabled||!input.trim()} className="min-h-12 shrink-0 rounded-xl bg-primary px-4 text-sm font-medium text-white disabled:opacity-50">{busy?'Working…':'Send'}</button>
       </form>
-      <p className="mt-2 text-center text-[10px] text-text-muted">Read-only · Verify mandatory requirements against original tender documents.</p>
+      <p className="mt-2 text-center text-[10px] text-text-muted">Status changes require confirmation · Verify mandatory requirements against original tender documents.</p>
      </div>
     </footer>
    </div>

@@ -14,6 +14,8 @@ import userEvent from "@testing-library/user-event";
 const streamAskAiRequest = vi.fn();
 const questions = Array.from({length:10}, (_, i) => ({label:`Question ${i+1}`, category:`CATEGORY_${String.fromCharCode(65+i)}`, question:`Full configured question ${i+1}?`}));
 
+vi.mock('next/navigation',()=>({useRouter:()=>({refresh:vi.fn()})}));
+vi.mock("@/components/won-tenders/mark-as-won-dialog", () => ({MarkAsWonDialog: () => null}));
 vi.mock("@/lib/ai/ask-ai-client", () => ({
   streamAskAiRequest: (...args: unknown[]) => streamAskAiRequest(...args),
   fetchAskAiSessions: vi.fn(async () => ({ sessions: [], total: 0 })),
@@ -419,4 +421,19 @@ describe("long tender title", () => {
       .find((el) => el.className.includes("line-clamp-2"));
     expect(header).toBeTruthy();
   });
+});
+
+describe('Tender Ask AI status request',()=>{
+ it('shows the status form for the selected tender without running AI',async()=>{
+  const id='10000000-0000-0000-0000-000000000001';
+  const fetcher=vi.fn(async(url:RequestInfo|URL)=>Response.json(String(url).includes('status-change?tender_id=')?{tender:{id,title:'Website tender',current_status:'VERIFY',display_status:'VERIFY',options:[{value:'CONDITIONAL_GO',label:'May Bid (Conditional GO)',allowed:true}]}}:String(url).includes('capability=1')?{can_change_status:true}:{smart_questions:questions}));
+  vi.stubGlobal('fetch',fetcher);
+  render(<TenderAskAiDrawer tenderId={id} tenderTitle="Website tender"/>);
+  fireEvent.click(screen.getByRole('button',{name:'Ask AI about Website tender'}));
+  fireEvent.change(screen.getByRole('textbox',{name:'Ask AI message'}),{target:{value:'Please change status to conditionalgo'}});
+  fireEvent.click(screen.getByRole('button',{name:'Send question'}));
+  await screen.findByRole('radio',{name:'May Bid (Conditional GO)'});
+  expect(fetcher.mock.calls.some(([url])=>String(url).includes('tender_id='+id))).toBe(true);
+  expect(streamAskAiRequest).not.toHaveBeenCalled();
+ });
 });

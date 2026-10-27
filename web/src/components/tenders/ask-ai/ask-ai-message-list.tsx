@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { ArrowDown } from "lucide-react";
 import { AskAiEmptyState, AskAiQuickActions } from "@/components/tenders/ask-ai/ask-ai-empty-state";
 import { AskAiFeedback } from "@/components/tenders/ask-ai/ask-ai-feedback";
@@ -13,6 +13,7 @@ import type { TenderSmartQuestion } from "@/lib/ai/tender-chat-ui";
 
 export function AskAiMessageList({
   tenderId,
+  actionContent,
   messages,
   busy,
   stickToBottom,
@@ -26,6 +27,7 @@ export function AskAiMessageList({
   reindexState,
 }: {
   tenderId?: string;
+  actionContent?: ReactNode;
   messages: AskAiMessage[];
   busy: boolean;
   stickToBottom: boolean;
@@ -47,7 +49,7 @@ export function AskAiMessageList({
     if (node && typeof node.scrollIntoView === "function") {
       node.scrollIntoView({ block: "end" });
     }
-  }, [messages, stickToBottom]);
+  }, [messages, stickToBottom, actionContent]);
 
   function handleScroll() {
     const el = scrollerRef.current;
@@ -64,7 +66,7 @@ export function AskAiMessageList({
         className="h-full overflow-y-auto overflow-x-hidden overscroll-contain bg-white px-4 py-5 sm:px-5"
         data-testid="ask-ai-message-list"
       >
-        {messages.length === 0 ? (
+        {messages.length === 0 && !actionContent ? (
           <AskAiEmptyState questions={questions} disabled={busy} onSelect={onQuickAction} />
         ) : (
           <div className="mx-auto max-w-3xl space-y-6">
@@ -86,6 +88,7 @@ export function AskAiMessageList({
                 {message.role === "assistant" && message.content && !message.incomplete && !message.error && !message.cancelled ? <div className="mt-4"><AskAiQuickActions compact questions={questions} disabled={busy} onSelect={onQuickAction} /></div> : null}
               </div>
             ))}
+            {actionContent}
             <div ref={bottomRef} />
           </div>
         )}

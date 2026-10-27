@@ -1,5 +1,8 @@
 "use client";
 
+import {ChatStatusChange} from "@/components/ai/chat-status-change";
+import {useStatusChangePermission} from "@/components/ai/use-status-change-permission";
+import {isStatusChangeRequest} from "@/lib/ai/status-change";
 import { useEffect, useId, useRef, useState } from "react";
 import { History, Plus, Search, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -47,6 +50,8 @@ export function TenderAskAiDrawer({
   const sendingRef = useRef(false);
   const [configAttempt, setConfigAttempt] = useState(0);
   const [open, setOpen] = useState(false);
+  const canChangeStatus = useStatusChangePermission(open);
+  const [statusRequest, setStatusRequest] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<AskAiMessage[]>([]);
   const [phase, setPhase] = useState<AskAiPhase>("idle");
@@ -113,6 +118,7 @@ export function TenderAskAiDrawer({
     if (typeof fetchAskAiSessionMessages !== "function") return;
     try {
       const result = await fetchAskAiSessionMessages(tenderId, sessionId);
+      setStatusRequest(null);
       setActiveSessionId(sessionId);
       setMessages(result.messages.map((item) => ({ id:item.id, backendMessageId:item.id, feedback:item.feedback, role:item.role, content:item.content, questionCategory:item.action || undefined, sources:item.sources, warnings:item.warnings, incomplete:item.status !== "complete", cancelled:item.status === "cancelled", error:item.status === "error" })));
       setHistoryOpen(false);
@@ -120,7 +126,7 @@ export function TenderAskAiDrawer({
     } catch { /* history remains available on a transient request failure */ }
   }
 
-  function newChat() { if (busy) return; setActiveSessionId(null); setMessages([]); setInput(""); setHistoryOpen(false); }
+  function newChat() { if (busy) return; setStatusRequest(null); setActiveSessionId(null); setMessages([]); setInput(""); setHistoryOpen(false); }
 
   async function removeSession(sessionId: string) {
     try { if (typeof deleteAskAiSession !== "function") return; await deleteAskAiSession(tenderId, sessionId); setSessions((current) => current.filter((item) => item.id !== sessionId)); if (activeSessionId === sessionId) newChat(); } catch { /* leave the UI untouched when deletion fails */ }
@@ -479,6 +485,7 @@ export function TenderAskAiDrawer({
   async function ask(raw: string, action?: AskAiAction | null, questionCategory?: string) {
     const text = raw.trim();
     if (!text || busy || sendingRef.current) return;
+    if (isStatusChangeRequest(text)) { setStatusRequest(createMessageId("status")); setInput(""); setStickToBottom(true); return; }
     sendingRef.current = true;
     setPhase("retrieving");
 
@@ -676,8 +683,9 @@ export function TenderAskAiDrawer({
               <div className="mt-1 max-h-[calc(100%-90px)] space-y-1 overflow-y-auto">{sessions.map((item) => <div key={item.id} className={cn("group flex items-center rounded-md", activeSessionId === item.id ? "bg-primary-50 text-primary-700" : "hover:bg-white")}><button type="button" onClick={() => void selectSession(item.id)} className="min-w-0 flex-1 px-2 py-2 text-left"><p className="truncate text-[12px] font-medium text-slate-700">{item.title}</p><p className="mt-0.5 text-[10px] text-slate-400">{new Date(item.lastMessageAt).toLocaleDateString()}</p></button><div className="mr-1 flex items-center gap-0.5 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100"><button type="button" onClick={() => { setSessionTitleDraft(item.title); setSessionDialog({ kind: "rename", session: item }); }} className="rounded px-1.5 py-1 text-[10px] text-slate-400 hover:bg-white hover:text-slate-700" aria-label={`Rename ${item.title}`}>Rename</button><button type="button" onClick={() => setSessionDialog({ kind: "delete", session: item })} className="rounded px-1.5 py-1 text-[10px] text-slate-400 hover:bg-white hover:text-red-600" aria-label={`Delete ${item.title}`}>Delete</button></div></div>)}{sessions.length === 0 ? <p className="px-2 py-3 text-[11px] text-slate-400">No saved conversations.</p> : null}</div>
             </aside>
             <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-              <AskAiMessageList tenderId={tenderId} questions={questions} messages={messages} busy={busy} stickToBottom={stickToBottom} onStickToBottomChange={setStickToBottom} showJumpToLatest={showJumpToLatest} onJumpToLatest={() => setStickToBottom(true)} onQuickAction={onQuickAction} onRetry={(index) => void retryAssistant(index)} onReindex={() => void handleReindex()} reindexState={reindexState} />
+              <AskAiMessageList actionContent={statusRequest ? <ChatStatusChange key={statusRequest} tenderId={tenderId} onDismiss={() => setStatusRequest(null)} /> : null} tenderId={tenderId} questions={questions} messages={messages} busy={busy} stickToBottom={stickToBottom} onStickToBottomChange={setStickToBottom} showJumpToLatest={showJumpToLatest} onJumpToLatest={() => setStickToBottom(true)} onQuickAction={onQuickAction} onRetry={(index) => void retryAssistant(index)} onReindex={() => void handleReindex()} reindexState={reindexState} />
               {configError ? <p role="status" className="px-3 py-2 text-xs text-slate-500">Quick questions could not be loaded. <button type="button" className="underline" onClick={() => setConfigAttempt(n => n + 1)}>Retry</button></p> : null}
+              {canChangeStatus ? <button type="button" disabled={busy} onClick={() => setStatusRequest(createMessageId("status"))} className="mx-4 my-2 min-h-10 shrink-0 self-start rounded-lg border border-border px-3 text-xs text-primary-700 disabled:opacity-50">Change tender status</button> : null}
               <AskAiComposer value={input} onChange={setInput} onSend={() => void ask(input)} onStop={stopGenerating} busy={busy} />
             </main>
           </div>

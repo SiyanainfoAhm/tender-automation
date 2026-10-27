@@ -39,6 +39,7 @@ type MarkAsWonDialogProps = {
   tenderTitle: string;
   defaultAwardValue?: number | null;
   teamMembers?: TeamMemberOption[];
+  initialNotes?: string;
   onSuccess?: (result: { wonProjectId: string; projectCode: string }) => void;
 };
 
@@ -53,6 +54,7 @@ export function MarkAsWonDialog({
   tenderTitle,
   defaultAwardValue,
   teamMembers = [],
+  initialNotes = "",
   onSuccess,
 }: MarkAsWonDialogProps) {
   const router = useRouter();
@@ -89,8 +91,8 @@ export function MarkAsWonDialog({
     setPbgApplicable(false);
     setPbgAmount("");
     setPbgExpiryDate("");
-    setNotes("");
-  }, [open, defaultAwardValue]);
+    setNotes(initialNotes);
+  }, [open, defaultAwardValue, initialNotes]);
 
   function submit() {
     const value = Number(finalAwardValue.replace(/,/g, ""));
