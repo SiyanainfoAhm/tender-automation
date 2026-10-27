@@ -8,13 +8,13 @@ export function requestedFinancialYears(question,now=new Date()) {
 }
 export function financialDocumentAnswer(question,rows,now=new Date()) {
  const years=requestedFinancialYears(question,now);
- if(!years.length||!/find|show|list|locate/i.test(question)||/qualif|eligib|do we meet|turnover requirement/i.test(question))return null;
+ if(!years.length||!/find|show|list|locate/i.test(question)||/qualif|eligib|do we meet|turnover requirement|this tender|this RFP|as required/i.test(question))return null;
  const escape=s=>String(s??'Unknown').replace(/[|\n\r]/g,' ').replace(/[\[\]<>]/g,'');
  const seen=new Set();const docs=rows.filter(d=>{const id=d.source_id||d.document_id;if(!id||seen.has(id))return false;seen.add(id);return true;});
  const lines=[`The requested three completed financial years are **${years.join(', ')}**.`, '', '| Financial year | Exact source file | Company | Type | Verification / extraction | Match evidence |', '| --- | --- | --- | --- | --- | --- |'];
  const missing=[];
  for(const year of years){
-  const matches=docs.filter(d=>String(d.metadata?.financial_year||d.financial_year||'').replace(/\s/g,'')===year&&/audit|balance|financ/i.test([d.document_name,d.metadata?.original_file_name,d.content].join(' '))).sort((a,b)=>Number(b.metadata?.extraction_status==='READY')-Number(a.metadata?.extraction_status==='READY')).slice(0,2);
+  const matches=docs.filter(d=>String(d.metadata?.financial_year||d.financial_year||'').replace(/\s/g,'')===year&&/audit|balance|financ/i.test([d.document_name,d.metadata?.original_file_name,d.content].join(' '))).sort((a,b)=>{const kind=d=>/audited financial statements|statutory|statutry|statutary|balance sheet/i.test([d.metadata?.document_type,d.document_name].join(' '))?3:/tax audit/i.test([d.metadata?.document_type,d.document_name].join(' '))?0:1;return kind(b)-kind(a)||Number(b.metadata?.extraction_status==='READY')-Number(a.metadata?.extraction_status==='READY');}).slice(0,2);
   if(!matches.length){missing.push(year);lines.push(`| ${year} | No matching source retrieved | — | — | Unresolved | No supplied source establishes this year |`);continue;}
   for(const d of matches){const m=d.metadata||{},id=d.source_id||d.document_id;const file=m.original_file_name||d.document_name;lines.push(`| ${year} | ${escape(file)} (${escape(d.document_name)})${d.ref?" ["+d.ref+"]":""} | ${escape(m.company_name)} | ${escape(m.document_type||m.document_category||'Financial')} | ${escape(m.verification_status||'unverified')} / ${escape(m.extraction_status||'unknown')} | Financial-year metadata matches; source candidate, substantive compliance unverified |`);}
  }

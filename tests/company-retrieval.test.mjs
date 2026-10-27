@@ -4,6 +4,15 @@ import {companyQuery,retrieveCompany,retrieve} from '../supabase/functions/agent
 import {safeAnswer} from '../supabase/functions/agenttender-orch-v2-global-chat/plan.mjs';
 import {requestedFinancialYears,financialDocumentAnswer} from '../supabase/functions/agenttender-orch-v2-chat/company-periods.mjs';
 import {presentAnswer} from '../supabase/functions/agenttender-orch-v2-chat/presentation.mjs';
+import {needsFullOcr} from '../supabase/functions/agenttender-company-text-index/structure.ts';
+
+test('scan samples route to full OCR without certifying unread pages',()=>{
+ const pages=Object.fromEntries(Array.from({length:5},(_,i)=>[i+1,{readable:false,has_images:true}]));
+ assert.equal(needsFullOcr(pages,60),true);
+ assert.equal(needsFullOcr({...pages,6:{readable:true,has_images:true}},60),false);
+ assert.equal(needsFullOcr(pages,5),false);
+ assert.equal(needsFullOcr({1:{readable:false,has_images:true}},60),false);
+});
 
 test('three completed Indian fiscal years follow the current date, including April rollover',()=>{
  assert.deepEqual(requestedFinancialYears('Find last three years audited balance sheets',new Date('2026-10-28T00:00:00Z')),['2023-24','2024-25','2025-26']);
