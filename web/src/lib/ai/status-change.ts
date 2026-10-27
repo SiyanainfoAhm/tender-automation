@@ -11,7 +11,10 @@ export function chatStatusLabel(status:TenderStatus) {
 // continue through the read-only answer engine. No command executes a write.
 export function isStatusChangeRequest(message:string) {
  const text=message.trim().replace(/^(?:(?:please|can you|can u|could you|would you|can i|i want to|i would like to|let['’]s)\s+)+/i,'');
- return /^(?:change|update|set|switch|move|mark)\b/i.test(text)&&/\b(?:status|tenders?|it|this|go|conditionalgo|may\s*bid|will\s*bid|no\s*bid|verify|submitted|won|lost)\b/i.test(text);
+ if(!/^(?:change|update|set|switch|move|mark)\b/i.test(text))return false;
+ if(/\bstatus\b/i.test(text))return true;
+ const target='(?:conditional[ _-]*go|no[ _-]*go|go|may[ _-]*bid|will[ _-]*bid|no[ _-]*bid|verify|submitted|won|lost|duplicate|cancelled|canceled|disqualified|technical[ _-]*rejected|financial[ _-]*rejected)';
+ return new RegExp('\\b(?:to|as)\\s+'+target+'\\b','i').test(text)||(/^(?:mark|set)\b/i.test(text)&&new RegExp('\\b'+target+'[.!?\\s]*$','i').test(text));
 }
 export function tenderIdFromCommand(message:string) {
  return message.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i)?.[0];

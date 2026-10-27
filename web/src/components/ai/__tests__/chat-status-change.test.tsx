@@ -57,6 +57,6 @@ describe('one-message status chooser',()=>{
 describe('user request routing',()=>{
  it('opens only explicit change requests, never recommendations or negatives',()=>{
   for(const q of ['Change status','Please move this tender to conditionalgo','Can you change it to GO?','I want to update the tender status'])expect(isStatusChangeRequest(q)).toBe(true);
-  for(const q of ['Which Conditional Go tenders should move to GO?','What status is this tender?','Do not change the status','Please do not change status','Show all status counts'])expect(isStatusChangeRequest(q)).toBe(false);
+  for(const q of ['Which Conditional Go tenders should move to GO?','What status is this tender?','Do not change the status','Please do not change status','Show all status counts','Update the tender summary','Change this tender budget estimate'])expect(isStatusChangeRequest(q)).toBe(false);
  });
 });
