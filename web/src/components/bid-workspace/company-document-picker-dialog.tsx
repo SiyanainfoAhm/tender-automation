@@ -35,8 +35,15 @@ export function CompanyDocumentPickerDialog({
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return documents;
-    return documents.filter((doc) => {
+    // Keep the currently selected document at the top so it is easy to see.
+    const ordered = selectedId
+      ? [
+          ...documents.filter((doc) => doc.id === selectedId),
+          ...documents.filter((doc) => doc.id !== selectedId),
+        ]
+      : documents;
+    if (!q) return ordered;
+    return ordered.filter((doc) => {
       const hay = [
         doc.name,
         doc.originalFileName,
@@ -49,7 +56,11 @@ export function CompanyDocumentPickerDialog({
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [documents, query]);
+  }, [documents, query, selectedId]);
+
+  const selectedDoc = selectedId
+    ? documents.find((doc) => doc.id === selectedId) || null
+    : null;
 
   async function choose(documentId: string) {
     setPendingId(documentId);
@@ -75,6 +86,17 @@ export function CompanyDocumentPickerDialog({
         <DialogHeader>
           <DialogTitle>Select Company Document</DialogTitle>
         </DialogHeader>
+        {selectedDoc ? (
+          <div className="flex items-start gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm">
+            <Check className="mt-0.5 size-4 shrink-0 text-emerald-700" />
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-emerald-800">Currently selected</p>
+              <p className="truncate text-foreground-900">{selectedDoc.name}</p>
+            </div>
+          </div>
+        ) : (
+          <p className="text-xs text-foreground-500">No company document is selected for this item yet.</p>
+        )}
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-foreground-400" />
           <Input
@@ -123,7 +145,10 @@ export function CompanyDocumentPickerDialog({
                   {loading ? (
                     <span className="text-xs text-foreground-500">…</span>
                   ) : active ? (
-                    <Check className="size-4 shrink-0 text-primary-600" />
+                    <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-emerald-700">
+                      <Check className="size-4" />
+                      Selected
+                    </span>
                   ) : null}
                 </button>
               );

@@ -4,7 +4,7 @@ import { checklistWorkCategory, WORK_CATEGORIES } from "@/lib/will-bid";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, Loader2 } from "lucide-react";
+import { ChevronRight, Download, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { BoqEditor } from "@/components/bid-workspace/boq-editor";
@@ -818,6 +818,18 @@ export function BidWorkspaceClient({
                   Mark Bid as Submitted
                 </Button>
               ) : null}
+              <Button asChild variant="outline" className="mt-2 w-full gap-1.5">
+                <a
+                  href={`/api/tenders/${tender.id}/bid-package`}
+                  download
+                  onClick={() =>
+                    toast.info("Preparing the bid package ZIP. Large tenders can take a minute.")
+                  }
+                >
+                  <Download className="size-4" />
+                  Download full package (ZIP)
+                </a>
+              </Button>
             </div>
           </div>
 

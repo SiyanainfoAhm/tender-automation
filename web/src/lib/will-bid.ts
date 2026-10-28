@@ -1,3 +1,5 @@
+import { isManualOnlyRequirement } from "@/lib/bid-checklist";
+
 export const WORK_CATEGORIES = [
   { key: "company", label: "Company Docs", description: "Match and attach existing company documents." },
   { key: "ai", label: "AI Draft", description: "Generate, review and edit tender-specific drafts." },
@@ -8,7 +10,9 @@ export function checklistWorkCategory(item: {
   processingType?: string | null;
   generationAllowed: boolean;
   matchedDocumentSource: string | null;
+  requirementName?: string | null;
 }) {
+  if (isManualOnlyRequirement(item.requirementName)) return "manual";
   const type = item.processingType?.toUpperCase();
   if (type === "MANUAL_ENTRY" || type === "MANUAL") return "manual";
   if (type === "AI_DRAFT") return "ai";

@@ -702,6 +702,8 @@ export function calculateSectionProgress<T extends {
   workspaceSection?: string | null;
   manualCompleted?: boolean | null;
   completionStatus: ChecklistCompletionStatus;
+  /** When provided (checklist rows), an item with an attached document counts as finished. */
+  isCompleted?: boolean;
 }>(
   items: T[],
   section?: RequirementDestinationSection,
@@ -713,10 +715,12 @@ export function calculateSectionProgress<T extends {
   });
   const total = scoped.length;
   const completed = scoped.filter((item) =>
-    isRequirementCompleted({
-      manualCompleted: item.manualCompleted,
-      completionStatus: item.completionStatus,
-    }),
+    typeof item.isCompleted === "boolean"
+      ? item.isCompleted
+      : isRequirementCompleted({
+          manualCompleted: item.manualCompleted,
+          completionStatus: item.completionStatus,
+        }),
   ).length;
   return {
     completed,
@@ -899,4 +903,34 @@ export function buildChecklistSeedFromMissingDocuments(
     });
   }
   return rows;
+}
+
+/**
+ * Tender fee / processing fee / EMD / bid security and BOQ / price / financial-bid items are
+ * always handled manually: no document is ever attached to them automatically.
+ * Mirrors public.agenttender_is_manual_only_requirement() in the database.
+ */
+const MANUAL_ONLY_REQUIREMENT_PATTERN = new RegExp(
+  [
+    "\\b(?:tender|bid|bidding|document|processing|application|e-?tender|portal)\\s*(?:fee|fees|cost)\\b",
+    "\\bemd\\b",
+    "earnest\\s+money",
+    "bid\\s+secur",
+    "security\\s+deposit",
+    "performance\\s+(?:security|guarantee|bank\\s+guarantee)",
+    "\\bboq\\b",
+    "bill\\s+of\\s+quantit",
+    "schedule\\s+of\\s+(?:rates|quantit)",
+    "price\\s*(?:bid|schedule|break\\s*-?\\s*up|quote|quotation|format|offer|proposal)",
+    "(?:financial|commercial)\\s*(?:bid|proposal|offer|quote|quotation|format|cover|envelope)",
+    "rate\\s+(?:quote|quotation|schedule|contract)",
+  ].join("|"),
+  "i",
+);
+const MANUAL_ONLY_EXCLUSIONS =
+  /exemption|turnover|capacity|solvency|net\s*worth|undertaking|declaration|affidavit/i;
+
+export function isManualOnlyRequirement(name: string | null | undefined): boolean {
+  const value = String(name || "");
+  return MANUAL_ONLY_REQUIREMENT_PATTERN.test(value) && !MANUAL_ONLY_EXCLUSIONS.test(value);
 }

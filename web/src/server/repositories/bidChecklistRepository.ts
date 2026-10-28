@@ -5,6 +5,7 @@ import {
   calculateSectionProgress,
   deriveCompletionSource,
   isFromScratchGeneratable,
+  isManualOnlyRequirement,
   isRequirementCompleted,
   matchRequirementToDocuments,
   normalizeRequirementIdentityKey,
@@ -154,10 +155,13 @@ function mapChecklistRow(
     sourceText: row.source_text ? String(row.source_text) : null,
     completionStatus,
     manualCompleted,
-    isCompleted: isRequirementCompleted({
-      manualCompleted,
-      completionStatus,
-    }),
+    // An item is finished once a document is attached (or it was marked done manually).
+    isCompleted:
+      linkedDocs.length > 0 ||
+      isRequirementCompleted({
+        manualCompleted,
+        completionStatus,
+      }),
     completionSource: deriveCompletionSource({
       manualCompleted,
       matchedBy,
@@ -279,7 +283,12 @@ function collectLinkedDocuments(options: {
     }
   }
 
+  // The current matched document always comes first so "View document" opens the right file.
+  const currentId =
+    options.matchedWorkspaceDocumentId || options.matchedCompanyDocumentId;
   return docs.sort((a, b) => {
+    if (a.id === currentId && b.id !== currentId) return -1;
+    if (b.id === currentId && a.id !== currentId) return 1;
     const av = a.versionLabel || "";
     const bv = b.versionLabel || "";
     return bv.localeCompare(av);
@@ -428,6 +437,11 @@ export async function rematchChecklistItems(options: {
         .eq("id", row.id)
         .eq("workspace_id", options.workspaceId);
       if (clearError) throw new Error(clearError.message);
+      continue;
+    }
+
+    // Fee / EMD / BOQ items are manual-only: never attach documents automatically.
+    if (isManualOnlyRequirement(String(row.requirement_name || ""))) {
       continue;
     }
 
