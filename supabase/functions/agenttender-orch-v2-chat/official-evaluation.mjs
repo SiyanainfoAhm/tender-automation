@@ -490,9 +490,13 @@ export function chatQualificationAnswer(report, ev, opts = {}) {
 
   const out = [`**Decision: ${label}**` + (official && ev.decided_on ? ` (evaluated ${ev.decided_on})` : ''), '', `**Why:** ${why}`];
   const hasClauses = pqRows(report?.requirements || []).some((x) => x.row.category !== 'Scope');
+  if (!hasClauses) {
+    const docs = [...new Set((opts.rfpDocuments || []).map(docName))];
+    out.splice(3, 0, '', `**📄 Please upload the full tender document.** ${docs.length ? `Only ${docs.join(', ')} ${docs.length > 1 ? 'are' : 'is'} available, and ${docs.length > 1 ? 'they do' : 'it does'} not contain` : 'The available documents do not contain'} the eligibility / prequalification criteria. Upload the complete RFP / NIT (with eligibility criteria, scope and BOQ) in this tender's documents and ask again — the exact clauses will then be checked.`);
+  }
   const tableRows = hasClauses ? report?.requirements || [] : [...(report?.requirements || []).filter((r) => r.category === 'Scope'), ...standardPqRows(report)];
   out.push('', prequalificationTable(tableRows, {explain: (r) => pqDetail(r, report), empty: noPqMessage(opts.rfpDocuments)}));
-  if (!hasClauses) out.push('', `_The RFP's eligibility section is not in the downloaded tender documents${opts.rfpDocuments?.length ? ' (' + [...new Set(opts.rfpDocuments.map(docName))].join(', ') + ')' : ''}. The rows below Scope are the standard conditions every tender is checked for, so they stay "not yet proven". Upload the full RFP / NIT and ask again for the exact clauses._`);
+  if (!hasClauses) out.push('', '_The rows other than Scope are the standard conditions every tender is checked for; they stay "not yet proven" until the full RFP is uploaded._');
 
   if (!official && ev?.pending) {
     const detail = /has not finished yet/i.test(ev.reason) ? '' : ` (${ev.reason.replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())})`;
