@@ -89,13 +89,22 @@ export async function syncCompanyFindings(db, tenderId, report, sources) {
 /** Company check computed by the chat function (separate isolate, shared cache). */
 export async function fetchCompanyCheck(tenderId, companyId) {
   const url = Deno.env.get('SUPABASE_URL'), key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-  const r = await fetch(url + '/functions/v1/agenttender-orch-v2-chat', {
-    method: 'POST',
-    headers: {Authorization: 'Bearer ' + key, apikey: key, 'Content-Type': 'application/json'},
-    body: JSON.stringify({action: 'company_check', tender_id: tenderId, company_id: companyId, question: 'company check'}),
-    signal: AbortSignal.timeout(170000),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok || !j.ok || !j.report) throw Error('COMPANY_CHECK_UNAVAILABLE: ' + (j.error || ('HTTP ' + r.status)));
-  return j;
+  let last = '';
+  // Parallel V2 jobs can briefly overload the chat function (503/546): retry with backoff.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 8000 * attempt + Math.floor(Math.random() * 4000)));
+    try {
+      const r = await fetch(url + '/functions/v1/agenttender-orch-v2-chat', {
+        method: 'POST',
+        headers: {Authorization: 'Bearer ' + key, apikey: key, 'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'company_check', tender_id: tenderId, company_id: companyId, question: 'company check'}),
+        signal: AbortSignal.timeout(170000),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.ok && j.report) return j;
+      last = j.error || ('HTTP ' + r.status);
+      if (r.status < 500) break;
+    } catch (e) { last = String(e?.message || e); }
+  }
+  throw Error('COMPANY_CHECK_UNAVAILABLE: ' + last);
 }
