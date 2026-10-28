@@ -1,9 +1,10 @@
 
+import {compactChunks,commitBatches} from "../agenttender-index-extractions/batches.mjs";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import {createClient} from "npm:@supabase/supabase-js@2.57.4";
 import * as pdfjs from "npm:pdfjs-dist@4.10.38/legacy/build/pdf.mjs";
 import {pdfLayout,structuredChunks} from "./structure.ts";
-import {readable as readText,mergeOcrPages,ocrBudget} from "./ocr-core.mjs";
+import {readable as readText,mergeOcrPages,ocrBudget,nativePagesFromExtraction} from "./ocr-core.mjs";
 const env=(n:string)=>Deno.env.get(n)?.trim()||"";
 const pick=(...names:string[])=>names.map(env).find(Boolean)||"";
 const KEY=env("SUPABASE_SERVICE_ROLE_KEY");
@@ -24,15 +25,20 @@ Deno.serve(async req=>{
   if(!/^[0-9a-f-]{36}$/i.test(id))return done({ok:false,error:"Valid tender_id required"});
   const {data:readiness,error:re}=await db.rpc("agenttender_tender_data_readiness",{p_tender_id:id});if(re)throw re;
   const ids=readiness.ocr_document_ids||[];
-  if(!ids.length)return done({ok:true,status:"NO_OCR_REQUIRED",readiness});
+  if(!ids.length&&!input.document_id)return done({ok:true,status:"NO_OCR_REQUIRED",readiness});
   const docId=input.document_id?String(input.document_id):ids[0];
-  if(!ids.includes(docId))return done({ok:false,error:"Document is not a scanned target for this tender"});
   const {data:d,error:de}=await db.from("agenttender_tender_documents").select("*").eq("id",docId).eq("tender_id",id).single();if(de)throw de;
+  const imageTarget=/\.(jpe?g|png|bmp)$/i.test(d.file_name||"");
+  if(!ids.includes(docId)&&!imageTarget)return done({ok:true,status:"NO_OCR_REQUIRED",readiness});
+  if(imageTarget){
+   const {data:saved,error}=await db.from("agenttender_document_extractions").select("extraction_metadata").eq("document_id",docId).eq("tender_id",id).eq("extraction_status","SUCCESS").maybeSingle();if(error)throw error;
+   if(saved?.extraction_metadata?.ocr_complete===true&&Date.parse(saved.extraction_metadata.source_document_updated_at)===Date.parse(d.updated_at))return done({ok:true,status:"OCR_ALREADY_COMPLETE",document_id:docId});
+  }
   const {data:job,error:je}=await db.from("agenttender_document_ingestion_jobs").select("progress").eq("document_id",docId).maybeSingle();if(je)throw je;
   const detected=[...new Set(Object.values(job?.progress?.files||{}).flatMap((f:any)=>f.ocr_pages||[]))].sort((a:any,b:any)=>a-b);
   const plan={document_id:docId,file_name:d.file_name,detected_pages:detected,max_ocr_pages:ocrBudget(input.max_ocr_pages),provider:"AZURE_DOCUMENT_INTELLIGENCE",configured:!!endpoint()&&!!azureKey()};
   if(input.dry_run===true||input.allow_external_ocr!==true)return done({ok:true,status:input.dry_run?"OCR_PREFLIGHT":"OCR_COST_AUTHORIZATION_REQUIRED",plan,readiness});
-  if(!/\.pdf$/i.test(d.file_name||""))return done({ok:false,status:"UNSUPPORTED_SCAN_CONTAINER",plan});
+  if(!imageTarget&&!/\.pdf$/i.test(d.file_name||""))return done({ok:false,status:"UNSUPPORTED_SCAN_CONTAINER",plan});
   if(!endpoint()||!azureKey())return done({ok:false,status:"OCR_PROVIDER_NOT_CONFIGURED",plan});
   const {data:t,error:te}=await db.from("agenttender_tenders").select("source_tender_id,scraped_date,qualification_status,status").eq("id",id).single();if(te)throw te;
   const {data:chatActive,error:chatError}=await db.rpc('agenttender_chat_prep_active',{p_tender:id});if(chatError)throw chatError;
@@ -68,18 +74,21 @@ Deno.serve(async req=>{
   if(dupOf){
    const now=new Date().toISOString(),fileName="sp-"+docId+"-"+d.file_name;
    const text="[Duplicate attachment: file content is byte-identical to document "+dupOf+"; its OCR text is indexed under that document.]";
-   const metadata={parser:"structure-v3",method:"DUPLICATE_OF_OCR_DOCUMENT",duplicate_of:dupOf,content_sha256:bytesSha,ocr_complete:true,completeness:"duplicate_of_complete_document"};
+   const metadata={parser:"structure-v3",method:"DUPLICATE_OF_OCR_DOCUMENT",source_document_updated_at:d.updated_at,duplicate_of:dupOf,content_sha256:bytesSha,ocr_complete:true,completeness:"duplicate_of_complete_document"};
    const {error:dupWrite}=await db.from("agenttender_document_extractions").upsert({scraped_date:t.scraped_date,source_tender_id:t.source_tender_id,document_kind:"ORIGINAL",file_name:fileName,source_url:d.storage_url,extraction_status:"SUCCESS",extracted_text:text,content_bytes:bytes.length,extraction_error:null,extraction_metadata:metadata,extracted_at:now,updated_at:now,document_id:docId,tender_id:id},{onConflict:"scraped_date,source_tender_id,document_kind,file_name"});if(dupWrite)throw dupWrite;
    const piece={content:text,page_number:1,page_start:1,page_end:1,section:"other",metadata:{parser:"structure-v3",duplicate_of:dupOf,page_references:[1],clause_references:[],duplicate_page_references:[]},chunk_index:0,content_hash:await sha(text)};
    const sourceId=t.scraped_date+":"+t.source_tender_id+":ORIGINAL:"+fileName;
    const {data:count,error:dupCommit}=await db.rpc("agenttender_commit_document_text_chunks",{p_tender_id:id,p_document_id:docId,p_source_id:sourceId,p_document_name:fileName,p_document_url:d.storage_url,p_document_type:"pdf",p_content_hash:await sha(norm(text)),p_chunks:[piece],p_metadata:{tender_document_id:docId,extraction_quality:metadata,ocr_complete:true,embedding_model:null}});if(dupCommit)throw dupCommit;
    return done({ok:true,status:"OCR_TEXT_INDEXED",duplicate_of:dupOf,document_id:docId,chunks:count,remaining_document_ids:ids.filter((x:string)=>x!==docId)});
   }
-  const {data:priorRows}=await db.from("agenttender_document_extractions").select("extraction_metadata").eq("document_id",docId).eq("tender_id",id).limit(1);
+  const {data:priorRows}=await db.from("agenttender_document_extractions").select("extraction_metadata,extracted_text,extracted_at").eq("document_id",docId).eq("tender_id",id).limit(1);
   const prior:any=priorRows?.[0]?.extraction_metadata||{};
   const priorTotal=Number(prior.total_pages||0),priorWeak=(prior.ocr_required_pages||[]).map(Number);
   const native:any[]=[];
-  if(priorTotal>0&&priorWeak.length===priorTotal){
+  const savedNative=nativePagesFromExtraction(priorRows?.[0],d.updated_at);
+  if(imageTarget){native.push({page:1,text:"",readable:false});}
+  else if(savedNative){native.push(...savedNative);}
+  else if(priorTotal>0&&priorWeak.length===priorTotal){
    for(let n=1;n<=priorTotal;n++)native.push({page:n,text:"",readable:false});
   }else{
    const task=pdfjs.getDocument({data:bytes.slice(),useSystemFonts:true,disableFontFace:true,isEvalSupported:false});const pdf=await task.promise;
@@ -104,7 +113,7 @@ Deno.serve(async req=>{
    if(claimError)return done({ok:true,status:"OCR_ALREADY_CLAIMED",document_id:docId});
    const submitUrl=endpoint()+"/documentintelligence/documentModels/prebuilt-read:analyze?api-version=2024-11-30&pages="+encodeURIComponent(pages.join(","));
    actualOcrSubmissions++;
-   const submitted=await fetch(submitUrl,{method:"POST",headers:{"Ocp-Apim-Subscription-Key":azureKey(),"Content-Type":"application/pdf"},body:bytes,signal:AbortSignal.timeout(25000)});
+   const submitted=await fetch(submitUrl,{method:"POST",headers:{"Ocp-Apim-Subscription-Key":azureKey(),"Content-Type":imageTarget?(/\.png$/i.test(d.file_name)?"image/png":/\.bmp$/i.test(d.file_name)?"image/bmp":"image/jpeg"):"application/pdf"},body:bytes,signal:AbortSignal.timeout(25000)});
    if(submitted.status!==202)throw Error("OCR_SUBMIT_HTTP_"+submitted.status);
    operationUrl=submitted.headers.get("operation-location");
    if(!operationUrl||new URL(operationUrl).origin!==new URL(endpoint()).origin)throw Error("INVALID_OCR_OPERATION_URL");
@@ -126,13 +135,20 @@ Deno.serve(async req=>{
   const text=merged.map(p=>"--- PAGE "+p.page+" ---\n"+p.text).join("\n\n"),now=new Date().toISOString();
   const metadata={parser:"structure-v3",method:"NATIVE_PLUS_AZURE_OCR",ocr_complete:true,content_sha256:bytesSha,ocr_pages_processed:pages,ocr_unreadable_pages:unreadable,azure_pages_returned:(output.pages||[]).length,total_pages:native.length,source_document_updated_at:d.updated_at,completeness:unreadable.length?"ocr_text_checked_with_unreadable_pages":"ocr_text_checked",pages:merged.map(p=>({page:p.page,chars:p.text.length,readable:readText(p.text)}))};
   const fileName="sp-"+docId+"-"+d.file_name;
-  const pieces=structuredChunks(text,metadata,null);if(!pieces.length)throw Error("OCR_EMPTY");if(pieces.length>MAX_CHUNKS)throw Error("OCR_CHUNK_LIMIT_"+pieces.length);
+  const pieces=compactChunks(structuredChunks(text,metadata,null));if(!pieces.length)throw Error("OCR_EMPTY");if(pieces.length>MAX_CHUNKS)throw Error("OCR_CHUNK_LIMIT_"+pieces.length);
   const row={scraped_date:t.scraped_date,source_tender_id:t.source_tender_id,document_kind:"ORIGINAL",file_name:fileName,source_url:d.storage_url,extraction_status:"SUCCESS",extracted_text:text,content_bytes:bytes.length,extraction_error:null,extraction_metadata:metadata,extracted_at:now,updated_at:now,document_id:docId,tender_id:id};
   const {error:writeError}=await db.from("agenttender_document_extractions").upsert(row,{onConflict:"scraped_date,source_tender_id,document_kind,file_name"});if(writeError)throw writeError;
+  const {error:providerDone}=await db.from("agenttender_tender_ocr_operations").update({status:"SUCCEEDED",last_error:null,updated_at:now}).eq("document_id",docId);if(providerDone)throw providerDone;
   const prepared=[];for(let i=0;i<pieces.length;i++)prepared.push({...pieces[i],chunk_index:i,content_hash:await sha(pieces[i].content)});
   const sourceId=t.scraped_date+":"+t.source_tender_id+":ORIGINAL:"+fileName;
+  if(prepared.length>1000){
+   const {pages:pageDetails,...summary}=metadata;
+   const batch=await commitBatches(db,{p_tender:id,p_document:docId,p_source:sourceId,p_name:fileName,p_url:d.storage_url,p_hash:await sha(norm(text)),p_total:prepared.length,p_chunks:prepared,p_metadata:{tender_document_id:docId,extraction_quality:summary,ocr_complete:true,embedding_model:null}});
+   const {error}=await db.from("agenttender_tender_ocr_operations").update({status:"SUCCEEDED",last_error:null,updated_at:now}).eq("document_id",docId);if(error)throw error;
+   return done({ok:true,status:batch.complete?"OCR_TEXT_INDEXED":"OCR_TEXT_SAVED_INDEX_PENDING",document_id:docId,chunks:batch.cursor,total_chunks:prepared.length,pages_processed:pages,unreadable_pages:unreadable.length});
+  }
   const {data:count,error:ce}=await db.rpc("agenttender_commit_document_text_chunks",{p_tender_id:id,p_document_id:docId,p_source_id:sourceId,p_document_name:fileName,p_document_url:d.storage_url,p_document_type:"pdf",p_content_hash:await sha(norm(text)),p_chunks:prepared,p_metadata:{tender_document_id:docId,extraction_quality:metadata,ocr_complete:true,embedding_model:null}});if(ce)throw ce;
   const {error:finishError}=await db.from("agenttender_tender_ocr_operations").update({status:"SUCCEEDED",last_error:null,updated_at:now}).eq("document_id",docId);if(finishError)throw finishError;
   return done({ok:true,status:"OCR_TEXT_INDEXED",document_id:docId,pages_processed:pages,unreadable_pages:unreadable.length,chunks:count,remaining_document_ids:ids.filter((x:string)=>x!==docId),embedding_status:"PENDING_EXISTING_LOCAL_EMBEDDING_PIPELINE",next_action:"Rerun readiness before any DeepSeek call"});
- }catch(e){const message=e instanceof Error?e.message:String(e);return done({ok:false,status:"OCR_BLOCKED",error:message||"OCR worker failed",retryable:/timed out|timeout|abort|network|fetch failed/i.test(message)});}
+ }catch(e){const message=e instanceof Error?e.message:typeof e?.message==="string"?e.message:String(e);return done({ok:false,status:"OCR_BLOCKED",error:message||"OCR worker failed",retryable:/timed out|timeout|abort|network|fetch failed/i.test(message)});}
 });

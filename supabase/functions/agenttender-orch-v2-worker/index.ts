@@ -117,12 +117,14 @@ Deno.serve(async(req)=>{
   let result:any={},ok=false,error="";
   try{
    const {data:t,error:te}=await db.from("agenttender_tenders").select("id,title,description,organization,category,tender_type,closing_date,emd_amount,tender_value,qualification_status,scraped_date,source_tender_id,ai_summary_url").eq("id",id).single();
-   if(te||!t||!["VERIFY","REVIEW"].includes(t.qualification_status))throw Error("TENDER_NOT_ELIGIBLE");
+   if(te||!t)throw Error("TENDER_NOT_ELIGIBLE");
+   const corrective=step===6&&checkpoint.revalidate_unsupported_auto_decision?.audit_id&&t.qualification_status==="CONDITIONAL_GO";
+   if(!["VERIFY","REVIEW"].includes(t.qualification_status)&&!corrective)throw Error("TENDER_NOT_ELIGIBLE");
    if(step===1){result={status:"INTAKE_VERIFIED",tender_id:id};}
    if(step===2 || step===5 || step===6){
     const {data:current,error:statusError}=await db.from("agenttender_tenders").select("qualification_status").eq("id",id).single();
     if(statusError)throw statusError;
-    if(!["VERIFY","REVIEW"].includes(current?.qualification_status))throw Error("TENDER_STATUS_CHANGED_BEFORE_AI");
+    if(!["VERIFY","REVIEW"].includes(current?.qualification_status)&&!(corrective&&current?.qualification_status==="CONDITIONAL_GO"))throw Error("TENDER_STATUS_CHANGED_BEFORE_AI");
    }
    if(step===2){
     result=screen(t,await activeRules(db));
@@ -167,6 +169,6 @@ Deno.serve(async(req)=>{
   const {data:f,error:fe}=await db.rpc("agenttender_orch_v2_finish",{p_tender:id,p_lease:job.lease_token,p_ok:ok,p_result:result,p_error:error||null});
   events.push({tender_id:id,step,ok,result,error:error||undefined,finish:fe?errText(fe):f});
  }));
- return Response.json({ok:true,route:"ORCHESTRATOR_V2",claimed:(claimed||[]).length,events,changed_business_statuses:events.filter((e:any)=>e.ok&&e.result?.applied===true).length});
+ return Response.json({ok:true,route:"ORCHESTRATOR_V2",claimed:(claimed||[]).length,events,changed_business_statuses:events.filter((e:any)=>e.ok&&(e.result?.applied===true||e.result?.recovery_applied===true)).length});
 });
 
