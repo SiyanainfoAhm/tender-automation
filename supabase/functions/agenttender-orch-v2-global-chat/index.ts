@@ -1,6 +1,5 @@
 import {companyQuestion,answerCompany} from './company-answer.mjs';
 import {financialDocumentAnswer,requestedFinancialYears} from './company-periods.mjs';
-import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import {createClient} from 'npm:@supabase/supabase-js@2.57.4';
 import {boundedMemory} from './memory.mjs';
 import {retrieve,retrieveCompany,expandedQuery} from './analyst.ts';
