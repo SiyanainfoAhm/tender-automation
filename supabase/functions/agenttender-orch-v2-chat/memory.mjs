@@ -58,6 +58,7 @@ export async function durableChat(req, process, db, key, cors) {
  }
  if(!uuid.test(input.tender_id||"")||!String(input.question||"").trim()||String(input.question).length>4000)return reply({ok:false,error:"VALID_TENDER_AND_QUESTION_REQUIRED"},400);
  if(input.request_id&&!uuid.test(input.request_id))return reply({ok:false,error:"INVALID_REQUEST_ID"},400);
+ if(internal&&input.read_only===true)return process(new Request(req.url,{method:'POST',headers:req.headers,body:JSON.stringify(input)}));
  const request=input.request_id||crypto.randomUUID();
  const args={p_user:user,p_company:input.company_id,p_tender:input.tender_id,p_request:request};
  const {data:begin,error:be}=await db.rpc("agenttender_chat_exchange_begin",{...args,p_question:input.question.trim(),p_category:input.question_category||"GENERAL_TENDER_INFO",p_session:input.session_id||null});

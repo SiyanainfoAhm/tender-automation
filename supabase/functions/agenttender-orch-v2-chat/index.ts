@@ -7,7 +7,7 @@ import {responseMode,retrieve,analystPrompt,parseAnswer,questionCategoryInstruct
 import {handleAction} from "./action-handler.ts";
 import {activeRules} from "./policy.mjs";
 import {assessQualification,qualificationQuestion,companyFinancialAnswer} from './qualification.mjs';
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+// Edge runtime globals are supplied by Supabase; no runtime type-only registry import.
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 
 const KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";

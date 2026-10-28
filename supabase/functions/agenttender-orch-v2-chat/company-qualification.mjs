@@ -102,6 +102,7 @@ export function validateSpec(spec,quotes){
 export function resolveSpec(spec,quotes,referenceDate){
  if(!spec)return null;
  const q=normalize(quotes.join(' '));
+ if(spec.scope&&(/government\s+educational|multiple\s+purchase\s+order/i.test(q)))return null;
  const period=q.match(/(?:last|past|preceding)\s+(one|two|three|four|five|six|seven|ten|[1-9]\d?)\s+(?:completed\s+)?(?:financial\s+)?years?/);
  const n=period?({one:1,two:2,three:3,four:4,five:5,six:6,seven:7,ten:10}[period[1]]||Number(period[1])):null;
  if(n&&(!referenceDate||!/^\d{4}-\d{2}-\d{2}$/.test(referenceDate)))return null;
@@ -126,6 +127,7 @@ export function certificationAssessment(clause,documents,entity,validOn){
  const n=normalize(clause),requirements=[];
  for(const m of n.matchAll(/iso\s*(?:\/\s*iec\s*)?(\d{4,5})(?::(\d{4}))?/g))requirements.push({kind:'ISO',code:m[1],edition:m[2]||null});
  if(/cmmi/.test(n))requirements.push({kind:'CMMI',levels:[...n.matchAll(/(?:level\s*)?\b([35])\b/g)].map(m=>m[1])});
+ if(/firm registration certificate|registrar of companies|certificate of incorporation/.test(n))requirements.push({kind:'INCORPORATION'});
  if(/\bpan\b/.test(n))requirements.push({kind:'PAN'});
  if(/\bgst\b|\bgstin\b/.test(n))requirements.push({kind:'GST'});
  if(!requirements.length)return {result:'UNKNOWN',explanation:'Mandatory registration/empanelment requires explicit original proof; this credential type is not automatically verified.'};
@@ -133,6 +135,7 @@ export function certificationAssessment(clause,documents,entity,validOn){
  for(const req of requirements){
   const matches=documents.flatMap(d=>pageText(d.extracted_text).map(page=>({...d,extracted_text:page.text,source_page:page.page,expiry_date:pageText(d.extracted_text).length===1?d.expiry_date:null}))).filter(d=>d.extraction_status==='READY'&&d.verification_status==='verified'&&entityKey(d.extracted_text).includes(entityKey(entity))).filter(d=>{
    const t=normalize(d.extracted_text);
+   if(req.kind==='INCORPORATION')return /certificate of incorporation|hereby certify.{0,150}incorporat/s.test(t)&&/companies act/.test(t)&&/\b[UL][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}\b/.test(d.extracted_text);
    if(req.kind==='PAN')return /\b[A-Z]{5}[0-9]{4}[A-Z]\b/.test(d.extracted_text)&&/\bpan\b|permanent account number/.test(t);
    if(req.kind==='GST')return /\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]\b/.test(d.extracted_text)&&/registration certificate|gstin/.test(t);
    if(!/certif|iso|cmmi/i.test(d.name+' '+d.document_category))return false;
