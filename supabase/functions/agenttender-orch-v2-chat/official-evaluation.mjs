@@ -393,13 +393,18 @@ export function focusedCheckAnswer(report, ev, category) {
   const f = FOCUS[category];
   if (!f || !report) return null;
   const overall = chatQualificationAnswer(report, ev).split('\n')[0];
-  const rows = (report.requirements || []).filter((r) => r.mandatory !== false && (f.cats.includes(r.category) || f.test.test(r.requirement || '')) && !/closing date|bid submission by|\bemd\b|earnest money/i.test(r.requirement || ''));
+  const owned = ['Turnover', 'Experience', 'Government experience', 'Certifications / empanelment', 'Product ownership / certification', 'EMD', 'Scope', 'Deadline / amendments'];
+  const rows = (report.requirements || []).filter((r) => r.mandatory !== false && (f.cats.includes(r.category) || (!owned.includes(r.category) && f.test.test(r.requirement || ''))) && !/closing date|bid submission by|\bemd\b|earnest money/i.test(r.requirement || ''));
   const mark = {PASS: '✅ Met', FAIL: '❌ Not met', UNKNOWN: '⚠️ Not confirmed'};
   const out = [overall, '', `**${f.title}**`];
   if (!rows.length) out.push('', f.none);
   for (const r of rows) {
-    const text = r.result === 'PASS' ? (turnoverText(r) || clean(r.calculation?.explanation || r.explanation)) : r.result === 'FAIL' ? failReason(r) : plainGap(r);
-    const docs = [...new Set([...(r.calculation?.company_documents || []).map((e) => e.document), ...(r.company_evidence || []).map((e) => e.document), ...(r.calculation?.evidence || []).map((e) => e.source_document_name)].filter(Boolean))].slice(0, 3);
+    const passText = clean(r.calculation?.explanation || r.explanation)
+      .replace(/^All listed credential identifiers, legal entity and required validity are supported by current original documents\.?$/i, 'Valid certificate on file.')
+      .replace(/^\d+ distinct source-backed projects qualify.*$/i, 'Matching completed project on file.');
+    const text = r.result === 'PASS' ? (turnoverText(r) || passText) : r.result === 'FAIL' ? failReason(r) : plainGap(r);
+    const own = (r.calculation?.company_documents || []).map((e) => e.document);
+    const docs = [...new Set((own.length ? own : [...(r.calculation?.evidence || []).map((e) => e.source_document_name || e.document), ...(r.company_evidence || []).map((e) => e.document)]).filter(Boolean))].slice(0, 3);
     out.push('', `- **${shortRequirement(r.requirement)}** — ${mark[r.result] || r.result}. ${text}${docs.length && r.result !== 'FAIL' && !/\(.*certificate.*\)/i.test(text) ? ` _Source: ${docs.join(', ')}._` : ''}`);
   }
   if (category === 'TURNOVER') {
