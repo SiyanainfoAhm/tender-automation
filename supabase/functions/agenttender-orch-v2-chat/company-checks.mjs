@@ -54,6 +54,18 @@ export function deterministicCheck(requirement,quotes,{documents,entity,referenc
   }
  }
 
+ // PAN / GST registration.
+ if(/\bpan\b|\bgst(?:in)?\b/.test(req)&&/registration|registered|valid|number/.test(req)&&!/turnover|return|filed|payment/.test(req)){
+  const docs=verifiedDocs(documents,entity);
+  const gst=docs.find(d=>/\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]\b/.test(d.extracted_text)&&/registration certificate|gstin/i.test(d.extracted_text));
+  const pan=docs.find(d=>/\b[A-Z]{5}[0-9]{4}[A-Z]\b/.test(d.extracted_text)&&/\bpan\b|permanent account number/i.test(d.extracted_text));
+  const needGst=/\bgst/.test(req),needPan=/\bpan\b/.test(req);
+  if((!needGst||gst)&&(!needPan||pan||gst)){
+   const g=gst?.extracted_text.match(/\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]\b/)?.[0],pn=g?g.slice(2,12):pan?.extracted_text.match(/\b[A-Z]{5}[0-9]{4}[A-Z]\b/)?.[0];
+   return {result:'PASS',explanation:[g?`GSTIN ${g}`:null,pn?`PAN ${pn}`:null].filter(Boolean).join(', ')+' on file.',company_evidence:[gst&&ev(gst,/gstin|registration/i),pan&&pan!==gst&&ev(pan,/\bpan\b|permanent account/i)].filter(Boolean)};
+  }
+ }
+
  // Not blacklisted / debarred: a self-declaration signed for each bid.
  if(/blacklist|debar/.test(req)){
   const d=verifiedDocs(documents,entity).find(x=>/blacklist|debar/i.test(x.extracted_text)&&/undertaking|declar|affidavit/i.test(x.extracted_text));

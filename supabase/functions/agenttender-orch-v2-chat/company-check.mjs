@@ -3,7 +3,7 @@
 import {assessQualification,QUALIFICATION_VERSION} from './qualification.mjs';
 import {chatQualificationAnswer} from './official-evaluation.mjs';
 
-export const COMPANY_CHECK_VERSION = QUALIFICATION_VERSION + '+checks-20261028b';
+export const COMPANY_CHECK_VERSION = QUALIFICATION_VERSION + '+checks-20261028c';
 const MAX_AGE_MS = 12 * 3600 * 1000;
 
 export async function getCompanyCheck({db, tender, companyId, allowCompany, aiKey, signal, refresh = false}) {
@@ -20,7 +20,16 @@ export async function getCompanyCheck({db, tender, companyId, allowCompany, aiKe
       return {report: data.report, sources: data.sources || [], cached: true};
     }
   }
-  const evaluated = await assessQualification({db, tender, companyId, question: 'Do we qualify for this tender? Check every mandatory eligibility condition.', allowCompany, aiKey, signal});
+  const question = 'Read every mandatory pre-qualification condition in the RFP (bidder type, years in business, turnover, net worth, similar project experience, certifications, registrations, blacklisting, EMD) and compare it against verified Siyana evidence.';
+  const mandatoryRows = (e) => (e?.report?.requirements || []).filter((r) => r.mandatory !== false).length;
+  let evaluated = await assessQualification({db, tender, companyId, question, allowCompany, aiKey, signal});
+  // Extraction can miss clauses on a single pass; a second pass keeps the fuller reading.
+  if (mandatoryRows(evaluated) < 8) {
+    try {
+      const second = await assessQualification({db, tender, companyId, question, allowCompany, aiKey, signal});
+      if (mandatoryRows(second) > mandatoryRows(evaluated)) evaluated = second;
+    } catch { /* keep the first reading */ }
+  }
   const sources = (evaluated.sources || []).map(({text, metadata, ...s}) => s);
   if (stamp) {
     await db.from('agenttender_chat_company_checks').upsert({tender_id: tender.id, company_id: companyId, version: COMPANY_CHECK_VERSION, stamp, report: evaluated.report, sources, created_at: new Date().toISOString()}).then(() => {}, () => {});
