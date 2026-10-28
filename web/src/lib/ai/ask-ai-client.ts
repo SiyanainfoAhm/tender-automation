@@ -213,9 +213,21 @@ export async function streamAskAiRequest(options: {
   }
 
   if (!response.ok || !response.body) {
-    const data = (await response.json().catch(() => null)) as {
-      error?: string;
-    } | null;
+    // Error replies may be JSON or a short event stream ("event: error / data: {...}").
+    const raw = await response.text().catch(() => "");
+    let data: { error?: string; message?: string } | null = null;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      const line = raw.split("\n").find((l) => l.startsWith("data:") && l.includes('"error"'));
+      try {
+        const event = line ? JSON.parse(line.slice(5).trim()) : null;
+        if (event?.message) data = { error: String(event.message) };
+      } catch {
+        data = null;
+      }
+    }
+    if (data && !data.error && data.message) data.error = data.message;
     options.handlers.onError?.({
       code: response.status === 403 ? "FORBIDDEN" : "UNKNOWN_ERROR",
       message: data?.error || "Ask AI couldn't complete this request.",

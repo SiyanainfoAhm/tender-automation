@@ -9,9 +9,9 @@ import {
   validateAskAiInput,
 } from "@/server/ai/rag/input-limits";
 import {
-  acquireAskAiConcurrency,
   checkAskAiRateLimits,
   releaseAskAiConcurrency,
+  waitForAskAiConcurrency,
 } from "@/server/ai/rag/rate-limit";
 import {
   createAskAiRequestId,
@@ -426,9 +426,11 @@ export async function POST(request: Request, context: RouteContext) {
       return NextResponse.json({ error: rate.message, code: rate.code }, { status: 429 });
     }
 
-    const concurrency = acquireAskAiConcurrency({
+    // A second request while one is still running waits for it instead of failing.
+    const concurrency = await waitForAskAiConcurrency({
       companyId: session.companyId,
       userId: session.user.id,
+      signal: request.signal,
     });
     if (!concurrency.ok) {
       await insertAiUsageLog({

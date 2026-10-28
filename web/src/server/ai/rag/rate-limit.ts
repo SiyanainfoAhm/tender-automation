@@ -46,6 +46,25 @@ export function acquireAskAiConcurrency(options: {
   return { ok: true };
 }
 
+/**
+ * Like acquireAskAiConcurrency, but when the user already has a request in flight
+ * (a retry, a second tab, a mobile reconnect) wait for it to finish instead of
+ * failing: the follow-up request reuses the cached tender check and answers quickly.
+ */
+export async function waitForAskAiConcurrency(options: {
+  companyId: string;
+  userId: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<RateLimitDecision> {
+  const deadline = Date.now() + (options.timeoutMs ?? 75_000);
+  for (;;) {
+    const decision = acquireAskAiConcurrency(options);
+    if (decision.ok || Date.now() >= deadline || options.signal?.aborted) return decision;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
 export function releaseAskAiConcurrency(options: {
   companyId: string;
   userId: string;
