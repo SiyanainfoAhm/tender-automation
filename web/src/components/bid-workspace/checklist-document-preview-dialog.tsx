@@ -12,29 +12,50 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import {
-  clearAuthenticatedDocumentPreview,
-  fetchAuthenticatedDocumentObjectUrl,
-  preloadAuthenticatedDocument,
-} from "@/lib/storage/authenticated-document-preview";
 
-/** Load the file once, retrying a single time on a dropped connection. */
+/**
+ * Preview URL for a checklist document. Word/Excel/PowerPoint files come back as a
+ * real paginated PDF (converted by SharePoint), so every-page stamps are visible.
+ */
+function previewHrefFor(href: string): string | null {
+  const workspace = href.match(/^\/api\/bid-workspace\/documents\/([0-9a-f-]{36})/i);
+  if (workspace) return `/api/document-preview?kind=workspace&id=${workspace[1]}`;
+  const company = href.match(/^\/api\/documents\/([0-9a-f-]{36})/i);
+  if (company) return `/api/document-preview?kind=company&id=${company[1]}`;
+  return null;
+}
+
+/** Load the file: converted preview first, then the original file, each tried twice. */
 async function loadDocumentBlob(href: string): Promise<{ objectUrl: string; blob: Blob }> {
-  let lastError: unknown = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const objectUrl = await fetchAuthenticatedDocumentObjectUrl(href);
-      const blob = await (await fetch(objectUrl)).blob();
-      return { objectUrl, blob };
-    } catch (error) {
-      lastError = error;
-      clearAuthenticatedDocumentPreview(href);
+  const candidates = [previewHrefFor(href), href].filter(Boolean) as string[];
+  let lastError = "Unable to load the document.";
+  for (const url of candidates) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await fetch(url, { credentials: "same-origin", cache: "no-store" });
+        if (!response.ok) {
+          const body = (await response.json().catch(() => null)) as { error?: string } | null;
+          lastError =
+            response.status === 401
+              ? "Sign in again to view this document."
+              : body?.error || `Unable to load the document (HTTP ${response.status}).`;
+          if (response.status === 401) throw new Error(lastError);
+          break; // try the next source
+        }
+        const blob = await response.blob();
+        if (!blob.size) {
+          lastError = "This document is empty.";
+          break;
+        }
+        return { objectUrl: URL.createObjectURL(blob), blob };
+      } catch (error) {
+        if (error instanceof Error && /sign in again/i.test(error.message)) throw error;
+        lastError =
+          "The document could not be loaded. Check your connection and try again, or use Download.";
+      }
     }
   }
-  if (lastError instanceof Error && /failed to fetch|network/i.test(lastError.message)) {
-    throw new Error("The document could not be loaded. Check your connection and try again, or use Download.");
-  }
-  throw lastError instanceof Error ? lastError : new Error("Unable to load the document.");
+  throw new Error(lastError);
 }
 
 export type PreviewDocument = {
@@ -48,7 +69,9 @@ type PreviewKind = "pdf" | "image" | "docx" | "other";
 
 /** Prefetches linked documents when a user hovers View Document. */
 export function preloadChecklistDocument(href: string | null | undefined) {
-  preloadAuthenticatedDocument(href);
+  // Intentionally a no-op: the preview converts files on demand, so it is not
+  // started on hover. Kept for callers that still import it.
+  void href;
 }
 
 /**
@@ -110,6 +133,7 @@ export function ChecklistDocumentPreviewDialog({
 
     let cancelled = false;
     let createdUrl: string | null = null;
+    let loadedUrl: string | null = null;
     setLoaded(false);
     setError(null);
     setKind(null);
@@ -125,7 +149,8 @@ export function ChecklistDocumentPreviewDialog({
           document.fileName || document.title || "",
           (blob.type || "").toLowerCase(),
         );
-        setDownloadUrl(objectUrl);
+        loadedUrl = objectUrl;
+        setDownloadUrl(document.href);
         setKind(detected);
         if (detected === "pdf" || detected === "image") {
           // Re-type the blob so the browser renders it inline instead of downloading.
@@ -152,6 +177,7 @@ export function ChecklistDocumentPreviewDialog({
     return () => {
       cancelled = true;
       if (createdUrl) URL.revokeObjectURL(createdUrl);
+      if (loadedUrl) URL.revokeObjectURL(loadedUrl);
     };
   }, [document, open]);
 
