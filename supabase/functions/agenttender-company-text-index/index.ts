@@ -1,3 +1,4 @@
+import {refreshCompanyCredentials} from '../agenttender-orch-v2-chat/company-credentials-store.mjs';
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import {admin,authorized,checked,sha,COMPANY} from "./common.ts";
@@ -8,6 +9,7 @@ Deno.serve(async(req)=>{
  try{
   if(!authorized(req))return Response.json({ok:false,error:"Unauthorized"},{status:401});
   const input=await req.json().catch(()=>({})),sb=admin();
+  if(input.action==='qualifications')return Response.json(await refreshCompanyCredentials(sb,input.company_id||COMPANY,{limit:Number(input.limit)||1,documentId:input.document_id||null,recheck:input.recheck===true,aiKey:Deno.env.get('DEEPSEEK_API_KEY')||Deno.env.get('DEEPSEEK_KEY')||Deno.env.get('DEEPSEEK')}));
   const token=await graphToken(),drive=await driveId(token);
   const jobs:any[]=await checked(sb.rpc("agenttender_claim_company_text",{p_company_id:COMPANY,p_limit:1}));
   const results:any[]=[];const budget={native:5};
@@ -60,6 +62,7 @@ Deno.serve(async(req)=>{
     results.push({document_id:d.document_id,status:resource?"RESOURCE_LIMIT":"ERROR",error:message});
    }
   }
-  return Response.json({ok:!results.some(r=>r.status==="ERROR"),processed:results.length,results});
+  const credentials=await refreshCompanyCredentials(sb,COMPANY,{limit:1,aiKey:Deno.env.get('DEEPSEEK_API_KEY')||Deno.env.get('DEEPSEEK_KEY')||Deno.env.get('DEEPSEEK')}).catch(e=>({error:e.message}));
+  return Response.json({credentials,ok:!results.some(r=>r.status==="ERROR"),processed:results.length,results});
  }catch(e){return Response.json({ok:false,error:e instanceof Error?e.message:String(e)},{status:500});}
 });

@@ -1,3 +1,4 @@
+import {assessQualification} from '../agenttender-orch-v2-chat/qualification.mjs';
 import {createClient} from "npm:@supabase/supabase-js@2.57.4";
 import {activeRules,screen,qualificationDecision} from "../agenttender-orch-v2-chat/policy.mjs";
 const KEY=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")||"";
@@ -6,6 +7,10 @@ Deno.serve(async req=>{try{
  if(!KEY||req.headers.get("Authorization")!=="Bearer "+KEY)return Response.json({error:"Unauthorized"},{status:401});
  const db=createClient(Deno.env.get("SUPABASE_URL")!,KEY,{auth:{persistSession:false}});
  const b=await req.json().catch(()=>({}));const rules=await activeRules(db);
+ if(b.action==='company_qualification'){
+  const {data:tender,error}=await db.from('agenttender_tenders').select('*').eq('id',b.tender_id).single();if(error)throw error;
+  return Response.json(await assessQualification({db,tender,companyId:b.company_id,question:b.question||'Do we qualify?',aiKey:Deno.env.get('DEEPSEEK_API_KEY')||Deno.env.get('DEEPSEEK_KEY')||Deno.env.get('DEEPSEEK')}));
+ }
  if(b.action==='qualification_policy_probe')return Response.json({ok:true,recommendation:qualificationDecision(b.assessment||{}),changed_business_statuses:0});
  if(b.action==='policy_probe')return Response.json({ok:true,rules,screen:screen(b.tender||{},rules),changed_business_statuses:0});
  const {data:routes,error:re}=await db.from('agenttender_tender_route_assignments').select('tender_id').eq('route','ORCHESTRATOR');if(re)throw re;

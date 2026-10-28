@@ -17,9 +17,9 @@ test('missing company financial proof is UNKNOWN and conditional, never FAIL',()
  const raw=base();raw.requirements[1]=row('Turnover','FAIL','COMPANY_COMPARISON');
  const r=normalizeQualification(raw,context);assert.equal(r.requirements[1].result,'UNKNOWN');assert.equal(r.recommendation,'CONDITIONAL_GO');
 });
-test('turnover comparison needs an actual verified source quote',()=>{
+test('turnover summary quote alone cannot replace annual verified arithmetic',()=>{
  const raw=base();raw.requirements[1]={...row('Turnover','PASS','COMPANY_COMPARISON'),company_evidence:[{ref:'C1',quote:company[0].text}]};
- assert.equal(normalizeQualification(raw,context).requirements[1].result,'PASS');
+ assert.equal(normalizeQualification(raw,context).requirements[1].result,'UNKNOWN');
  raw.requirements[1].company_evidence[0].quote='Turnover is INR 9000000';
  assert.equal(normalizeQualification(raw,context).requirements[1].result,'UNKNOWN');
 });

@@ -6,7 +6,7 @@ import {casualAnswer} from "./greetings.mjs";
 import {responseMode,retrieve,analystPrompt,parseAnswer,questionCategoryInstructions} from "./analyst.ts";
 import {handleAction} from "./action-handler.ts";
 import {activeRules} from "./policy.mjs";
-import {assessQualification,qualificationQuestion} from './qualification.mjs';
+import {assessQualification,qualificationQuestion,companyFinancialAnswer} from './qualification.mjs';
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 
@@ -147,6 +147,15 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
     return Response.json({ ok: false, error: "Tender not available for company" }, { status: 403, headers: cors });
   }
 
+  const directFinancial=await companyFinancialAnswer(db,companyId,question,canReadCompanyDocuments);
+  if(directFinancial){
+   const response={ok:true,answer:directFinancial.answer,calculation:directFinancial.calculation,company_evidence:directFinancial.documents,changed_business_statuses:0};
+   if(authenticatedUserId&&!memory&&!(internal&&input.read_only===true)){
+    const saved=await db.rpc('agenttender_record_v2_chat_answer',{p_user:authenticatedUserId,p_company:companyId,p_tender:tenderId,p_session:input.session_id||null,p_question:question,p_answer:response.answer,p_model:'deterministic-company-credentials',p_category:'FINANCIAL',p_sources:directFinancial.documents});if(saved.error)throw saved.error;
+    return Response.json({...response,...saved.data},{headers:cors});
+   }
+   return Response.json(response,{headers:cors});
+  }
   if(question_category==='DO_WE_QUALIFY'||question_category==='ELIGIBILITY'||qualificationQuestion(question)){
    const evaluated=await assessQualification({db,tender,companyId,question,allowCompany:canReadCompanyDocuments,aiKey:AIKEY});
    const result=evaluated.report.recommendation==='GO'?'CONFIRMED':evaluated.report.recommendation==='NO_GO'?'NOT CONFIRMED':'UNVERIFIED';

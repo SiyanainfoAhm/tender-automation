@@ -37,7 +37,7 @@ function fixture(options={}) {
   Deno:{env:{get:key=>key==='DEEPSEEK_API_KEY'?'test-ai':''},serve:fn=>{handler=fn;}},
   createClient:()=>({from:query,rpc:async(name,args)=>({data:{total:7,status_counts:{GO:2,VERIFY:5},recorded_status_counts:{UNSET:7},tenders:(options.tenders||[]).slice(args.p_plan.offset||0,(args.p_plan.offset||0)+6),matching_total:(options.tenders||[]).length},error:null})}),
   boundedMemory,knownPlan,cleanPlan,safeAnswer,qualificationQuestion,financialDocumentAnswer,requestedFinancialYears,expandedQuery:q=>q,retrieve:async()=>({tender:[],company:[],warnings:[]}),
-  assessQualification:async({tender,allowCompany})=>{running++;peak=Math.max(peak,running);assessments.push({id:tender.id,allowCompany});await new Promise(r=>setTimeout(r,5));running--;return {answer:'Qualification report '+tender.title,report:{recommendation:'CONDITIONAL_GO'}};},
+  companyFinancialAnswer:async()=>null,assessQualification:async({tender,allowCompany})=>{running++;peak=Math.max(peak,running);assessments.push({id:tender.id,allowCompany});await new Promise(r=>setTimeout(r,5));running--;return {answer:'Qualification report '+tender.title,report:{recommendation:'CONDITIONAL_GO'}};},
   fetch:async()=>{throw Error('AI unavailable');},
  };
  const source=readFileSync(new URL('./index.ts',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');

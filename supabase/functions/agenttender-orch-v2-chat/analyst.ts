@@ -58,7 +58,7 @@ export async function retrieveCompany(db:any,companyId:string,q:string,vector:an
  ]);
  if(companyRow.error||texts.error)throw Error('Company source metadata unavailable');
  const states=new Map((texts.data||[]).map((t:any)=>[t.document_id,t.extraction_status]));
- const byId=new Map((docs.data||[]).filter((d:any)=>d.use_as_company_evidence!==false&&d.ai_index_enabled!==false).map((d:any)=>[d.id,d]));
+ const byId=new Map((docs.data||[]).filter((d:any)=>d.ai_index_enabled!==false).map((d:any)=>[d.id,d]));
  const company=rows.filter((x:any)=>byId.has(x.document_id)).map((x:any)=>{const d:any=byId.get(x.document_id);return {...x,content:x.content||x.chunk_text||x.text||'',id:x.chunk_id,source_id:x.document_id,document_name:d.name,document_url:"/api/documents/"+d.id,document_type:d.document_type,source_type:'COMPANY_DOCUMENT',page_number:x.page_start,metadata:{...d,company_name:companyRow.data?.name||null,extraction_status:states.get(d.id)||'UNKNOWN'}};});
  return {company,warnings,semantic:!!vector};
 }
