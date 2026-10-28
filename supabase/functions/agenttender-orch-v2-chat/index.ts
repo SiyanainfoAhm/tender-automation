@@ -130,6 +130,13 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
   const greeting=casualAnswer(question);
   if(greeting){let saved:any=null;if(authenticatedUserId && !memory){const r=await db.rpc('agenttender_record_v2_chat_answer',{p_user:authenticatedUserId,p_company:companyId,p_tender:tenderId,p_session:input.session_id||null,p_question:question,p_answer:greeting,p_model:'deterministic-greeting',p_category:'GENERAL_CONVERSATION',p_sources:[]});if(!r.error)saved=r.data;}return Response.json({message_id:saved?.message_id||null,session_id:saved?.session_id||null,ok:true,status:"ANSWERED",route:"ORCHESTRATOR_V2_LIGHT_CHAT",answer:greeting,evidence:[],company_evidence:[],orchestration_steps_run:0,extraction_triggered:false,indexing_triggered:false,embedding_triggered:false,ocr_triggered:false,changed_business_statuses:0},{headers:cors});}
 
+  // Internal: the V2 decision worker asks for the same company check in this isolate.
+  if(internal&&input.action==='company_check'){
+   const {data:ct,error:cte}=await db.from('agenttender_tenders').select('id,source_tender_id,title,closing_date,emd_amount,status,qualification_status').eq('id',tenderId).maybeSingle();
+   if(cte||!ct)return Response.json({ok:false,error:'Tender not found'},{status:404,headers:cors});
+   const c=await getCompanyCheck({db,tender:ct,companyId,allowCompany:true,aiKey:AIKEY,signal:undefined,refresh:input.refresh===true});
+   return Response.json({ok:true,...c},{headers:cors});
+  }
   const actionResponse=await handleAction(req,input,db,URL,KEY,cors);
   if(actionResponse)return actionResponse;
 

@@ -1,6 +1,6 @@
 import {finalEvidenceLedger} from "./final-ledger.mjs";
-import {getCompanyCheck,companyCheckContext} from "../agenttender-orch-v2-chat/company-check.mjs";
-import {provenCompanyFailures,companyFailureOverride,syncCompanyFindings} from "./company-decision.mjs";
+import {companyCheckContext} from "../agenttender-orch-v2-chat/company-check.mjs";
+import {provenCompanyFailures,companyFailureOverride,syncCompanyFindings,fetchCompanyCheck} from "./company-decision.mjs";
 export const DECISION_VERSION="V2_PROGRESSIVE_DECISIONS_20261028_COMPANY_CHECK";
 export function cleanAssessment(raw,context){
  const allowed=new Set((context.owner_rules||[]).map(r=>r.code));
@@ -34,7 +34,7 @@ export async function decideTender({db,tender,aiKey,checkpoint={}}){
  const ledger=finalEvidenceLedger(originals,stage3);
  // Same company check the tender chatbot uses: RFP conditions vs Siyana's verified company documents.
  let companyCheck=null;
- try{companyCheck=await getCompanyCheck({db,tender,companyId:"a1b2c3d4-e5f6-7890-abcd-ef1234567890",allowCompany:true,aiKey,signal:AbortSignal.timeout(150000)});}catch(e){companyCheck={error:String(e?.message||e).slice(0,300)};}
+ try{companyCheck=await fetchCompanyCheck(tender.id,"a1b2c3d4-e5f6-7890-abcd-ef1234567890");}catch(e){companyCheck={error:String(e?.message||e).slice(0,300)};}
  let companyFindings=null;
  if(companyCheck?.report){try{companyFindings=await syncCompanyFindings(db,tender.id,companyCheck.report,companyCheck.sources||[]);}catch(e){companyFindings={error:String(e?.message||e).slice(0,200)};}}
  const original_evidence=ledger.originals;

@@ -85,3 +85,17 @@ export async function syncCompanyFindings(db, tenderId, report, sources) {
   }
   return {written: records.length, upgraded};
 }
+
+/** Company check computed by the chat function (separate isolate, shared cache). */
+export async function fetchCompanyCheck(tenderId, companyId) {
+  const url = Deno.env.get('SUPABASE_URL'), key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  const r = await fetch(url + '/functions/v1/agenttender-orch-v2-chat', {
+    method: 'POST',
+    headers: {Authorization: 'Bearer ' + key, apikey: key, 'Content-Type': 'application/json'},
+    body: JSON.stringify({action: 'company_check', tender_id: tenderId, company_id: companyId, question: 'company check'}),
+    signal: AbortSignal.timeout(170000),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.ok || !j.report) throw Error('COMPANY_CHECK_UNAVAILABLE: ' + (j.error || ('HTTP ' + r.status)));
+  return j;
+}
