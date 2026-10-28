@@ -39,7 +39,7 @@ export function deterministicCheck(requirement,quotes,{documents,entity,referenc
  // Bidder must itself be a Government organisation / PSU / named public agency.
  if(/(?:state|central)\s*\/?\s*(?:state|central)?\s*government\s+organi[sz]ations?|public sector undertaking|\bpsu\b/.test(req)
   &&/\b(?:bidder|agency|organi[sz]ation|firm)\b/.test(req)&&/such as|only|must be|shall be|should be|eligible|restricted/.test(req)
-  &&!/experience|project|client|work order|orders?\b|supplied|executed|completed|empanell?ed with|similar/.test(req)){
+  &&!/experience|project|client|work order|orders?\b|supplied|executed|completed|empanell?ed with|similar|blacklist|debar|ineligible|banned|suspended/.test(req)){
   const c=inc();
   if(c?.privateCompany&&!c.publicSector)return {result:'FAIL',explanation:`Only Government organisations / PSUs (or the agencies named in the RFP) may bid. Siyana Info Solutions is a private limited company${c.cin?' (CIN '+c.cin+')':''}, so it is not eligible on its own.`,company_evidence:[ev(c.document,/certificate of incorporation/i)]};
  }

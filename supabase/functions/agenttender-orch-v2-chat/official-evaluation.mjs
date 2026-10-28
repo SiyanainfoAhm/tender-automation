@@ -373,7 +373,8 @@ export function chatQualificationAnswer(report, ev) {
     out.push('', `**Already met:** ${passed.slice(0, 8).map(label2).join('; ')}.`);
   }
   if (!official && ev?.pending) {
-    out.push('', `_The daily automatic evaluation for this tender has not finished (${ev.reason.replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())}). This answer comes from today's requirement check of the RFP._`);
+    const detail = /has not finished yet/i.test(ev.reason) ? '' : ` (${ev.reason.replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())})`;
+    out.push('', `_The daily automatic evaluation for this tender has not finished yet${detail}. This answer comes from today's requirement check of the RFP against Siyana's company documents._`);
   }
   if (label === 'NO-GO' && !official) out.push('', 'No bid documents need to be prepared unless the blocking condition is resolved.');
   return out.join('\n');

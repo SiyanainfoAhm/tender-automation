@@ -51,7 +51,9 @@ export function normalizeQualification(raw,{rfp,company,coverage,tender,rules,cr
   let calculation=null;
   if(r.mandatory!==false&&['Turnover','Experience','Government experience'].includes(r.category)){
    const clauseText=original.flatMap(e=>{const i=rfp.findIndex(s=>s.ref===e.ref);return rfp.slice(Math.max(0,i-1),i+2).filter(s=>s.source_id===e.source_id&&s.page===e.page).map(s=>s.text);});
-   const spec=resolveSpec(r.category==='Turnover'?r.turnover_spec:r.experience_spec,clauseText,tender.closing_date?.slice(0,10));
+   const rawSpec=r.category==='Turnover'?r.turnover_spec:r.experience_spec;
+   // The clause can span chunks; the extracted requirement sentence is a second, source-bound reading.
+   const spec=resolveSpec(rawSpec,clauseText,tender.closing_date?.slice(0,10))||resolveSpec(rawSpec,[...clauseText,...original.map(e=>e.quote),String(r.requirement||'')],tender.closing_date?.slice(0,10));
    const valid=credentials&&original.length&&spec;
    if(valid){
     calculation=r.category==='Turnover'?turnover(credentials.facts,spec,credentials.entity):matchProjects(credentials.projects,spec,credentials.entity,validOn);
