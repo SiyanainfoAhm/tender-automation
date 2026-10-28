@@ -75,6 +75,16 @@ Deno.serve(async req=>{
  const token=(await auth.json()).access_token;
  const results:any[]=[];
  for(const d of pending){
+  if(/\.pdf$/i.test(d.file_name||"")){
+   // Reuse the resumable ingestion service instead of parsing an entire PDF in this request.
+   const {data:existing,error}=await db.from("agenttender_document_ingestion_jobs").select("status,progress").eq("document_id",d.document_id).maybeSingle();if(error)throw error;
+   if(!existing){
+    const {data:owned,error:oe}=await db.from("agenttender_tender_documents").select("company_id,updated_at").eq("id",d.document_id).eq("tender_id",tenderId).single();if(oe)throw oe;
+    const {error:ie}=await db.from("agenttender_document_ingestion_jobs").insert({document_id:d.document_id,tender_id:tenderId,company_id:owned.company_id,source_updated_at:owned.updated_at});if(ie)throw ie;
+   }
+   results.push({document_id:d.document_id,status:existing?.status==="FAILED"?"BLOCKED":"QUEUED_RESUMABLE",checkpoint_preserved:true});continue;
+  }
+
   if(Date.now()-started>80000){results.push({document_id:d.document_id,status:"DEFERRED_TIME_BUDGET"});continue;}
   try{
    const url="https://graph.microsoft.com/v1.0/drives/"+encodeURIComponent(graph.drive)+"/items/"+encodeURIComponent(d.sharepoint_drive_item_id)+"/content";

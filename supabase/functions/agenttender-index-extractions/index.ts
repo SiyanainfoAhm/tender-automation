@@ -1,3 +1,4 @@
+import {compactChunks,commitBatches} from "./batches.mjs";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import {admin,authorized,checked,clean,substantive,sha,chunks,COMPANY} from "./common.ts";
 import {structuredChunks,PARSER_VERSION} from "./structure.ts";
@@ -33,6 +34,12 @@ Deno.serve(async(req)=>{
         if(prior?.status==='INDEXED'&&[await sha(text),await sha(PARSER_VERSION+':'+text)].includes(prior.content_hash))continue;
       }
       try {
+        if(pieces.length>1000){
+          const prepared=compactChunks(pieces);for(const piece of prepared)piece.content_hash=await sha(piece.content);
+          const {pages,...quality}=extraction.extraction_metadata||{};
+          const batch=await commitBatches(sb,{p_tender:tender.id,p_document:docId,p_source:sourceId,p_name:x.file_name,p_url:x.source_url,p_hash:await sha(text),p_total:prepared.length,p_chunks:prepared,p_metadata:{tender_document_id:docId,extraction_quality:quality,embedding_model:null}});
+          results.push({tender:x.source_tender_id,file:x.file_name,status:batch.complete?"TEXT_INDEXED":"INDEX_BATCH_PENDING",cursor:batch.cursor,total:prepared.length});continue;
+        }
         const claimed=await checked(sb.rpc("agenttender_claim_extraction_index",{p_tender_id:tender.id,p_source_id:sourceId,p_document_name:x.file_name,p_document_url:x.source_url}));if(!claimed)continue;
         if(substantive(text)<=20||!pieces.length){
           await checked(sb.from("agenttender_document_extractions").update({extraction_status:"EMPTY",extraction_error:"NO_EMBEDDED_TEXT: scanned image pages require OCR",updated_at:new Date().toISOString()}).eq("scraped_date",x.scraped_date).eq("source_tender_id",x.source_tender_id).eq("document_kind",x.document_kind).eq("file_name",x.file_name));
