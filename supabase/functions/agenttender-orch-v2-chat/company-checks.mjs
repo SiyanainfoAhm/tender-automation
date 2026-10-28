@@ -12,7 +12,9 @@ const pageOf=(d,re)=>pageText(d.extracted_text).find(p=>re.test(p.text))?.page??
 const ev=(d,re)=>({document:d.name,source_document_id:d.id,page:pageOf(d,re)});
 
 export function incorporation(docs,entity){
- for(const d of verifiedDocs(docs,entity)){
+ // Prefer the stand-alone incorporation certificate over bundles that contain a copy.
+ const ordered=verifiedDocs(docs,entity).sort((a,b)=>Number(/incorporat/i.test(b.name))-Number(/incorporat/i.test(a.name))||String(a.extracted_text).length-String(b.extracted_text).length);
+ for(const d of ordered){
   const t=d.extracted_text;
   if(!/certificate of incorporation/i.test(t)||!/companies act/i.test(t))continue;
   const cin=t.match(/\b([UL])(\d{5})([A-Z]{2})(\d{4})([A-Z]{3})(\d{6})\b/);
