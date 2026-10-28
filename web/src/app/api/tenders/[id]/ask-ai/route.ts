@@ -244,6 +244,26 @@ function createSseResponse(options: {
           message: "Checking tender, company and past-bid evidence...",
         });
 
+        // Keep the stream active while V2 works (detailed checks take 30-60s);
+        // idle connections can be dropped by proxies before the answer arrives.
+        const waitingMessages = [
+          "Reading the tender requirements...",
+          "Comparing with Siyana's company documents...",
+          "Applying company rules and the V2 evaluation...",
+          "Preparing the answer...",
+        ];
+        let tick = 0;
+        const keepAlive = setInterval(() => {
+          try {
+            send({
+              type: "status",
+              stage: "retrieving",
+              message: waitingMessages[Math.min(tick++, waitingMessages.length - 1)],
+            });
+          } catch {
+            clearInterval(keepAlive);
+          }
+        }, 8000);
         const result = await callLightV2Chat({
           tenderId: options.tenderId,
           companyId: options.companyId,
@@ -253,7 +273,7 @@ function createSseResponse(options: {
           questionCategory: options.questionCategory,
           conversation: options.conversation,
           signal: abort.signal,
-        });
+        }).finally(() => clearInterval(keepAlive));
 
         if (result.status !== "ANSWERED" || !result.answer) {
           send({

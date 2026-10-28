@@ -180,7 +180,11 @@ export async function streamAskAiRequest(options: {
     if (!response.ok) {
       options.handlers.onError?.({
         code: "UNKNOWN_ERROR",
-        message: data?.error || "Ask AI couldn't complete this request.",
+        message:
+          data?.error ||
+          (response.status === 504 || response.status === 408
+            ? "Ask AI took too long to answer. Please try again."
+            : `Ask AI couldn't complete this request (HTTP ${response.status}). Please try again.`),
         retryable: true,
       });
       return;
