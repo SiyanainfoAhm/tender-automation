@@ -1,3 +1,4 @@
+import {caCertificateTurnover} from './company-checks.mjs';
 import {CREDENTIAL_VERSION,extractFinancial,entityKey,pageText,normalize,money,functionalTypes} from './company-qualification.mjs';
 const checked=async q=>{const {data,error}=await q;if(error)throw Error(error.message);return data;};
 const hash=async s=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s))),x=>x.toString(16).padStart(2,'0')).join('');
@@ -7,6 +8,7 @@ export async function loadCredentials(db,companyId){
  const live=e=>{const d=byId.get(e.source_document_id);return d&&d.source_fingerprint===e.source_fingerprint&&d.extraction_status==='READY'&&d.verification_status==='verified'&&d.extracted_text?.includes(e.quote)&&e.source_page;};
  const facts=(data.facts||[]).filter(r=>r.fact_key.startsWith('financial.turnover:')).map(r=>({...r.fact,source_document_name:byId.get(r.fact.source_document_id)?.name,verification_state:r.verification_state==='VERIFIED'&&live(r.fact)?'VERIFIED':'CANDIDATE'}));
  const projects=(data.projects||[]).map(p=>({...p,qualification:{...p.qualification,source_documents:(p.qualification?.source_documents||[]).map(e=>({...e,source_document_name:byId.get(e.source_document_id)?.name})),verification_state:p.qualification?.verification_state==='VERIFIED'&&p.qualification?.source_documents?.every(live)?'VERIFIED':'CANDIDATE'}}));
+ facts.push(...caCertificateTurnover(sources,data.company_name));
  return {entity:data.company_name,facts,projects,documents:sources,issues:sources.flatMap(d=>d.qualification_extraction?.issues||[])};
 }
 function quoted(value,quote,text){return typeof quote==='string'&&quote.length>=8&&text.includes(quote)&&normalize(quote).includes(normalize(value));}

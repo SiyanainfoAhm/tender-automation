@@ -53,7 +53,9 @@ export function turnover(facts,spec,entity){
  if(!years.length||years.includes(null)||!['average','each','cumulative','highest'].includes(spec.method))return {...result,explanation:'Required years and calculation method must be explicit.'};
  const values=[];
  for(const year of years){
-  const candidates=facts.filter(x=>x.financial_year===year&&entityKey(x.legal_entity)===entityKey(entity)&&x.currency==='INR'&&['turnover','revenue_from_operations'].includes(x.metric));
+  let candidates=facts.filter(x=>x.financial_year===year&&entityKey(x.legal_entity)===entityKey(entity)&&x.currency==='INR'&&['turnover','revenue_from_operations'].includes(x.metric));
+  // A CA turnover certificate states the certified figure for the year; it settles audit-report variants.
+  if(candidates.some(x=>x.source==='CA_CERTIFICATE'))candidates=candidates.filter(x=>x.source==='CA_CERTIFICATE');
   const valid=candidates.filter(x=>x.verification_state==='VERIFIED'&&x.audited===true&&Number.isFinite(x.amount_inr)&&x.amount_inr>=0&&x.source_page&&x.quote);
   const amounts=[...new Set(candidates.filter(x=>Number.isFinite(x.amount_inr)).map(x=>x.amount_inr))];
   if(amounts.length>1)result.contradictions.push({year,values:amounts});
@@ -62,7 +64,7 @@ export function turnover(facts,spec,entity){
  if(result.missing_years.length||result.contradictions.length)return {...result,explanation:'Missing or contradictory annual evidence prevents a verified calculation.'};
  const sum=values.reduce((a,b)=>a+b,0);result.value_inr=spec.method==='average'?sum/years.length:spec.method==='cumulative'?sum:spec.method==='highest'?Math.max(...values):Math.min(...values);
  result.result=Number.isFinite(spec.minimum_inr)&&spec.minimum_inr>=0?(result.value_inr>=spec.minimum_inr?'PASS':'FAIL'):'UNKNOWN';
- return {...result,annual_values:years.map((year,i)=>({year,amount_inr:values[i]})),explanation:`${spec.method}: ${values.join(' + ')}${spec.method==='average'?' / '+years.length:''} = INR ${result.value_inr}. Required INR ${spec.minimum_inr??'unspecified'}.`};
+ return {...result,required_inr:spec.minimum_inr??null,annual_values:years.map((year,i)=>({year,amount_inr:values[i]})),explanation:`${spec.method}: ${values.join(' + ')}${spec.method==='average'?' / '+years.length:''} = INR ${result.value_inr}. Required INR ${spec.minimum_inr??'unspecified'}.`};
 }
 export function matchProjects(projects,spec,entity,validOn){
  const matches=[],excluded=[];const required=functionalTypes(spec.scope||'');
@@ -117,7 +119,7 @@ export function resolveSpec(spec,quotes,referenceDate){
  return validateSpec(spec,quotes)?spec:null;
 }
 export function certificateValidity(text,metadataExpiry,validOn){
- const n=normalize(text);const match=n.match(/(?:certificate expiry|expiry date|valid (?:up to|until|till))[^\d]{0,180}(\d{1,2})\s*(?:st|nd|rd|th)?\s*[-./ ]\s*([a-z]{3,9}|\d{1,2})\s*[-./ , ]\s*(20\d{2})/i);
+ const n=normalize(text);const match=n.match(/(?:certificate expiry|expiry date|date of expiry|valid (?:up to|until|till)|validity)[^\d]{0,180}(\d{1,2})\s*(?:st|nd|rd|th)?\s*[-./ ]\s*([a-z]{3,9}|\d{1,2})\s*[-./ , ]\s*(20\d{2})/i);
  let originalExpiry=null;
  if(match){const month=/^\d+$/.test(match[2])?Number(match[2]):['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'].indexOf(match[2].slice(0,3))+1;if(month>=1&&month<=12)originalExpiry=match[3]+'-'+String(month).padStart(2,'0')+'-'+match[1].padStart(2,'0');}
  const expiry=[metadataExpiry,originalExpiry].filter(Boolean).sort()[0];

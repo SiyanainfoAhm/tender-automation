@@ -1,6 +1,7 @@
 import {selectCompanyExcerpts,qualificationConfidence,uncoveredSubmissionRequirements} from './qualification-evidence.mjs';
 import {loadCredentials} from './company-credentials-store.mjs';
 import {turnover,matchProjects,resolveSpec,certificationAssessment} from './company-qualification.mjs';
+import {deterministicCheck} from './company-checks.mjs';
 // Advisory assessment inside the existing V2 chat path. No business-data writes.
 import {retrieve} from './analyst.ts';
 import {activeRules,qualificationDecision} from './policy.mjs';
@@ -58,7 +59,15 @@ export function normalizeQualification(raw,{rfp,company,coverage,tender,rules,cr
    }else {result='UNKNOWN';calculation={result:'UNKNOWN',explanation:original.some(e=>/government\s+educational|multiple\s+purchase\s+order/i.test(e.quote))?'The RFP restricts experience to government educational organizations and permits single/multiple purchase orders within specified fiscal years. The available structured project comparison does not verify those exact restrictions; inspect the original purchase orders and execution evidence.':'The original clause did not establish a supported calculation specification (required years, method, threshold, functional scope, count or period), or current verified company evidence is unavailable. No passing average or project count has been certified.'};}
   }
   if(credentials&&r.mandatory!==false&&r.category==='Certifications / empanelment'&&result!=='FAIL'){
-   calculation=certificationAssessment(original.map(e=>e.quote).join(' '),credentials.documents||[],credentials.entity,validOn);result=original.length?calculation.result:'UNKNOWN';
+   calculation=certificationAssessment([r.requirement,...original.map(e=>e.quote)].join(' '),credentials.documents||[],credentials.entity,validOn);result=original.length?calculation.result:'UNKNOWN';
+  }
+  // Plain clauses answered directly from verified company documents (incorporation, years in
+  // business, Government/PSU-only eligibility, blacklisting declaration, positive net worth).
+  let companyCheck=null;
+  if(credentials&&original.length&&r.mandatory!==false&&!(r.category==='Turnover'&&calculation?.result&&calculation.result!=='UNKNOWN')){
+   companyCheck=deterministicCheck(r.requirement||'',original.map(e=>e.quote),{documents:credentials.documents||[],entity:credentials.entity,referenceDate:tender.closing_date?.slice(0,10)||today});
+   if(companyCheck&&(result==='UNKNOWN'||companyCheck.result==='FAIL')){result=companyCheck.result;calculation={result,explanation:companyCheck.explanation,company_documents:companyCheck.company_evidence};}
+   else companyCheck=null;
   }
   if(result==='PASS'&&r.mandatory!==false&&/filed.*tax returns|tax returns.*filed/i.test(r.requirement||'')){result='UNKNOWN';calculation={result:'UNKNOWN',explanation:'Audited accounts do not establish filed tax returns for every required year. Verify each original filing acknowledgement and fiscal/assessment-year mapping.'};}
   // A partnership is usable only with both the actual permission clause and

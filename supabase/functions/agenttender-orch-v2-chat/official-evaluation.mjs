@@ -290,6 +290,8 @@ const inrPlain = (n) => '₹' + Number(n).toLocaleString('en-IN');
 
 /** Turn evaluator boilerplate into a plain gap description. */
 function plainGap(r) {
+  const t = turnoverText(r);
+  if (t) return t;
   const e = clean(r.calculation?.explanation || r.explanation);
   const extra = [];
   const missing = r.calculation?.missing_years || [];
@@ -310,7 +312,19 @@ function plainGap(r) {
   return first.length > 260 ? first.slice(0, 257) + '…' : first;
 }
 
+function turnoverText(r) {
+  const c = r.calculation;
+  if (!c || !Number.isFinite(c.value_inr) || !Array.isArray(c.annual_values)) return null;
+  const years = c.annual_values.map((v) => `FY ${v.year}: ${inrPlain(v.amount_inr)}`).join(', ');
+  const label = c.method === 'average' ? 'Average turnover' : c.method === 'cumulative' ? 'Total turnover' : 'Turnover';
+  const need = Number.isFinite(c.required_inr) ? c.required_inr : null;
+  const src = c.evidence?.[0]?.source_document_name ? ` (${c.evidence[0].source_document_name})` : '';
+  return `${label} ${inrPlain(Math.round(c.value_inr))}${need ? ' against ' + inrPlain(need) + ' required' : ''} — ${years}${src}.`;
+}
+
 function failReason(r) {
+  const t = turnoverText(r);
+  if (t) return t;
   const e = clean(r.explanation).replace(/\s*This is a proven positive non-compliance\.?/i, '');
   const sentences = e.split(/(?<=\.)\s+/).slice(0, 2).join(' ');
   return sentences.length > 480 ? sentences.slice(0, 477) + '…' : sentences;
