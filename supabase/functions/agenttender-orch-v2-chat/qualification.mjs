@@ -31,7 +31,7 @@ export function normalizeQualification(raw,{rfp,company,coverage,tender,rules,cr
  if(omitted.length)raw={...raw,requirements:[...(raw.requirements||[]),...omitted],requirements_complete:false};
  if(raw.requirements?.length>100)raw={...raw,requirements_complete:false};
  // Rows for clauses the RFP does not contain ("no turnover clause present in the extract") are not requirements.
- const candidateRequirements=(Array.isArray(raw.requirements)?raw.requirements:[]).filter(r=>!isPlaceholderRequirement(r?.requirement)).slice(0,100).map((r,i)=>{
+ const candidateRequirements=(Array.isArray(raw.requirements)?raw.requirements:[]).filter(r=>r?.category==='Scope'||!isPlaceholderRequirement(r?.requirement)).slice(0,100).map((r,i)=>{
   const original=sourceBoundEvidence(r.rfp_evidence,rfp);
   const proof=sourceBoundEvidence(r.company_evidence,company,true,validOn);
   let result=['PASS','FAIL','UNKNOWN'].includes(r.result)?r.result:'UNKNOWN';

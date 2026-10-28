@@ -29,7 +29,7 @@ export const PQ_RESULT = {
 const PLACEHOLDER = /\b(?:not|none)\s+(?:present|found|available|stated|specified|mentioned)\b|\bno\s+[a-z /-]{0,40}\b(?:clause|requirement|condition)s?\s+(?:is\s+|are\s+)?(?:present|found|available|stated|specified)|not\s+(?:in|part of)\s+the\s+(?:supplied|reviewed|available)\s+(?:extract|pages|documents?)|as\s+(?:set out|specified|mentioned|given)\s+in\s+the\s+(?:tender|rfp|bid)\s+document|\bnot\s+(?:yet\s+)?available\s+in\s+the\b/i;
 // Bid-process / contract-execution terms, not prequalification.
 const NOT_PQ = /closing date|bid submission by|last date (?:of|for) submission|bid (?:end|due) date|submitted by the .{0,30}(?:end|due) date|shall not (?:assign|sub-?let|transfer)|\bsub-?let\b|liquidated damages|penalt(?:y|ies)\b|payment terms|performance (?:bank )?guarantee|security deposit|warranty period|delivery (?:period|schedule)|arbitration|force majeure|termination/i;
-const NOT_PQ_CATEGORY = new Set(['Scope', 'Deadline / amendments']);
+const NOT_PQ_CATEGORY = new Set(['Deadline / amendments']);
 
 const words = (t) => new Set(clean(t).toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 3 && !/^(bidder|must|shall|should|have|with|from|that|this|their|the)$/.test(w)));
 function sameClause(a, b) {
@@ -46,6 +46,8 @@ export const isPlaceholderRequirement = (text) => PLACEHOLDER.test(String(text |
 /** True when a requirement row is a genuine prequalification clause from the RFP. */
 export function isPrequalificationRow(r) {
   if (!r || r.mandatory === false) return false;
+  // Scope is always shown (as one fixed line); its extracted wording is not used.
+  if (r.category === 'Scope') return true;
   if (NOT_PQ_CATEGORY.has(r.category)) return false;
   const text = String(r.requirement || '');
   if (!clean(text)) return false;
@@ -68,11 +70,11 @@ export function pqRows(rows) {
   const out = [];
   for (const r of Array.isArray(rows) ? rows : []) {
     if (!isPrequalificationRow(r)) continue;
-    const item = pqItemLabel(r.requirement);
+    const item = r.category === 'Scope' ? 'Scope matches our software / IT services work' : pqItemLabel(r.requirement);
     if (!item) continue;
     const raw = String(r?.result || r?.verdict || 'UNKNOWN').toUpperCase();
     const result = PQ_RESULT[raw] ? raw : 'UNKNOWN';
-    const i = out.findIndex((x) => sameClause(x.row.requirement, r.requirement));
+    const i = out.findIndex((x) => (r.category === 'Scope' ? x.row.category === 'Scope' : x.row.category !== 'Scope' && sameClause(x.row.requirement, r.requirement)));
     if (i >= 0) {
       if ((RANK[result] || 0) > (RANK[out[i].result] || 0)) out[i] = {item, result, row: r};
       continue;
@@ -81,7 +83,7 @@ export function pqRows(rows) {
   }
   // Failed first, then not yet proven, then passed: what needs action comes first.
   const order = {FAIL: 0, UNKNOWN: 1, PASS: 2};
-  return out.map((x, n) => ({...x, n})).sort((a, b) => order[a.result] - order[b.result] || a.n - b.n);
+  return out.map((x, n) => ({...x, n})).sort((a, b) => (b.row.category === 'Scope') - (a.row.category === 'Scope') || order[a.result] - order[b.result] || a.n - b.n);
 }
 
 export function prequalificationTable(rows, {empty = 'No prequalification clauses were found in the tender documents for this tender.', explain = null} = {}) {
@@ -99,9 +101,9 @@ export function prequalificationTable(rows, {empty = 'No prequalification clause
   };
   const summary = [`${passed} passed`, failed ? `${failed} failed` : null, unproven ? `${unproven} not yet proven` : null].filter(Boolean).join(' · ');
   return [
-    `**Prequalification checklist** — ${list.length} item${list.length > 1 ? 's' : ''} in the RFP: ${summary}`,
+    `**Prequalification checklist** — ${list.length} item${list.length > 1 ? 's' : ''}: ${summary}`,
     '',
-    '| # | Prequalification item (as per RFP) | Passed / Failed | Details |',
+    '| # | Prequalification item | Passed / Failed | Details |',
     '| --- | --- | --- | --- |',
     ...list.map((r, i) => {
       const ref = rfpRef(r.row);

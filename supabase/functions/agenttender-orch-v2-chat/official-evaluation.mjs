@@ -1,4 +1,4 @@
-import {prequalificationTable,isPrequalificationRow} from './pq-table.mjs';
+import {prequalificationTable,isPrequalificationRow,pqRows} from './pq-table.mjs';
 // The tender chatbot speaks from the SAME evaluation the daily V2 orchestrator made
 // (agenttender_v2_decision_audit + requirement findings + recorded status/reason),
 // so chat answers never contradict the GO / NO_GO / CONDITIONAL_GO shown in TenderFlow.
@@ -405,6 +405,7 @@ const NEEDED = {
 
 /** Row text for the prequalification table: why it passed or failed, with the document used. */
 export function pqDetail(r, report) {
+  if (r.standard_detail) return r.standard_detail;
   if (r.result === 'PASS') {
     const t = turnoverText(r);
     if (t) return t;
@@ -426,6 +427,28 @@ export function pqDetail(r, report) {
 }
 
 const docName = (d) => clean(d).replace(/^sp-[0-9a-f-]{36}-/i, '').replace(/^[0-9a-f]{8}-[0-9a-f-]{27}\.html$/i, 'portal tender page');
+
+/**
+ * Standard conditions every tender is checked for, used ONLY when the downloaded documents
+ * do not contain the RFP's eligibility section. Never "Passed": the clause is not available.
+ */
+export function standardPqRows(report) {
+  const NA = 'RFP clause not available yet. ';
+  const facts = [...(report?.credentials?.financial_facts || [])].filter((f) => Number.isFinite(f.amount_inr))
+    .sort((a, b) => String(b.financial_year).localeCompare(String(a.financial_year))).slice(0, 3);
+  const projects = (report?.credentials?.projects || []).filter((p) => p?.qualification?.verification_state === 'VERIFIED' && Number.isFinite(p.project_value_inr))
+    .sort((a, b) => b.project_value_inr - a.project_value_inr);
+  const row = (requirement, detail) => ({category: 'Standard', requirement, mandatory: true, result: 'UNKNOWN', rfp_evidence: [], standard_detail: NA + detail});
+  return [
+    row('Bidder is a registered firm / company providing IT / software services', 'Siyana is a registered private limited company; incorporation and registration documents are on file.'),
+    row('Minimum years in business / since incorporation', 'Incorporation certificate is on file; compare the date with the required years once the clause is available.'),
+    row('Minimum average annual turnover (last 3 financial years)', facts.length ? `Certified turnover on file: ${facts.map((f) => `FY ${f.financial_year} ${inrPlain(f.amount_inr)}`).join(', ')}.` : 'No certified turnover figures are on file.'),
+    row('Similar project experience (work orders / completion certificates)', projects.length ? `${projects.length} verified work orders on file; largest: ${projects.slice(0, 2).map((p) => `${clean(p.client_name)} (${shortInr(p.project_value_inr)})`).join('; ')}.` : 'No verified work orders on file.'),
+    row('Valid GST and PAN registration', 'GST certificates (Gujarat, Telangana) and PAN are on file; check whether the RFP asks for a particular State.'),
+    row('Not blacklisted — self-declaration / affidavit', 'Siyana signs a non-blacklisting undertaking with each bid; prepare it on letterhead for this tender.'),
+    row('EMD / bid security', 'Check the amount and any MSE / Udyam exemption in the full RFP.'),
+  ];
+}
 
 /** Message when no real prequalification clause is in the documents TenderFlow has. */
 export function noPqMessage(rfpDocuments) {
@@ -458,7 +481,7 @@ export function chatQualificationAnswer(report, ev, opts = {}) {
     why = 'Every mandatory condition found in the RFP is met by verified company documents.';
   } else {
     label = 'VERIFY';
-    why = !reqs.length
+    why = !pqRows(report?.requirements || []).some((x) => x.row.category !== 'Scope')
       ? 'The eligibility / prequalification section of the RFP is not in the documents TenderFlow has, so eligibility cannot be checked yet.'
       : unknown.length
       ? `No mandatory condition is failed, but ${unknown.length} condition${unknown.length > 1 ? 's still need' : ' still needs'} proof before Siyana can confirm eligibility.`
@@ -466,7 +489,10 @@ export function chatQualificationAnswer(report, ev, opts = {}) {
   }
 
   const out = [`**Decision: ${label}**` + (official && ev.decided_on ? ` (evaluated ${ev.decided_on})` : ''), '', `**Why:** ${why}`];
-  out.push('', prequalificationTable(report?.requirements || [], {explain: (r) => pqDetail(r, report), empty: noPqMessage(opts.rfpDocuments)}));
+  const hasClauses = pqRows(report?.requirements || []).some((x) => x.row.category !== 'Scope');
+  const tableRows = hasClauses ? report?.requirements || [] : [...(report?.requirements || []).filter((r) => r.category === 'Scope'), ...standardPqRows(report)];
+  out.push('', prequalificationTable(tableRows, {explain: (r) => pqDetail(r, report), empty: noPqMessage(opts.rfpDocuments)}));
+  if (!hasClauses) out.push('', `_The RFP's eligibility section is not in the downloaded tender documents${opts.rfpDocuments?.length ? ' (' + [...new Set(opts.rfpDocuments.map(docName))].join(', ') + ')' : ''}. The rows below Scope are the standard conditions every tender is checked for, so they stay "not yet proven". Upload the full RFP / NIT and ask again for the exact clauses._`);
 
   if (!official && ev?.pending) {
     const detail = /has not finished yet/i.test(ev.reason) ? '' : ` (${ev.reason.replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())})`;
