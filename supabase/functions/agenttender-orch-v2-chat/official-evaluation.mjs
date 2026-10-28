@@ -79,12 +79,17 @@ export async function loadOfficialEvaluation(db, tender) {
     : 'VERIFY';
 
   const assessment = a?.assessment || {};
-  const reason =
-    clean(assessment.business_reason) ||
-    plainReason(a?.reason) ||
-    plainReason(tender.prescreen_reason) ||
-    clean(qr.data?.reason) ||
-    null;
+  const familyOf = (d) => (!d ? null : NO_GO_STATUSES.has(d) ? 'NO_GO' : GO_STATUSES.has(d) ? 'GO' : d === 'CONDITIONAL_GO' ? 'CONDITIONAL_GO' : 'VERIFY');
+  // When the recorded status was changed after the automatic run (owner decision, EMD,
+  // deadline), the automatic reasoning no longer explains it: use the recorded reason.
+  const overridden = Boolean(status && v2Decision && familyOf(status) !== familyOf(v2Decision));
+  const reason = overridden
+    ? plainReason(tender.prescreen_reason) || clean(qr.data?.reason) || null
+    : clean(assessment.business_reason) ||
+      plainReason(a?.reason) ||
+      plainReason(tender.prescreen_reason) ||
+      clean(qr.data?.reason) ||
+      null;
 
   return {
     available: Boolean(decision && reason),
@@ -92,15 +97,15 @@ export async function loadOfficialEvaluation(db, tender) {
     family,
     label: LABEL[decision] || decision,
     v2_decision: v2Decision,
-    status_overrides_v2: Boolean(status && v2Decision && status !== v2Decision),
+    status_overrides_v2: overridden,
     decided_on: dateIn(a?.decision_at || qr.data?.updated_at),
     reason,
-    rules: codes.map((code) => ({
+    rules: (overridden ? [] : codes).map((code) => ({
       code,
       title: shortRuleTitle(ruleByCode.get(code)?.title || code),
       kind: ruleByCode.get(code)?.decision || null,
     })),
-    emd: assessment.emd_assessment || null,
+    emd: overridden ? null : assessment.emd_assessment || null,
     blocking_issues: Array.isArray(assessment.blocking_issues) ? assessment.blocking_issues.slice(0, 8) : [],
     missing_company_evidence: Array.isArray(assessment.missing_company_evidence)
       ? assessment.missing_company_evidence.slice(0, 8) : [],
@@ -144,7 +149,7 @@ const NOT_NEEDED = {
 /** Clean, deterministic answer for NO-GO tenders: the decision and why, nothing else. */
 export function noGoAnswer(ev, tender, category) {
   const lines = [];
-  lines.push(`**Decision: ${ev.label}**` + (ev.decided_on ? ` (evaluated ${ev.decided_on})` : ''));
+  lines.push(`**Decision: ${ev.label}**` + (ev.decided_on && !ev.status_overrides_v2 ? ` (evaluated ${ev.decided_on})` : ''));
   if (category === 'GENERAL_TENDER_INFO' || category === 'SCOPE_OF_WORK' || category === 'TENDER_STATUS') {
     const buyer = clean(tender.organization || tender.authority || tender.department);
     const closing = dateIn(tender.closing_date);
@@ -163,8 +168,8 @@ export function noGoAnswer(ev, tender, category) {
     if (emd) lines.push('', emd);
   }
   if (NOT_NEEDED[category]) lines.push('', NOT_NEEDED[category]);
-  if (ev.status_overrides_v2 && ev.v2_decision && ev.v2_decision !== ev.decision) {
-    lines.push('', `_Recorded status is ${ev.label}; the automatic evaluation had suggested ${LABEL[ev.v2_decision] || ev.v2_decision}._`);
+  if (ev.status_overrides_v2 && ev.v2_decision) {
+    lines.push('', `_This decision was recorded after the automatic evaluation (which had suggested ${LABEL[ev.v2_decision] || ev.v2_decision})._`);
   }
   return lines.join('\n');
 }

@@ -21,6 +21,13 @@ function scrubInternalArtifacts(value) {
   .replace(/\b(?:raw\s+)?uuid\b/gi,"")
   .replace(/([.!?])\s*[.!?]+/g,"$1")
   .replace(/\[\s*(?:citation unavailable|source unavailable)\s*\]/gi,"")
+  // Collapse runs of citations: drop exact repeats, keep one tag per source document.
+  .replace(/(?:\s*\*\(Source: [^)]*\)\*){2,}/g,(run)=>{
+   const tags=run.match(/\*\(Source: ([^)]*)\)\*/g)||[];
+   const byDoc=new Map();
+   for(const t of tags){const inner=t.slice(10,-2);const doc=inner.split(/ — |, p\. /)[0];const page=(inner.match(/, p\. ([^)]+)$/)||[])[1];const e=byDoc.get(doc)||new Set();if(page)e.add(page);byDoc.set(doc,e);}
+   return ' *(Source: '+[...byDoc].map(([d,p])=>d+(p.size?', p. '+[...p].join(', '):'')).join('; ')+')*';
+  })
   .replace(/[ \t]{2,}/g," ")
   .replace(/\n{3,}/g,"\n\n")
   .trim();
