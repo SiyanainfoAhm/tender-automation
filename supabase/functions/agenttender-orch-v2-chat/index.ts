@@ -7,7 +7,7 @@ import {responseMode,retrieve,analystPrompt,parseAnswer,questionCategoryInstruct
 import {handleAction} from "./action-handler.ts";
 import {activeRules} from "./policy.mjs";
 import {assessQualification,qualificationQuestion,companyFinancialAnswer} from './qualification.mjs';
-import {loadOfficialEvaluation,noGoAnswer,evaluationContext,alignQualificationAnswer,OFFICIAL_EVALUATION_INSTRUCTION} from './official-evaluation.mjs';
+import {loadOfficialEvaluation,noGoAnswer,evaluationContext,chatQualificationAnswer,OFFICIAL_EVALUATION_INSTRUCTION} from './official-evaluation.mjs';
 // Edge runtime globals are supplied by Supabase; no runtime type-only registry import.
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 
@@ -176,7 +176,7 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
   if(question_category==='DO_WE_QUALIFY'||question_category==='ELIGIBILITY'||qualificationQuestion(question)){
    const evaluated=await assessQualification({db,tender,companyId,question,allowCompany:canReadCompanyDocuments,aiKey:AIKEY});
    const result=evaluated.report.recommendation==='GO'?'CONFIRMED':evaluated.report.recommendation==='NO_GO'?'NOT CONFIRMED':'UNVERIFIED';
-   if(official?.available)evaluated.answer=alignQualificationAnswer(evaluated.answer,official);
+   evaluated.answer=chatQualificationAnswer(evaluated.report,official);
    const response={ok:true,status:'ANSWERED',route:'ORCHESTRATOR_V2_LIGHT_CHAT',official_decision:official?.decision||null,answer:evaluated.answer,qualification:evaluated.report,result,evidence_state:evaluated.report.coverage.complete?'MEDIUM':'LOW',sources:evaluated.sources.map(s=>({id:s.ref,documentName:s.document,pageNumber:s.page,section:s.section})),changed_business_statuses:0,extraction_triggered:false,indexing_triggered:false,embedding_triggered:false};
    const sourceCards=evaluated.sources.map(({text,metadata,...s})=>s);
    Object.assign(response,{evidence:sourceCards.filter(s=>s.ref.startsWith('R')),company_evidence:sourceCards.filter(s=>s.ref.startsWith('C')),model:MODEL,readiness_warnings:official?.available?[]:evaluated.report.coverage.warnings});
@@ -268,7 +268,7 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
   if(answerConfigError) console.error("Adaptive chat config read failed");
   const adaptivePolicy=answerConfig?.config?.adaptive_answer_policy;
   const adaptiveInstructions = adaptivePolicy ? "\nStyle: concise natural paragraphs; tables only for useful comparisons. Category decision guidance governs content. End with exactly three relevant next questions. Never add generic task lists." : "";
-  const system = (official?.available?OFFICIAL_EVALUATION_INSTRUCTION+"\n":"")+analystPrompt(response_mode)+"\nVerified corrections are tender-scoped interpretations, never original evidence. Current RFP wins. The following category guidance controls the business decision and visible format; JSON result remains an evidence-sufficiency label for compatibility. Question category: "+adaptiveCategory+"\n"+questionCategoryInstructions(adaptiveCategory)+adaptiveInstructions;
+  const system = (official?.available&&!official.pending?OFFICIAL_EVALUATION_INSTRUCTION+"\n":official?.pending?"\nThe daily automatic evaluation for this tender has not finished yet (documents still being collected). Decide from the RFP evidence, start with \"Decision: GO / NO-GO / CONDITIONAL GO / VERIFY\", and if a mandatory eligibility condition clearly excludes Siyana, say NO-GO. Never show internal error codes.\n":"")+analystPrompt(response_mode)+"\nVerified corrections are tender-scoped interpretations, never original evidence. Current RFP wins. The following category guidance controls the business decision and visible format; JSON result remains an evidence-sufficiency label for compatibility. Question category: "+adaptiveCategory+"\n"+questionCategoryInstructions(adaptiveCategory)+adaptiveInstructions;
 
   const payload = {
     question,
@@ -290,7 +290,7 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
       date_only:/^\d{4}-\d{2}-\d{2}$/.test(String(tender.closing_date||"")),
       guidance:"A date-only field does not establish a closing time. On the closing date, do not declare expired without a verified time and timezone. Compare RFP times in their declared timezone; flag conflicting deadline evidence. Never infer no submitted bid from absence of supplied submission evidence."
     },
-    official_evaluation: official?.available?evaluationContext(official):null,
+    official_evaluation: official?.available&&!official.pending?evaluationContext(official):null,
     recorded_decisions_are_not_evidence: !official?.available,
     tender_evidence: tenderEvidence,
     company_evidence: companyEvidence,
@@ -315,7 +315,7 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
   let rawAnswer = "";
   let parsed = parseAnswer("", refs);
   for (let attempt = 0; attempt < 2; attempt++) {
-    const officialCheck = official?.available ? '\nOFFICIAL DECISION CHECK: The first line must be "Decision: '+official.label+'". Any recommendation, fit or verdict you state must equal '+official.label+'; explain the official reason instead of re-deciding.' : '';
+    const officialCheck = official?.available&&!official.pending ? '\nOFFICIAL DECISION CHECK: The first line must be "Decision: '+official.label+'". Any recommendation, fit or verdict you state must equal '+official.label+'; explain the official reason instead of re-deciding.' : '';
     const formatInstruction = officialCheck + '\nFINAL DECISION CHECK: Use only facts proven by the supplied original evidence. A listed EMD is not the actual payable EMD. If exemption applicability is conflicting or unverified, summarize it as payable EMD NOT VERIFIED and do not use the listed amount to assert a binding EMD exclusion. A poor-fit recommendation may instead rely on proven scope exclusions, explaining the scope reason. Missing company evidence is not a proven failure. Keep scope and summary to about 180 words before the three follow-up questions; EMD to about 100 words before follow-ups. Avoid unrelated policy commentary in narrow checks.\nOUTPUT CONTRACT: Return exactly one valid JSON object with "answer" (non-empty string), "result" (CONFIRMED, PARTIALLY CONFIRMED, NOT CONFIRMED, UNVERIFIED, or null), and "evidence_state" (HIGH, MEDIUM, or LOW). Put all prose, citations and suggested questions inside the answer string. Escape newlines inside JSON strings. Do not output Markdown fences or any text outside the JSON object.';
     const aiRes = await fetch("https://api.deepseek.com/chat/completions", {
       method: "POST",

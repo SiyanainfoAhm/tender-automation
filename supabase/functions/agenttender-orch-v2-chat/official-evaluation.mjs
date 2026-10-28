@@ -32,8 +32,34 @@ const dateIn = (v) => {
     : null;
 };
 
+/** Plain-language explanation for internal pipeline codes. */
+export function describePipelineReason(text) {
+  const s = String(text || '');
+  if (/TENDER247_ACQUISITION_REQUIRED|SOURCE_ACQUISITION_BLOCKED/i.test(s))
+    return 'The tender documents have not been downloaded from the portal yet, so the full evaluation is waiting for them.';
+  if (/TARGETED_SOURCE_ACQUISITION/i.test(s))
+    return 'Some tender documents are still being collected; the full evaluation runs once they are available.';
+  if (/MISSING_SOURCE_EVIDENCE/i.test(s))
+    return 'The full RFP document was not available, so eligibility could not be checked.';
+  if (/EVIDENCE_REFRESH_REQUIRED/i.test(s))
+    return 'The tender documents changed; a fresh evaluation is pending.';
+  if (/PREPARATION|WORKER_RESOURCE_LIMIT|compute resources/i.test(s))
+    return 'Document processing failed temporarily; the evaluation will be retried.';
+  return 'The automatic evaluation has not finished yet.';
+}
+
+/** Human-written parts of a recorded reason (e.g. "... | Removed from VERIFY 2026-10-27 by user: scope is India only"). */
+function humanParts(text) {
+  return clean(text)
+    .split(/\s+\|\s+/)
+    .filter((p) => p && !machineReason(p))
+    .map((p) => p.replace(/^Removed from [A-Z_ -]+ (\d{4}-\d{2}-\d{2}) by user:\s*/i, 'Marked by user on $1: '));
+}
+
 /** Remove machine prefixes such as "NO_GO — validated approved rule(s): X. Evidence:". */
 function plainReason(text) {
+  const human = humanParts(text);
+  if (clean(text) && machineReason(clean(text).split(/\s+\|\s+/)[0]) && human.length) return human.join(' ');
   let s = clean(text);
   s = s.replace(/^(?:NO[_ -]?GO|CONDITIONAL[_ ]GO|GO|VERIFY|REVIEW)\s*[—:-]\s*/i, '');
   s = s.replace(/^validated approved rule\(s\):\s*[A-Z0-9_, ]+\.\s*/i, '');
@@ -103,13 +129,20 @@ export async function loadOfficialEvaluation(db, tender) {
   // deadline), the automatic reasoning no longer explains it: use the recorded reason.
   const overridden = Boolean(status && v2Decision && familyOf(status) !== familyOf(v2Decision));
   const usable = (t) => (machineReason(t) ? '' : clean(t));
-  const reason = (overridden
+  const recorded = (overridden
     ? plainReason(tender.prescreen_reason) || usable(qr.data?.reason)
     : usable(assessment.business_reason) ||
       plainReason(a?.reason) ||
       plainReason(tender.prescreen_reason) ||
-      usable(qr.data?.reason)) ||
-    (decision ? PENDING_REASON[family] || PENDING_REASON.VERIFY : null);
+      usable(qr.data?.reason)) || '';
+  const pendingText = tender.prescreen_reason || a?.reason || '';
+  // VERIFY / not evaluated with only pipeline codes on record = evaluation still pending.
+  const pending = (family === 'VERIFY' || family === 'NONE') && (!recorded || machineReason(pendingText));
+  const reason = recorded && !pending
+    ? recorded
+    : decision
+      ? (family === 'VERIFY' || family === 'NONE' ? describePipelineReason(pendingText) : PENDING_REASON[family])
+      : null;
 
   return {
     available: Boolean(decision && reason),
@@ -118,6 +151,7 @@ export async function loadOfficialEvaluation(db, tender) {
     label: LABEL[decision] || decision,
     v2_decision: v2Decision,
     status_overrides_v2: overridden,
+    pending,
     decided_on: dateIn(a?.decision_at || qr.data?.updated_at),
     reason,
     rules: (overridden ? [] : codes).map((code) => ({
@@ -234,4 +268,99 @@ export function alignQualificationAnswer(answer, ev) {
     return lead + parts.join('; ') + ' |';
   });
   return header + '\n\n**Requirement check**\n\n' + body.trim();
+}
+
+// ---------------------------------------------------------------------------
+// "Do we qualify?" — short, decision-first answer built from the requirement check.
+
+/** Short label for a long RFP clause. */
+function shortRequirement(text) {
+  let s = clean(text)
+    .replace(/^(?:the\s+)?bidder\s+(?:must|shall|should)\s+(?:have\s+been\s+|have\s+|be\s+|possess\s+|hold\s+)?/i, '')
+    .replace(/^(?:a\s+)?valid\s+/i, 'Valid ');
+  s = s.charAt(0).toUpperCase() + s.slice(1);
+  if (s.length > 170) {
+    const cut = s.slice(0, 170).search(/[,;(](?=[^,;(]*$)/);
+    s = (cut > 60 ? s.slice(0, cut) : s.slice(0, 167)).trim().replace(/[,;:]$/, '') + '…';
+  }
+  return s.replace(/\.$/, '');
+}
+
+const inrPlain = (n) => '₹' + Number(n).toLocaleString('en-IN');
+
+/** Turn evaluator boilerplate into a plain gap description. */
+function plainGap(r) {
+  const e = clean(r.calculation?.explanation || r.explanation);
+  const extra = [];
+  const missing = r.calculation?.missing_years || [];
+  if (missing.length) extra.push('audited figures missing for ' + missing.join(', '));
+  for (const c of r.calculation?.contradictions || []) {
+    if (c?.year && Array.isArray(c.values)) extra.push(`two different ${c.year} figures (${c.values.map(inrPlain).join(' vs ')})`);
+  }
+  if (extra.length) return 'Not confirmed — ' + extra.join('; ') + '.';
+  if (/supported calculation specification|No passing average or project count/i.test(e))
+    return 'Not confirmed — no matching completed project / figure verified from company documents yet.';
+  if (/matching company compliance evidence has not been verified/i.test(e))
+    return 'Company proof (declaration / statement) not attached or verified yet.';
+  if (/original evidence is missing, expired or mismatched/i.test(e))
+    return 'A current, valid certificate was not found (missing or expired).';
+  if (/Missing or contradictory annual evidence/i.test(e))
+    return 'Audited turnover figures are incomplete or conflicting.';
+  const first = e.split(/(?<=\.)\s+/)[0] || e;
+  return first.length > 260 ? first.slice(0, 257) + '…' : first;
+}
+
+function failReason(r) {
+  const e = clean(r.explanation).replace(/\s*This is a proven positive non-compliance\.?/i, '');
+  const sentences = e.split(/(?<=\.)\s+/).slice(0, 2).join(' ');
+  return sentences.length > 480 ? sentences.slice(0, 477) + '…' : sentences;
+}
+
+export function chatQualificationAnswer(report, ev) {
+  const reqs = (report?.requirements || []).filter((r) => r.mandatory !== false || r.category === 'Scope');
+  const fails = reqs.filter((r) => r.result === 'FAIL' && r.mandatory !== false);
+  const unknown = reqs.filter((r) => r.result === 'UNKNOWN' && r.mandatory !== false && !/closing date|bid submission by/i.test(r.requirement));
+  const passed = reqs.filter((r) => r.result === 'PASS');
+  const official = ev?.available && !ev.pending;
+
+  let label, why;
+  if (official) {
+    label = ev.label;
+    why = ev.reason;
+  } else if (fails.length) {
+    label = 'NO-GO';
+    why = fails.length > 1
+      ? `Siyana does not meet ${fails.length} mandatory eligibility conditions in the RFP (below).`
+      : 'Siyana does not meet a mandatory eligibility condition in the RFP (below).';
+  } else if (report?.recommendation === 'GO') {
+    label = 'GO';
+    why = 'Every mandatory condition found in the RFP is met by verified company documents.';
+  } else {
+    label = 'VERIFY';
+    why = unknown.length
+      ? `No mandatory condition is failed, but ${unknown.length} condition${unknown.length > 1 ? 's still need' : ' still needs'} proof before Siyana can confirm eligibility.`
+      : 'Eligibility could not be fully verified from the available documents.';
+  }
+
+  const out = [`**Decision: ${label}**` + (official && ev.decided_on ? ` (evaluated ${ev.decided_on})` : ''), '', `**Why:** ${why}`];
+
+  if (fails.length) {
+    out.push('', official && ev.family !== 'NO_GO' ? '**Blocking issue found in the detailed check:**' : '**Blocking issue:**');
+    for (const r of fails) out.push(`- **${shortRequirement(r.requirement)}** — ${failReason(r)}`);
+  }
+  if (unknown.length && label !== 'NO-GO') {
+    out.push('', '**Still to confirm:**');
+    for (const r of unknown.slice(0, 8)) out.push(`- **${shortRequirement(r.requirement)}** — ${plainGap(r)}`);
+  } else if (unknown.length) {
+    out.push('', `**Also unconfirmed:** ${unknown.slice(0, 6).map((r) => shortRequirement(r.requirement)).join('; ')}.`);
+  }
+  if (passed.length) {
+    const label2 = (r) => (r.category === 'Scope' ? 'Scope matches Siyana\u2019s software work' : shortRequirement(r.requirement));
+    out.push('', `**Already met:** ${passed.slice(0, 8).map(label2).join('; ')}.`);
+  }
+  if (!official && ev?.pending) {
+    out.push('', `_The daily automatic evaluation for this tender has not finished (${ev.reason.replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())}). This answer comes from today's requirement check of the RFP._`);
+  }
+  if (label === 'NO-GO' && !official) out.push('', 'No bid documents need to be prepared unless the blocking condition is resolved.');
+  return out.join('\n');
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import { friendlyTenderReason } from "@/lib/tenders/friendly-reason";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -1629,7 +1630,7 @@ export function TenderDetailClient({
                 {tender.prescreenReason ? (
                   <DecisionRow label="ChatGPT Response">
                     <p className="whitespace-pre-wrap font-normal leading-relaxed text-foreground-700">
-                      {tender.prescreenReason}
+                      {friendlyTenderReason(tender.prescreenReason)}
                     </p>
                   </DecisionRow>
                 ) : null}

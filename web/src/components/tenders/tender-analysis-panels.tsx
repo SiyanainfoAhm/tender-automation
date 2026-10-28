@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { friendlyTenderReason } from "@/lib/tenders/friendly-reason";
 import { ExternalLink } from "lucide-react";
 
 import { StatusBadge } from "@/components/status/qualification-badge";
@@ -162,7 +163,7 @@ export function TenderAnalyzerPanels({
 
         {qualification?.reason || tender.prescreenReason ? (
           <p className="mt-4 text-sm leading-relaxed text-foreground-700 whitespace-pre-wrap">
-            {tender.prescreenReason || qualification?.reason}
+            {friendlyTenderReason(tender.prescreenReason) || qualification?.reason}
           </p>
         ) : null}
         {qualification?.chatUrl ? (
@@ -255,7 +256,7 @@ export function TenderAnalyzerPanels({
                 ChatGPT response
               </p>
               <p className="whitespace-pre-wrap text-sm text-foreground-600">
-                {tender.prescreenReason}
+                {friendlyTenderReason(tender.prescreenReason)}
               </p>
             </div>
           ) : null}
@@ -319,7 +320,7 @@ export function AnalyzeRfpExtract({ tender }: { tender: TenderDetailDTO }) {
     {
       title: "Summary",
       body:
-        tender.prescreenReason ||
+        friendlyTenderReason(tender.prescreenReason) ||
         qualification?.reason ||
         qualification?.verdict ||
         tender.description,

@@ -1,11 +1,12 @@
 import { resolveTenderArtifactUrls } from "@/lib/tenders/resolve-document-urls";
+import { friendlyTenderReason } from "@/lib/tenders/friendly-reason";
 import type { WebTenderListRow } from "@/server/repositories/tenderRepository";
 
 /**
  * Main list shows ChatGPT prescreen text only (not screening/qualification decision reason).
  */
 export function tenderListPrescreenReason(row: WebTenderListRow): string {
-  return String(row.prescreen_reason || "").trim();
+  return friendlyTenderReason(row.prescreen_reason);
 }
 
 /** @deprecated Use tenderListPrescreenReason — kept for call-site compatibility. */
