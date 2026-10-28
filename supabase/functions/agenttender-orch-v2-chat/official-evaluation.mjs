@@ -379,3 +379,35 @@ export function chatQualificationAnswer(report, ev) {
   if (label === 'NO-GO' && !official) out.push('', 'No bid documents need to be prepared unless the blocking condition is resolved.');
   return out.join('\n');
 }
+
+// ---------------------------------------------------------------------------
+// Turnover / Experience / Certifications quick questions: the relevant rows of the same check.
+const FOCUS = {
+  TURNOVER: {title: 'Turnover check', cats: ['Turnover'], test: /turnover|net\s*worth|financial/i, none: 'The RFP sets no turnover requirement.'},
+  EXPERIENCE: {title: 'Experience check', cats: ['Experience', 'Government experience'], test: /experience|similar|project|years|engaged/i, none: 'The RFP sets no project-experience requirement.'},
+  GOVERNMENT_EXPERIENCE: {title: 'Government experience check', cats: ['Government experience', 'Experience'], test: /government|psu|public sector/i, none: 'The RFP sets no government-experience requirement.'},
+  CERTIFICATIONS: {title: 'Certifications check', cats: ['Certifications / empanelment', 'Product ownership / certification'], test: /\biso\b|cmmi|certif|registration|empanel|\bpan\b|\bgst\b/i, none: 'The RFP asks for no specific certification.'},
+};
+
+export function focusedCheckAnswer(report, ev, category) {
+  const f = FOCUS[category];
+  if (!f || !report) return null;
+  const overall = chatQualificationAnswer(report, ev).split('\n')[0];
+  const rows = (report.requirements || []).filter((r) => r.mandatory !== false && (f.cats.includes(r.category) || f.test.test(r.requirement || '')) && !/closing date|bid submission by|\bemd\b|earnest money/i.test(r.requirement || ''));
+  const mark = {PASS: '✅ Met', FAIL: '❌ Not met', UNKNOWN: '⚠️ Not confirmed'};
+  const out = [overall, '', `**${f.title}**`];
+  if (!rows.length) out.push('', f.none);
+  for (const r of rows) {
+    const text = r.result === 'PASS' ? (turnoverText(r) || clean(r.calculation?.explanation || r.explanation)) : r.result === 'FAIL' ? failReason(r) : plainGap(r);
+    const docs = [...new Set([...(r.calculation?.company_documents || []).map((e) => e.document), ...(r.company_evidence || []).map((e) => e.document), ...(r.calculation?.evidence || []).map((e) => e.source_document_name)].filter(Boolean))].slice(0, 3);
+    out.push('', `- **${shortRequirement(r.requirement)}** — ${mark[r.result] || r.result}. ${text}${docs.length && r.result !== 'FAIL' && !/\(.*certificate.*\)/i.test(text) ? ` _Source: ${docs.join(', ')}._` : ''}`);
+  }
+  if (category === 'TURNOVER') {
+    const facts = (report.credentials?.financial_facts || []).filter((x) => x.source === 'CA_CERTIFICATE');
+    if (facts.length && !rows.some((r) => turnoverText(r))) {
+      out.push('', `Siyana’s certified turnover: ${facts.map((x) => `FY ${x.financial_year} ${inrPlain(x.amount_inr)}`).join(', ')} (${facts[0].source_document_name}).`);
+    }
+  }
+  out.push('', '_Full eligibility result: ask **Do We Qualify?**_');
+  return out.join('\n');
+}

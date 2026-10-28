@@ -62,17 +62,24 @@ export function deterministicCheck(requirement,quotes,{documents,entity,referenc
 
  // Positive net worth.
  if(/net\s*worth/.test(req)&&/positive|not (?:be )?negative|non-negative|should not be eroded/.test(all)&&!/(?:rs\.?|inr|₹)\s*[\d,.]+\s*(?:crore|lakh)?|\d+\s*(?:crore|lakh)/.test(req)){
-  const audits=verifiedDocs(documents,entity).filter(d=>/independent auditor|statutory audit/i.test(d.extracted_text)&&/balance sheet/i.test(d.extracted_text));
-  audits.sort((a,b)=>String(b.financial_year||'').localeCompare(String(a.financial_year||'')));
-  for(const d of audits){
-   const m=d.extracted_text.match(/Debt-Equity[\s\S]{0,120}?Total Equity\s*\n\s*(\d+(?:\.\d+)?)/i);
-   if(m&&Number(m[1])>0)return {result:'PASS',explanation:`Latest audited accounts${d.financial_year?' (FY '+d.financial_year+')':''} show positive total equity (debt-equity ratio ${m[1]}), i.e. positive net worth.`,company_evidence:[ev(d,/Debt-Equity/i)]};
-  }
+  const n=netWorthEvidence(documents,entity);
+  if(n)return {result:'PASS',explanation:`Latest audited accounts${n.financial_year?' (FY '+n.financial_year+')':''} show positive total equity (debt-equity ratio ${n.ratio}), i.e. positive net worth.`,company_evidence:[ev(n.document,/Debt-Equity/i)]};
  }
  return null;
 }
 
 const certDate=t=>{const m=String(t).match(/Date\s*:?\s*(\d{2})[-./](\d{2})[-./](20\d{2})/);return m?`${m[3]}-${m[2]}-${m[1]}`:null;};
+
+/** Positive-equity evidence from the latest audited accounts (null when not found). */
+export function netWorthEvidence(documents,entity){
+ const audits=verifiedDocs(documents,entity).filter(d=>/independent auditor|statutory audit/i.test(d.extracted_text)&&/balance sheet/i.test(d.extracted_text));
+ audits.sort((a,b)=>String(b.financial_year||'').localeCompare(String(a.financial_year||'')));
+ for(const d of audits){
+  const m=d.extracted_text.match(/Debt-Equity[\s\S]{0,120}?Total Equity\s*\n\s*(\d+(?:\.\d+)?)/i);
+  if(m&&Number(m[1])>0)return {document:d,financial_year:d.financial_year||null,ratio:m[1]};
+ }
+ return null;
+}
 
 /** Turnover facts read from CA turnover certificates ("Financial Year / Total Turnover" tables). */
 export function caCertificateTurnover(documents,entity){

@@ -7,7 +7,8 @@ import {responseMode,retrieve,analystPrompt,parseAnswer,questionCategoryInstruct
 import {handleAction} from "./action-handler.ts";
 import {activeRules} from "./policy.mjs";
 import {assessQualification,qualificationQuestion,companyFinancialAnswer} from './qualification.mjs';
-import {loadOfficialEvaluation,noGoAnswer,evaluationContext,chatQualificationAnswer,OFFICIAL_EVALUATION_INSTRUCTION} from './official-evaluation.mjs';
+import {loadOfficialEvaluation,noGoAnswer,evaluationContext,chatQualificationAnswer,focusedCheckAnswer,OFFICIAL_EVALUATION_INSTRUCTION} from './official-evaluation.mjs';
+import {getCompanyCheck,companyCheckContext,COMPANY_CHECK_INSTRUCTION} from './company-check.mjs';
 // Edge runtime globals are supplied by Supabase; no runtime type-only registry import.
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 
@@ -164,7 +165,7 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
    return Response.json(response,{headers:cors});
   }
 
-  const directFinancial=await companyFinancialAnswer(db,companyId,question,canReadCompanyDocuments);
+  const directFinancial=['TURNOVER','DO_WE_QUALIFY','ELIGIBILITY'].includes(question_category)?null:await companyFinancialAnswer(db,companyId,question,canReadCompanyDocuments);
   if(directFinancial){
    const response={ok:true,answer:directFinancial.answer,calculation:directFinancial.calculation,company_evidence:directFinancial.documents,changed_business_statuses:0};
    if(authenticatedUserId&&!memory&&!(internal&&input.read_only===true)){
@@ -173,13 +174,26 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
    }
    return Response.json(response,{headers:cors});
   }
-  if(question_category==='DO_WE_QUALIFY'||question_category==='ELIGIBILITY'||qualificationQuestion(question)){
-   const evaluated=await assessQualification({db,tender,companyId,question,allowCompany:canReadCompanyDocuments,aiKey:AIKEY});
+  // One cached requirement check (RFP vs verified company documents) feeds every answer.
+  let check:any=null;
+  try{check=await getCompanyCheck({db,tender,companyId,allowCompany:canReadCompanyDocuments,aiKey:AIKEY,signal:undefined});}catch(e){console.warn('Company check unavailable',String(e));}
+  const focused=check?.report&&['TURNOVER','EXPERIENCE','GOVERNMENT_EXPERIENCE','CERTIFICATIONS'].includes(question_category)?focusedCheckAnswer(check.report,official,question_category):null;
+  if(focused){
+   const response:any={ok:true,status:'ANSWERED',route:'ORCHESTRATOR_V2_COMPANY_CHECK',question_category,answer:focused,result:'CHECKED',evidence_state:'MEDIUM',official_decision:official?.decision||null,evidence:[],company_evidence:[],sources:(check.sources||[]).filter((s:any)=>String(s.ref||'').startsWith('C')).slice(0,12).map((s:any)=>({id:s.ref,documentName:s.document,pageNumber:s.page,section:s.section})),readiness_warnings:[],partial_document_evidence:false,model:'company-check',changed_business_statuses:0,extraction_triggered:false,indexing_triggered:false,embedding_triggered:false};
+   if(authenticatedUserId&&!memory&&!(internal&&input.read_only===true)){
+    const saved=await db.rpc('agenttender_record_v2_chat_answer',{p_user:authenticatedUserId,p_company:companyId,p_tender:tenderId,p_session:input.session_id||null,p_question:question,p_answer:focused,p_model:'company-check',p_category:question_category,p_sources:response.sources});
+    if(saved.error)throw saved.error;
+    return Response.json({...response,message_id:saved.data?.message_id,session_id:saved.data?.session_id},{headers:cors});
+   }
+   return Response.json(response,{headers:cors});
+  }
+  if((question_category==='DO_WE_QUALIFY'||question_category==='ELIGIBILITY'||qualificationQuestion(question))&&check?.report){
+   const evaluated:any={report:check.report,sources:(check.sources||[]).map((s:any)=>({...s,text:''}))};
    const result=evaluated.report.recommendation==='GO'?'CONFIRMED':evaluated.report.recommendation==='NO_GO'?'NOT CONFIRMED':'UNVERIFIED';
    evaluated.answer=chatQualificationAnswer(evaluated.report,official);
-   const response={ok:true,status:'ANSWERED',route:'ORCHESTRATOR_V2_LIGHT_CHAT',official_decision:official?.decision||null,answer:evaluated.answer,qualification:evaluated.report,result,evidence_state:evaluated.report.coverage.complete?'MEDIUM':'LOW',sources:evaluated.sources.map(s=>({id:s.ref,documentName:s.document,pageNumber:s.page,section:s.section})),changed_business_statuses:0,extraction_triggered:false,indexing_triggered:false,embedding_triggered:false};
-   const sourceCards=evaluated.sources.map(({text,metadata,...s})=>s);
-   Object.assign(response,{evidence:sourceCards.filter(s=>s.ref.startsWith('R')),company_evidence:sourceCards.filter(s=>s.ref.startsWith('C')),model:MODEL,readiness_warnings:official?.available?[]:evaluated.report.coverage.warnings});
+   const response={ok:true,status:'ANSWERED',route:'ORCHESTRATOR_V2_LIGHT_CHAT',official_decision:official?.decision||null,answer:evaluated.answer,qualification:evaluated.report,result,evidence_state:evaluated.report.coverage.complete?'MEDIUM':'LOW',sources:evaluated.sources.map((s:any)=>({id:s.ref,documentName:s.document,pageNumber:s.page,section:s.section})),changed_business_statuses:0,extraction_triggered:false,indexing_triggered:false,embedding_triggered:false};
+   const sourceCards=evaluated.sources.map(({text,metadata,...s}:any)=>s);
+   Object.assign(response,{evidence:sourceCards.filter((s:any)=>s.ref.startsWith('R')),company_evidence:sourceCards.filter((s:any)=>s.ref.startsWith('C')),model:MODEL,readiness_warnings:official?.available?[]:evaluated.report.coverage.warnings});
    if(authenticatedUserId&&!memory&&!(internal&&input.read_only===true)){
     const saved=await db.rpc('agenttender_record_v2_chat_answer',{p_user:authenticatedUserId,p_company:companyId,p_tender:tenderId,p_session:input.session_id||null,p_question:question,p_answer:response.answer,p_model:MODEL,p_category:'DO_WE_QUALIFY',p_sources:response.sources});
     if(saved.error)throw saved.error;
@@ -268,7 +282,7 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
   if(answerConfigError) console.error("Adaptive chat config read failed");
   const adaptivePolicy=answerConfig?.config?.adaptive_answer_policy;
   const adaptiveInstructions = adaptivePolicy ? "\nStyle: concise natural paragraphs; tables only for useful comparisons. Category decision guidance governs content. End with exactly three relevant next questions. Never add generic task lists." : "";
-  const system = (official?.available&&!official.pending?OFFICIAL_EVALUATION_INSTRUCTION+"\n":official?.pending?"\nThe daily automatic evaluation for this tender has not finished yet (documents still being collected). Decide from the RFP evidence, start with \"Decision: GO / NO-GO / CONDITIONAL GO / VERIFY\", and if a mandatory eligibility condition clearly excludes Siyana, say NO-GO. Never show internal error codes.\n":"")+analystPrompt(response_mode)+"\nVerified corrections are tender-scoped interpretations, never original evidence. Current RFP wins. The following category guidance controls the business decision and visible format; JSON result remains an evidence-sufficiency label for compatibility. Question category: "+adaptiveCategory+"\n"+questionCategoryInstructions(adaptiveCategory)+adaptiveInstructions;
+  const system = (check?.report?COMPANY_CHECK_INSTRUCTION+"\n":"")+(official?.available&&!official.pending?OFFICIAL_EVALUATION_INSTRUCTION+"\n":official?.pending?"\nThe daily automatic evaluation for this tender has not finished yet (documents still being collected). Decide from the RFP evidence, start with \"Decision: GO / NO-GO / CONDITIONAL GO / VERIFY\", and if a mandatory eligibility condition clearly excludes Siyana, say NO-GO. Never show internal error codes.\n":"")+analystPrompt(response_mode)+"\nVerified corrections are tender-scoped interpretations, never original evidence. Current RFP wins. The following category guidance controls the business decision and visible format; JSON result remains an evidence-sufficiency label for compatibility. Question category: "+adaptiveCategory+"\n"+questionCategoryInstructions(adaptiveCategory)+adaptiveInstructions;
 
   const payload = {
     question,
@@ -291,6 +305,7 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
       guidance:"A date-only field does not establish a closing time. On the closing date, do not declare expired without a verified time and timezone. Compare RFP times in their declared timezone; flag conflicting deadline evidence. Never infer no submitted bid from absence of supplied submission evidence."
     },
     official_evaluation: official?.available&&!official.pending?evaluationContext(official):null,
+    company_check: companyCheckContext(check?.report,official),
     recorded_decisions_are_not_evidence: !official?.available,
     tender_evidence: tenderEvidence,
     company_evidence: companyEvidence,
@@ -315,7 +330,8 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
   let rawAnswer = "";
   let parsed = parseAnswer("", refs);
   for (let attempt = 0; attempt < 2; attempt++) {
-    const officialCheck = official?.available&&!official.pending ? '\nOFFICIAL DECISION CHECK: The first line must be "Decision: '+official.label+'". Any recommendation, fit or verdict you state must equal '+official.label+'; explain the official reason instead of re-deciding.' : '';
+    const checkDecision = companyCheckContext(check?.report,official)?.decision;
+    const officialCheck = official?.available&&!official.pending ? '\nOFFICIAL DECISION CHECK: The first line must be "Decision: '+official.label+'". Any recommendation, fit or verdict you state must equal '+official.label+'; explain the official reason instead of re-deciding.' : checkDecision ? '\nDECISION CHECK: The first line must be "Decision: '+checkDecision+'" (from company_check). Explain it with the company_check rows; do not re-decide.' : '';
     const formatInstruction = officialCheck + '\nFINAL DECISION CHECK: Use only facts proven by the supplied original evidence. A listed EMD is not the actual payable EMD. If exemption applicability is conflicting or unverified, summarize it as payable EMD NOT VERIFIED and do not use the listed amount to assert a binding EMD exclusion. A poor-fit recommendation may instead rely on proven scope exclusions, explaining the scope reason. Missing company evidence is not a proven failure. Keep scope and summary to about 180 words before the three follow-up questions; EMD to about 100 words before follow-ups. Avoid unrelated policy commentary in narrow checks.\nOUTPUT CONTRACT: Return exactly one valid JSON object with "answer" (non-empty string), "result" (CONFIRMED, PARTIALLY CONFIRMED, NOT CONFIRMED, UNVERIFIED, or null), and "evidence_state" (HIGH, MEDIUM, or LOW). Put all prose, citations and suggested questions inside the answer string. Escape newlines inside JSON strings. Do not output Markdown fences or any text outside the JSON object.';
     const aiRes = await fetch("https://api.deepseek.com/chat/completions", {
       method: "POST",
