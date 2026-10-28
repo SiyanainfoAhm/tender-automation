@@ -8,6 +8,10 @@ import {loadCredentials} from './company-credentials-store.mjs';
 
 export const COMPANY_CHECK_VERSION = QUALIFICATION_VERSION + '+checks-20261028d';
 // The stamp already changes whenever company documents, RFP documents or rules change.
+// Saved checks from earlier versions of the same day stay valid: the table clean-up (placeholder rows,
+// Scope / deadline rows, duplicates) is applied when the answer is built, so a version bump must not
+// force a slow full re-read of every tender (that re-read can exceed the function's resource limit).
+const compatibleVersion = (v) => String(v || '').startsWith('v2-material-qualification-20261028') && String(v).endsWith('+checks-20261028d');
 const MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 
 export async function getCompanyCheck({db, tender, companyId, allowCompany, aiKey, signal, refresh = false, cacheOnly = false}) {
@@ -20,7 +24,7 @@ export async function getCompanyCheck({db, tender, companyId, allowCompany, aiKe
   if (!refresh && stamp) {
     const {data} = await db.from('agenttender_chat_company_checks')
       .select('version,stamp,report,sources,created_at').eq('tender_id', tender.id).eq('company_id', companyId).maybeSingle();
-    if (data && data.version === COMPANY_CHECK_VERSION && data.stamp === stamp && Date.now() - Date.parse(data.created_at) < MAX_AGE_MS) {
+    if (data && compatibleVersion(data.version) && data.stamp === stamp && Date.now() - Date.parse(data.created_at) < MAX_AGE_MS) {
       return {report: data.report, sources: data.sources || [], cached: true};
     }
   }
