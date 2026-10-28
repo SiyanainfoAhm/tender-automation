@@ -1,3 +1,4 @@
+import {extractionDocumentId,extractionUsable} from './qualification-evidence.mjs';
 
 const MODES = ["QUICK","ANALYSIS","ELIGIBILITY","BID_REVIEW"];
 export const responseMode = (v:any) => MODES.includes(v) ? v : "ANALYSIS";
@@ -95,13 +96,23 @@ export async function retrieve(db:any,tenderId:string,companyId:string,q:string,
   const scan=await db.from('agenttender_ai_document_chunks').select('id,source_id,document_url,document_name,page_number,page_start,section,chunk_index,content,metadata,source_type,document_type',{count:'exact'}).eq('tender_id',tenderId).eq('company_id',companyId).eq('is_active',true).eq('source_type','TENDER_DOCUMENT').order('document_name').order('chunk_index').order('id').range(0,399);
   const docs=await db.from('agenttender_tender_documents').select('id,file_name').eq('tender_id',tenderId).eq('company_id',companyId).eq('section','tender');
   if(docs.data)docs.data=docs.data.filter((d:any)=>!(/\.html?$/i.test(d.file_name)||/ai[\s_-]*summary/i.test(d.file_name)));
-  const extracts=await db.from('agenttender_document_extractions').select('document_id,extraction_status,extraction_metadata').eq('tender_id',tenderId).in('document_id',(docs.data||[]).map((d:any)=>d.id));
+  const extracts=await db.from('agenttender_document_extractions').select('document_id,file_name,extraction_status,extraction_metadata').eq('tender_id',tenderId);
+  // Older SharePoint extractions lack BOTH foreign keys. Resolve only exact
+  // filenames carrying an owned document UUID and the canonical source tender ID.
+  const identity=await db.from('agenttender_tenders').select('source_tender_id').eq('id',tenderId).maybeSingle();
+  if(identity.error)extracts.error=identity.error;
+  if(identity.data?.source_tender_id&&docs.data?.length){
+   const legacy=await db.from('agenttender_document_extractions').select('document_id,file_name,extraction_status,extraction_metadata').is('tender_id',null).eq('source_tender_id',identity.data.source_tender_id).in('file_name',docs.data.map((d:any)=>`sp-${d.id}-${d.file_name}`));
+   if(legacy.error)extracts.error=legacy.error;
+   extracts.data=[...(extracts.data||[]),...(legacy.data||[])];
+  }
   const good=(scan.data||[]).filter((x:any)=>x.document_type!=='TENDER_METADATA'&&x.metadata?.not_rfp!==true&&x.metadata?.not_rfp!=='true'&&x.metadata?.unsupported_type!==true);
-  const extracted=new Set((extracts.data||[]).filter((x:any)=>x.extraction_status==='SUCCESS'&&x.extraction_metadata?.unsupported_type!==true&&x.extraction_metadata?.completeness!=='partial'&&!x.extraction_metadata?.ocr_unreadable_pages?.length).map((x:any)=>x.document_id));
+  const extracted=new Set((extracts.data||[]).filter(extractionUsable).map((x:any)=>extractionDocumentId(x,docs.data||[])).filter(Boolean));
   const missing=(docs.data||[]).filter((d:any)=>!extracted.has(d.id));
   coverage.total_chunks=scan.count;coverage.stored_documents=(docs.data||[]).length;
   if(scan.error||docs.error||extracts.error)coverage.warnings.push('Document coverage check unavailable.');
-  if(!good.length)coverage.warnings.push('No original RFP text is available.');
+  if(!good.length)coverage.warnings.push(scan.error?'Original RFP retrieval failed; stored text availability could not be checked.':'No original RFP text is available.');
+  if(scan.count!==null&&scan.count>(scan.data||[]).length&&scan.count<=400)coverage.warnings.push('RFP scan returned fewer chunks than stored; coverage is incomplete.');
   if((scan.count||0)>400)coverage.warnings.push('RFP exceeds the 400-chunk review limit; review remaining pages.');
   if(missing.length)coverage.warnings.push('Missing, failed or partial extraction/OCR: '+missing.map((d:any)=>d.file_name).join('; '));
   // Every stored original must have an active source association in the index.
