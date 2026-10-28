@@ -1,4 +1,4 @@
-import {prequalificationTable} from './pq-table.mjs';
+import {prequalificationTable,isPrequalificationRow} from './pq-table.mjs';
 // The tender chatbot speaks from the SAME evaluation the daily V2 orchestrator made
 // (agenttender_v2_decision_audit + requirement findings + recorded status/reason),
 // so chat answers never contradict the GO / NO_GO / CONDITIONAL_GO shown in TenderFlow.
@@ -334,8 +334,111 @@ function failReason(r) {
   return sentences.length > 480 ? sentences.slice(0, 477) + '…' : sentences;
 }
 
-export function chatQualificationAnswer(report, ev) {
-  const reqs = (report?.requirements || []).filter((r) => r.mandatory !== false || r.category === 'Scope');
+// ---------------------------------------------------------------------------
+// Detailed, row-specific text for the prequalification table.
+
+const STATES = ['Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chhattisgarh','Goa','Gujarat','Haryana','Himachal Pradesh','Jharkhand','Karnataka','Kerala','Madhya Pradesh','Maharashtra','Manipur','Meghalaya','Mizoram','Nagaland','Odisha','Punjab','Rajasthan','Sikkim','Tamil Nadu','Telangana','Tripura','Uttar Pradesh','Uttarakhand','West Bengal','Delhi','Jammu and Kashmir','Ladakh','Puducherry','Chandigarh'];
+const GOVT_TYPES = new Set(['Central Government', 'State Government', 'PSU', 'Local Body / Municipal Body', 'Autonomous Body', 'Other']);
+const GENERIC = /original clause (?:is verified|did not establish)|matching company compliance evidence has not been verified|supported calculation specification|Evidence did not verify the proposed finding|No passing average or project count|Missing proof is UNKNOWN|not automatically verified/i;
+const GENERIC_ACTION = /^Verify the original clause and obtain current company proof\.?$/i;
+
+/** First rupee amount in a clause, in INR (handles lakh / crore). */
+function clauseAmount(text) {
+  const m = clean(text).match(/(?:rs\.?|inr|₹)\s*([\d,]+(?:\.\d+)?)\s*(crores?|cr\b|lakhs?|lacs?)?/i) || clean(text).match(/([\d,]+(?:\.\d+)?)\s*(crores?|cr\b|lakhs?|lacs?)\b/i);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, ''));
+  if (!Number.isFinite(n)) return null;
+  const u = (m[2] || '').toLowerCase();
+  return n * (/^cr/.test(u) ? 1e7 : /^la/.test(u) ? 1e5 : 1);
+}
+const shortInr = (n) => (n >= 1e7 ? `₹${+(n / 1e7).toFixed(2)} cr` : n >= 1e5 ? `₹${+(n / 1e5).toFixed(2)} lakh` : inrPlain(n));
+
+/** What Siyana's own project records show for an experience clause. */
+function experienceDetail(r, projects) {
+  const req = clean(r.requirement);
+  const list = (projects || []).filter((p) => p?.qualification?.verification_state === 'VERIFIED');
+  const parts = [];
+  const excluded = r.calculation?.excluded || [];
+  if (Number.isInteger(r.calculation?.required_count)) {
+    parts.push(`${r.calculation.qualifying_count || 0} of Siyana's verified projects qualify; ${r.calculation.required_count} required.`);
+    const reasons = {};
+    for (const x of excluded) for (const why of x.reasons || []) reasons[why] = (reasons[why] || 0) + 1;
+    const top = Object.entries(reasons).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([w, n]) => `${w} (${n})`);
+    if (top.length) parts.push(`Main gaps: ${top.join(', ')}.`);
+  }
+  const state = STATES.find((s) => new RegExp(`\\b${s}\\b`, 'i').test(req));
+  if (state) {
+    const inState = list.filter((p) => new RegExp(`\\b${state}\\b`, 'i').test(`${p.client_name} ${p.project_name}`));
+    parts.push(inState.length
+      ? `Work orders on file for ${state}: ${inState.slice(0, 3).map((p) => `${clean(p.project_name).slice(0, 60)} (${clean(p.client_name)}${Number.isFinite(p.project_value_inr) ? ', ' + shortInr(p.project_value_inr) : ''})`).join('; ')}.`
+      : `None of Siyana's ${list.length} verified work orders is for a client in ${state} — this clause needs ${state} Government experience.`);
+  }
+  const min = clauseAmount(req);
+  const govtOnly = /govt|government|psu|public sector/i.test(req);
+  if (min && !state) {
+    const big = list.filter((p) => Number.isFinite(p.project_value_inr) && p.project_value_inr >= min && (!govtOnly || GOVT_TYPES.has(p.project_type)))
+      .sort((a, b) => b.project_value_inr - a.project_value_inr);
+    parts.push(big.length
+      ? `Work orders ≥ ${shortInr(min)}${govtOnly ? ' with government/public clients' : ''} on file: ${big.slice(0, 3).map((p) => `${clean(p.client_name)} (${shortInr(p.project_value_inr)})`).join('; ')} — completion certificate${big.length > 1 ? 's' : ''} still to be confirmed against the clause.`
+      : `No verified work order of ${shortInr(min)} or more${govtOnly ? ' from a government client' : ''} is on file.`);
+  }
+  if (!parts.length) {
+    const gov = list.filter((p) => GOVT_TYPES.has(p.project_type) && Number.isFinite(p.project_value_inr)).sort((a, b) => b.project_value_inr - a.project_value_inr);
+    parts.push(gov.length
+      ? `Not matched automatically. Closest work orders on file: ${gov.slice(0, 3).map((p) => `${clean(p.project_name).slice(0, 50)} (${clean(p.client_name)}, ${shortInr(p.project_value_inr)})`).join('; ')}.`
+      : 'No matching completed project is verified in company documents.');
+  }
+  parts.push(`Needed: work order${/completion/i.test(req) ? ' + completion certificate' : ''} matching this clause.`);
+  return parts.join(' ');
+}
+
+const NEEDED = {
+  'Staffing / deployment': 'Needed: CVs and degree / experience certificates of the named staff.',
+  'Certifications / empanelment': 'Needed: a current copy of this certificate / registration in company documents.',
+  'Product ownership / certification': 'Needed: OEM authorisation or product-ownership certificate.',
+  'Hosting / security / integrations': 'Needed: proof of the required hosting / security credential.',
+  'Local office': 'Needed: proof of an office in the required location (rent agreement / GST address).',
+  'Consortium / subcontracting': 'Needed: check the RFP consortium / JV terms and the partner documents.',
+  EMD: 'Needed: EMD payment or a valid MSE / Udyam exemption certificate.',
+  Turnover: 'Needed: CA-certified turnover / audited accounts for the exact years asked.',
+};
+
+/** Row text for the prequalification table: why it passed or failed, with the document used. */
+export function pqDetail(r, report) {
+  if (r.result === 'PASS') {
+    const t = turnoverText(r);
+    if (t) return t;
+    let text = clean(r.calculation?.explanation || r.explanation)
+      .replace(/^All listed credential identifiers, legal entity and required validity are supported by current original documents\.?$/i, 'Valid document on file.')
+      .replace(/^\d+ distinct source-backed projects qualify.*$/i, 'Matching completed project on file.');
+    const own = (r.calculation?.company_documents || []).map((e) => e.document);
+    const docs = [...new Set((own.length ? own : [...(r.calculation?.evidence || []).map((e) => e.source_document_name || e.document), ...(r.company_evidence || []).map((e) => e.document)]).filter(Boolean))].slice(0, 2);
+    if (docs.length && !docs.some((d) => text.includes(d))) text += ` Source: ${docs.join(', ')}.`;
+    return text || 'Met by verified company documents.';
+  }
+  if (r.result === 'FAIL') return failReason(r);
+  if (['Experience', 'Government experience'].includes(r.category) && report?.credentials) return experienceDetail(r, report.credentials.projects);
+  const raw = clean(r.calculation?.explanation || r.explanation);
+  const gap = GENERIC.test(raw) ? '' : plainGap(r);
+  const action = clean(r.action);
+  const need = action && !GENERIC_ACTION.test(action) ? `Needed: ${action.replace(/^needed:\s*/i, '').replace(/^./, (c) => c.toLowerCase())}` : NEEDED[r.category] || 'Needed: the supporting company document / declaration for this clause.';
+  return [gap || 'Not yet proven from verified company documents.', need].join(' ');
+}
+
+const docName = (d) => clean(d).replace(/^sp-[0-9a-f-]{36}-/i, '').replace(/^[0-9a-f]{8}-[0-9a-f-]{27}\.html$/i, 'portal tender page');
+
+/** Message when no real prequalification clause is in the documents TenderFlow has. */
+export function noPqMessage(rfpDocuments) {
+  const docs = [...new Set((rfpDocuments || []).map(docName).filter(Boolean))];
+  return '**Prequalification checklist** — not available yet.\n\n' +
+    (docs.length ? `TenderFlow has only these tender documents: ${docs.join(', ')}. ` : '') +
+    'They do not contain the eligibility / prequalification section of the RFP, so no prequalification item can be checked. ' +
+    'Upload the full tender document (RFP / NIT with the eligibility criteria) and ask again.';
+}
+
+export function chatQualificationAnswer(report, ev, opts = {}) {
+  // Decision counts use the same real prequalification rows the table shows (plus scope).
+  const reqs = (report?.requirements || []).filter((r) => isPrequalificationRow(r) || (r.category === 'Scope' && r.result === 'FAIL'));
   const fails = reqs.filter((r) => r.result === 'FAIL' && r.mandatory !== false);
   const unknown = reqs.filter((r) => r.result === 'UNKNOWN' && r.mandatory !== false && !/closing date|bid submission by/i.test(r.requirement));
   const passed = reqs.filter((r) => r.result === 'PASS');
@@ -355,13 +458,15 @@ export function chatQualificationAnswer(report, ev) {
     why = 'Every mandatory condition found in the RFP is met by verified company documents.';
   } else {
     label = 'VERIFY';
-    why = unknown.length
+    why = !reqs.length
+      ? 'The eligibility / prequalification section of the RFP is not in the documents TenderFlow has, so eligibility cannot be checked yet.'
+      : unknown.length
       ? `No mandatory condition is failed, but ${unknown.length} condition${unknown.length > 1 ? 's still need' : ' still needs'} proof before Siyana can confirm eligibility.`
       : 'Eligibility could not be fully verified from the available documents.';
   }
 
   const out = [`**Decision: ${label}**` + (official && ev.decided_on ? ` (evaluated ${ev.decided_on})` : ''), '', `**Why:** ${why}`];
-  out.push('', prequalificationTable(report?.requirements || [], {explain: (r) => (r.result === 'FAIL' ? failReason(r) : plainGap(r))}));
+  out.push('', prequalificationTable(report?.requirements || [], {explain: (r) => pqDetail(r, report), empty: noPqMessage(opts.rfpDocuments)}));
 
   if (!official && ev?.pending) {
     const detail = /has not finished yet/i.test(ev.reason) ? '' : ` (${ev.reason.replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())})`;
@@ -389,7 +494,7 @@ export function focusedCheckAnswer(report, ev, category) {
   const mark = {PASS: '✅ Met', FAIL: '❌ Not met', UNKNOWN: '⚠️ Not confirmed'};
   const out = [overall, '', `**${f.title}**`];
   if (!rows.length) out.push('', f.none);
-  else out.push('', prequalificationTable(rows, {explain: (r) => (r.result === 'FAIL' ? failReason(r) : plainGap(r))}).replace(/^\*\*Prequalification checklist\*\*/, '**Checklist**'), '', '**Details**');
+  else out.push('', prequalificationTable(rows, {explain: (r) => pqDetail(r, report)}).replace(/^\*\*Prequalification checklist\*\*/, '**Checklist**'), '', '**Details**');
   for (const r of rows) {
     const passText = clean(r.calculation?.explanation || r.explanation)
       .replace(/^All listed credential identifiers, legal entity and required validity are supported by current original documents\.?$/i, 'Valid certificate on file.')

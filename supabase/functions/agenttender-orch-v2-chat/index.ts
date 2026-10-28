@@ -201,7 +201,7 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
   if(!scopeQuestion&&(question_category==='DO_WE_QUALIFY'||question_category==='ELIGIBILITY'||qualificationQuestion(question))&&check?.report){
    const evaluated:any={report:check.report,sources:(check.sources||[]).map((s:any)=>({...s,text:''}))};
    const result=evaluated.report.recommendation==='GO'?'CONFIRMED':evaluated.report.recommendation==='NO_GO'?'NOT CONFIRMED':'UNVERIFIED';
-   evaluated.answer=chatQualificationAnswer(evaluated.report,official);
+   evaluated.answer=chatQualificationAnswer(evaluated.report,official,{rfpDocuments:(check.sources||[]).filter((s:any)=>String(s.ref||'').startsWith('R')).map((s:any)=>s.document)});
    const response={ok:true,status:'ANSWERED',route:'ORCHESTRATOR_V2_LIGHT_CHAT',official_decision:official?.decision||null,answer:evaluated.answer,qualification:evaluated.report,result,evidence_state:evaluated.report.coverage.complete?'MEDIUM':'LOW',sources:evaluated.sources.map((s:any)=>({id:s.ref,documentName:s.document,pageNumber:s.page,section:s.section})),changed_business_statuses:0,extraction_triggered:false,indexing_triggered:false,embedding_triggered:false};
    const sourceCards=evaluated.sources.map(({text,metadata,...s}:any)=>s);
    Object.assign(response,{evidence:sourceCards.filter((s:any)=>s.ref.startsWith('R')),company_evidence:sourceCards.filter((s:any)=>s.ref.startsWith('C')),model:MODEL,readiness_warnings:official?.available?[]:evaluated.report.coverage.warnings});

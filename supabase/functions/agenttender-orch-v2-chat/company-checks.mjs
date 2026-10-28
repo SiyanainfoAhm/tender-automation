@@ -56,6 +56,19 @@ export function deterministicCheck(requirement,quotes,{documents,entity,referenc
   }
  }
 
+ // GST registration required in a specific State: the GSTIN state code shows where Siyana is registered.
+ const gstState=gstStateRequirement(req);
+ if(gstState){
+  const regs=companyGstins(documents,entity);
+  if(regs.length){
+   const inState=regs.filter(g=>g.gstin.slice(0,2)===gstState.code);
+   const list=regs.map(g=>`${GST_STATES[g.gstin.slice(0,2)]||'state code '+g.gstin.slice(0,2)} (${g.gstin})`).join(', ');
+   return inState.length
+    ?{result:'PASS',explanation:`Siyana is GST-registered in ${gstState.name}: ${inState[0].gstin}.`,company_evidence:[ev(inState[0].document,new RegExp(inState[0].gstin))]}
+    :{result:'FAIL',explanation:`The RFP needs GST registration in ${gstState.name}. Siyana is GST-registered only in ${list}; no ${gstState.name} GSTIN is on file (a new state registration would be needed before bidding).`,company_evidence:[ev(regs[0].document,new RegExp(regs[0].gstin))]};
+  }
+ }
+
  // PAN / GST registration.
  if(/\bpan\b|\bgst(?:in)?\b/.test(req)&&/registration|registered|valid|number/.test(req)&&!/turnover|return|filed|payment/.test(req)){
   const docs=verifiedDocs(documents,entity);
@@ -80,6 +93,37 @@ export function deterministicCheck(requirement,quotes,{documents,entity,referenc
   if(n)return {result:'PASS',explanation:`Latest audited accounts${n.financial_year?' (FY '+n.financial_year+')':''} show positive total equity (debt-equity ratio ${n.ratio}), i.e. positive net worth.`,company_evidence:[ev(n.document,/Debt-Equity/i)]};
  }
  return null;
+}
+
+export const GST_STATES={'01':'Jammu and Kashmir','02':'Himachal Pradesh','03':'Punjab','04':'Chandigarh','05':'Uttarakhand','06':'Haryana','07':'Delhi','08':'Rajasthan','09':'Uttar Pradesh','10':'Bihar','11':'Sikkim','12':'Arunachal Pradesh','13':'Nagaland','14':'Manipur','15':'Mizoram','16':'Tripura','17':'Meghalaya','18':'Assam','19':'West Bengal','20':'Jharkhand','21':'Odisha','22':'Chhattisgarh','23':'Madhya Pradesh','24':'Gujarat','26':'Dadra and Nagar Haveli and Daman and Diu','27':'Maharashtra','29':'Karnataka','30':'Goa','31':'Lakshadweep','32':'Kerala','33':'Tamil Nadu','34':'Puducherry','35':'Andaman and Nicobar Islands','36':'Telangana','37':'Andhra Pradesh','38':'Ladakh'};
+const STATE_ALIASES={'orissa':'21','pondicherry':'34','j&k':'01','jammu & kashmir':'01','nct of delhi':'07','new delhi':'07','up':'09'};
+
+/** {code,name} when the clause asks for GST registration in one named State, else null. */
+export function gstStateRequirement(req){
+ const t=normalize(req);
+ if(!/\bgst/.test(t)||!/regist/.test(t))return null;
+ const names=Object.entries(GST_STATES).map(([code,name])=>[code,name.toLowerCase()]).concat(Object.entries(STATE_ALIASES).filter(([a])=>a.length>3).map(([a,code])=>[code,a]));
+ for(const [code,name] of names.sort((a,b)=>b[1].length-a[1].length)){
+  const n=name.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  if(new RegExp(`regist[a-z]*\\b.{0,60}\\b(?:in|within|of|from)\\s+(?:the\\s+)?(?:state\\s+of\\s+)?${n}\\b|\\b${n}\\s+(?:state\\s+)?gst`).test(t))return {code,name:GST_STATES[code]};
+ }
+ return null;
+}
+
+/** Siyana's own GSTINs (same PAN as most of its registrations), with the document each is in. */
+export function companyGstins(documents,entity){
+ const found=new Map();
+ for(const d of verifiedDocs(documents,entity)){
+  if(!/gst|registration certificate/i.test(d.extracted_text))continue;
+  for(const m of d.extracted_text.matchAll(/\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b/g))if(GST_STATES[m[1].slice(0,2)]&&!found.has(m[1]))found.set(m[1],{gstin:m[1],document:d});
+ }
+ // Client GSTINs also appear in invoices / work orders: keep the PAN that occurs most.
+ const count=new Map();for(const g of found.values()){const p=g.gstin.slice(2,12);count.set(p,(count.get(p)||0)+1);}
+ const pan=[...count.entries()].sort((a,b)=>b[1]-a[1])[0]?.[0];
+ const own=[...found.values()].filter(g=>g.gstin.slice(2,12)===pan);
+ // One registration per state is enough for display.
+ const byState=new Map();for(const g of own)if(!byState.has(g.gstin.slice(0,2)))byState.set(g.gstin.slice(0,2),g);
+ return [...byState.values()];
 }
 
 const certDate=t=>{const m=String(t).match(/Date\s*:?\s*(\d{2})[-./](\d{2})[-./](20\d{2})/);return m?`${m[3]}-${m[2]}-${m[1]}`:null;};
