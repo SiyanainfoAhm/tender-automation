@@ -26,7 +26,7 @@ The internal diagnostic path skips conversation persistence only for an authenti
 
 99 automated tests passed across qualification normalization, financial/project evidence, company retrieval, global chat, orchestration safeguards and the tender-specific regression suite. `git diff --check` passed.
 
-Production function `agenttender-orch-v2-chat` is deployed as version 72. Version 70's live authenticated read-only check returned HTTP 200 with both sources and all 111 chunks reviewed; no false extraction/OCR warning remained. Final version verification is recorded in the task's output report.
+Production function `agenttender-orch-v2-chat` is deployed as version 72. The final version 72 authenticated read-only check returned HTTP 200 and NOT_VERIFIED, with a 31/100 evidence-completion score. Both sources and all 111 chunks were reviewed; no false extraction/OCR warning remained. Recorded workflow was still null and qualification remained VERIFY.
 
 Initial deployment attempts timed out fetching the existing JSR type-only runtime declaration. Removing that runtime import allowed Supabase bundling to succeed; runtime globals and existing authentication were retained.
 
@@ -37,4 +37,3 @@ No schema migration, new table, OCR run, status change, company-fact promotion, 
 The RFP requires at least INR 1 million in **each** FY 2023–24, 2024–25 and 2025–26. The required latest year is unverified and another required year's original figures conflict. Experience must preserve government **educational** clients, the stated fiscal years and single/multiple purchase-order wording. The existing structured project model cannot certify those exact restrictions. Missing proof is not a confirmed failure.
 
 The underlying source parser reports text-layer completeness, not visual completeness; no new visual OCR certification is claimed. The assessment remains bounded and advisory. Authenticated browser rendering and a full frontend build are not claimed as tested.
-
