@@ -1,3 +1,4 @@
+import {companyQuestion,answerCompany} from './company-answer.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -16,10 +17,10 @@ function fixture(options={}) {
   agenttender_user_sessions:[{user_id:user,token_hash:createHash('sha256').update('test-session').digest('hex'),expires_at:options.expired?'2020-01-01':'2099-01-01',revoked_at:null}],
   agenttender_users:[{id:user,company_id:company,is_active:true}],
   agenttender_company_memberships:options.noMembership?[]:[{user_id:user,company_id:company,status:'active',role:'ADMIN'}],
-  agenttender_role_permissions:[{role:'ADMIN',agenttender_permissions:{key:'tenders.view'}}],
+  agenttender_role_permissions:[...(options.documents?[{role:'ADMIN',agenttender_permissions:{key:'documents.view'}}]:[]),{role:'ADMIN',agenttender_permissions:{key:'tenders.view'}}],
   agenttender_ai_chat_sessions:[],agenttender_ai_chat_messages:[],
  };
- const reads=[];const assessments=[];let running=0,peak=0;
+ const reads=[];const assessments=[];const rpcs=[];let running=0,peak=0;
  function query(table) {
   const filters=[];let single=false;let mutation=null,change,limit=1000,descending=false;
   const q={select(){return q;},eq(k,v){filters.push(row=>row[k]===v);return q;},is(k,v){filters.push(row=>(row[k]??null)===v);return q;},gte(k,v){filters.push(row=>row[k]>=v);return q;},maybeSingle(){single=true;return q;},order(k,o){descending=o?.ascending===false;return q;},limit(n){limit=n;return q;},insert(v){mutation='insert';change=v;return q;},update(v){mutation='update';change=v;return q;},then(resolve,reject){
@@ -35,14 +36,14 @@ function fixture(options={}) {
  let handler;
  const sandbox={console:{error(){}},Request,Response,AbortSignal,TextEncoder,TextDecoder,ReadableStream,setInterval,clearInterval,AbortController,readModelStream,crypto,Date,JSON,Set,Number,String,Promise,
   Deno:{env:{get:key=>key==='DEEPSEEK_API_KEY'?'test-ai':''},serve:fn=>{handler=fn;}},
-  createClient:()=>({from:query,rpc:async(name,args)=>({data:{total:7,status_counts:{GO:2,VERIFY:5},recorded_status_counts:{UNSET:7},tenders:(options.tenders||[]).slice(args.p_plan.offset||0,(args.p_plan.offset||0)+6),matching_total:(options.tenders||[]).length},error:null})}),
-  boundedMemory,knownPlan,cleanPlan,safeAnswer,qualificationQuestion,financialDocumentAnswer,requestedFinancialYears,expandedQuery:q=>q,retrieve:async()=>({tender:[],company:[],warnings:[]}),
+  createClient:()=>({from:query,rpc:async(name,args)=>{rpcs.push(name);if(name==='agenttender_company_credential_sources')return {data:{company_name:'Siyana Info Solutions',documents:[],facts:[],projects:[]},error:null};return ({data:{total:7,status_counts:{GO:2,VERIFY:5},recorded_status_counts:{UNSET:7},tenders:(options.tenders||[]).slice(args.p_plan.offset||0,(args.p_plan.offset||0)+6),matching_total:(options.tenders||[]).length},error:null});}}),
+  companyQuestion,answerCompany,boundedMemory,knownPlan,cleanPlan,safeAnswer,qualificationQuestion,financialDocumentAnswer,requestedFinancialYears,expandedQuery:q=>q,retrieve:async()=>({tender:[],company:[],warnings:[]}),
   companyFinancialAnswer:async()=>null,assessQualification:async({tender,allowCompany})=>{running++;peak=Math.max(peak,running);assessments.push({id:tender.id,allowCompany});await new Promise(r=>setTimeout(r,5));running--;return {answer:'Qualification report '+tender.title,report:{recommendation:'CONDITIONAL_GO'}};},
   fetch:async()=>{throw Error('AI unavailable');},
  };
  const source=readFileSync(new URL('./index.ts',import.meta.url),'utf8').replace(/^import .*;\r?\n/gm,'');
  new vm.Script(stripTypeScriptTypes(source)).runInNewContext(sandbox);
- return {tables,reads,assessments,peak:()=>peak,call:async(body={},token='test-session')=>handler(new Request('https://local.test',{method:'POST',headers:{'Content-Type':'application/json',...(token?{'x-agenttender-session':token}:{})},body:JSON.stringify(body)}))};
+ return {tables,reads,rpcs,assessments,peak:()=>peak,call:async(body={},token='test-session')=>handler(new Request('https://local.test',{method:'POST',headers:{'Content-Type':'application/json',...(token?{'x-agenttender-session':token}:{})},body:JSON.stringify(body)}))};
 }
 test('multi-VERIFY qualification paginates the full set with explicit limits and bounded concurrency',async()=>{
  const tenders=Array.from({length:12},(_,i)=>({id:'t'+i,title:'Tender '+i,qualification_status:'VERIFY'}));const f=fixture({tenders});
@@ -97,4 +98,12 @@ test('AI stream errors are controlled and do not persist unfinished answers',asy
  const f=fixture();const response=await f.call({message:'Unrecognized question',stream:true});
  const events=(await response.text()).split('\n').filter(l=>l.startsWith('data:')).map(l=>JSON.parse(l.slice(5)));
  assert.equal(events.at(-1).type,'error');assert.equal(f.tables.agenttender_ai_chat_messages.length,0);
+});
+
+test('global company profile bypasses tender snapshot and AI, saves history without tender ID',async()=>{
+ const f=fixture({documents:true});const result=await (await f.call({message:'Show our company profile'})).json();
+ assert.equal(result.ok,true);assert.match(result.answer,/company profile/);assert.deepEqual(f.rpcs,['agenttender_company_credential_sources']);assert.equal(f.tables.agenttender_ai_chat_sessions[0].tender_id,null);assert.deepEqual(result.presentation.references,[]);
+});
+test('company permission denial bypasses company RPC and tender search',async()=>{
+ const f=fixture();const result=await (await f.call({message:'What is our turnover?'})).json();assert.equal(result.ok,true);assert.match(result.answer,/restricted/);assert.deepEqual(f.rpcs,[]);
 });

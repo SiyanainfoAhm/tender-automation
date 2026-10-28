@@ -1,3 +1,4 @@
+import {companyQuestion,answerCompany} from './company-answer.mjs';
 import {financialDocumentAnswer,requestedFinancialYears} from './company-periods.mjs';
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import {createClient} from 'npm:@supabase/supabase-js@2.57.4';
@@ -66,6 +67,19 @@ Deno.serve(async req=>{
   if(recent.length>=6)return reply({error:'Please wait a minute before asking another question.'},429);
   const work=async(emit?: (event:Record<string,unknown>)=>void,signal?:AbortSignal)=>{
   const history=session?await checked(scope('agenttender_ai_chat_messages').eq('session_id',session.id).order('created_at',{ascending:false}).limit(60)):[];
+  if(companyQuestion(question)){
+   emit?.({type:'status',message:'Checking company records and original evidence…'});
+   const result=await answerCompany(db,user.company_id,question,permissions);
+   const presentation=safeAnswer(result.structured,[],result.documents);
+   const answer=presentation.summary+'\n\n'+presentation.details;
+   if(internal)return {ok:true,answer,presentation,changed_business_statuses:0};
+   if(!session){session={id:crypto.randomUUID()};await checked(db.from('agenttender_ai_chat_sessions').insert({id:session.id,company_id:user.company_id,user_id:user.id,tender_id:null,title:question.slice(0,80)}));}
+   const common={session_id:session.id,company_id:user.company_id,user_id:user.id,tender_id:null,status:'complete',model:'company-evidence'};
+   const now=Date.now();
+   await checked(db.from('agenttender_ai_chat_messages').insert([{...common,created_at:new Date(now-1).toISOString(),role:'user',content:question},{...common,created_at:new Date(now).toISOString(),role:'assistant',content:answer,sources:{presentation}}]));
+   await checked(db.from('agenttender_ai_chat_sessions').update({updated_at:new Date().toISOString(),last_message_at:new Date().toISOString()}).eq('id',session.id).eq('company_id',user.company_id).eq('user_id',user.id).is('tender_id',null));
+   return {ok:true,session_id:session.id,answer,presentation,changed_business_statuses:0};
+  }
   emit?.({type:'status',message:'Planning your search…'});
   const memory=boundedMemory(history,question);
   const priorIds=[...history.filter((x:any)=>x.role==='assistant').flatMap((x:any)=>x.sources?.presentation?.references?.map((t:any)=>t.id)||[]),...(question.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi)||[])];
