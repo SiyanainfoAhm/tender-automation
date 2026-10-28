@@ -2,7 +2,16 @@ import {caCertificateTurnover} from './company-checks.mjs';
 import {CREDENTIAL_VERSION,extractFinancial,entityKey,pageText,normalize,money,functionalTypes} from './company-qualification.mjs';
 const checked=async q=>{const {data,error}=await q;if(error)throw Error(error.message);return data;};
 const hash=async s=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s))),x=>x.toString(16).padStart(2,'0')).join('');
-export async function loadCredentials(db,companyId){
+// One copy per isolate for a few minutes: parallel V2 jobs and chat answers share it.
+const credentialMemo=new Map();
+export function loadCredentials(db,companyId){
+ const hit=credentialMemo.get(companyId);
+ if(hit&&hit.until>Date.now())return hit.promise;
+ const promise=loadCredentialsFresh(db,companyId).catch(e=>{credentialMemo.delete(companyId);throw e;});
+ credentialMemo.set(companyId,{promise,until:Date.now()+5*60*1000});
+ return promise;
+}
+async function loadCredentialsFresh(db,companyId){
  const data=await checked(db.rpc('agenttender_company_credential_sources',{p_company_id:companyId}));
  const sources=data.documents||[],byId=new Map(sources.map(d=>[d.id,d]));
  const live=e=>{const d=byId.get(e.source_document_id);return d&&d.source_fingerprint===e.source_fingerprint&&d.extraction_status==='READY'&&d.verification_status==='verified'&&d.extracted_text?.includes(e.quote)&&e.source_page;};
@@ -55,7 +64,7 @@ async function extractProjects(d,companyName,aiKey){
 }
 // Existing company text worker calls this after extraction and on idle ticks.
 export async function refreshCompanyCredentials(db,companyId,{limit=1,documentId=null,aiKey=null,recheck=false}={}){
- const state=await loadCredentials(db,companyId);const eligible=state.documents.filter(d=>d.extraction_status==='READY'&&(!documentId||d.id===documentId)&&(recheck||d.qualification_extraction?.version!==CREDENTIAL_VERSION)&&/audit|financial|turnover|work.?order|agreement|completion/i.test(d.name+' '+d.document_category));
+ const state=await loadCredentialsFresh(db,companyId);const eligible=state.documents.filter(d=>d.extraction_status==='READY'&&(!documentId||d.id===documentId)&&(recheck||d.qualification_extraction?.version!==CREDENTIAL_VERSION)&&/audit|financial|turnover|work.?order|agreement|completion/i.test(d.name+' '+d.document_category));
  const results=[];
  for(const d of eligible.slice(0,Math.min(5,limit))){const facts=[],projects=[],issues=[];
   if(/audit|financial|turnover/i.test(d.name)){

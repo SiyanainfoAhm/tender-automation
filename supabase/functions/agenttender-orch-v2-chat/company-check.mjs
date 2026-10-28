@@ -23,9 +23,9 @@ export async function getCompanyCheck({db, tender, companyId, allowCompany, aiKe
   const question = 'Read every mandatory pre-qualification condition in the RFP (bidder type, years in business, turnover, net worth, similar project experience, certifications, registrations, blacklisting, EMD) and compare it against verified Siyana evidence.';
   // Clause extraction varies between runs; two independent readings are merged so no
   // mandatory condition found by either reading is lost.
-  const runs = await Promise.allSettled([1, 2].map(() => assessQualification({db, tender, companyId, question, allowCompany, aiKey, signal})));
-  const ok = runs.filter((r) => r.status === 'fulfilled').map((r) => r.value);
-  if (!ok.length) throw runs[0].reason;
+  const shared = {};
+  const ok = [await assessQualification({db, tender, companyId, question, allowCompany, aiKey, signal, shared})];
+  try { ok.push(await assessQualification({db, tender, companyId, question, allowCompany, aiKey, signal, shared})); } catch { /* one reading is enough */ }
   const evaluated = mergeReadings(ok);
   const sources = (evaluated.sources || []).map(({text, metadata, ...s}) => s);
   if (stamp) {

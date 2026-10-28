@@ -109,10 +109,12 @@ function credentialSummary(report){
  const rows=report.requirements.filter(r=>r.mandatory!==false&&['Turnover','Experience','Government experience'].includes(r.category));
  return rows.map(r=>'- '+r.category+': '+(r.calculation?r.calculation.explanation:'UNKNOWN — required original clause, years/method or verified company evidence is missing.')+(r.calculation?.missing_years?.length?' Missing years: '+r.calculation.missing_years.join(', '):'')+(r.calculation?.contradictions?.length?' Conflicting amounts: '+JSON.stringify(r.calculation.contradictions):'')+(r.calculation?.evidence?.length?' Sources: '+r.calculation.evidence.map(f=>f.source_document_name+', p. '+f.source_page).join('; '):'')+(r.calculation?.projects?.length?' Qualifying projects: '+r.calculation.projects.map(p=>p.project_name+' ('+p.client_name+', INR '+p.project_value_inr+', completed '+p.end_date+'); '+p.qualification.source_documents.map(e=>e.source_document_name+', p. '+e.source_page).join('; ')).join(' | '):'')).join('\n');
 }
-export async function assessQualification({db,tender,companyId,question,allowCompany=true,aiKey,signal}){
- const data=await retrieve(db,tender.id,companyId,question,'ELIGIBILITY','DO_WE_QUALIFY',allowCompany);
- const rules=await activeRules(db);
- const credentials=allowCompany?await loadCredentials(db,companyId):null;
+export async function assessQualification({db,tender,companyId,question,allowCompany=true,aiKey,signal,shared=null}){
+ // A second reading of the same tender reuses retrieval and company records (memory-bounded).
+ const data=shared?.data||await retrieve(db,tender.id,companyId,question,'ELIGIBILITY','DO_WE_QUALIFY',allowCompany);
+ const rules=shared?.rules||await activeRules(db);
+ const credentials=allowCompany?(shared?.credentials||await loadCredentials(db,companyId)):null;
+ if(shared)Object.assign(shared,{data,rules,credentials});
  const project=(x,i,prefix)=>({ref:prefix+(i+1),text:String(x.content||x.chunk_text||x.text||''),document:x.document_name||'Source document',page:x.page_number??x.page_start??null,section:x.section??null,source_id:x.metadata?.tender_document_id||x.source_id,chunk_id:x.id,document_url:x.document_url,metadata:x.metadata});
  const rfp=data.tender.map((x,i)=>project(x,i,'R'));
  const company=selectCompanyExcerpts(data.company.map((x,i)=>project(x,i,'C')));
