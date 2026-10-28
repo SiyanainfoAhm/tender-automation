@@ -39,8 +39,27 @@ function plainReason(text) {
   s = s.replace(/^validated approved rule\(s\):\s*[A-Z0-9_, ]+\.\s*/i, '');
   s = s.replace(/^supported custom software scope:\s*[A-Z0-9_, ]+\.\s*/i, '');
   s = s.replace(/\bEvidence:\s*/i, 'Tender text: ');
-  return s;
+  return machineReason(s) ? '' : s;
 }
+
+/** Internal pipeline codes / errors are not a business reason a user can act on. */
+function machineReason(text) {
+  const s = clean(text);
+  if (!s) return false;
+  if (/\b(?:Error|Exception|DEPENDENCY_PENDING|EVIDENCE_PENDING|TIMEOUT|HTTP \d{3})\b/i.test(s)) return true;
+  // Mostly UPPER_SNAKE tokens with little prose
+  const words = s.split(/\s+/);
+  const codes = words.filter((w) => /^[A-Z0-9]+(?:_[A-Z0-9]+)+[:.,]?$/.test(w)).length;
+  return codes > 0 && codes / words.length > 0.25;
+}
+
+const PENDING_REASON = {
+  VERIFY: 'The automatic evaluation has not finished for this tender — some tender documents are still being collected and checked. The requirement check below shows what is already known.',
+  REVIEW: 'This tender needs a manual review. The requirement check below shows what is already known.',
+  CONDITIONAL_GO: 'Siyana can bid if the conditions listed below are met.',
+  GO: 'The tender matches Siyana’s target business and eligibility.',
+  NO_GO: 'The tender was marked NO-GO.',
+};
 
 function shortRuleTitle(title) {
   // Owner rule titles are long policy sentences; keep the first clause for display.
@@ -83,13 +102,14 @@ export async function loadOfficialEvaluation(db, tender) {
   // When the recorded status was changed after the automatic run (owner decision, EMD,
   // deadline), the automatic reasoning no longer explains it: use the recorded reason.
   const overridden = Boolean(status && v2Decision && familyOf(status) !== familyOf(v2Decision));
-  const reason = overridden
-    ? plainReason(tender.prescreen_reason) || clean(qr.data?.reason) || null
-    : clean(assessment.business_reason) ||
+  const usable = (t) => (machineReason(t) ? '' : clean(t));
+  const reason = (overridden
+    ? plainReason(tender.prescreen_reason) || usable(qr.data?.reason)
+    : usable(assessment.business_reason) ||
       plainReason(a?.reason) ||
       plainReason(tender.prescreen_reason) ||
-      clean(qr.data?.reason) ||
-      null;
+      usable(qr.data?.reason)) ||
+    (decision ? PENDING_REASON[family] || PENDING_REASON.VERIFY : null);
 
   return {
     available: Boolean(decision && reason),
@@ -202,9 +222,10 @@ export const OFFICIAL_EVALUATION_INSTRUCTION =
 /** Replace the re-computed qualification decision line with the official one. */
 export function alignQualificationAnswer(answer, ev) {
   const header = `**Decision: ${ev.label}**` + (ev.decided_on ? ` (evaluated ${ev.decided_on})` : '') + `\n\n**Why:** ${ev.reason}`;
-  let body = String(answer || '');
+  let body = String(answer || '').replace(/\\r?\\n/g, '\n');
   body = body.replace(/\*\*Decision:[^*]*\*\*\n?[^\n]*\n?Confidence measures verified mandatory evidence, not probability of winning\.\n?/i, '');
   body = body.replace(/\n*\*\*Evidence limits:\*\*[^\n]*(?:\n(?!\n)[^\n]*)*/i, '');
   body = body.replace(/\n*Recorded workflow:[^\n]*No status changed\.?/i, '');
+  body = body.replace(/\n{3,}/g, '\n\n');
   return header + '\n\n**Requirement check**\n\n' + body.trim();
 }
