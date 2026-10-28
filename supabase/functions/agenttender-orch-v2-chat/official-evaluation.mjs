@@ -227,5 +227,11 @@ export function alignQualificationAnswer(answer, ev) {
   body = body.replace(/\n*\*\*Evidence limits:\*\*[^\n]*(?:\n(?!\n)[^\n]*)*/i, '');
   body = body.replace(/\n*Recorded workflow:[^\n]*No status changed\.?/i, '');
   body = body.replace(/\n{3,}/g, '\n\n');
+  // Source cell: drop auto section tags (often wrong, e.g. "§ EMD" on an experience clause) and repeats.
+  body = body.replace(/^(\|.*\| )([^|]*) \|$/gm, (row, lead, src) => {
+    if (/^-+$/.test(src.trim())) return row;
+    const parts = [...new Set(src.split(/;\s*/).map((p) => p.replace(/\s*§\s*[^;]*$/, '').trim()).filter(Boolean))];
+    return lead + parts.join('; ') + ' |';
+  });
   return header + '\n\n**Requirement check**\n\n' + body.trim();
 }
