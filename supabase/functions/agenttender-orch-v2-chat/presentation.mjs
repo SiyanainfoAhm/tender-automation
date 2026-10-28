@@ -31,9 +31,8 @@ export function presentAnswer(parsed,sources,context) {
  const used=[...new Set((original.match(/\b[RCHP]\d+\b/gi)||[]).map(v=>v.toUpperCase()))].filter(v=>byRef.has(v));
  let answer=scrubInternalArtifacts(original.replace(/\[([RCHP]\d+)\]/gi,(_,id)=>{
   const source=byRef.get(id.toUpperCase());
-  return "";
+  return source?readableCitation(source):'';
  }));
- for(const source of sources.filter(s=>s.source_type!=='COMPANY_DOCUMENT')){const name=String(source.document||"");if(name.length>4&&/\.(?:pdf|docx?|xlsx?|txt|csv)\b/i.test(name))answer=answer.split(name).join("source document");}
  const trace={response_trace_version:"sources-only-v5",route:"ORCHESTRATOR_V2_LIGHT_CHAT",...context,result:parsed.result,evidence_state:parsed.evidence_state,sources_used:sources.filter(s=>used.includes(String(s.ref).toUpperCase())).map(s=>({ref:s.ref,document:s.document,page:s.page??null,section:s.section??null,source_type:s.source_type,chunk_id:s.chunk_id??null,document_url:s.document_url??null,source_id:s.source_id??null})),supplied_source_count:sources.length,citation_validation:original.includes("[citation unavailable]")?"INVALID_REFERENCE":used.length?"REFERENCE_IDS_VALID_NOT_CLAIM_VERIFICATION":"NO_CITATIONS",orchestration_steps_run:0,changed_business_statuses:0};
  return {answer,response_trace:trace};
 }

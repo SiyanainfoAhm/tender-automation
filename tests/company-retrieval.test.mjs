@@ -5,6 +5,11 @@ import {safeAnswer} from '../supabase/functions/agenttender-orch-v2-global-chat/
 import {requestedFinancialYears,financialDocumentAnswer} from '../supabase/functions/agenttender-orch-v2-chat/company-periods.mjs';
 import {presentAnswer} from '../supabase/functions/agenttender-orch-v2-chat/presentation.mjs';
 import {needsFullOcr} from '../supabase/functions/agenttender-company-text-index/structure.ts';
+import {structuredChunks} from '../supabase/functions/agenttender-index-extractions/structure.ts';
+test('native extraction page markers preserve original RFP page references',()=>{
+ const chunks=structuredChunks('[Page 1]\nMandatory financial requirements and eligibility criteria must be met.\n[Page 2]\nThe vendor must provide a valid certificate before award.');
+ assert.equal(chunks[0].page_number,1);assert.equal(chunks[1].page_number,2);
+});
 
 test('scan samples route to full OCR without certifying unread pages',()=>{
  const pages=Object.fromEntries(Array.from({length:5},(_,i)=>[i+1,{readable:false,has_images:true}]));

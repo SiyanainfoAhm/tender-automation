@@ -6,6 +6,7 @@ import {casualAnswer} from "./greetings.mjs";
 import {responseMode,retrieve,analystPrompt,parseAnswer,questionCategoryInstructions} from "./analyst.ts";
 import {handleAction} from "./action-handler.ts";
 import {activeRules} from "./policy.mjs";
+import {assessQualification,qualificationQuestion} from './qualification.mjs';
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
 
@@ -96,8 +97,8 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
   // header, so V2 resolves the principal from agenttender_user_sessions.
   const internal = req.headers.get("Authorization") === `Bearer ${KEY}` && !token;
   if(internal && uuid.test(String(input.user_id||''))){
-    const {data:u,error}=await db.from('agenttender_users').select('id,company_id,is_active').eq('id',input.user_id).maybeSingle();
-    if(error||!u?.is_active||u.company_id!==companyId)return Response.json({error:'Company access denied'},{status:403,headers:cors});
+    const {data:u,error}=await db.from('agenttender_users').select('id,company_id,is_active,locked_until,must_change_password').eq('id',input.user_id).maybeSingle();
+    if(error||!u?.is_active||u.company_id!==companyId||u.must_change_password||(u.locked_until&&Date.parse(u.locked_until)>Date.now()))return Response.json({error:'Company access denied'},{status:403,headers:cors});
     authenticatedUserId=u.id;
   }
   if (!internal) {
@@ -107,13 +108,13 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
     const hashed = Array.from(new Uint8Array(digest)).map((x) => x.toString(16).padStart(2, "0")).join("");
     const { data: session, error: sessionError } = await db.from("agenttender_user_sessions")
       .select("user_id,expires_at,revoked_at").eq("token_hash", hashed).maybeSingle();
-    if (sessionError || !session || session.revoked_at || session.expires_at <= new Date().toISOString()) {
+    if (sessionError || !session || session.revoked_at || !Number.isFinite(Date.parse(session.expires_at)) || Date.parse(session.expires_at)<=Date.now()) {
       return Response.json({ error: "Invalid session" }, { status: 401, headers: cors });
     }
 
     const { data: user, error: userError } = await db.from("agenttender_users")
-      .select("company_id,is_active").eq("id", session.user_id).maybeSingle();
-    if (userError || !user?.is_active || !user.company_id) {
+      .select("company_id,is_active,locked_until,must_change_password").eq("id", session.user_id).maybeSingle();
+    if (userError || !user?.is_active || !user.company_id || user.must_change_password || (user.locked_until&&Date.parse(user.locked_until)>Date.now())) {
       return Response.json({ error: "Inactive user" }, { status: 401, headers: cors });
     }
     authenticatedUserId=session.user_id;
@@ -132,15 +133,32 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
 
   const [{ data: tender, error: tenderError }, { data: ownedDocs, error: ownedError }, { data: ownedChunks, error: chunkError }] = await Promise.all([
     db.from("agenttender_tenders")
-      .select("id,source_tender_id,title,description,organization,department,authority,emd_amount,tender_value,closing_date,qualification_status,prescreen_status,prescreen_reason")
+      .select("id,source_tender_id,title,description,organization,department,authority,emd_amount,tender_value,closing_date,status,qualification_status,prescreen_status,prescreen_reason")
       .eq("id", tenderId).maybeSingle(),
     db.from("agenttender_tender_documents").select("id").eq("tender_id", tenderId).eq("company_id", companyId).limit(1),
     db.from("agenttender_ai_document_chunks").select("id").eq("tender_id", tenderId).eq("company_id", companyId).limit(1),
   ]);
 
   if (tenderError || !tender) return Response.json({ ok: false, error: "Tender not found" }, { status: 404, headers: cors });
-  if (ownedError || chunkError || (!ownedDocs?.length && !ownedChunks?.length)) {
+  // Tender records are shared under tenders.view. Missing company-scoped RFPs
+  // must produce an explicitly limited report rather than blocking that report.
+  // Document retrieval below still applies company_id on every original source.
+  if (ownedError || chunkError) {
     return Response.json({ ok: false, error: "Tender not available for company" }, { status: 403, headers: cors });
+  }
+
+  if(question_category==='DO_WE_QUALIFY'||question_category==='ELIGIBILITY'||qualificationQuestion(question)){
+   const evaluated=await assessQualification({db,tender,companyId,question,allowCompany:canReadCompanyDocuments,aiKey:AIKEY});
+   const result=evaluated.report.recommendation==='GO'?'CONFIRMED':evaluated.report.recommendation==='NO_GO'?'NOT CONFIRMED':'UNVERIFIED';
+   const response={ok:true,status:'ANSWERED',route:'ORCHESTRATOR_V2_LIGHT_CHAT',answer:evaluated.answer,qualification:evaluated.report,result,evidence_state:evaluated.report.coverage.complete?'MEDIUM':'LOW',sources:evaluated.sources.map(s=>({id:s.ref,documentName:s.document,pageNumber:s.page,section:s.section})),changed_business_statuses:0,extraction_triggered:false,indexing_triggered:false,embedding_triggered:false};
+   const sourceCards=evaluated.sources.map(({text,metadata,...s})=>s);
+   Object.assign(response,{evidence:sourceCards.filter(s=>s.ref.startsWith('R')),company_evidence:sourceCards.filter(s=>s.ref.startsWith('C')),model:MODEL,readiness_warnings:evaluated.report.coverage.warnings});
+   if(authenticatedUserId&&!memory&&!(internal&&input.read_only===true)){
+    const saved=await db.rpc('agenttender_record_v2_chat_answer',{p_user:authenticatedUserId,p_company:companyId,p_tender:tenderId,p_session:input.session_id||null,p_question:question,p_answer:response.answer,p_model:MODEL,p_category:'DO_WE_QUALIFY',p_sources:response.sources});
+    if(saved.error)throw saved.error;
+    return Response.json({...response,message_id:saved.data?.message_id,session_id:saved.data?.session_id},{headers:cors});
+   }
+   return Response.json(response,{headers:cors});
   }
 
   // Prior screening outcomes are not evidence for a fresh analyst decision.
@@ -341,5 +359,9 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
 Deno.serve(async(req:Request)=>{
  if(!URL||!KEY)return Response.json({ok:false,error:"SERVICE_UNAVAILABLE"},{status:503,headers:cors});
  const db=createClient(URL,KEY,{auth:{persistSession:false}});
+ // Administrative production probes use the identical authenticated evaluator
+ // without creating conversations or audit exchanges. Public clients cannot opt out.
+ const probe=await req.clone().json().catch(()=>({}));
+ if(req.headers.get('Authorization')==='Bearer '+KEY&&!req.headers.get('x-agenttender-session')&&probe.read_only===true&&uuid.test(String(probe.user_id||'')))return processChatRequest(req);
  return durableChat(req,processChatRequest,db,KEY,cors);
 });

@@ -51,7 +51,7 @@ export function categoryFor(q:string,requested:any){
  if(/\b(scope of work|deliverables|what (?:do we|must we) (?:build|deliver))\b/i.test(q))return 'SCOPE_OF_WORK';
  if(/\b(submission|how to submit|ready to bid)\b/i.test(q))return 'SUBMISSION_READINESS';
  if(/\b(profit|margin|delivery cost|project cost|bid price)\b/i.test(q))return 'PROJECT_COST';
- if(/qualify|we eligible|meet.*criteria/i.test(q))return 'DO_WE_QUALIFY';
+ if(/qualif|we eligible|meet.*criteria|partner|subcontract|suitable|conditional.?go/i.test(q))return 'DO_WE_QUALIFY';
  if(/government.*experience|govt.*experience/i.test(q))return 'GOVERNMENT_EXPERIENCE';
  if(/emd|exempt|msme/i.test(q))return 'EMD';
  if(/turnover/i.test(q))return 'TURNOVER';
