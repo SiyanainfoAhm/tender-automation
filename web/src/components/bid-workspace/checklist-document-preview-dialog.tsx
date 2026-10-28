@@ -13,9 +13,29 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
+  clearAuthenticatedDocumentPreview,
   fetchAuthenticatedDocumentObjectUrl,
   preloadAuthenticatedDocument,
 } from "@/lib/storage/authenticated-document-preview";
+
+/** Load the file once, retrying a single time on a dropped connection. */
+async function loadDocumentBlob(href: string): Promise<{ objectUrl: string; blob: Blob }> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const objectUrl = await fetchAuthenticatedDocumentObjectUrl(href);
+      const blob = await (await fetch(objectUrl)).blob();
+      return { objectUrl, blob };
+    } catch (error) {
+      lastError = error;
+      clearAuthenticatedDocumentPreview(href);
+    }
+  }
+  if (lastError instanceof Error && /failed to fetch|network/i.test(lastError.message)) {
+    throw new Error("The document could not be loaded. Check your connection and try again, or use Download.");
+  }
+  throw lastError instanceof Error ? lastError : new Error("Unable to load the document.");
+}
 
 export type PreviewDocument = {
   title: string;
@@ -97,8 +117,7 @@ export function ChecklistDocumentPreviewDialog({
 
     void (async () => {
       try {
-        const objectUrl = await fetchAuthenticatedDocumentObjectUrl(document.href);
-        const blob = await (await fetch(objectUrl)).blob();
+        const { objectUrl, blob } = await loadDocumentBlob(document.href);
         if (cancelled) return;
         const head = new Uint8Array(await blob.slice(0, 8).arrayBuffer());
         const detected = detectKind(

@@ -1,3 +1,5 @@
+export const maxDuration = 60;
+
 import { NextResponse } from "next/server";
 
 import { getSession } from "@/server/auth/session";
@@ -32,8 +34,8 @@ export async function GET(_request: Request, context: RouteContext) {
     const headers = new Headers();
     const contentType = upstream.headers.get("content-type");
     if (contentType) headers.set("Content-Type", contentType);
-    const contentLength = upstream.headers.get("content-length");
-    if (contentLength) headers.set("Content-Length", contentLength);
+    // Content-Length is not forwarded: storage may compress the body, and a
+    // mismatched length makes browsers abort the download ("Failed to fetch").
     const disposition = upstream.headers.get("content-disposition");
     if (disposition) headers.set("Content-Disposition", disposition);
     headers.set(
