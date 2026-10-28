@@ -29,3 +29,11 @@ test('explicit FY normalization and India April rollover',()=>{
 test('permission denial performs no credential or document query',async()=>{
  const db=new Proxy({},{get(){throw Error('must not read');}});const r=await answerCompany(db,'company','turnover',new Set());assert.match(r.structured.details,/does not permit/);assert.deepEqual(r.documents,[]);
 });
+test('company profile, certification limits and foreign-entity project boundaries use existing scoped sources',async()=>{
+ const docs=Array.from({length:15},(_,i)=>({...d,id:'d'+i,name:'ISO Certificate '+i,verification_status:i===0?'pending':'verified',source_fingerprint:'fp'}));
+ const projects=[{project_name:'Foreign Project',qualification:{legal_entity:'Other Limited',source_documents:[]}},{project_name:'Own Project',description:'Website development',qualification:{legal_entity:entity,source_documents:[],verification_state:'VERIFIED'}}];
+ const scopes=[];const db={rpc:async(name,args)=>{assert.equal(name,'agenttender_company_credential_sources');assert.equal(args.p_company_id,'tenant');return {data:{company_name:entity,documents:docs,projects,facts:[]}};},from:table=>{assert.equal(table,'agenttender_companies');const query={select(){return query;},eq(k,v){scopes.push([k,v]);return query;},maybeSingle:async()=>({data:{name:entity,description:'Software services'}})};return query;}};
+ const perms=new Set(['documents.view']);const profile=await answerCompany(db,'tenant','company profile',perms);assert.match(profile.structured.details,/Software services/);
+ const cert=await answerCompany(db,'tenant','our certificates',perms);assert.equal(cert.structured.document_ids.length,12);assert.equal(cert.structured.document_ids[0],'d1');assert.match(cert.structured.details,/Catalogue candidates/);assert.ok(cert.structured.details.length<16000);
+ const exp=await answerCompany(db,'tenant','our experience',perms);assert.doesNotMatch(exp.structured.details,/Foreign Project/);assert.match(exp.structured.details,/Own Project/);assert.match(exp.structured.details,/Verification: CANDIDATE/);assert.ok(scopes.every(([k,v])=>k==='id'&&v==='tenant'));
+});
