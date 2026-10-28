@@ -160,8 +160,9 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
   // recorded status), so its answers match the GO / NO_GO / CONDITIONAL_GO users see.
   let official:any=null;
   try{official=await loadOfficialEvaluation(db,tender);}catch(e){console.warn('Official evaluation unavailable',String(e));}
-  const QUICK_CATEGORIES=['SCOPE_OF_WORK','GENERAL_TENDER_INFO','EMD','DO_WE_QUALIFY','ELIGIBILITY','REQUIRED_DOCUMENTS','TURNOVER','EXPERIENCE','GOVERNMENT_EXPERIENCE','CERTIFICATIONS','PROJECT_COST','SUBMISSION_READINESS','TENDER_STATUS'];
-  if(official?.available&&official.family==='NO_GO'&&(QUICK_CATEGORIES.includes(question_category)||qualificationQuestion(question))){
+  const QUICK_CATEGORIES=['GENERAL_TENDER_INFO','EMD','DO_WE_QUALIFY','ELIGIBILITY','REQUIRED_DOCUMENTS','TURNOVER','EXPERIENCE','GOVERNMENT_EXPERIENCE','CERTIFICATIONS','PROJECT_COST','SUBMISSION_READINESS','TENDER_STATUS'];
+  const scopeQuestion=question_category==='SCOPE_OF_WORK'||/\bscope\b|deliverables|what (?:do|must) we (?:build|deliver|do)/i.test(question);
+  if(official?.available&&official.family==='NO_GO'&&!scopeQuestion&&(QUICK_CATEGORIES.includes(question_category)||qualificationQuestion(question))){
    const answer=noGoAnswer(official,tender,question_category,{table:['DO_WE_QUALIFY','ELIGIBILITY','REQUIRED_DOCUMENTS'].includes(question_category)||qualificationQuestion(question)});
    const response:any={ok:true,status:'ANSWERED',route:'ORCHESTRATOR_V2_OFFICIAL_DECISION',question_category,answer,result:'NOT CONFIRMED',evidence_state:'HIGH',official_decision:official.decision,evidence:[],company_evidence:[],sources:[],readiness_warnings:[],partial_document_evidence:false,model:'official-evaluation',changed_business_statuses:0,orchestration_steps_run:0,extraction_triggered:false,indexing_triggered:false,embedding_triggered:false,ocr_triggered:false};
    if(authenticatedUserId&&!memory&&!(internal&&input.read_only===true)){
@@ -183,7 +184,10 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
   }
   // One cached requirement check (RFP vs verified company documents) feeds every answer.
   let check:any=null;
-  try{check=await getCompanyCheck({db,tender,companyId,allowCompany:canReadCompanyDocuments,aiKey:AIKEY,signal:undefined});}catch(e){console.warn('Company check unavailable',String(e));}
+  // The full RFP-vs-company check takes two AI readings; only eligibility-type questions wait for it.
+  // Other questions (scope, EMD, dates...) reuse a cached check if one exists, never start a new one.
+  const needsCheck=!scopeQuestion&&(['DO_WE_QUALIFY','ELIGIBILITY','TURNOVER','EXPERIENCE','GOVERNMENT_EXPERIENCE','CERTIFICATIONS','REQUIRED_DOCUMENTS','SUBMISSION_READINESS'].includes(question_category)||qualificationQuestion(question));
+  try{check=await getCompanyCheck({db,tender,companyId,allowCompany:canReadCompanyDocuments,aiKey:AIKEY,signal:undefined,cacheOnly:!needsCheck});}catch(e){console.warn('Company check unavailable',String(e));}
   const focused=check?.report&&['TURNOVER','EXPERIENCE','GOVERNMENT_EXPERIENCE','CERTIFICATIONS'].includes(question_category)?focusedCheckAnswer(check.report,official,question_category):null;
   if(focused){
    const response:any={ok:true,status:'ANSWERED',route:'ORCHESTRATOR_V2_COMPANY_CHECK',question_category,answer:focused,result:'CHECKED',evidence_state:'MEDIUM',official_decision:official?.decision||null,evidence:[],company_evidence:[],sources:(check.sources||[]).filter((s:any)=>String(s.ref||'').startsWith('C')).slice(0,12).map((s:any)=>({id:s.ref,documentName:s.document,pageNumber:s.page,section:s.section})),readiness_warnings:[],partial_document_evidence:false,model:'company-check',changed_business_statuses:0,extraction_triggered:false,indexing_triggered:false,embedding_triggered:false};
@@ -194,7 +198,7 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
    }
    return Response.json(response,{headers:cors});
   }
-  if((question_category==='DO_WE_QUALIFY'||question_category==='ELIGIBILITY'||qualificationQuestion(question))&&check?.report){
+  if(!scopeQuestion&&(question_category==='DO_WE_QUALIFY'||question_category==='ELIGIBILITY'||qualificationQuestion(question))&&check?.report){
    const evaluated:any={report:check.report,sources:(check.sources||[]).map((s:any)=>({...s,text:''}))};
    const result=evaluated.report.recommendation==='GO'?'CONFIRMED':evaluated.report.recommendation==='NO_GO'?'NOT CONFIRMED':'UNVERIFIED';
    evaluated.answer=chatQualificationAnswer(evaluated.report,official);
@@ -339,7 +343,7 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
   for (let attempt = 0; attempt < 2; attempt++) {
     const checkDecision = companyCheckContext(check?.report,official)?.decision;
     const officialCheck = official?.available&&!official.pending ? '\nOFFICIAL DECISION CHECK: The first line must be "Decision: '+official.label+'". Any recommendation, fit or verdict you state must equal '+official.label+'; explain the official reason instead of re-deciding.' : checkDecision ? '\nDECISION CHECK: The first line must be "Decision: '+checkDecision+'" (from company_check). Explain it with the company_check rows; do not re-decide.' : '';
-    const formatInstruction = officialCheck + '\nFINAL DECISION CHECK: Use only facts proven by the supplied original evidence. A listed EMD is not the actual payable EMD. If exemption applicability is conflicting or unverified, summarize it as payable EMD NOT VERIFIED and do not use the listed amount to assert a binding EMD exclusion. A poor-fit recommendation may instead rely on proven scope exclusions, explaining the scope reason. Missing company evidence is not a proven failure. Keep scope and summary to about 180 words before the three follow-up questions; EMD to about 100 words before follow-ups. Avoid unrelated policy commentary in narrow checks.\nOUTPUT CONTRACT: Return exactly one valid JSON object with "answer" (non-empty string), "result" (CONFIRMED, PARTIALLY CONFIRMED, NOT CONFIRMED, UNVERIFIED, or null), and "evidence_state" (HIGH, MEDIUM, or LOW). Put all prose, citations and suggested questions inside the answer string. Escape newlines inside JSON strings. Do not output Markdown fences or any text outside the JSON object.';
+    const formatInstruction = officialCheck + '\nFINAL DECISION CHECK: Use only facts proven by the supplied original evidence. A listed EMD is not the actual payable EMD. If exemption applicability is conflicting or unverified, summarize it as payable EMD NOT VERIFIED and do not use the listed amount to assert a binding EMD exclusion. A poor-fit recommendation may instead rely on proven scope exclusions, explaining the scope reason. Missing company evidence is not a proven failure. For scope questions give the full scope-of-work summary (about 300 words, bullets allowed); keep a general summary to about 180 words before the three follow-up questions; EMD to about 100 words before follow-ups. Avoid unrelated policy commentary in narrow checks.\nOUTPUT CONTRACT: Return exactly one valid JSON object with "answer" (non-empty string), "result" (CONFIRMED, PARTIALLY CONFIRMED, NOT CONFIRMED, UNVERIFIED, or null), and "evidence_state" (HIGH, MEDIUM, or LOW). Put all prose, citations and suggested questions inside the answer string. Escape newlines inside JSON strings. Do not output Markdown fences or any text outside the JSON object.';
     const aiRes = await fetch("https://api.deepseek.com/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${AIKEY}`, "Content-Type": "application/json" },

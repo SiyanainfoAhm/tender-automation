@@ -223,7 +223,7 @@ export function noGoAnswer(ev, tender, category, opts = {}) {
     if (emd) lines.push('', emd);
   }
   if (opts.table && ev.findings?.length) {
-    lines.push('', prequalificationTable(ev.findings.map((f) => ({requirement: f.requirement, result: f.verdict, mandatory: f.mandatory}))));
+    lines.push('', prequalificationTable(ev.findings.map((f) => ({requirement: f.requirement, result: f.verdict, mandatory: f.mandatory, explanation: f.explanation}))));
   }
   if (NOT_NEEDED[category]) lines.push('', NOT_NEEDED[category]);
   if (ev.status_overrides_v2 && ev.v2_decision) {
@@ -361,16 +361,8 @@ export function chatQualificationAnswer(report, ev) {
   }
 
   const out = [`**Decision: ${label}**` + (official && ev.decided_on ? ` (evaluated ${ev.decided_on})` : ''), '', `**Why:** ${why}`];
-  out.push('', prequalificationTable(report?.requirements || []));
+  out.push('', prequalificationTable(report?.requirements || [], {explain: (r) => (r.result === 'FAIL' ? failReason(r) : plainGap(r))}));
 
-  if (fails.length) {
-    out.push('', official && ev.family !== 'NO_GO' ? '**Blocking issue found in the detailed check:**' : '**Blocking issue:**');
-    for (const r of fails) out.push(`- **${shortRequirement(r.requirement)}** — ${failReason(r)}`);
-  }
-  if (unknown.length && label !== 'NO-GO') {
-    out.push('', '**Not yet proven — what is missing:**');
-    for (const r of unknown.slice(0, 8)) out.push(`- **${shortRequirement(r.requirement)}** — ${plainGap(r)}`);
-  }
   if (!official && ev?.pending) {
     const detail = /has not finished yet/i.test(ev.reason) ? '' : ` (${ev.reason.replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())})`;
     out.push('', `_The daily automatic evaluation for this tender has not finished yet${detail}. This answer comes from today's requirement check of the RFP against Siyana's company documents._`);
@@ -397,7 +389,7 @@ export function focusedCheckAnswer(report, ev, category) {
   const mark = {PASS: '✅ Met', FAIL: '❌ Not met', UNKNOWN: '⚠️ Not confirmed'};
   const out = [overall, '', `**${f.title}**`];
   if (!rows.length) out.push('', f.none);
-  else out.push('', prequalificationTable(rows).replace(/^\*\*Prequalification checklist\*\*/, '**Checklist**'), '', '**Details**');
+  else out.push('', prequalificationTable(rows, {explain: (r) => (r.result === 'FAIL' ? failReason(r) : plainGap(r))}).replace(/^\*\*Prequalification checklist\*\*/, '**Checklist**'), '', '**Details**');
   for (const r of rows) {
     const passText = clean(r.calculation?.explanation || r.explanation)
       .replace(/^All listed credential identifiers, legal entity and required validity are supported by current original documents\.?$/i, 'Valid certificate on file.')

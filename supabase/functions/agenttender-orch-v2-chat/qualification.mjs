@@ -100,7 +100,7 @@ export function renderQualification(report){
  const rows=rs.map(r=>'- **'+clean(r.requirement)+'** — '+clean(r.calculation?.explanation||r.explanation)+' _Source: '+([...r.rfp_evidence,...r.company_evidence].map(cite).join('; ')||'Unverified')+'_').join('\n');
  const failures=rs.filter(r=>r.mandatory===true&&r.result==='FAIL');
  return '**Tender:** '+clean(report.tender.title)+' ('+clean(report.tender.source_tender_id||report.tender.id)+')\n\n**Decision: '+report.recommendation+' — qualification confidence '+report.qualification_confidence+'/100.**\n'+reason+'\nConfidence measures verified mandatory evidence, not probability of winning.\n\n'+
- (rs.length?prequalificationTable(rs)+'\n\n**Reasons / gaps:**\n'+rows:'No source-backed mandatory criteria could be established; obtain or recover the original RFP text.')+
+ (rs.length?prequalificationTable(rs)+'\n\n**Sources:**\n'+rows:'No source-backed mandatory criteria could be established; obtain or recover the original RFP text.')+
  '\n\n'+credentialSummary(report)+'\n\n**Proven gaps:** '+(failures.length?failures.map(r=>r.requirement+': '+r.explanation).join('; '):'No mandatory failure established. Missing proof remains UNKNOWN.')+
  (report.coverage.warnings.length?'\n\n**Evidence limits:** '+report.coverage.warnings.join(' '):'')+
  ((report.interpretations||[]).length?'\n\n'+report.interpretations.join(' '):'')+

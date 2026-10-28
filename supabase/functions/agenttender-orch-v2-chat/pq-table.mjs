@@ -39,20 +39,29 @@ export function pqRows(rows) {
     if (seen.has(key)) continue;
     seen.add(key);
     const result = String(r?.result || r?.verdict || 'UNKNOWN').toUpperCase();
-    out.push({item, result: PQ_RESULT[result] ? result : 'UNKNOWN'});
+    const res = PQ_RESULT[result] ? result : 'UNKNOWN';
+    out.push({item, result: res, row: r});
   }
   return out;
 }
 
-export function prequalificationTable(rows, {empty = 'No prequalification items were found in the RFP for this tender.'} = {}) {
+export function prequalificationTable(rows, {empty = 'No prequalification items were found in the RFP for this tender.', explain = null} = {}) {
   const list = pqRows(rows);
   if (!list.length) return empty;
   const passed = list.filter((r) => r.result === 'PASS').length;
+  // Every failed item carries the reason: what the RFP asks and what our documents show.
+  const why = (r) => {
+    if (r.result === 'PASS') return '—';
+    const text = clean(explain ? explain(r.row) : (r.row?.calculation?.explanation || r.row?.explanation || ''));
+    return text || (r.result === 'FAIL'
+      ? 'Our company documents do not meet this condition.'
+      : 'No verified company document proves this condition yet.');
+  };
   return [
     `**Prequalification checklist** — ${passed} of ${list.length} passed`,
     '',
-    '| Prequalification checklist item | Passed / Failed |',
-    '| --- | --- |',
-    ...list.map((r) => `| ${r.item} | ${PQ_RESULT[r.result]} |`),
+    '| Prequalification checklist item | Passed / Failed | Why it failed |',
+    '| --- | --- | --- |',
+    ...list.map((r) => `| ${r.item} | ${PQ_RESULT[r.result]} | ${why(r)} |`),
   ].join('\n');
 }

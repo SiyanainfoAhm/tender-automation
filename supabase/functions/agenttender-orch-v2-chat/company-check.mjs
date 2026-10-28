@@ -2,11 +2,15 @@
 // owner rules and credential records), cached so every chatbot answer uses the same facts.
 import {assessQualification,QUALIFICATION_VERSION} from './qualification.mjs';
 import {chatQualificationAnswer} from './official-evaluation.mjs';
+import {retrieve} from './analyst.ts';
+import {activeRules} from './policy.mjs';
+import {loadCredentials} from './company-credentials-store.mjs';
 
 export const COMPANY_CHECK_VERSION = QUALIFICATION_VERSION + '+checks-20261028d';
-const MAX_AGE_MS = 12 * 3600 * 1000;
+// The stamp already changes whenever company documents, RFP documents or rules change.
+const MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 
-export async function getCompanyCheck({db, tender, companyId, allowCompany, aiKey, signal, refresh = false}) {
+export async function getCompanyCheck({db, tender, companyId, allowCompany, aiKey, signal, refresh = false, cacheOnly = false}) {
   if (!allowCompany) return null;
   let stamp = '';
   try {
@@ -20,12 +24,20 @@ export async function getCompanyCheck({db, tender, companyId, allowCompany, aiKe
       return {report: data.report, sources: data.sources || [], cached: true};
     }
   }
+  if (cacheOnly) return null;
   const question = 'Read every mandatory pre-qualification condition in the RFP (bidder type, years in business, turnover, net worth, similar project experience, certifications, registrations, blacklisting, EMD) and compare it against verified Siyana evidence.';
   // Clause extraction varies between runs; two independent readings are merged so no
   // mandatory condition found by either reading is lost.
-  const shared = {};
-  const ok = [await assessQualification({db, tender, companyId, question, allowCompany, aiKey, signal, shared})];
-  try { ok.push(await assessQualification({db, tender, companyId, question, allowCompany, aiKey, signal, shared})); } catch { /* one reading is enough */ }
+  // Load the RFP excerpts, rules and company records once, then run both readings in parallel.
+  const [data, rules, credentials] = await Promise.all([
+    retrieve(db, tender.id, companyId, question, 'ELIGIBILITY', 'DO_WE_QUALIFY', allowCompany),
+    activeRules(db),
+    loadCredentials(db, companyId),
+  ]);
+  const shared = {data, rules, credentials};
+  const readings = await Promise.allSettled([0, 1].map(() => assessQualification({db, tender, companyId, question, allowCompany, aiKey, signal, shared})));
+  const ok = readings.filter((r) => r.status === 'fulfilled').map((r) => r.value);
+  if (!ok.length) throw readings[0].reason;
   const evaluated = mergeReadings(ok);
   const sources = (evaluated.sources || []).map(({text, metadata, ...s}) => s);
   if (stamp) {
