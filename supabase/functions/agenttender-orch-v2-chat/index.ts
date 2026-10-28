@@ -162,7 +162,7 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
   try{official=await loadOfficialEvaluation(db,tender);}catch(e){console.warn('Official evaluation unavailable',String(e));}
   const QUICK_CATEGORIES=['SCOPE_OF_WORK','GENERAL_TENDER_INFO','EMD','DO_WE_QUALIFY','ELIGIBILITY','REQUIRED_DOCUMENTS','TURNOVER','EXPERIENCE','GOVERNMENT_EXPERIENCE','CERTIFICATIONS','PROJECT_COST','SUBMISSION_READINESS','TENDER_STATUS'];
   if(official?.available&&official.family==='NO_GO'&&(QUICK_CATEGORIES.includes(question_category)||qualificationQuestion(question))){
-   const answer=noGoAnswer(official,tender,question_category);
+   const answer=noGoAnswer(official,tender,question_category,{table:['DO_WE_QUALIFY','ELIGIBILITY','REQUIRED_DOCUMENTS'].includes(question_category)||qualificationQuestion(question)});
    const response:any={ok:true,status:'ANSWERED',route:'ORCHESTRATOR_V2_OFFICIAL_DECISION',question_category,answer,result:'NOT CONFIRMED',evidence_state:'HIGH',official_decision:official.decision,evidence:[],company_evidence:[],sources:[],readiness_warnings:[],partial_document_evidence:false,model:'official-evaluation',changed_business_statuses:0,orchestration_steps_run:0,extraction_triggered:false,indexing_triggered:false,embedding_triggered:false,ocr_triggered:false};
    if(authenticatedUserId&&!memory&&!(internal&&input.read_only===true)){
     const saved=await db.rpc('agenttender_record_v2_chat_answer',{p_user:authenticatedUserId,p_company:companyId,p_tender:tenderId,p_session:input.session_id||null,p_question:question,p_answer:answer,p_model:'official-evaluation',p_category:question_category,p_sources:[]});

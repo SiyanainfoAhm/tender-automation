@@ -1,3 +1,4 @@
+import {prequalificationTable} from './pq-table.mjs';
 // The tender chatbot speaks from the SAME evaluation the daily V2 orchestrator made
 // (agenttender_v2_decision_audit + requirement findings + recorded status/reason),
 // so chat answers never contradict the GO / NO_GO / CONDITIONAL_GO shown in TenderFlow.
@@ -201,7 +202,7 @@ const NOT_NEEDED = {
 };
 
 /** Clean, deterministic answer for NO-GO tenders: the decision and why, nothing else. */
-export function noGoAnswer(ev, tender, category) {
+export function noGoAnswer(ev, tender, category, opts = {}) {
   const lines = [];
   lines.push(`**Decision: ${ev.label}**` + (ev.decided_on && !ev.status_overrides_v2 ? ` (evaluated ${ev.decided_on})` : ''));
   if (category === 'GENERAL_TENDER_INFO' || category === 'SCOPE_OF_WORK' || category === 'TENDER_STATUS') {
@@ -220,6 +221,9 @@ export function noGoAnswer(ev, tender, category) {
   if (category === 'EMD') {
     const emd = emdLine(ev, tender);
     if (emd) lines.push('', emd);
+  }
+  if (opts.table && ev.findings?.length) {
+    lines.push('', prequalificationTable(ev.findings.map((f) => ({requirement: f.requirement, result: f.verdict, mandatory: f.mandatory}))));
   }
   if (NOT_NEEDED[category]) lines.push('', NOT_NEEDED[category]);
   if (ev.status_overrides_v2 && ev.v2_decision) {
@@ -357,20 +361,15 @@ export function chatQualificationAnswer(report, ev) {
   }
 
   const out = [`**Decision: ${label}**` + (official && ev.decided_on ? ` (evaluated ${ev.decided_on})` : ''), '', `**Why:** ${why}`];
+  out.push('', prequalificationTable(report?.requirements || []));
 
   if (fails.length) {
     out.push('', official && ev.family !== 'NO_GO' ? '**Blocking issue found in the detailed check:**' : '**Blocking issue:**');
     for (const r of fails) out.push(`- **${shortRequirement(r.requirement)}** — ${failReason(r)}`);
   }
   if (unknown.length && label !== 'NO-GO') {
-    out.push('', '**Still to confirm:**');
+    out.push('', '**Not yet proven — what is missing:**');
     for (const r of unknown.slice(0, 8)) out.push(`- **${shortRequirement(r.requirement)}** — ${plainGap(r)}`);
-  } else if (unknown.length) {
-    out.push('', `**Also unconfirmed:** ${unknown.slice(0, 6).map((r) => shortRequirement(r.requirement)).join('; ')}.`);
-  }
-  if (passed.length) {
-    const label2 = (r) => (r.category === 'Scope' ? 'Scope matches Siyana\u2019s software work' : shortRequirement(r.requirement));
-    out.push('', `**Already met:** ${passed.slice(0, 8).map(label2).join('; ')}.`);
   }
   if (!official && ev?.pending) {
     const detail = /has not finished yet/i.test(ev.reason) ? '' : ` (${ev.reason.replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())})`;
@@ -398,6 +397,7 @@ export function focusedCheckAnswer(report, ev, category) {
   const mark = {PASS: '✅ Met', FAIL: '❌ Not met', UNKNOWN: '⚠️ Not confirmed'};
   const out = [overall, '', `**${f.title}**`];
   if (!rows.length) out.push('', f.none);
+  else out.push('', prequalificationTable(rows).replace(/^\*\*Prequalification checklist\*\*/, '**Checklist**'), '', '**Details**');
   for (const r of rows) {
     const passText = clean(r.calculation?.explanation || r.explanation)
       .replace(/^All listed credential identifiers, legal entity and required validity are supported by current original documents\.?$/i, 'Valid certificate on file.')

@@ -1,3 +1,4 @@
+import {prequalificationTable} from './pq-table.mjs';
 import {selectCompanyExcerpts,qualificationConfidence,uncoveredSubmissionRequirements} from './qualification-evidence.mjs';
 import {loadCredentials} from './company-credentials-store.mjs';
 import {turnover,matchProjects,resolveSpec,certificationAssessment} from './company-qualification.mjs';
@@ -96,10 +97,10 @@ const cite=e=>clean(e.document)+(e.page!=null?', p. '+e.page:' (page unavailable
 export function renderQualification(report){
  const rs=report.requirements.filter(r=>r.mandatory!==false||r.category==='Scope');
  const reason=report.recommendation==='GO'?'Every identified mandatory condition is verified against source evidence.':report.recommendation==='NO_GO'?'A cited mandatory condition is proven not to be met.':'Qualification cannot be verified until the material evidence gaps below are resolved.';
- const rows=rs.map(r=>'| '+clean(r.requirement)+' | '+r.result+' | '+clean(r.calculation?.explanation||r.explanation)+' | '+([...r.rfp_evidence,...r.company_evidence].map(cite).join('; ')||'Unverified')+' |').join('\n');
+ const rows=rs.map(r=>'- **'+clean(r.requirement)+'** — '+clean(r.calculation?.explanation||r.explanation)+' _Source: '+([...r.rfp_evidence,...r.company_evidence].map(cite).join('; ')||'Unverified')+'_').join('\n');
  const failures=rs.filter(r=>r.mandatory===true&&r.result==='FAIL');
  return '**Tender:** '+clean(report.tender.title)+' ('+clean(report.tender.source_tender_id||report.tender.id)+')\n\n**Decision: '+report.recommendation+' — qualification confidence '+report.qualification_confidence+'/100.**\n'+reason+'\nConfidence measures verified mandatory evidence, not probability of winning.\n\n'+
- (rs.length?'| Material criterion | Finding | Reason / gap | Source |\n| --- | --- | --- | --- |\n'+rows:'No source-backed mandatory criteria could be established; obtain or recover the original RFP text.')+
+ (rs.length?prequalificationTable(rs)+'\n\n**Reasons / gaps:**\n'+rows:'No source-backed mandatory criteria could be established; obtain or recover the original RFP text.')+
  '\n\n'+credentialSummary(report)+'\n\n**Proven gaps:** '+(failures.length?failures.map(r=>r.requirement+': '+r.explanation).join('; '):'No mandatory failure established. Missing proof remains UNKNOWN.')+
  (report.coverage.warnings.length?'\n\n**Evidence limits:** '+report.coverage.warnings.join(' '):'')+
  ((report.interpretations||[]).length?'\n\n'+report.interpretations.join(' '):'')+
