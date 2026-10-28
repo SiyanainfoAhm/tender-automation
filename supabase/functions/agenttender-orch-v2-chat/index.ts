@@ -416,5 +416,7 @@ Deno.serve(async(req:Request)=>{
  // without creating conversations or audit exchanges. Public clients cannot opt out.
  const probe=await req.clone().json().catch(()=>({}));
  if(req.headers.get('Authorization')==='Bearer '+KEY&&!req.headers.get('x-agenttender-session')&&probe.read_only===true&&uuid.test(String(probe.user_id||'')))return processChatRequest(req);
+ // Service-only: the V2 decision worker requests the shared company check (no conversation).
+ if(req.headers.get('Authorization')==='Bearer '+KEY&&!req.headers.get('x-agenttender-session')&&probe.action==='company_check')return processChatRequest(req);
  return durableChat(req,processChatRequest,db,KEY,cors);
 });
