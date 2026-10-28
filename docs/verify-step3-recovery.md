@@ -21,11 +21,11 @@ Live validation exposed a separate final-commit defect that converted a validato
 - `agenttender-tender-ocr-worker`: 25
 - Database migrations in this change provide dependency wake-up, revision-aware claims, source-bound duplicate recovery, final validation guards and atomic index batches.
 
-The live tender-specific chat deployment advanced independently to version 79. Its files are not changed by this repair. The PR is based on the latest inspected main tree, preserving concurrent Ask AI changes and draft PR #3.
+The live tender-specific chat deployment advanced independently to version 81. Its files are not changed by this repair. The PR changes none of those files and merges cleanly with the latest inspected main tree, preserving concurrent Ask AI changes and draft PR #3.
 
 ## Validation and remaining dependencies
 
-28 JavaScript regression tests cover coverage, late annexures, stale revisions, exact evidence, bounded extraction, interruption/replay, saved native text and indexing batches. Transactional database regressions verify wake-up/cache invalidation, failure-history preservation, final VERIFY handling, partial-index visibility and replay. The new indexing RPC is service-only. Live processing advanced beyond Step 3; evidence-backed exclusions were committed by the existing normal rules, while missing proof remained VERIFY.
+30 JavaScript regression tests cover coverage, late annexures, stale revisions, exact evidence, bounded extraction, interruption/replay, saved native text and indexing batches. Transactional database regressions verify wake-up/cache invalidation, failure-history preservation, final VERIFY handling, partial-index visibility and replay. The new indexing RPC is service-only. Live processing advanced beyond Step 3; evidence-backed exclusions were committed by the existing normal rules, while missing proof remained VERIFY.
 
 Tender247 portal acquisition is not restored by pretending an archive exists. The deployed acquisition service verifies SharePoint and legacy Azure access, but has no portal/gateway execution path. No company Tender247 account is configured in this project. The existing web import service expects `TENDER247_SYNC_ENDPOINT` (the authorized Azure gateway `/api/tender247/tenders` route) and `TENDER247_SYNC_UPSTREAM_SECRET`; upstream gateway authorization remains required. An authorized operator must connect/run that existing importer for genuinely missing source attachments, or upload those originals. Gateway credential validity could not be established through the available interfaces. Authentication was not bypassed.
 
