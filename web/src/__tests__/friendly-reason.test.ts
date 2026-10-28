@@ -19,6 +19,11 @@ describe("friendlyTenderReason", () => {
       ),
     ).toBe("Marked by user on 2026-10-27: scope is India only (US/GLOBAL tender)");
   });
+  it("explains rule-based decisions", () => {
+    expect(friendlyTenderReason("NO_GO — validated approved rule(s): EMD_LIMIT, COMPANY_MANDATORY_PQ_FAILURE. Evidence: The bidder should be a PSU")).toBe(
+      "NO-GO: EMD above ₹5 lakh limit; Siyana does not meet a mandatory eligibility condition (checked against company documents). Tender text: The bidder should be a PSU",
+    );
+  });
   it("leaves normal reasons unchanged", () => {
     expect(friendlyTenderReason("NO_GO — EMD of ₹2 crore exceeds the limit")).toBe("NO_GO — EMD of ₹2 crore exceeds the limit");
   });

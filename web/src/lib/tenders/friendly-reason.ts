@@ -26,9 +26,31 @@ function describePipelineReason(text: string): string {
   return "Evaluation pending: the automatic check has not finished yet.";
 }
 
+const RULE_LABELS: Record<string, string> = {
+  COMPANY_MANDATORY_PQ_FAILURE: "Siyana does not meet a mandatory eligibility condition (checked against company documents)",
+  TURNOVER_ABOVE_COMPANY_LIMIT: "turnover requirement above company limit",
+  EMD_LIMIT: "EMD above ₹5 lakh limit",
+};
+
+function ruleLabel(code: string): string {
+  return RULE_LABELS[code] || code.toLowerCase().replace(/_/g, " ");
+}
+
+/** "NO_GO — validated approved rule(s): A, B. Evidence: …" → readable sentence. */
+function ruleDecision(text: string): string | null {
+  const m = text.match(/^(NO_GO|CONDITIONAL_GO)\s*[—-]\s*(?:validated approved rule\(s\)|supported custom software scope):\s*([A-Z0-9_, ]+)\.\s*(.*)$/);
+  if (!m) return null;
+  const codes = m[2].split(/\s*,\s*/).filter(Boolean);
+  const label = m[1] === "NO_GO" ? "NO-GO" : "CONDITIONAL GO";
+  const rest = m[3].replace(/^Company qualifications still require verification before bidding\.\s*/i, "").replace(/^Evidence:\s*/i, "Tender text: ");
+  return `${label}: ${codes.map(ruleLabel).join("; ")}.${rest ? " " + rest : ""}`;
+}
+
 export function friendlyTenderReason(raw: string | null | undefined): string {
   const text = String(raw || "").replace(/\s+/g, " ").trim();
   if (!text) return "";
+  const decided = ruleDecision(text);
+  if (decided) return decided;
   const parts = text.split(/\s+\|\s+/);
   if (!parts.some(isMachineText)) return text;
   const human = parts
