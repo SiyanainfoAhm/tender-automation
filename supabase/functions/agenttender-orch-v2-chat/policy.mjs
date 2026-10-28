@@ -4,7 +4,7 @@ export const POLICY_VERSION='approved-evidence-v1';
 export function qualificationDecision({requirements=[],softwareFit=false,coverageComplete=false,requirementsComplete=false}){
  if(requirements.some(r=>r.mandatory===true&&r.result==='FAIL'&&r.rfp_evidence?.length))return 'NO_GO';
  if(softwareFit&&coverageComplete&&requirementsComplete&&requirements.length&&requirements.every(r=>r.mandatory!==null&&(r.mandatory===false||r.result==='PASS')))return 'GO';
- return 'CONDITIONAL_GO';
+ return 'NOT_VERIFIED';
 }
 export function screen(t,rules){
  const text=[t.title,t.description].filter(Boolean).join(' ').toLowerCase();
