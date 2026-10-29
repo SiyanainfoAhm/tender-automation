@@ -70,12 +70,12 @@ export function canCreateFeeForTender(status: DocumentAccessStatus): boolean {
 
 export function biddingDocumentsLockReason(status: DocumentAccessStatus): string {
   if (canAccessBiddingDocuments(status)) return "";
-  return "Bidding documents unlock when status is Will Bid, Partnership, Submitted, or Won.";
+  return "Bidding documents unlock when status is GO, PARTNER_BID, SUBMITTED, or WON.";
 }
 
 export function financialDocumentsLockReason(status: DocumentAccessStatus): string {
   if (canAccessFinancialDocuments(status)) return "";
-  return "Financial documents unlock from May Bid onward.";
+  return "Financial documents unlock from CONDITIONAL_GO onward.";
 }
 
 export function deliverablesLockReason(status: DocumentAccessStatus): string {

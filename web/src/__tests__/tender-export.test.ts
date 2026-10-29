@@ -104,8 +104,8 @@ describe("tender export utils", () => {
   });
 
   it("maps status to UI labels", () => {
-    expect(tenderExportStatusLabel("NO_GO")).toBe("No Bid");
-    expect(tenderExportStatusLabel("CONDITIONAL_GO")).toBe("May Bid");
+    expect(tenderExportStatusLabel("NO_GO")).toBe("NO_GO");
+    expect(tenderExportStatusLabel("CONDITIONAL_GO")).toBe("CONDITIONAL_GO");
   });
 
   it("exportMoneyCellValue distinguishes zero from not disclosed", () => {
@@ -157,7 +157,7 @@ describe("tender export xlsx", () => {
     expect(emdCell.value).toBe(25000);
     expect(emdCell.numFmt).toBe('"₹"#,##0');
     expect(valueCell.value).toBe(1000000);
-    expect(statusCell.value).toBe("No Bid");
+    expect(statusCell.value).toBe("NO_GO");
     expect(msmeCell.value).toBe("Yes");
     expect(closingCell.value).toBeInstanceOf(Date);
     expect(closingCell.numFmt).toBe("dd-mm-yyyy");

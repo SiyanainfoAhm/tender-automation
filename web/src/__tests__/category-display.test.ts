@@ -99,15 +99,15 @@ describe("buildTopCategories", () => {
 
 describe("formatDecisionStatus / compactTenderCount", () => {
   it("formats status enums for display", () => {
-    expect(formatDecisionStatus("NO_GO")).toBe("No Bid");
-    expect(formatDecisionStatus("CONDITIONAL_GO")).toBe("May Bid");
-    expect(formatDecisionStatus("PARTNER_BID")).toBe("Partnership");
-    expect(formatDecisionStatus("NOT_EVALUATED")).toBe("Not Evaluated");
-    expect(formatDecisionStatus("UNDER_EVALUATION")).toBe("Not Evaluated");
-    expect(formatDecisionStatus("SUBMITTED")).toBe("Submitted");
-    expect(formatDecisionStatus("CANCELLED")).toBe("Tender cancelled");
-    expect(formatDecisionStatus("DISQUALIFIED")).toBe("Disqualified");
-    expect(formatDecisionStatus("LOST")).toBe("Lost");
+    expect(formatDecisionStatus("NO_GO")).toBe("NO_GO");
+    expect(formatDecisionStatus("CONDITIONAL_GO")).toBe("CONDITIONAL_GO");
+    expect(formatDecisionStatus("PARTNER_BID")).toBe("PARTNER_BID");
+    expect(formatDecisionStatus("NOT_EVALUATED")).toBe("NOT_EVALUATED");
+    expect(formatDecisionStatus("UNDER_EVALUATION")).toBe("NOT_EVALUATED");
+    expect(formatDecisionStatus("SUBMITTED")).toBe("SUBMITTED");
+    expect(formatDecisionStatus("CANCELLED")).toBe("CANCELLED");
+    expect(formatDecisionStatus("DISQUALIFIED")).toBe("DISQUALIFIED");
+    expect(formatDecisionStatus("LOST")).toBe("LOST");
   });
 
   it("formats tender counts", () => {

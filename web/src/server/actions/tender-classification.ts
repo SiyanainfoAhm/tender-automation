@@ -48,7 +48,7 @@ export async function updateTenderClassificationAction(input: {
     if (input.status === "NO_GO" && data.qualification && reason.length < 8) {
       return {
         ok: false,
-        error: "Please enter a short reason before marking No Bid.",
+        error: "Please enter a short reason before marking NO_GO.",
       };
     }
 

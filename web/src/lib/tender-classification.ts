@@ -14,8 +14,8 @@ export type PipelineStage = "new" | "screening" | "will_bid" | "submitted";
 export const PIPELINE_STAGES: Array<{ key: PipelineStage; label: string }> = [
   { key: "new", label: "New" },
   { key: "screening", label: "Screening" },
-  { key: "will_bid", label: "Will Bid" },
-  { key: "submitted", label: "Submitted" },
+  { key: "will_bid", label: "GO" },
+  { key: "submitted", label: "SUBMITTED" },
 ];
 
 export const CLASSIFICATION_ACTION_META: Record<
@@ -28,26 +28,26 @@ export const CLASSIFICATION_ACTION_META: Record<
   }
 > = {
   GO: {
-    label: "Will Bid",
-    toast: "Tender marked Will Bid.",
+    label: "GO",
+    toast: "Tender marked GO.",
     activeClass: "bg-emerald-50 border-emerald-500 text-emerald-700",
     idleClass: "bg-white border-border text-foreground-600 hover:border-emerald-300",
   },
   CONDITIONAL_GO: {
-    label: "May Bid",
-    toast: "Tender marked May Bid.",
+    label: "CONDITIONAL_GO",
+    toast: "Tender marked CONDITIONAL_GO.",
     activeClass: "bg-amber-50 border-amber-500 text-amber-700",
     idleClass: "bg-white border-border text-foreground-600 hover:border-amber-300",
   },
   PARTNER_BID: {
-    label: "Partnership",
-    toast: "Tender moved to Partnership.",
+    label: "PARTNER_BID",
+    toast: "Tender marked PARTNER_BID.",
     activeClass: "bg-indigo-50 border-indigo-500 text-indigo-700",
     idleClass: "bg-white border-border text-foreground-600 hover:border-indigo-300",
   },
   NO_GO: {
-    label: "No Bid",
-    toast: "Tender marked No Bid.",
+    label: "NO_GO",
+    toast: "Tender marked NO_GO.",
     activeClass: "bg-rose-50 border-rose-500 text-rose-700",
     idleClass: "bg-white border-border text-foreground-600 hover:border-rose-300",
   },
@@ -55,18 +55,18 @@ export const CLASSIFICATION_ACTION_META: Record<
 
 export const CLASSIFICATION_DECISION_LABELS: Record<TenderStatus, string> = {
   GO: "GO",
-  CONDITIONAL_GO: "CONDITIONAL GO",
-  PARTNER_BID: "PARTNER BID",
+  CONDITIONAL_GO: "CONDITIONAL_GO",
+  PARTNER_BID: "PARTNER_BID",
   VERIFY: "VERIFY",
-  NO_GO: "NO-GO",
+  NO_GO: "NO_GO",
   DUPLICATE: "DUPLICATE",
   WON: "WON",
   LOST: "LOST",
   DISQUALIFIED: "DISQUALIFIED",
   SUBMITTED: "SUBMITTED",
   CANCELLED: "CANCELLED",
-  TECHNICAL_REJECTED: "TECHNICAL REJECTED",
-  FINANCIAL_REJECTED: "FINANCIAL REJECTED",
+  TECHNICAL_REJECTED: "TECHNICAL_REJECTED",
+  FINANCIAL_REJECTED: "FINANCIAL_REJECTED",
   DELETE: "DELETE",
 };
 

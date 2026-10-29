@@ -68,10 +68,10 @@ const PIPELINE_META: Array<{
 }> = [
   { key: "new", label: "New", color: "#94a3b8", barClass: "bg-slate-300" },
   { key: "screening", label: "Screening", color: "#64748b", barClass: "bg-slate-400" },
-  { key: "mayBid", label: "Partnership", color: "#7c3aed", barClass: "bg-violet-500" },
-  { key: "willBid", label: "Will Bid", color: "#10b981", barClass: "bg-emerald-500" },
-  { key: "submitted", label: "Submitted", color: "#3b82f6", barClass: "bg-blue-500" },
-  { key: "won", label: "Won", color: "#16a34a", barClass: "bg-green-600" },
+  { key: "mayBid", label: "CONDITIONAL_GO / PARTNER_BID", color: "#7c3aed", barClass: "bg-violet-500" },
+  { key: "willBid", label: "GO", color: "#10b981", barClass: "bg-emerald-500" },
+  { key: "submitted", label: "SUBMITTED", color: "#3b82f6", barClass: "bg-blue-500" },
+  { key: "won", label: "WON", color: "#16a34a", barClass: "bg-green-600" },
 ];
 
 function toNumber(value: unknown): number {

@@ -9,12 +9,12 @@ import { SourceBadge } from "@/components/status/source-badge";
 describe("status badges", () => {
   it("renders Will Bid label for GO", () => {
     render(<StatusBadge status="GO" />);
-    expect(screen.getByText("Will Bid")).toBeTruthy();
+    expect(screen.getByText("GO")).toBeTruthy();
   });
 
   it("renders No Bid label for NO_GO", () => {
     render(<StatusBadge status="NO_GO" />);
-    expect(screen.getByText("No Bid")).toBeTruthy();
+    expect(screen.getByText("NO_GO")).toBeTruthy();
   });
 });
 

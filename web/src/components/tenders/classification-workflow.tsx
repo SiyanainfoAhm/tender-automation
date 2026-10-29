@@ -265,7 +265,7 @@ export function ClassificationWorkflow({
       <Dialog open={noBidOpen} onOpenChange={setNoBidOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Mark as No Bid</DialogTitle>
+            <DialogTitle>Mark as NO_GO</DialogTitle>
             <DialogDescription>
               Record a short reason. This updates the stored qualification
               reason when one already exists.
@@ -277,7 +277,7 @@ export function ClassificationWorkflow({
               id="no-bid-reason"
               value={noBidReason}
               onChange={(event) => setNoBidReason(event.target.value)}
-              placeholder="Why is this tender a No Bid?"
+              placeholder="Why is this tender NO_GO?"
               rows={4}
             />
           </div>
@@ -293,7 +293,7 @@ export function ClassificationWorkflow({
               {saving === "NO_GO" ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
-                "Mark No Bid"
+                "Mark NO_GO"
               )}
             </Button>
           </DialogFooter>

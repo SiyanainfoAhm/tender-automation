@@ -38,22 +38,22 @@ export const REJECTED_STATUSES = [
   "FINANCIAL_REJECTED",
 ] as const;
 
-/** Presentation labels only — stored DB values remain GO / CONDITIONAL_GO / etc. */
+/** Labels match the stored DB values exactly (GO, CONDITIONAL_GO, …) so screens and backend never disagree. */
 export const STATUS_DISPLAY_LABELS: Record<TenderStatus, string> = {
-  GO: "Will Bid",
-  CONDITIONAL_GO: "May Bid",
-  PARTNER_BID: "Partnership",
-  VERIFY: "Verify",
-  NO_GO: "No Bid",
-  DUPLICATE: "Duplicate",
-  WON: "Won",
-  LOST: "Lost",
-  DISQUALIFIED: "Disqualified",
-  SUBMITTED: "Submitted",
-  CANCELLED: "Tender cancelled",
-  TECHNICAL_REJECTED: "Technical Rejected",
-  FINANCIAL_REJECTED: "Financial Rejected",
-  DELETE: "Delete",
+  GO: "GO",
+  CONDITIONAL_GO: "CONDITIONAL_GO",
+  PARTNER_BID: "PARTNER_BID",
+  VERIFY: "VERIFY",
+  NO_GO: "NO_GO",
+  DUPLICATE: "DUPLICATE",
+  WON: "WON",
+  LOST: "LOST",
+  DISQUALIFIED: "DISQUALIFIED",
+  SUBMITTED: "SUBMITTED",
+  CANCELLED: "CANCELLED",
+  TECHNICAL_REJECTED: "TECHNICAL_REJECTED",
+  FINANCIAL_REJECTED: "FINANCIAL_REJECTED",
+  DELETE: "DELETE",
 };
 
 /**
@@ -80,21 +80,21 @@ export const TENDER_UI_STATUSES = [
 export type TenderUiStatus = (typeof TENDER_UI_STATUSES)[number];
 
 export const TENDER_UI_STATUS_LABELS: Record<TenderUiStatus, string> = {
-  verify: "Verify",
-  may_bid: "May Bid",
-  will_bid: "Will Bid",
-  partnership: "Partnership",
-  submitted: "Submitted",
-  won: "Won",
-  lost: "Lost",
-  disqualified: "Disqualified",
-  technical_rejected: "Technical Rejected",
-  financial_rejected: "Financial Rejected",
-  delete: "Delete",
-  no_bid: "No Bid",
-  duplicate: "Duplicate",
-  cancelled: "Tender cancelled",
-  not_evaluated: "Not Evaluated",
+  verify: "VERIFY",
+  may_bid: "CONDITIONAL_GO",
+  will_bid: "GO",
+  partnership: "PARTNER_BID",
+  submitted: "SUBMITTED",
+  won: "WON",
+  lost: "LOST",
+  disqualified: "DISQUALIFIED",
+  technical_rejected: "TECHNICAL_REJECTED",
+  financial_rejected: "FINANCIAL_REJECTED",
+  delete: "DELETE",
+  no_bid: "NO_GO",
+  duplicate: "DUPLICATE",
+  cancelled: "CANCELLED",
+  not_evaluated: "NOT_EVALUATED",
 };
 
 export const TENDER_UI_STATUS_COLORS: Record<TenderUiStatus, string> = {
@@ -121,20 +121,20 @@ export const TENDER_LIST_STATUS_FILTERS: Array<{
   label: string;
 }> = [
   { value: "ALL", label: "All" },
-  { value: "verify", label: "Verify" },
-  { value: "may_bid", label: "May Bid" },
-  { value: "will_bid", label: "Will Bid" },
-  { value: "partnership", label: "Partnership" },
-  { value: "submitted", label: "Submitted" },
-  { value: "won", label: "Won" },
-  { value: "lost", label: "Lost" },
-  { value: "disqualified", label: "Disqualified" },
-  { value: "technical_rejected", label: "Technical Rejected" },
-  { value: "financial_rejected", label: "Financial Rejected" },
-  { value: "delete", label: "Delete" },
-  { value: "no_bid", label: "No Bid" },
-  { value: "duplicate", label: "Duplicate" },
-  { value: "cancelled", label: "Tender cancelled" },
+  { value: "verify", label: "VERIFY" },
+  { value: "may_bid", label: "CONDITIONAL_GO" },
+  { value: "will_bid", label: "GO" },
+  { value: "partnership", label: "PARTNER_BID" },
+  { value: "submitted", label: "SUBMITTED" },
+  { value: "won", label: "WON" },
+  { value: "lost", label: "LOST" },
+  { value: "disqualified", label: "DISQUALIFIED" },
+  { value: "technical_rejected", label: "TECHNICAL_REJECTED" },
+  { value: "financial_rejected", label: "FINANCIAL_REJECTED" },
+  { value: "delete", label: "DELETE" },
+  { value: "no_bid", label: "NO_GO" },
+  { value: "duplicate", label: "DUPLICATE" },
+  { value: "cancelled", label: "CANCELLED" },
 ];
 
 export function getTenderUiStatus(

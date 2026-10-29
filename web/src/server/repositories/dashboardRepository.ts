@@ -478,7 +478,7 @@ export async function getDashboardOverview(options: {
         key: "declined",
         label: `Bids declined ${periodPhrase}`,
         value: declined.toLocaleString("en-IN"),
-        supporting: "No Bid outcomes in period",
+        supporting: "NO_GO outcomes in period",
       },
       {
         key: "awarded",

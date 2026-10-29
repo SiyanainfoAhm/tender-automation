@@ -11,8 +11,8 @@ describe("tender UI status mapping", () => {
     expect(getTenderUiStatus("VERIFY")).toBe("verify");
     expect(getTenderUiStatus("CONDITIONAL_GO")).toBe("may_bid");
     expect(getTenderUiStatus("MAY_BID")).toBe("may_bid");
-    expect(tenderUiStatusLabel("VERIFY")).toBe("Verify");
-    expect(tenderUiStatusLabel("CONDITIONAL_GO")).toBe("May Bid");
+    expect(tenderUiStatusLabel("VERIFY")).toBe("VERIFY");
+    expect(tenderUiStatusLabel("CONDITIONAL_GO")).toBe("CONDITIONAL_GO");
     expect(getTenderUiStatus(null)).toBe("not_evaluated");
   });
 
@@ -26,11 +26,11 @@ describe("tender UI status mapping", () => {
     expect(getTenderUiStatus("CANCELLED")).toBe("cancelled");
     expect(getTenderUiStatus("TECHNICAL_REJECTED")).toBe("technical_rejected");
     expect(getTenderUiStatus("FINANCIAL_REJECTED")).toBe("financial_rejected");
-    expect(tenderUiStatusLabel("CANCELLED")).toBe("Tender cancelled");
-    expect(tenderUiStatusLabel("DISQUALIFIED")).toBe("Disqualified");
-    expect(tenderUiStatusLabel("LOST")).toBe("Lost");
-    expect(tenderUiStatusLabel("TECHNICAL_REJECTED")).toBe("Technical Rejected");
-    expect(tenderUiStatusLabel("FINANCIAL_REJECTED")).toBe("Financial Rejected");
+    expect(tenderUiStatusLabel("CANCELLED")).toBe("CANCELLED");
+    expect(tenderUiStatusLabel("DISQUALIFIED")).toBe("DISQUALIFIED");
+    expect(tenderUiStatusLabel("LOST")).toBe("LOST");
+    expect(tenderUiStatusLabel("TECHNICAL_REJECTED")).toBe("TECHNICAL_REJECTED");
+    expect(tenderUiStatusLabel("FINANCIAL_REJECTED")).toBe("FINANCIAL_REJECTED");
   });
 
   it("expands status filters to the correct DB values", () => {
@@ -80,7 +80,7 @@ describe("tender UI status mapping", () => {
     });
     // Legacy UNDER_EVALUATION is never a visible UI status.
     expect(getTenderUiStatus("UNDER_EVALUATION")).toBe("not_evaluated");
-    expect(tenderUiStatusLabel("UNDER_EVALUATION")).toBe("Not Evaluated");
+    expect(tenderUiStatusLabel("UNDER_EVALUATION")).toBe("NOT_EVALUATED");
     expect(qualificationStatusesForFilter("under_evaluation")).toEqual({
       kind: "null",
     });

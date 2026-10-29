@@ -50,7 +50,7 @@ export const DASHBOARD_PIPELINE_META: Record<
   }
 > = {
   verify: {
-    label: "Verify",
+    label: "VERIFY",
     number: 1,
     barClass: "bg-sky-500",
     iconBg: "bg-sky-50",
@@ -58,7 +58,7 @@ export const DASHBOARD_PIPELINE_META: Record<
     color: "#0ea5e9",
   },
   may_bid: {
-    label: "May Bid",
+    label: "CONDITIONAL_GO",
     number: 2,
     barClass: "bg-amber-500",
     iconBg: "bg-amber-50",
@@ -66,7 +66,7 @@ export const DASHBOARD_PIPELINE_META: Record<
     color: "#f59e0b",
   },
   will_bid: {
-    label: "Will Bid",
+    label: "GO",
     number: 3,
     barClass: "bg-emerald-500",
     iconBg: "bg-emerald-50",
@@ -74,7 +74,7 @@ export const DASHBOARD_PIPELINE_META: Record<
     color: "#10b981",
   },
   partnership: {
-    label: "Partnership",
+    label: "PARTNER_BID",
     number: 4,
     barClass: "bg-violet-500",
     iconBg: "bg-violet-50",
@@ -82,7 +82,7 @@ export const DASHBOARD_PIPELINE_META: Record<
     color: "#7c3aed",
   },
   submitted: {
-    label: "Submitted",
+    label: "SUBMITTED",
     number: 5,
     barClass: "bg-blue-500",
     iconBg: "bg-blue-50",
@@ -90,7 +90,7 @@ export const DASHBOARD_PIPELINE_META: Record<
     color: "#3b82f6",
   },
   won: {
-    label: "Won",
+    label: "WON",
     number: 6,
     barClass: "bg-emerald-600",
     iconBg: "bg-emerald-50",
@@ -98,7 +98,7 @@ export const DASHBOARD_PIPELINE_META: Record<
     color: "#16a34a",
   },
   lost: {
-    label: "Lost",
+    label: "LOST",
     number: 7,
     barClass: "bg-rose-700",
     iconBg: "bg-rose-50",
@@ -106,7 +106,7 @@ export const DASHBOARD_PIPELINE_META: Record<
     color: "#b91c1c",
   },
   disqualified: {
-    label: "Disqualified",
+    label: "DISQUALIFIED",
     number: 8,
     barClass: "bg-red-600",
     iconBg: "bg-red-50",
@@ -114,7 +114,7 @@ export const DASHBOARD_PIPELINE_META: Record<
     color: "#9f1239",
   },
   no_bid: {
-    label: "No Bid",
+    label: "NO_GO",
     number: 9,
     barClass: "bg-rose-500",
     iconBg: "bg-rose-50",
@@ -122,7 +122,7 @@ export const DASHBOARD_PIPELINE_META: Record<
     color: "#dc2626",
   },
   duplicate: {
-    label: "Duplicate",
+    label: "DUPLICATE",
     number: 10,
     barClass: "bg-slate-500",
     iconBg: "bg-slate-50",
@@ -130,7 +130,7 @@ export const DASHBOARD_PIPELINE_META: Record<
     color: "#6b7280",
   },
   cancelled: {
-    label: "Tender cancelled",
+    label: "CANCELLED",
     number: 11,
     barClass: "bg-stone-500",
     iconBg: "bg-stone-50",

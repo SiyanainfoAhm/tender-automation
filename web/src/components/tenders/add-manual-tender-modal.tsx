@@ -424,8 +424,8 @@ export function AddManualTenderModal({
                   </SelectContent>
                 </Select>
                 <p className="text-[11px] text-foreground-400">
-                  Will Bid is a human decision. Agents may set May Bid or
-                  Verify, but never Will Bid.
+                  GO is a human decision. Agents may set CONDITIONAL_GO or
+                  VERIFY, but never GO.
                 </p>
               </div>
             </div>
@@ -656,7 +656,7 @@ export function AddManualTenderModal({
               </div>
               {showNoBidReason ? (
                 <div className="space-y-1.5">
-                  <Label htmlFor="mt-nobid">No Bid Reason *</Label>
+                  <Label htmlFor="mt-nobid">NO_GO Reason *</Label>
                   <Textarea
                     id="mt-nobid"
                     rows={2}

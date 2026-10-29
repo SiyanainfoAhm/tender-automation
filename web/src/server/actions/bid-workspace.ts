@@ -127,7 +127,7 @@ async function requireEditableWorkspace(tenderId: string, permission: "bids.edit
   });
   if (!detail) throw new Error("Tender not found.");
   if (detail.qualificationStatus === "NO_GO") {
-    throw new Error("This tender is marked No Bid. Editing is disabled.");
+    throw new Error("This tender is marked NO_GO. Editing is disabled.");
   }
   if (detail.submitted) {
     throw new Error("This bid has been marked submitted. Editing is disabled.");

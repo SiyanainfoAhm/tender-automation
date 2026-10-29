@@ -1,11 +1,7 @@
 import {STATUS_DISPLAY_LABELS,type TenderStatus} from '@/lib/tender-status';
 
 export function chatStatusLabel(status:TenderStatus) {
- if(status==='GO')return 'Will Bid (GO)';
- if(status==='CONDITIONAL_GO')return 'May Bid (Conditional GO)';
- if(status==='NO_GO')return 'No Bid (No GO)';
- if(status==='DELETE')return 'Delete status';
- return STATUS_DISPLAY_LABELS[status];
+     return STATUS_DISPLAY_LABELS[status];
 }
 // Only a user's explicit command opens a form. Analysis and recommendations
 // continue through the read-only answer engine. No command executes a write.

@@ -1366,7 +1366,7 @@ export function TenderDetailClient({
                         className="size-1.5 shrink-0 rounded-full bg-foreground-400"
                         aria-hidden
                       />
-                      Not Evaluated
+                      NOT_EVALUATED
                     </span>
                   )}
                 </InfoRow>
@@ -1622,7 +1622,7 @@ export function TenderDetailClient({
                           className="size-1.5 shrink-0 rounded-full bg-foreground-400"
                           aria-hidden
                         />
-                        Not Evaluated
+                        NOT_EVALUATED
                       </span>
                     )}
                   </div>

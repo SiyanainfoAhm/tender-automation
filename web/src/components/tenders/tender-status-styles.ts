@@ -17,7 +17,7 @@ export const qualificationStatusStyles: Record<
 > = {
   GO: {
     label: STATUS_DISPLAY_LABELS.GO,
-    shortLabel: "Will Bid",
+    shortLabel: "GO",
     bg: "bg-emerald-100",
     text: "text-emerald-700",
     border: "border-emerald-200",
@@ -25,7 +25,7 @@ export const qualificationStatusStyles: Record<
   },
   CONDITIONAL_GO: {
     label: STATUS_DISPLAY_LABELS.CONDITIONAL_GO,
-    shortLabel: "May Bid",
+    shortLabel: "CONDITIONAL_GO",
     bg: "bg-amber-100",
     text: "text-amber-700",
     border: "border-amber-200",
@@ -33,7 +33,7 @@ export const qualificationStatusStyles: Record<
   },
   PARTNER_BID: {
     label: STATUS_DISPLAY_LABELS.PARTNER_BID,
-    shortLabel: "Partnership",
+    shortLabel: "PARTNER_BID",
     bg: "bg-indigo-100",
     text: "text-indigo-700",
     border: "border-indigo-200",
@@ -41,7 +41,7 @@ export const qualificationStatusStyles: Record<
   },
   VERIFY: {
     label: STATUS_DISPLAY_LABELS.VERIFY,
-    shortLabel: "Verify",
+    shortLabel: "VERIFY",
     bg: "bg-sky-100",
     text: "text-sky-700",
     border: "border-sky-200",
@@ -49,7 +49,7 @@ export const qualificationStatusStyles: Record<
   },
   NO_GO: {
     label: STATUS_DISPLAY_LABELS.NO_GO,
-    shortLabel: "No Bid",
+    shortLabel: "NO_GO",
     bg: "bg-rose-100",
     text: "text-rose-700",
     border: "border-rose-200",
@@ -57,7 +57,7 @@ export const qualificationStatusStyles: Record<
   },
   DUPLICATE: {
     label: STATUS_DISPLAY_LABELS.DUPLICATE,
-    shortLabel: "Duplicate",
+    shortLabel: "DUPLICATE",
     bg: "bg-slate-100",
     text: "text-slate-700",
     border: "border-slate-200",
@@ -65,7 +65,7 @@ export const qualificationStatusStyles: Record<
   },
   WON: {
     label: STATUS_DISPLAY_LABELS.WON,
-    shortLabel: "Won",
+    shortLabel: "WON",
     bg: "bg-emerald-100",
     text: "text-emerald-800",
     border: "border-emerald-300",
@@ -73,7 +73,7 @@ export const qualificationStatusStyles: Record<
   },
   LOST: {
     label: STATUS_DISPLAY_LABELS.LOST,
-    shortLabel: "Lost",
+    shortLabel: "LOST",
     bg: "bg-rose-100",
     text: "text-rose-800",
     border: "border-rose-300",
@@ -81,7 +81,7 @@ export const qualificationStatusStyles: Record<
   },
   DISQUALIFIED: {
     label: STATUS_DISPLAY_LABELS.DISQUALIFIED,
-    shortLabel: "Disqualified",
+    shortLabel: "DISQUALIFIED",
     bg: "bg-red-100",
     text: "text-red-800",
     border: "border-red-300",
@@ -89,7 +89,7 @@ export const qualificationStatusStyles: Record<
   },
   SUBMITTED: {
     label: STATUS_DISPLAY_LABELS.SUBMITTED,
-    shortLabel: "Submitted",
+    shortLabel: "SUBMITTED",
     bg: "bg-blue-100",
     text: "text-blue-800",
     border: "border-blue-300",
@@ -97,7 +97,7 @@ export const qualificationStatusStyles: Record<
   },
   CANCELLED: {
     label: STATUS_DISPLAY_LABELS.CANCELLED,
-    shortLabel: "Cancelled",
+    shortLabel: "CANCELLED",
     bg: "bg-stone-100",
     text: "text-stone-800",
     border: "border-stone-300",
@@ -105,7 +105,7 @@ export const qualificationStatusStyles: Record<
   },
   TECHNICAL_REJECTED: {
     label: STATUS_DISPLAY_LABELS.TECHNICAL_REJECTED,
-    shortLabel: "Tech Rejected",
+    shortLabel: "TECHNICAL_REJECTED",
     bg: "bg-orange-100",
     text: "text-orange-900",
     border: "border-orange-300",
@@ -113,7 +113,7 @@ export const qualificationStatusStyles: Record<
   },
   FINANCIAL_REJECTED: {
     label: STATUS_DISPLAY_LABELS.FINANCIAL_REJECTED,
-    shortLabel: "Fin Rejected",
+    shortLabel: "FINANCIAL_REJECTED",
     bg: "bg-amber-100",
     text: "text-amber-950",
     border: "border-amber-400",
@@ -121,7 +121,7 @@ export const qualificationStatusStyles: Record<
   },
   DELETE: {
     label: STATUS_DISPLAY_LABELS.DELETE,
-    shortLabel: "Delete",
+    shortLabel: "DELETE",
     bg: "bg-slate-100",
     text: "text-slate-800",
     border: "border-slate-300",

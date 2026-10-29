@@ -177,7 +177,7 @@ export async function createBidFeeAction(
     if (!canCreateFeeForTender(status)) {
       return {
         ok: false,
-        error: "Fees can only be added from May Bid onward.",
+        error: "Fees can only be added from CONDITIONAL_GO onward.",
       };
     }
 
@@ -267,7 +267,7 @@ export async function createBidFeeWithAttachmentsAction(
     if (!canCreateFeeForTender(tender.tender.qualification_status as string | null)) {
       return {
         ok: false,
-        error: "Fees can only be added from May Bid onward.",
+        error: "Fees can only be added from CONDITIONAL_GO onward.",
       };
     }
 

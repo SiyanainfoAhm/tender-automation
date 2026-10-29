@@ -63,7 +63,7 @@ export async function changeChecklistWorkCategoryAction(input: {
 
     if (!detail) return { ok: false, error: "Tender not found." };
     if (detail.qualificationStatus === "NO_GO") {
-      return { ok: false, error: "This tender is marked No Bid. Editing is disabled." };
+      return { ok: false, error: "This tender is marked NO_GO. Editing is disabled." };
     }
     if (detail.submitted) {
       return { ok: false, error: "This bid has been marked submitted. Editing is disabled." };

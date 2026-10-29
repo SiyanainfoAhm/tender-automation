@@ -78,7 +78,7 @@ const createManualTenderSchema = z
     if (data.initialStatus === "NO_GO" && !(data.noBidReason || "").trim()) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "No Bid reason is required when status is No Bid",
+        message: "NO_GO reason is required when status is NO_GO",
         path: ["noBidReason"],
       });
     }
