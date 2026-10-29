@@ -21,7 +21,7 @@ test('turnover above 3 crore is NO_GO only without JV/consortium',()=>{
  const text='Average annual turnover of the bidder should be minimum Rs. 10 Crore during last three financial years.';
  const a={decision:'NO_GO',rule_code:'TURNOVER_ABOVE_COMPANY_LIMIT',turnover_required_inr:100000000,evidence:[{ref:'D1',quote:'Average annual turnover of the bidder should be minimum Rs. 10 Crore',rule_code:'TURNOVER_ABOVE_COMPANY_LIMIT'}]};
  assert.equal(validateQuick(a,src(text),rules,tender).decision,'NO_GO');
- assert.equal(validateQuick(a,src(text+' Consortium is allowed with maximum two members.'),rules,tender).decision,'NEED_MORE');
+ assert.equal(validateQuick(a,src(text+' Consortium is allowed with maximum two members.'),rules,tender).decision,'CONDITIONAL_GO');
  assert.equal(validateQuick({...a,turnover_required_inr:20000000},src(text),rules,tender).decision,'NEED_MORE');
 });
 test('EMD NO_GO needs payable amount above cap inside the quote',()=>{
@@ -58,6 +58,16 @@ test('turnover clause deep in a long RFP is always included',()=>{
  assert.ok(k&&k.text.includes(clause));
  const v=validateQuick({decision:'NO_GO',rule_code:'TURNOVER_ABOVE_COMPANY_LIMIT',turnover_required_inr:100000000,evidence:[{ref:'K',quote:'average annual turnover of not less than Rs 10 Crore',rule_code:'TURNOVER_ABOVE_COMPANY_LIMIT'}]},s,rules,{title:'t'});
  assert.equal(v.decision,'NO_GO');
+});
+test('amounts written in words, lakh and crore are understood',()=>{
+ const text='The bidder must have average annual turnover of not less than Rupees Ten Crore. EMD of Rs. 10 Lakh only shall be paid.';
+ assert.equal(validateQuick({decision:'NO_GO',rule_code:'TURNOVER_ABOVE_COMPANY_LIMIT',turnover_required_inr:100000000,evidence:[{ref:'D1',quote:'average annual turnover of not less than Rupees Ten Crore',rule_code:'TURNOVER_ABOVE_COMPANY_LIMIT'}]},src(text),rules,tender).decision,'NO_GO');
+ assert.equal(validateQuick({decision:'NO_GO',rule_code:'EMD_LIMIT',emd_payable_inr:1000000,evidence:[{ref:'D1',quote:'EMD of Rs. 10 Lakh only shall be paid',rule_code:'EMD_LIMIT'}]},src(text),rules,tender).decision,'NO_GO');
+});
+test('turnover above cap with JV allowed becomes CONDITIONAL_GO with a note',()=>{
+ const text='Average annual turnover of the bidder should be minimum Rs. 10 Crore. Consortium is allowed with maximum two members.';
+ const v=validateQuick({decision:'NO_GO',rule_code:'TURNOVER_ABOVE_COMPANY_LIMIT',turnover_required_inr:100000000,evidence:[{ref:'D1',quote:'Average annual turnover of the bidder should be minimum Rs. 10 Crore',rule_code:'TURNOVER_ABOVE_COMPANY_LIMIT'}]},src(text),rules,tender);
+ assert.equal(v.decision,'CONDITIONAL_GO');assert.match(v.review_notes[0],/JV/);
 });
 test('corrigendum is read first, listing mirrors last',()=>{
  assert.ok(docRank('Corrigendum-1.pdf')<docRank('RFP.pdf'));assert.ok(docRank('RFP.pdf')<docRank('listing.html'));

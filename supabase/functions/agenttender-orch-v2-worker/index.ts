@@ -2,6 +2,7 @@ import {decideTender,DECISION_VERSION} from "./decision-evidence.mjs";
 import {activeRules,screen} from "./policy.mjs";
 import {inspectStep3} from "./step3-evidence.mjs";
 import {quickScreen,QUICK_VERSION} from "./quick-screen.mjs";
+import {titleScreen} from "./title-screen.mjs";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import {createClient} from "npm:@supabase/supabase-js@2.57.4";
 const KEY=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")||"";
@@ -138,7 +139,13 @@ Deno.serve(async(req)=>{
     if(!["VERIFY","REVIEW"].includes(current?.qualification_status)&&!(corrective&&current?.qualification_status==="CONDITIONAL_GO"))throw Error("TENDER_STATUS_CHANGED_BEFORE_AI");
    }
    if(step===2){
-    result=screen(t,await activeRules(db));
+    // Obvious non-fit by title: NO_GO now, no AI, no document work.
+    const ts=titleScreen(t);
+    if(ts){
+     const {data:commit,error:commitError}=await db.rpc("agenttender_orch_v2_quick_commit",{p_tender:id,p_lease:job.lease_token,p_decision:"NO_GO",p_reason:ts.reason,p_assessment:{quick_version:ts.version,rule_code:ts.rule_code,evidence:[{ref:"L",quote:t.title,rule_code:ts.rule_code}],title_screen:ts}});
+     if(commitError)throw commitError;
+     result={quick_screen:true,title_screen:true,decision:"NO_GO",commit,reason:ts.reason};ok=true;
+    }else result=screen(t,await activeRules(db));
    }
    // Quick screen first: decide from notice/scope/PQ/EMD/turnover text already read.
    // Only when it cannot run (no documents) does the full-coverage review below take over.

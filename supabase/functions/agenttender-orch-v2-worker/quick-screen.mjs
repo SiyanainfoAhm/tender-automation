@@ -204,6 +204,21 @@ async function askAI(aiKey, payload) {
   }
 }
 
+// Every INR amount written in a quote: "Rs 12,00,000", "₹10,00,00,000", "10 Crore", "Rupees Ten Crore", "5.5 lakh".
+const WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, fifteen: 15, twenty: 20, twenty5: 25, fifty: 50, hundred: 100 };
+export function inrAmounts(quote) {
+  const q = String(quote || "").toLowerCase().replace(/twenty[- ]five/g, "twenty5");
+  const out = [];
+  const unit = (u) => /crore|cr\b/.test(u) ? 1e7 : /lakh|lac/.test(u) ? 1e5 : 1;
+  for (const m of q.matchAll(/(\d[\d,]*(?:\.\d+)?)\s*(crores?|cr\b|lakhs?|lacs?)?/g)) {
+    const n = Number(m[1].replace(/,/g, ""));
+    if (Number.isFinite(n) && n > 0) out.push(n * (m[2] ? unit(m[2]) : 1));
+  }
+  for (const m of q.matchAll(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty5|twenty|fifty|hundred)\s+(crores?|lakhs?|lacs?)/g)) out.push(WORDS[m[1]] * unit(m[2]));
+  return out;
+}
+const near = (a, b) => b > 0 && Math.abs(a - b) / b < 0.02;
+
 // Deterministic checks on the AI answer: quotes must exist in the source, rules must be enabled.
 export function validateQuick(raw, sources, rules, tender) {
   const byRef = new Map(sources.map((s) => [s.ref, s]));
@@ -223,6 +238,7 @@ export function validateQuick(raw, sources, rules, tender) {
   let decision = ["NO_GO", "CONDITIONAL_GO", "NEED_MORE"].includes(raw?.decision) ? raw.decision : "NEED_MORE";
   let rule = raw?.rule_code ? String(raw.rule_code) : null;
   const problems = [];
+  let jvRelief = false;
 
   if (decision === "NO_GO") {
     const r = rule && ruleMap.get(rule);
@@ -233,18 +249,22 @@ export function validateQuick(raw, sources, rules, tender) {
       const need = Number(raw?.turnover_required_inr);
       const cap = Number(r.parameters?.max_mandatory_average_annual_turnover_inr) || 30000000;
       if (!(need > cap)) problems.push("turnover not above cap");
-      if (raw?.consortium_allowed === true || consortiumAllowed) problems.push("consortium/JV allowed");
-      if (!cited.some((e) => /\d/.test(e.quote) && byRef.get(e.ref)?.kind === "DOCUMENT")) problems.push("turnover quote has no amount");
+      if (raw?.consortium_allowed === true || consortiumAllowed) { problems.push("consortium/JV allowed"); jvRelief = true; }
+      if (!cited.some((e) => byRef.get(e.ref)?.kind === "DOCUMENT" && inrAmounts(e.quote).some((a) => near(a, need) || a > cap))) problems.push("turnover quote has no amount above the cap");
     } else if (rule === "EMD_LIMIT") {
       const pay = Number(raw?.emd_payable_inr);
       const cap = Number(r.parameters?.max_payable_emd) || 500000;
-      const digits = String(Math.trunc(pay));
       if (!(pay > cap)) problems.push("payable EMD not above cap");
-      if (!cited.some((e) => e.quote.replace(/[^0-9]/g, "").includes(digits))) problems.push("EMD quote does not contain the payable amount");
+      if (!cited.some((e) => inrAmounts(e.quote).some((a) => near(a, pay)))) problems.push("EMD quote does not contain the payable amount");
     } else if (!docEvidence.some((e) => e.rule_code === rule) && !cited.some((e) => byRef.get(e.ref)?.kind === "LISTING" && norm(e.quote) === norm(tender.title))) {
       problems.push("scope exclusion needs a document quote or the full listing title");
     }
     if (problems.length) decision = "NEED_MORE";
+    // Turnover above the cap but JV/consortium is allowed: a bid is possible through a partner.
+    if (jvRelief && problems.length === 1 && evidence.length) {
+      decision = "CONDITIONAL_GO";
+      notes.unshift("Turnover requirement is above Rs 3 crore, but JV/consortium is allowed: bid only with a partner");
+    }
   }
   if (decision === "CONDITIONAL_GO" && !evidence.length) { problems.push("no verified scope quote"); decision = "NEED_MORE"; }
   if (decision !== "NO_GO") rule = decision === "CONDITIONAL_GO" ? (rule && ruleMap.get(rule)?.decision !== "NO_GO" ? rule : null) : null;
