@@ -12,7 +12,8 @@ import {
 import userEvent from "@testing-library/user-event";
 
 const streamAskAiRequest = vi.fn();
-const questions = Array.from({length:10}, (_, i) => ({label:`Question ${i+1}`, category:`CATEGORY_${String.fromCharCode(65+i)}`, question:`Full configured question ${i+1}?`}));
+const CATEGORIES = ["DO_WE_QUALIFY","SCOPE_OF_WORK","GENERAL_TENDER_INFO","EMD","REQUIRED_DOCUMENTS","TURNOVER","EXPERIENCE","CERTIFICATIONS","PROJECT_COST","SUBMISSION_READINESS"];
+const questions = CATEGORIES.map((category, i) => ({label:`Question ${i+1}`, category, question:`Full configured question ${i+1}?`}));
 
 vi.mock('next/navigation',()=>({useRouter:()=>({refresh:vi.fn()})}));
 vi.mock("@/components/won-tenders/mark-as-won-dialog", () => ({MarkAsWonDialog: () => null}));
@@ -197,7 +198,7 @@ describe("TenderAskAiDrawer streaming UX", () => {
       expect.objectContaining({
         tenderId: "tender-1",
         action: undefined,
-        questionCategory: "CATEGORY_A",
+        questionCategory: "DO_WE_QUALIFY",
         sessionId: "session-1",
         message:
           "Full configured question 1?",
@@ -388,7 +389,7 @@ describe("TenderAskAiDrawer streaming UX", () => {
       <TenderAskAiDrawer tenderId="tender-1" tenderTitle="Tender" />,
     );
     await user.click(screen.getByRole("button", { name: /Ask AI about/i }));
-    await user.click(await screen.findByText("Question 3"));
+    await user.click(await screen.findByText("Question 2"));
 
     await waitFor(() => expect(streamAskAiRequest).toHaveBeenCalledTimes(1));
     expect(screen.getByTestId("ask-ai-stop")).toBeTruthy();

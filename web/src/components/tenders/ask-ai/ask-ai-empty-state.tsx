@@ -17,7 +17,7 @@ export function AskAiEmptyState(props:Parameters<typeof AskAiQuickActions>[0]) {
  return <div data-testid="ask-ai-empty-state" className="mx-auto max-w-3xl py-3">
   <span className="inline-flex rounded-full bg-primary-50 px-3 py-1 text-xs font-medium text-primary-700">Your tender intelligence assistant</span>
   <h3 className="mt-4 font-heading text-xl font-semibold text-text-primary">How can I help with this tender?</h3>
-  <p className="mb-5 mt-2 text-sm leading-6 text-text-muted">Explore eligibility, documents and deadlines using this tender’s evidence and your company’s records.</p>
+  <p className="mb-5 mt-2 text-sm leading-6 text-text-muted">Check whether we qualify, or get a summary of the scope of work.</p>
   <AskAiQuickActions {...props}/>
  </div>;
 }
