@@ -39,7 +39,8 @@ export async function getCompanyCheck({db, tender, companyId, allowCompany, aiKe
     loadCredentials(db, companyId),
   ]);
   const shared = {data, rules, credentials};
-  const readings = await Promise.allSettled([0, 1].map(() => assessQualification({db, tender, companyId, question, allowCompany, aiKey, signal, shared})));
+  // One reading keeps a first-time check inside the function's CPU / memory limit (two parallel readings exceeded it).
+  const readings = await Promise.allSettled([0].map(() => assessQualification({db, tender, companyId, question, allowCompany, aiKey, signal, shared})));
   const ok = readings.filter((r) => r.status === 'fulfilled').map((r) => r.value);
   if (!ok.length) throw readings[0].reason;
   const evaluated = mergeReadings(ok);
@@ -47,7 +48,7 @@ export async function getCompanyCheck({db, tender, companyId, allowCompany, aiKe
   if (stamp) {
     await db.from('agenttender_chat_company_checks').upsert({tender_id: tender.id, company_id: companyId, version: COMPANY_CHECK_VERSION, stamp, report: evaluated.report, sources, created_at: new Date().toISOString()}).then(() => {}, () => {});
   }
-  return {report: evaluated.report, sources, cached: false};
+  return {report: evaluated.report, sources, cached: false, credentials};
 }
 
 /** Compact, plain rows handed to the answer model as verified company facts. */

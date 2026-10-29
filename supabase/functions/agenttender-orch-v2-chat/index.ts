@@ -188,10 +188,15 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
   // The full RFP-vs-company check takes two AI readings; only eligibility-type questions wait for it.
   // Other questions (scope, EMD, dates...) reuse a cached check if one exists, never start a new one.
   const needsCheck=!scopeQuestion&&(['DO_WE_QUALIFY','ELIGIBILITY','TURNOVER','EXPERIENCE','GOVERNMENT_EXPERIENCE','CERTIFICATIONS','REQUIRED_DOCUMENTS','SUBMISSION_READINESS'].includes(question_category)||qualificationQuestion(question));
-  try{check=await getCompanyCheck({db,tender,companyId,allowCompany:canReadCompanyDocuments,aiKey:AIKEY,signal:undefined,cacheOnly:!needsCheck});}catch(e){console.warn('Company check unavailable',String(e));}
+  const CHECK_BUDGET_MS=50000;let checkTimedOut=false;
+  try{check=await Promise.race([getCompanyCheck({db,tender,companyId,allowCompany:canReadCompanyDocuments,aiKey:AIKEY,signal:undefined,cacheOnly:!needsCheck}),new Promise((resolve)=>setTimeout(()=>{checkTimedOut=true;resolve(null);},CHECK_BUDGET_MS))]);}catch(e){console.warn('Company check unavailable',String(e));}
+  // No check (still running, failed, or none saved): answer from the standard prequalification rows and company records instead of failing.
+  if(!check?.report&&needsCheck&&canReadCompanyDocuments&&['DO_WE_QUALIFY','ELIGIBILITY'].includes(question_category)){
+   check={report:{check_incomplete:true,recommendation:'VERIFY',requirements:[],coverage:{complete:false,warnings:[checkTimedOut?'The full RFP check took too long; ask again in a minute.':'The full RFP check could not be completed.']}},sources:[],cached:false};
+  }
   // Re-evaluate the saved check's turnover / experience / registration rows against the current company records.
   let creds:any=null;
-  if(check?.report&&canReadCompanyDocuments){try{creds=await loadCredentials(db,companyId);check={...check,report:refreshReport(check.report,creds,tender)};}catch(e){console.warn('Check refresh unavailable',String(e));}}
+  if(check?.report&&canReadCompanyDocuments){try{creds=check.credentials||await loadCredentials(db,companyId);check={...check,report:refreshReport(check.report,creds,tender)};}catch(e){console.warn('Check refresh unavailable',String(e));}}
   const focused=check?.report&&['TURNOVER','EXPERIENCE','GOVERNMENT_EXPERIENCE','CERTIFICATIONS'].includes(question_category)?focusedCheckAnswer(check.report,official,question_category):null;
   if(focused){
    const response:any={ok:true,status:'ANSWERED',route:'ORCHESTRATOR_V2_COMPANY_CHECK',question_category,answer:focused,result:'CHECKED',evidence_state:'MEDIUM',official_decision:official?.decision||null,evidence:[],company_evidence:[],sources:(check.sources||[]).filter((s:any)=>String(s.ref||'').startsWith('C')).slice(0,12).map((s:any)=>({id:s.ref,documentName:s.document,pageNumber:s.page,section:s.section})),readiness_warnings:[],partial_document_evidence:false,model:'company-check',changed_business_statuses:0,extraction_triggered:false,indexing_triggered:false,embedding_triggered:false};

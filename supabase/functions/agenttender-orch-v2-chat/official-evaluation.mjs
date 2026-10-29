@@ -529,7 +529,8 @@ export function chatQualificationAnswer(report, ev, opts = {}) {
   const hasClauses = pqRows(report?.requirements || []).some((x) => x.row.category !== 'Scope');
   if (!hasClauses) {
     const docs = [...new Set((opts.rfpDocuments || []).map(docName))];
-    out.splice(3, 0, '', `**📄 Please upload the full tender document.** ${docs.length ? `Only ${docs.join(', ')} ${docs.length > 1 ? 'are' : 'is'} available, and ${docs.length > 1 ? 'they do' : 'it does'} not contain` : 'The available documents do not contain'} the eligibility / prequalification criteria. Upload the complete RFP / NIT (with eligibility criteria, scope and BOQ) in this tender's documents and ask again — the exact clauses will then be checked.`);
+    if (report?.check_incomplete) out.splice(3, 0, '', '**⏳ The clause-by-clause RFP check is still being prepared for this tender.** Ask again in a minute for the full result; the standard items below are already checked against our company records.');
+    else out.splice(3, 0, '', `**📄 Please upload the full tender document.** ${docs.length ? `Only ${docs.join(', ')} ${docs.length > 1 ? 'are' : 'is'} available, and ${docs.length > 1 ? 'they do' : 'it does'} not contain` : 'The available documents do not contain'} the eligibility / prequalification criteria. Upload the complete RFP / NIT (with eligibility criteria, scope and BOQ) in this tender's documents and ask again — the exact clauses will then be checked.`);
   }
   const tableRows = hasClauses ? report?.requirements || [] : [...(report?.requirements || []).filter((r) => r.category === 'Scope'), ...standardPqRows(report, {credentials: opts.credentials, tender: opts.tender})];
   out.push('', prequalificationTable(tableRows, {explain: (r) => pqDetail(r, report), empty: noPqMessage(opts.rfpDocuments)}));
