@@ -1,6 +1,7 @@
 import {decideTender,DECISION_VERSION} from "./decision-evidence.mjs";
 import {activeRules,screen} from "./policy.mjs";
 import {inspectStep3} from "./step3-evidence.mjs";
+import {quickScreen,QUICK_VERSION} from "./quick-screen.mjs";
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import {createClient} from "npm:@supabase/supabase-js@2.57.4";
 const KEY=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")||"";
@@ -109,12 +110,22 @@ Deno.serve(async(req)=>{
   const result=await inspectStep3({db,tender:t,aiKey:AIKEY,allowAI:input.allow_external_ai===true,allowPrepare:false,call,url:URL,key:KEY});
   return Response.json({ok:true,tender_id:t.id,result,changed_business_statuses:0});
  }
+ // Dry run of the quick screen: never writes. force=true skips the "wait for more pages" gate.
+ if(input.action==="quick_preview"){
+  const {data:t,error}=await db.from("agenttender_tenders").select("id,title,description,organization,closing_date,emd_amount,tender_value,qualification_status").eq("id",String(input.tender_id||"")).single();
+  if(error) return Response.json({ok:false,error:error.message},{status:400});
+  if(input.allow_external_ai!==true)return Response.json({ok:false,error:"External AI must be enabled"},{status:400});
+  try{
+   const q=await quickScreen({db,tender:t,rules:await activeRules(db),aiKey:AIKEY,checkpoint:{},force:input.force===true});
+   return Response.json({ok:true,quick_version:QUICK_VERSION,tender_id:t.id,current_status:t.qualification_status,...q,changed_business_statuses:0});
+  }catch(e){return Response.json({ok:false,tender_id:t.id,error:errText(e)},{status:500});}
+ }
  if(input.action==="policy_probe"){const rules=await activeRules(db);return Response.json({ok:true,worker_version:"v2-owner-follow-ai-v2",rules,screen:screen(input.tender||{},rules),changed_business_statuses:0});}
  const {data:claimed,error:ce}=input.action==="run_step3" ? await db.rpc("agenttender_orch_v2_claim_step3",{p_limit:limit,p_scraped_date:input.scraped_date}) : await db.rpc("agenttender_orch_v2_claim",{p_limit:limit});if(ce)throw ce;
  // Run all claimed jobs in parallel; per-step concurrency is enforced by agenttender_orch_v2_claim.
  await Promise.allSettled((claimed||[]).map(async (job:any)=>{
   const id=job.tender_id,step=job.step,checkpoint=job.checkpoint||{};
-  let result:any={},ok=false,error="";
+  let result:any={},ok=false,error="",committed=false;
   try{
    const {data:t,error:te}=await db.from("agenttender_tenders").select("id,title,description,organization,category,tender_type,closing_date,emd_amount,tender_value,qualification_status,scraped_date,source_tender_id,ai_summary_url").eq("id",id).single();
    if(te||!t)throw Error("TENDER_NOT_ELIGIBLE");
@@ -129,7 +140,23 @@ Deno.serve(async(req)=>{
    if(step===2){
     result=screen(t,await activeRules(db));
    }
-   if(step===3){
+   // Quick screen first: decide from notice/scope/PQ/EMD/turnover text already read.
+   // Only when it cannot run (no documents) does the full-coverage review below take over.
+   let quickDone=false;
+   if(step===3&&checkpoint.quick_screen?.disabled!==true){
+    const q=await quickScreen({db,tender:t,rules:await activeRules(db),aiKey:input.allow_external_ai===true?AIKEY:"",checkpoint});
+    if(q.action==="DECIDE"){
+     const {data:commit,error:commitError}=await db.rpc("agenttender_orch_v2_quick_commit",{p_tender:id,p_lease:job.lease_token,p_decision:q.decision,p_reason:q.reason,p_assessment:{...q.assessment,quick:q.quick}});
+     if(commitError)throw commitError;
+     result={quick_screen:true,decision:q.decision,commit,reason:q.reason};
+     ok=true;committed=commit?.applied===true;quickDone=true;
+    }else if(q.action==="WAIT"){
+     const {error:saveError}=await db.from("agenttender_orch_v2_tasks").update({checkpoint:{...checkpoint,quick_screen:{...q.quick,last_wait:q.reason,last_assessment:q.assessment||null}}}).eq("tender_id",id).eq("lease_token",job.lease_token).eq("state","RUNNING");
+     if(saveError)throw saveError;
+     throw Error("DEPENDENCY_PENDING:QUICK_TEXT_WAIT:"+q.reason);
+    }
+   }
+   if(step===3&&!quickDone){
     try{result=await inspectStep3({db,tender:t,aiKey:AIKEY,allowAI:input.allow_external_ai===true,allowPrepare:true,call,url:URL,key:KEY,checkpoint,leaseToken:job.lease_token});}
     catch(e){const msg=errText(e);if(msg.includes("DEPENDENCY_PENDING:"))throw Error(msg);if(/SUMMARY_SCREEN_HTTP_|AbortError|timeout|timed out|WORKER_RESOURCE_LIMIT/.test(msg))throw Error("DEPENDENCY_PENDING:PREPARATION:"+msg);throw Error("STEP3_TECHNICAL_FAILURE:"+msg);}
    }
@@ -166,10 +193,12 @@ Deno.serve(async(req)=>{
    }
    ok=true;
   }catch(e){error=errText(e).slice(0,1600);}
+  // A quick-screen commit already closed the task and released the lease.
+  if(ok&&result?.quick_screen===true){events.push({tender_id:id,step,ok,result});return;}
   const {data:f,error:fe}=await db.rpc("agenttender_orch_v2_finish",{p_tender:id,p_lease:job.lease_token,p_ok:ok,p_result:result,p_error:error||null});
   events.push({tender_id:id,step,ok,result,error:error||undefined,finish:fe?errText(fe):f});
  }));
- return Response.json({ok:true,route:"ORCHESTRATOR_V2",claimed:(claimed||[]).length,events,changed_business_statuses:events.filter((e:any)=>e.ok&&(e.result?.applied===true||e.result?.recovery_applied===true)).length});
+ return Response.json({ok:true,route:"ORCHESTRATOR_V2",claimed:(claimed||[]).length,events,changed_business_statuses:events.filter((e:any)=>e.ok&&(e.result?.applied===true||e.result?.recovery_applied===true||e.result?.commit?.applied===true)).length});
 });
 
 
