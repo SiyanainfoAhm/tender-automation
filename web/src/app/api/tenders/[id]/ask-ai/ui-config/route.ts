@@ -4,6 +4,7 @@ import { requirePermissionStrict } from "@/server/auth/permissions";
 import { CompanyAccessError } from "@/server/auth/company-access";
 import { getTenderById } from "@/server/repositories/tenderRepository";
 import { parseSmartQuestions } from "@/lib/ai/tender-chat-ui";
+import { getServerSupabase } from "@/lib/db/server";
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
   try {
@@ -12,15 +13,25 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
     const session = await requirePermissionStrict("tenders.view");
     const { id } = await context.params;
     if (!await getTenderById(id)) return NextResponse.json({ error: "Tender not found" }, { status: 404 });
-    const url = process.env.SUPABASE_URL?.replace(/\/$/, "");
-    if (!url) throw new Error("Chat configuration unavailable");
-    const response = await fetch(`${url}/functions/v1/agenttender-chat-ui`, {
-      method: "POST", headers: { "Content-Type": "application/json", "x-agenttender-session": token },
-      body: JSON.stringify({ tender_id: id, company_id: session.companyId }), cache: "no-store",
-    });
-    const data = await response.json();
-    if (!response.ok || data.ok === false) return NextResponse.json({ error: "Unable to load tender questions" }, { status: response.ok ? 502 : response.status });
-    return NextResponse.json({ smart_questions: parseSmartQuestions(data.smart_questions), revision: data.revision }, { headers: { "Cache-Control": "private, no-store" } });
+    const headers = { "Cache-Control": "private, no-store" };
+    // Preferred: the edge function (re-checks session and company access).
+    try {
+      const url = process.env.SUPABASE_URL?.replace(/\/$/, "");
+      if (!url) throw new Error("SUPABASE_URL missing");
+      const response = await fetch(`${url}/functions/v1/agenttender-chat-ui`, {
+        method: "POST", headers: { "Content-Type": "application/json", "x-agenttender-session": token },
+        body: JSON.stringify({ tender_id: id, company_id: session.companyId }), cache: "no-store",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.ok !== false) return NextResponse.json({ smart_questions: parseSmartQuestions(data.smart_questions), revision: data.revision }, { headers });
+      console.warn("[AskAI ui-config] edge function refused", response.status, data?.error);
+    } catch (edgeError) {
+      console.warn("[AskAI ui-config] edge function failed", edgeError instanceof Error ? edgeError.message : "unknown");
+    }
+    // Fallback: the same stored question list, read directly after the session/permission/tender checks above.
+    const { data: cfg, error } = await getServerSupabase().from("agenttender_chat_ui_config").select("config,revision").eq("config_key", "tender_v2").eq("is_active", true).maybeSingle();
+    if (error || !cfg) return NextResponse.json({ error: "Unable to load tender questions" }, { status: 503 });
+    return NextResponse.json({ smart_questions: parseSmartQuestions((cfg.config as { smart_questions?: unknown })?.smart_questions), revision: cfg.revision }, { headers });
   } catch (error) {
     return NextResponse.json({ error: "Unable to load tender questions" }, { status: error instanceof CompanyAccessError ? 403 : 503 });
   }
