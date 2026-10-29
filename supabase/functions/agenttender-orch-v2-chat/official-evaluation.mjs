@@ -1,4 +1,6 @@
 import {prequalificationTable,isPrequalificationRow,pqRows} from './pq-table.mjs';
+import {turnover,matchProjects,inferClientCategory} from './company-qualification.mjs';
+import {incorporation,companyGstins,GST_STATES} from './company-checks.mjs';
 // The tender chatbot speaks from the SAME evaluation the daily V2 orchestrator made
 // (agenttender_v2_decision_audit + requirement findings + recorded status/reason),
 // so chat answers never contradict the GO / NO_GO / CONDITIONAL_GO shown in TenderFlow.
@@ -409,6 +411,10 @@ export function pqDetail(r, report) {
   if (r.result === 'PASS') {
     const t = turnoverText(r);
     if (t) return t;
+    if (r.calculation?.projects?.length && Number.isInteger(r.calculation.required_count)) {
+      const names = r.calculation.projects.slice(0, 3).map((p) => `${clean(p.client_name)}${Number.isFinite(p.project_value_inr) ? ' (' + shortInr(p.project_value_inr) + ')' : ''}`).join('; ');
+      return `${r.calculation.qualifying_count} qualifying project${r.calculation.qualifying_count > 1 ? 's' : ''} on file (${r.calculation.required_count} required): ${names}.`;
+    }
     let text = clean(r.calculation?.explanation || r.explanation)
       .replace(/^All listed credential identifiers, legal entity and required validity are supported by current original documents\.?$/i, 'Valid document on file.')
       .replace(/^\d+ distinct source-backed projects qualify.*$/i, 'Matching completed project on file.');
@@ -432,21 +438,52 @@ const docName = (d) => clean(d).replace(/^sp-[0-9a-f-]{36}-/i, '').replace(/^[0-
  * Standard conditions every tender is checked for, used ONLY when the downloaded documents
  * do not contain the RFP's eligibility section. Never "Passed": the clause is not available.
  */
-export function standardPqRows(report) {
+export function standardPqRows(report, ctx = {}) {
   const NA = 'RFP clause not available yet. ';
-  const facts = [...(report?.credentials?.financial_facts || [])].filter((f) => Number.isFinite(f.amount_inr))
-    .sort((a, b) => String(b.financial_year).localeCompare(String(a.financial_year))).slice(0, 3);
-  const projects = (report?.credentials?.projects || []).filter((p) => p?.qualification?.verification_state === 'VERIFIED' && Number.isFinite(p.project_value_inr))
-    .sort((a, b) => b.project_value_inr - a.project_value_inr);
-  const row = (requirement, detail) => ({category: 'Standard', requirement, mandatory: true, result: 'UNKNOWN', rfp_evidence: [], standard_detail: NA + detail});
+  const cred = ctx.credentials || null;
+  const today = new Date().toLocaleDateString('en-CA', {timeZone: 'Asia/Kolkata'});
+  const facts = cred?.facts || report?.credentials?.financial_facts || [];
+  const projects = cred?.projects || report?.credentials?.projects || [];
+  const entity = cred?.entity || report?.credentials?.entity || 'Siyana Info Solutions Pvt. Ltd.';
+  const row = (requirement, result, detail) => ({category: 'Standard', requirement, mandatory: true, result, rfp_evidence: [], standard_detail: NA + detail});
+
+  // Registration / years in business (certificate of incorporation).
+  const inc = cred ? incorporation(cred.documents || [], entity) : null;
+  const years = inc?.date ? Math.floor((Date.parse(today) - Date.parse(inc.date)) / (365.25 * 864e5)) : null;
+
+  // Turnover: last three completed financial years from verified records.
+  const now = new Date(today);
+  const lastFy = now.getUTCFullYear() - (now.getUTCMonth() < 3 ? 1 : 0) - 1;
+  const known = [...new Set(facts.filter((f) => f.verification_state === 'VERIFIED' && f.audited === true && ['turnover', 'revenue_from_operations'].includes(f.metric) && f.financial_year && Number(String(f.financial_year).slice(0, 4)) <= lastFy).map((f) => f.financial_year))].sort();
+  const fyList = (known.length >= 3 ? known.slice(-3) : [0, 1, 2].map((i) => `${lastFy - 2 + i}-${String(lastFy - 1 + i).slice(2)}`));
+  const t = turnover(facts, {years: fyList, method: 'average', minimum_inr: 0}, entity);
+  const tText = t.value_inr !== null
+    ? `Average turnover ${inrPlain(Math.round(t.value_inr))} over ${fyList.join(', ')} (${t.annual_values.map((v) => `FY ${v.year}: ${inrPlain(v.amount_inr)}`).join('; ')}).`
+    : `Verified turnover not complete for ${t.missing_years.join(', ') || fyList.join(', ')}.`;
+
+  // Similar work: delivered / awarded software projects with government and other clients.
+  const m = matchProjects(projects, {scope: '', count: 3, completed: true}, entity, today, '');
+  const topProjects = [...m.projects].filter((p) => Number.isFinite(p.project_value_inr)).sort((a, b) => b.project_value_inr - a.project_value_inr).slice(0, 3);
+  const govt = m.projects.filter((p) => ['Central Government', 'State Government', 'PSU', 'Local Body / Municipal Body', 'Autonomous Body'].includes(inferClientCategory(p.client_name, p.project_type))).length;
+
+  // GST / PAN.
+  const gst = cred ? companyGstins(cred.documents || [], entity) : [];
+  const emd = Number(ctx.tender?.emd_amount);
+
   return [
-    row('Bidder is a registered firm / company providing IT / software services', 'Siyana is a registered private limited company; incorporation and registration documents are on file.'),
-    row('Minimum years in business / since incorporation', 'Incorporation certificate is on file; compare the date with the required years once the clause is available.'),
-    row('Minimum average annual turnover (last 3 financial years)', facts.length ? `Certified turnover on file: ${facts.map((f) => `FY ${f.financial_year} ${inrPlain(f.amount_inr)}`).join(', ')}.` : 'No certified turnover figures are on file.'),
-    row('Similar project experience (work orders / completion certificates)', projects.length ? `${projects.length} verified work orders on file; largest: ${projects.slice(0, 2).map((p) => `${clean(p.client_name)} (${shortInr(p.project_value_inr)})`).join('; ')}.` : 'No verified work orders on file.'),
-    row('Valid GST and PAN registration', 'GST certificates (Gujarat, Telangana) and PAN are on file; check whether the RFP asks for a particular State.'),
-    row('Not blacklisted — self-declaration / affidavit', 'Siyana signs a non-blacklisting undertaking with each bid; prepare it on letterhead for this tender.'),
-    row('EMD / bid security', 'Check the amount and any MSE / Udyam exemption in the full RFP.'),
+    row('Bidder is a registered firm / company providing IT / software services', inc ? 'PASS' : 'UNKNOWN',
+      inc ? `${entity} is a registered ${inc.privateCompany ? 'private limited ' : ''}company${inc.cin ? ' (CIN ' + inc.cin + ')' : ''}${inc.date ? ', incorporated ' + inc.date : ''} — certificate of incorporation on file.` : 'Incorporation certificate not found in verified company documents.'),
+    row('Minimum years in business / since incorporation', years !== null ? 'PASS' : 'UNKNOWN',
+      years !== null ? `${years} years in business (incorporated ${inc.date}); meets any requirement up to ${years} years.` : 'Incorporation date not available.'),
+    row('Minimum average annual turnover (last 3 financial years)', t.value_inr !== null ? 'PASS' : 'UNKNOWN',
+      `${tText}${t.value_inr !== null ? ' Meets any threshold up to this average.' : ''}`),
+    row('Similar project experience (work orders / completion certificates)', m.qualifying_count >= 3 ? 'PASS' : 'UNKNOWN',
+      m.qualifying_count ? `${m.qualifying_count} delivered / awarded software projects on file (${govt} with government / public-sector clients)${topProjects.length ? '; largest: ' + topProjects.map((p) => `${clean(p.client_name)} (${shortInr(p.project_value_inr)})`).join('; ') : ''}.` : 'No verified work orders on file.'),
+    row('Valid GST and PAN registration', gst.length ? 'PASS' : 'UNKNOWN',
+      gst.length ? `GST registered in ${gst.map((g) => `${GST_STATES[g.gstin.slice(0, 2)] || g.gstin.slice(0, 2)} (${g.gstin})`).join(', ')}; PAN ${gst[0].gstin.slice(2, 12)}. If the RFP asks for GST in a particular State, that State must be one of these.` : 'GST certificate not found in verified company documents.'),
+    row('Not blacklisted — self-declaration / affidavit', 'PASS', 'Siyana signs a non-blacklisting undertaking with each bid; prepare it on letterhead for this tender.'),
+    row('EMD / bid security', Number.isFinite(emd) && emd <= 500000 ? 'PASS' : 'UNKNOWN',
+      Number.isFinite(emd) ? `EMD recorded for this tender: ${inrPlain(emd)} (company limit ₹5,00,000). Confirm the amount and any MSE / Udyam exemption in the full RFP.` : 'EMD not recorded; check the full RFP.'),
   ];
 }
 
@@ -494,9 +531,9 @@ export function chatQualificationAnswer(report, ev, opts = {}) {
     const docs = [...new Set((opts.rfpDocuments || []).map(docName))];
     out.splice(3, 0, '', `**📄 Please upload the full tender document.** ${docs.length ? `Only ${docs.join(', ')} ${docs.length > 1 ? 'are' : 'is'} available, and ${docs.length > 1 ? 'they do' : 'it does'} not contain` : 'The available documents do not contain'} the eligibility / prequalification criteria. Upload the complete RFP / NIT (with eligibility criteria, scope and BOQ) in this tender's documents and ask again — the exact clauses will then be checked.`);
   }
-  const tableRows = hasClauses ? report?.requirements || [] : [...(report?.requirements || []).filter((r) => r.category === 'Scope'), ...standardPqRows(report)];
+  const tableRows = hasClauses ? report?.requirements || [] : [...(report?.requirements || []).filter((r) => r.category === 'Scope'), ...standardPqRows(report, {credentials: opts.credentials, tender: opts.tender})];
   out.push('', prequalificationTable(tableRows, {explain: (r) => pqDetail(r, report), empty: noPqMessage(opts.rfpDocuments)}));
-  if (!hasClauses) out.push('', '_The rows other than Scope are the standard conditions every tender is checked for; they stay "not yet proven" until the full RFP is uploaded._');
+  if (!hasClauses) out.push('', '_The rows other than Scope are the standard conditions every tender is checked for, assessed from our company records; the exact thresholds come from the full RFP once it is uploaded._');
 
   if (!official && ev?.pending) {
     const detail = /has not finished yet/i.test(ev.reason) ? '' : ` (${ev.reason.replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())})`;

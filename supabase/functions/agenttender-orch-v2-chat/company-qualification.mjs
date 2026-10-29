@@ -57,7 +57,8 @@ export function turnover(facts,spec,entity){
   // A CA turnover certificate states the certified figure for the year; it settles audit-report variants.
   if(candidates.some(x=>x.source==='CA_CERTIFICATE'))candidates=candidates.filter(x=>x.source==='CA_CERTIFICATE');
   const valid=candidates.filter(x=>x.verification_state==='VERIFIED'&&x.audited===true&&Number.isFinite(x.amount_inr)&&x.amount_inr>=0&&x.source_page&&x.quote);
-  const amounts=[...new Set(candidates.filter(x=>Number.isFinite(x.amount_inr)).map(x=>x.amount_inr))];
+  // An unverified lead from another document cannot contradict a verified figure.
+  const amounts=[...new Set(candidates.filter(x=>x.verification_state==='VERIFIED'&&Number.isFinite(x.amount_inr)).map(x=>x.amount_inr))];
   if(amounts.length>1)result.contradictions.push({year,values:amounts});
   if(!valid.length)result.missing_years.push(year);else{values.push(valid[0].amount_inr);result.evidence.push(...valid);}
  }
@@ -66,23 +67,42 @@ export function turnover(facts,spec,entity){
  result.result=Number.isFinite(spec.minimum_inr)&&spec.minimum_inr>=0?(result.value_inr>=spec.minimum_inr?'PASS':'FAIL'):'UNKNOWN';
  return {...result,required_inr:spec.minimum_inr??null,annual_values:years.map((year,i)=>({year,amount_inr:values[i]})),explanation:`${spec.method}: ${values.join(' + ')}${spec.method==='average'?' / '+years.length:''} = INR ${result.value_inr}. Required INR ${spec.minimum_inr??'unspecified'}.`};
 }
-export function matchProjects(projects,spec,entity,validOn){
+const GOVERNMENT_TYPES=['Central Government','State Government','PSU','Local Body / Municipal Body','Autonomous Body'];
+/** Client category for a work-order client; keeps an explicit category, infers one only for "Other"/blank. */
+export function inferClientCategory(name,current){
+ if(current&&current!=='Other')return current;
+ const n=normalize(name);
+ if(!n||/\b(?:pvt|private)\b/.test(n))return current||'Other';
+ if(/smart city|municipal|panchayat|nagar palika|mahanagar|nagar nigam/.test(n))return 'Local Body / Municipal Body';
+ if(/university|vishwavidyalaya|visvavidyalayam|विश्वविद्यालय|\binstitute\b|\biit\b|\biim\b|commission|\bboard\b|council|\bauthority\b/.test(n))return 'Autonomous Body';
+ if(/corporation|\blimited\b|\bltd\b|undertaking|railway|freight corridor/.test(n))return 'PSU';
+ if(/heavy water|atomic energy|ministry|government|\bgovt\b|department|directorate|secretariat|police|collectorate/.test(n))return 'Central Government';
+ return current||'Other';
+}
+export function matchProjects(projects,spec,entity,validOn,clauseText=''){
  const matches=[],excluded=[];const required=functionalTypes(spec.scope||'');
  for(const p of projects){const reasons=[];const q=p.qualification||{};
   if(entityKey(q.legal_entity)!==entityKey(entity))reasons.push('different/unproven legal entity');
   if(q.verification_state!=='VERIFIED')reasons.push('unverified original evidence');
-  if(!required.length||required.some(t=>!functionalTypes([p.project_name,p.description].join(' ')).includes(t)))reasons.push('functional scope differs or is unspecified');
-  if(!Number.isFinite(p.project_value_inr)||p.project_value_inr<spec.minimum_inr)reasons.push('contract value missing/below minimum');
-  if(spec.completed!==false&&(p.project_status!=='completed'||!q.completion_evidence?.page||!q.completion_evidence?.quote||!p.end_date))reasons.push('completion not proven');
-  if(spec.client_category==='government'&&!['Central Government','State Government','PSU','Local Body / Municipal Body','Autonomous Body'].includes(p.project_type))reasons.push('government client not proven');
-  if(spec.client_category==='private'&&p.project_type!=='Private')reasons.push('private client not proven');
-  if(spec.since&&(!p.end_date||p.end_date<spec.since)||spec.until&&(!p.end_date||p.end_date>spec.until))reasons.push('outside experience period');
+  // A generic "software / IT services" scope needs no special keyword; a named domain (payroll, GIS...) must appear.
+  if(required.length&&required.some(t=>!functionalTypes([p.project_name,p.description].join(' ')).includes(t)))reasons.push('functional scope differs');
+  if(Number.isFinite(spec.minimum_inr)&&(!Number.isFinite(p.project_value_inr)||p.project_value_inr<spec.minimum_inr))reasons.push('contract value missing/below minimum');
+  // Won projects count as delivered experience (software delivered; only final-phase payment pending).
+  const delivered=p.won_project===true;
+  if(spec.completed!==false&&!delivered&&(p.project_status!=='completed'||!q.completion_evidence?.page||!q.completion_evidence?.quote||!p.end_date))reasons.push('completion not proven');
+  const category=inferClientCategory(p.client_name,p.project_type);
+  if(spec.client_category==='government'&&!GOVERNMENT_TYPES.includes(category))reasons.push('government client not proven');
+  if(spec.client_category==='private'&&category!=='Private')reasons.push('private client not proven');
+  if(!(delivered&&!p.end_date)&&(spec.since&&(!p.end_date||p.end_date<spec.since)||spec.until&&(!p.end_date||p.end_date>spec.until)))reasons.push('outside experience period');
   if(p.end_date&&p.end_date>validOn)reasons.push('future completion');
   if(!q.source_documents?.length)reasons.push('original source missing');
   (reasons.length?excluded:matches).push(reasons.length?{id:p.id,project_name:p.project_name,reasons}:p);
  }
  const distinct=[...new Map(matches.map(p=>[normalize(p.qualification?.contract_ref||p.client_name+'|'+p.project_name),p])).values()];
- return {result:required.length&&Number.isInteger(spec.count)&&spec.count>0&&Number.isFinite(spec.minimum_inr)&&distinct.length>=spec.count?'PASS':'UNKNOWN',required_count:spec.count,qualifying_count:distinct.length,projects:distinct,excluded,explanation:`${distinct.length} distinct source-backed projects qualify; ${spec.count??'unspecified'} required. Missing proof is UNKNOWN.`};
+ const need=Number.isInteger(spec.count)&&spec.count>0?spec.count:1;
+ // A clause that states a rupee value must have produced a value threshold; otherwise do not pass it.
+ const valueUnparsed=!Number.isFinite(spec.minimum_inr)&&/(?:\brs\.?|\binr\b|₹|\blakh|\blac|\bcrore)/i.test(clauseText);
+ return {result:!valueUnparsed&&distinct.length>=need?'PASS':'UNKNOWN',required_count:need,qualifying_count:distinct.length,projects:distinct,excluded,explanation:`${distinct.length} distinct source-backed projects qualify; ${need} required.`};
 }
 export function validateSpec(spec,quotes){
  const text=normalize(quotes.join(' ')),flat=text.replace(/,/g,'');if(!spec||!text)return false;

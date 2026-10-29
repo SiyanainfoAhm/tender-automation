@@ -1,5 +1,5 @@
 import {caCertificateTurnover} from './company-checks.mjs';
-import {CREDENTIAL_VERSION,extractFinancial,entityKey,pageText,normalize,money,functionalTypes} from './company-qualification.mjs';
+import {CREDENTIAL_VERSION,extractFinancial,entityKey,pageText,normalize,money,functionalTypes,inferClientCategory} from './company-qualification.mjs';
 const checked=async q=>{const {data,error}=await q;if(error)throw Error(error.message);return data;};
 const hash=async s=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s))),x=>x.toString(16).padStart(2,'0')).join('');
 // One copy per isolate for a few minutes: parallel V2 jobs and chat answers share it.
@@ -18,7 +18,25 @@ async function loadCredentialsFresh(db,companyId){
  const facts=(data.facts||[]).filter(r=>r.fact_key.startsWith('financial.turnover:')).map(r=>({...r.fact,source_document_name:byId.get(r.fact.source_document_id)?.name,verification_state:r.verification_state==='VERIFIED'&&live(r.fact)?'VERIFIED':'CANDIDATE'}));
  const projects=(data.projects||[]).map(p=>({...p,qualification:{...p.qualification,source_documents:(p.qualification?.source_documents||[]).map(e=>({...e,source_document_name:byId.get(e.source_document_id)?.name})),verification_state:p.qualification?.verification_state==='VERIFIED'&&p.qualification?.source_documents?.every(live)?'VERIFIED':'CANDIDATE'}}));
  facts.push(...caCertificateTurnover(sources,data.company_name));
+ // Client category: infer government / PSU / autonomous bodies instead of leaving them as "Other".
+ for(const p of projects)p.project_type=inferClientCategory(p.client_name,p.project_type);
+ await mergeWonProjects(db,companyId,data.company_name,projects);
  return {entity:data.company_name,facts,projects,documents:sources,issues:sources.flatMap(d=>d.qualification_extraction?.issues||[])};
+}
+const words=t=>new Set(normalize(t).replace(/[^a-z0-9 ]/g,' ').split(/\s+/).filter(w=>w.length>3));
+const sameClient=(a,b)=>{const A=words(a),B=words(b);if(!A.size||!B.size)return false;let n=0;for(const w of A)if(B.has(w))n++;return n/Math.min(A.size,B.size)>=0.5;};
+/** Won projects count as delivered experience (software delivered, final-phase payment pending). */
+async function mergeWonProjects(db,companyId,entity,projects){
+ let won=[];
+ try{const r=await db.from('agenttender_won_projects').select('id,project_code,client_department,contract_description,final_award_value,award_date,contract_start_date,contract_number,execution_status').eq('company_id',companyId);if(r.error)throw Error(r.error.message);won=r.data||[];}catch(e){console.warn('Won projects unavailable',String(e));return;}
+ for(const w of won){
+  if(/cancel|terminat|withdrawn/i.test(String(w.execution_status||'')))continue;
+  const ref=normalize(w.contract_number||'').replace(/[^a-z0-9]/g,'');
+  const hit=projects.find(p=>(ref.length>5&&normalize(p.qualification?.contract_ref||'').replace(/[^a-z0-9]/g,'').includes(ref))||sameClient(p.client_name,w.client_department));
+  if(hit){hit.won_project=true;continue;}
+  projects.push({id:'won:'+w.id,client_name:w.client_department,project_name:w.contract_description||w.client_department,description:w.contract_description||'',project_value_inr:Number.isFinite(Number(w.final_award_value))?Number(w.final_award_value):null,project_type:inferClientCategory(w.client_department,'Other'),project_status:'completed',start_date:w.contract_start_date||w.award_date||null,end_date:null,won_project:true,
+   qualification:{legal_entity:entity,verification_state:'VERIFIED',contract_ref:w.contract_number||w.project_code,source_documents:[{source_document_name:'Won project '+w.project_code,page:1}],completion_evidence:{page:1,quote:'Awarded '+(w.award_date||'')+'; software delivered, final-phase payment pending (won project record)'}}});
+ }
 }
 function quoted(value,quote,text){return typeof quote==='string'&&quote.length>=8&&text.includes(quote)&&normalize(quote).includes(normalize(value));}
 export function validateProject(raw,d,companyName){

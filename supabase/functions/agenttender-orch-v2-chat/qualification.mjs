@@ -8,6 +8,35 @@ import {pqDetail,noPqMessage} from './official-evaluation.mjs';
 import {retrieve} from './analyst.ts';
 import {activeRules,qualificationDecision} from './policy.mjs';
 export const QUALIFICATION_VERSION='v2-material-qualification-20261028b';
+/**
+ * Re-evaluate the deterministic rows (turnover, experience, registrations) of a saved check against the
+ * current company records. No AI call: it only upgrades UNKNOWN rows that the records now prove, and
+ * applies hard failures (e.g. GST needed in a State where Siyana is not registered).
+ */
+export function refreshReport(report,credentials,tender){
+ if(!report||!credentials)return report;
+ const today=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
+ const closing=tender?.closing_date?String(tender.closing_date).slice(0,10):null;
+ const validOn=closing&&closing>today?closing:today;
+ const rows=(report.requirements||[]).map(r=>{
+  if(r.mandatory===false)return r;
+  const quotes=[...(r.rfp_evidence||[]).map(e=>e.quote).filter(Boolean),String(r.requirement||'')];
+  let row=r;
+  try{
+   if(['Turnover','Experience','Government experience'].includes(r.category)&&r.criteria){
+    const spec=resolveSpec(r.criteria,quotes,closing);
+    if(spec){
+     const calc=r.category==='Turnover'?turnover(credentials.facts,spec,credentials.entity):matchProjects(credentials.projects,spec,credentials.entity,validOn,quotes.join(' '));
+     if(calc.result==='PASS'&&r.result!=='PASS'||(r.category==='Turnover'&&calc.result!=='UNKNOWN'&&calc.result!==r.result))row={...r,result:calc.result,calculation:calc,explanation:clean(calc.explanation)};
+    }
+   }
+   const dc=deterministicCheck(r.requirement||'',quotes,{documents:credentials.documents||[],entity:credentials.entity,referenceDate:closing||today});
+   if(dc&&dc.result!==row.result&&(row.result==='UNKNOWN'||dc.result==='FAIL'))row={...row,result:dc.result,calculation:{result:dc.result,explanation:dc.explanation,company_documents:dc.company_evidence},explanation:clean(dc.explanation)};
+  }catch(e){console.warn('Row refresh skipped',String(e));}
+  return row;
+ });
+ return {...report,requirements:rows,credentials:{entity:credentials.entity,financial_facts:credentials.facts,projects:credentials.projects,issues:credentials.issues}};
+}
 export const qualificationQuestion=q=>/turnover|similar.?project|qualif|eligib|\bpq\b|conditional.?go|move.*\bgo\b|suitable|do we meet|partner|subcontract/i.test(q);
 export const dimensions=['Scope','Turnover','Experience','Government experience','Certifications / empanelment','EMD','Local office','Staffing / deployment','Product ownership / certification','Hosting / security / integrations','Consortium / subcontracting','Deadline / amendments','Other mandatory PQ / TQ'];
 const norm=s=>String(s||'').replace(/\s+/g,' ').trim().toLowerCase();
@@ -59,7 +88,7 @@ export function normalizeQualification(raw,{rfp,company,coverage,tender,rules,cr
    const spec=resolveSpec(rawSpec,clauseText,tender.closing_date?.slice(0,10))||resolveSpec(rawSpec,[...clauseText,...original.map(e=>e.quote),String(r.requirement||'')],tender.closing_date?.slice(0,10));
    const valid=credentials&&original.length&&spec;
    if(valid){
-    calculation=r.category==='Turnover'?turnover(credentials.facts,spec,credentials.entity):matchProjects(credentials.projects,spec,credentials.entity,validOn);
+    calculation=r.category==='Turnover'?turnover(credentials.facts,spec,credentials.entity):matchProjects(credentials.projects,spec,credentials.entity,validOn,[...clauseText,...original.map(e=>e.quote),String(r.requirement||'')].join(' '));
     result=calculation.result;
    }else {result='UNKNOWN';calculation={result:'UNKNOWN',explanation:original.some(e=>/government\s+educational|multiple\s+purchase\s+order/i.test(e.quote))?'The RFP restricts experience to government educational organizations and permits single/multiple purchase orders within specified fiscal years. The available structured project comparison does not verify those exact restrictions; inspect the original purchase orders and execution evidence.':'The original clause did not establish a supported calculation specification (required years, method, threshold, functional scope, count or period), or current verified company evidence is unavailable. No passing average or project count has been certified.'};}
   }

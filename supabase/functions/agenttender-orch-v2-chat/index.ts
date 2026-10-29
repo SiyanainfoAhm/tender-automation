@@ -6,7 +6,8 @@ import {casualAnswer} from "./greetings.mjs";
 import {responseMode,retrieve,analystPrompt,parseAnswer,questionCategoryInstructions} from "./analyst.ts";
 import {handleAction} from "./action-handler.ts";
 import {activeRules} from "./policy.mjs";
-import {assessQualification,qualificationQuestion,companyFinancialAnswer} from './qualification.mjs';
+import {assessQualification,qualificationQuestion,companyFinancialAnswer,refreshReport} from './qualification.mjs';
+import {loadCredentials} from './company-credentials-store.mjs';
 import {loadOfficialEvaluation,noGoAnswer,evaluationContext,chatQualificationAnswer,focusedCheckAnswer,OFFICIAL_EVALUATION_INSTRUCTION} from './official-evaluation.mjs';
 import {getCompanyCheck,companyCheckContext,COMPANY_CHECK_INSTRUCTION} from './company-check.mjs';
 // Edge runtime globals are supplied by Supabase; no runtime type-only registry import.
@@ -188,6 +189,9 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
   // Other questions (scope, EMD, dates...) reuse a cached check if one exists, never start a new one.
   const needsCheck=!scopeQuestion&&(['DO_WE_QUALIFY','ELIGIBILITY','TURNOVER','EXPERIENCE','GOVERNMENT_EXPERIENCE','CERTIFICATIONS','REQUIRED_DOCUMENTS','SUBMISSION_READINESS'].includes(question_category)||qualificationQuestion(question));
   try{check=await getCompanyCheck({db,tender,companyId,allowCompany:canReadCompanyDocuments,aiKey:AIKEY,signal:undefined,cacheOnly:!needsCheck});}catch(e){console.warn('Company check unavailable',String(e));}
+  // Re-evaluate the saved check's turnover / experience / registration rows against the current company records.
+  let creds:any=null;
+  if(check?.report&&canReadCompanyDocuments){try{creds=await loadCredentials(db,companyId);check={...check,report:refreshReport(check.report,creds,tender)};}catch(e){console.warn('Check refresh unavailable',String(e));}}
   const focused=check?.report&&['TURNOVER','EXPERIENCE','GOVERNMENT_EXPERIENCE','CERTIFICATIONS'].includes(question_category)?focusedCheckAnswer(check.report,official,question_category):null;
   if(focused){
    const response:any={ok:true,status:'ANSWERED',route:'ORCHESTRATOR_V2_COMPANY_CHECK',question_category,answer:focused,result:'CHECKED',evidence_state:'MEDIUM',official_decision:official?.decision||null,evidence:[],company_evidence:[],sources:(check.sources||[]).filter((s:any)=>String(s.ref||'').startsWith('C')).slice(0,12).map((s:any)=>({id:s.ref,documentName:s.document,pageNumber:s.page,section:s.section})),readiness_warnings:[],partial_document_evidence:false,model:'company-check',changed_business_statuses:0,extraction_triggered:false,indexing_triggered:false,embedding_triggered:false};
@@ -201,7 +205,7 @@ async function processChatRequest(req: Request, memory:any=null): Promise<Respon
   if(!scopeQuestion&&(question_category==='DO_WE_QUALIFY'||question_category==='ELIGIBILITY'||qualificationQuestion(question))&&check?.report){
    const evaluated:any={report:check.report,sources:(check.sources||[]).map((s:any)=>({...s,text:''}))};
    const result=evaluated.report.recommendation==='GO'?'CONFIRMED':evaluated.report.recommendation==='NO_GO'?'NOT CONFIRMED':'UNVERIFIED';
-   evaluated.answer=chatQualificationAnswer(evaluated.report,official,{rfpDocuments:(check.sources||[]).filter((s:any)=>String(s.ref||'').startsWith('R')).map((s:any)=>s.document)});
+   evaluated.answer=chatQualificationAnswer(evaluated.report,official,{credentials:creds,tender,rfpDocuments:(check.sources||[]).filter((s:any)=>String(s.ref||'').startsWith('R')).map((s:any)=>s.document)});
    const response={ok:true,status:'ANSWERED',route:'ORCHESTRATOR_V2_LIGHT_CHAT',official_decision:official?.decision||null,answer:evaluated.answer,qualification:evaluated.report,result,evidence_state:evaluated.report.coverage.complete?'MEDIUM':'LOW',sources:evaluated.sources.map((s:any)=>({id:s.ref,documentName:s.document,pageNumber:s.page,section:s.section})),changed_business_statuses:0,extraction_triggered:false,indexing_triggered:false,embedding_triggered:false};
    const sourceCards=evaluated.sources.map(({text,metadata,...s}:any)=>s);
    Object.assign(response,{evidence:sourceCards.filter((s:any)=>s.ref.startsWith('R')),company_evidence:sourceCards.filter((s:any)=>s.ref.startsWith('C')),model:MODEL,readiness_warnings:official?.available?[]:evaluated.report.coverage.warnings});
