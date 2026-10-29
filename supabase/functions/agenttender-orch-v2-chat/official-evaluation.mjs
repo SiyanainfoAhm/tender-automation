@@ -529,12 +529,11 @@ export function chatQualificationAnswer(report, ev, opts = {}) {
   const hasClauses = pqRows(report?.requirements || []).some((x) => x.row.category !== 'Scope');
   if (!hasClauses) {
     const docs = [...new Set((opts.rfpDocuments || []).map(docName))];
-    if (report?.check_incomplete) out.splice(3, 0, '', '**⏳ The clause-by-clause RFP check is still being prepared for this tender.** Ask again in a minute for the full result; the standard items below are already checked against our company records.');
+    if (report?.check_incomplete) out.splice(3, 0, '', '**⏳ The clause-by-clause RFP check is still being prepared for this tender.** Ask again in a minute for the prequalification criteria and their check against our documents.');
     else out.splice(3, 0, '', `**📄 Please upload the full tender document.** ${docs.length ? `Only ${docs.join(', ')} ${docs.length > 1 ? 'are' : 'is'} available, and ${docs.length > 1 ? 'they do' : 'it does'} not contain` : 'The available documents do not contain'} the eligibility / prequalification criteria. Upload the complete RFP / NIT (with eligibility criteria, scope and BOQ) in this tender's documents and ask again — the exact clauses will then be checked.`);
   }
-  const tableRows = hasClauses ? report?.requirements || [] : [...(report?.requirements || []).filter((r) => r.category === 'Scope'), ...standardPqRows(report, {credentials: opts.credentials, tender: opts.tender})];
-  out.push('', prequalificationTable(tableRows, {explain: (r) => pqDetail(r, report), empty: noPqMessage(opts.rfpDocuments)}));
-  if (!hasClauses) out.push('', '_The rows other than Scope are the standard conditions every tender is checked for, assessed from our company records; the exact thresholds come from the full RFP once it is uploaded._');
+  // Only the prequalification criteria the tender actually states, each checked against Siyana's documents.
+  if (hasClauses) out.push('', prequalificationTable(report?.requirements || [], {explain: (r) => pqDetail(r, report), empty: noPqMessage(opts.rfpDocuments)}));
 
   if (!official && ev?.pending) {
     const detail = /has not finished yet/i.test(ev.reason) ? '' : ` (${ev.reason.replace(/\.$/, '').replace(/^./, (c) => c.toLowerCase())})`;

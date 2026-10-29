@@ -46,8 +46,8 @@ export const isPlaceholderRequirement = (text) => PLACEHOLDER.test(String(text |
 /** True when a requirement row is a genuine prequalification clause from the RFP. */
 export function isPrequalificationRow(r) {
   if (!r || r.mandatory === false) return false;
-  // Scope is always shown (as one fixed line); its extracted wording is not used.
-  if (r.category === 'Scope') return true;
+  // Only conditions the tender itself sets for bidders: no scope, EMD or deadline rows.
+  if (r.category === 'Scope' || r.category === 'EMD') return false;
   if (NOT_PQ_CATEGORY.has(r.category)) return false;
   const text = String(r.requirement || '');
   if (!clean(text)) return false;
