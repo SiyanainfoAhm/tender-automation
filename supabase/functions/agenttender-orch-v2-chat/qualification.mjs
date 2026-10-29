@@ -13,6 +13,42 @@ export const QUALIFICATION_VERSION='v2-material-qualification-20261028b';
  * current company records. No AI call: it only upgrades UNKNOWN rows that the records now prove, and
  * applies hard failures (e.g. GST needed in a State where Siyana is not registered).
  */
+
+// Siyana signs every declaration / undertaking the buyer asks for, and opens a local office after an award when allowed.
+const COMMITMENT=/\b(?:undertaking|self[- ]?declaration|declaration|affidavit|authenticity of documents|not (?:been )?blacklisted|non[- ]?blacklist|integrity pact|power of attorney|authori[sz]ation letter|no[- ]deviation|acceptance of (?:terms|tender)|toll[- ]?free|helpline|support (?:phone|telephone|number)|dedicated (?:phone|telephone|number)|office (?:of|in|at|within)\b[^.]{0,80}\b(?:state|city|district|consignee)|local office|(?:branch|project) office)\b/i;
+const NEVER_COMMIT=/\b(?:gst|pan\b|turnover|net worth|iso|cmmi|certificate of incorporation|experience|work order)\b/i;
+function commitmentRow(r){
+ if(r.result==='PASS'||r.mandatory===false)return r;
+ const t=String(r.requirement||'');
+ if(!COMMITMENT.test(t))return r;
+ if(NEVER_COMMIT.test(t)&&!/\b(?:undertaking|declaration|affidavit)\b/i.test(t))return r;
+ const office=/\boffice\b/i.test(t);
+ const detail=office?'Siyana will open an office in the required state after the award, as the tender allows, and submit the proof then.':/toll|helpline|phone|telephone|number/i.test(t)?'Siyana will set up and declare the dedicated support number before service start.':'Siyana will sign and submit this declaration / undertaking with the bid.';
+ return {...r,result:'PASS',standard_detail:detail,calculation:{result:'PASS',explanation:detail},explanation:detail};
+}
+const WORDN={one:1,two:2,three:3,four:4,five:5,'1':1,'2':2,'3':3,'4':4,'5':5};
+const inrNumber=x=>Number(String(x).replace(/,/g,''));
+function experienceAlternatives(r,credentials,validOn){
+ if(r.result==='PASS'||r.mandatory===false)return r;
+ const t=String(r.requirement||'');
+ if(!(['Experience','Government experience'].includes(r.category)||/past experience|similar (?:services?|works?|projects?)/i.test(t)))return r;
+ const govt=/central|state govt|government|govt|psu|public sector/i.test(t);
+ const pool=matchProjects(credentials.projects,{scope:'',count:1,completed:true,client_category:govt?'government':undefined},credentials.entity,validOn,'').projects;
+ const val=p=>Number.isFinite(p.project_value_inr)?p.project_value_inr:0;
+ const cost=inrNumber(([...t.matchAll(/estimated (?:cost|value)[^0-9%]{0,40}(?:inr|rs\.?|₹)\s*([\d,]{5,}(?:\.\d+)?)/gi)][0]||[])[1]);
+ const alts=[...t.matchAll(/\b(one|two|three|four|five|[1-5])\s+(?:similar\s+)?(?:completed\s+)?(?:services?|works?|projects?|orders?)?[^%]{0,70}?(\d{2,3})\s*%/gi)].map(m=>({n:WORDN[m[1].toLowerCase()],pct:Number(m[2])}));
+ let ok=null;
+ if(alts.length&&Number.isFinite(cost)&&cost>0){
+  for(const a of alts){const min=cost*a.pct/100;const hit=pool.filter(p=>val(p)>=min);if(hit.length>=a.n){ok={need:a.n,min,hit,txt:`${a.n} project${a.n>1?'s':''} of at least ${a.pct}% of the estimated cost`};break;}}
+ }else if(!alts.length&&!/\d\s*%|₹|\binr\b|\brs\b/i.test(t)&&govt&&pool.length){
+  const need=Math.max(1,Number((t.match(/\b(\d|one|two|three)\s+(?:years?|projects?|works?)/i)||[])[1])||1);
+  if(/year/i.test(t)||pool.length>=1)ok={need:1,min:0,hit:pool,txt:'government / public-sector experience'};
+ }
+ if(!ok)return r;
+ const names=ok.hit.sort((a,b)=>val(b)-val(a)).slice(0,3).map(p=>`${clean(p.client_name)}${val(p)?' (₹'+Number(val(p)).toLocaleString('en-IN')+')':''}`).join('; ');
+ const detail=`Met by Siyana's awarded / delivered projects: ${ok.txt} — ${names}.`;
+ return {...r,result:'PASS',standard_detail:detail,calculation:{result:'PASS',explanation:detail,required_count:ok.need,qualifying_count:ok.hit.length,projects:ok.hit},explanation:detail};
+}
 export function refreshReport(report,credentials,tender){
  if(!report||!credentials)return report;
  const today=new Date().toLocaleDateString('en-CA',{timeZone:'Asia/Kolkata'});
@@ -33,6 +69,7 @@ export function refreshReport(report,credentials,tender){
    const dc=deterministicCheck(r.requirement||'',quotes,{documents:credentials.documents||[],entity:credentials.entity,referenceDate:closing||today});
    if(dc&&dc.result!==row.result&&(row.result==='UNKNOWN'||dc.result==='FAIL'))row={...row,result:dc.result,calculation:{result:dc.result,explanation:dc.explanation,company_documents:dc.company_evidence},explanation:clean(dc.explanation)};
   }catch(e){console.warn('Row refresh skipped',String(e));}
+  try{row=commitmentRow(experienceAlternatives(row,credentials,validOn));}catch(e){console.warn('Commitment pass skipped',String(e));}
   return row;
  });
  return {...report,requirements:rows,credentials:{entity:credentials.entity,financial_facts:credentials.facts,projects:credentials.projects,issues:credentials.issues}};
