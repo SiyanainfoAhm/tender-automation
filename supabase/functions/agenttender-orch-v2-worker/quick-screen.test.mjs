@@ -50,6 +50,15 @@ test('long documents keep opening, eligibility and EMD sections',()=>{
  const out=selectQuickText(text,20000);
  assert.ok(out.length<=20100);assert.ok(out.includes('NOTICE INVITING'));assert.ok(out.includes('ELIGIBILITY CRITERIA'));assert.ok(out.includes('EMD Rs 50000'));
 });
+test('turnover clause deep in a long RFP is always included',()=>{
+ const filler='general terms and conditions apply. '.repeat(3000);
+ const clause='The bidder shall have an average annual turnover of not less than Rs 10 Crore from IT services';
+ const s=buildSources({title:'t'},[{document_id:'a',file_name:'rfp.pdf',text:filler+clause+filler,complete:true,pages:40,total:40}]);
+ const k=s.find(x=>x.ref==='K');
+ assert.ok(k&&k.text.includes(clause));
+ const v=validateQuick({decision:'NO_GO',rule_code:'TURNOVER_ABOVE_COMPANY_LIMIT',turnover_required_inr:100000000,evidence:[{ref:'K',quote:'average annual turnover of not less than Rs 10 Crore',rule_code:'TURNOVER_ABOVE_COMPANY_LIMIT'}]},s,rules,{title:'t'});
+ assert.equal(v.decision,'NO_GO');
+});
 test('corrigendum is read first, listing mirrors last',()=>{
  assert.ok(docRank('Corrigendum-1.pdf')<docRank('RFP.pdf'));assert.ok(docRank('RFP.pdf')<docRank('listing.html'));
  const s=buildSources({title:'t'},[{document_id:'a',file_name:'a.pdf',text:'hello',complete:true,pages:1,total:1}]);
