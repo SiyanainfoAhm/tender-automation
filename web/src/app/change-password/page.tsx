@@ -2,13 +2,13 @@ import { redirect } from "next/navigation";
 
 import { ChangePasswordForm } from "@/components/auth/change-password-form";
 import { logoutAction } from "@/server/actions/auth";
-import { getSession } from "@/server/auth/session";
+import { getSession, SESSION_EXPIRED_REDIRECT } from "@/server/auth/session";
 import { Button } from "@/components/ui/button";
 
 export default async function ChangePasswordPage() {
   const session = await getSession();
   if (!session) {
-    redirect("/login");
+    redirect(SESSION_EXPIRED_REDIRECT);
   }
   if (!session.user.mustChangePassword) {
     redirect("/dashboard");

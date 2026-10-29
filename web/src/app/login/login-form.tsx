@@ -20,6 +20,7 @@ export function LoginForm() {
   const searchParams = useSearchParams();
   const nextPath = searchParams.get("next") || "";
   const resetSuccess = searchParams.get("reset") === "1";
+  const sessionExpired = searchParams.get("expired") === "1";
   const [state, formAction, pending] = useActionState(loginAction, {});
   const [showPassword, setShowPassword] = useState(false);
   const [email, setEmail] = useState("");
@@ -75,6 +76,14 @@ export function LoginForm() {
     <form action={handleSubmit} className="space-y-4">
       {nextPath ? <input type="hidden" name="next" value={nextPath} /> : null}
 
+      {sessionExpired && !resetSuccess ? (
+        <div
+          role="status"
+          className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900"
+        >
+          Your session expired. Please sign in again.
+        </div>
+      ) : null}
       {resetSuccess ? (
         <div
           role="status"

@@ -64,7 +64,14 @@ export function middleware(request: NextRequest) {
     pathname === "/forgot-password" ||
     pathname === "/reset-password"
   ) {
-    if (hasSession && (pathname === "/login" || pathname === "/signup")) {
+    // `expired=1` means the app already found this cookie invalid; never
+    // bounce back into the app, or the user loops between app and login.
+    const sessionExpired = request.nextUrl.searchParams.get("expired") === "1";
+    if (
+      hasSession &&
+      !sessionExpired &&
+      (pathname === "/login" || pathname === "/signup")
+    ) {
       const url = request.nextUrl.clone();
       url.pathname = DEFAULT_LANDING_PATH;
       url.search = DEFAULT_LANDING_QUERY;

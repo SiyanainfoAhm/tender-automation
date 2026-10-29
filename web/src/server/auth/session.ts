@@ -25,6 +25,12 @@ export type AuthSession = {
 const COOKIE_NAME =
   process.env.AGENTTENDER_SESSION_COOKIE?.trim() || "agenttender_session";
 
+export const SESSION_COOKIE_NAME = COOKIE_NAME;
+
+/** Clears the stale session cookie, then shows the login page. */
+export const SESSION_EXPIRED_REDIRECT = "/api/auth/session-expired";
+export const SESSION_EXPIRED_LOGIN_PATH = "/login?expired=1";
+
 function sessionHours(): number {
   const n = Number.parseInt(
     process.env.AGENTTENDER_SESSION_HOURS || "8",
@@ -412,10 +418,22 @@ export async function getSession(): Promise<AuthSession | null> {
   const lastSeen = session.last_seen_at
     ? new Date(session.last_seen_at).getTime()
     : 0;
+  let effectiveExpiresAt = session.expires_at as string;
   if (Date.now() - lastSeen > 5 * 60_000) {
+    // Sliding expiry: an active user stays signed in. The session ends after
+    // AGENTTENDER_SESSION_HOURS of inactivity, not a fixed time after login.
+    // Remember-me sessions already expire later and are left unchanged.
+    const slidingExpiry = Date.now() + sessionHours() * 60 * 60_000;
+    const update: { last_seen_at: string; expires_at?: string } = {
+      last_seen_at: new Date().toISOString(),
+    };
+    if (slidingExpiry > expiresAtMs) {
+      effectiveExpiresAt = new Date(slidingExpiry).toISOString();
+      update.expires_at = effectiveExpiresAt;
+    }
     await supabase
       .from("agenttender_user_sessions")
-      .update({ last_seen_at: new Date().toISOString() })
+      .update(update)
       .eq("id", session.id);
   }
 
@@ -441,7 +459,7 @@ export async function getSession(): Promise<AuthSession | null> {
 
   return {
     sessionId: session.id,
-    expiresAt: session.expires_at,
+    expiresAt: effectiveExpiresAt,
     user: {
       id: user.id,
       email: user.email,
@@ -470,7 +488,7 @@ export async function requireSession(options?: {
 }): Promise<AuthSession> {
   const session = await getSession();
   if (!session) {
-    redirect("/login");
+    redirect(SESSION_EXPIRED_REDIRECT);
   }
   if (
     session.user.mustChangePassword &&

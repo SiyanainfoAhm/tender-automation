@@ -2,7 +2,7 @@ import { listWillBidTenders } from "@/server/repositories/willBidRepository";
 import { redirect } from "next/navigation";
 
 import { AppShell } from "@/components/layout/app-shell";
-import { getSession } from "@/server/auth/session";
+import { getSession, SESSION_EXPIRED_REDIRECT } from "@/server/auth/session";
 import { getCompanyById } from "@/server/repositories/companyRepository";
 import { listMembershipsForUser } from "@/server/repositories/membershipRepository";
 import { getUserPreferences } from "@/server/repositories/savedViewRepository";
@@ -28,7 +28,7 @@ export default async function AppLayout({
 }) {
   const session = await getSession();
   if (!session) {
-    redirect("/login");
+    redirect(SESSION_EXPIRED_REDIRECT);
   }
 
   if (session.user.mustChangePassword) {
