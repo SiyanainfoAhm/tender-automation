@@ -5,7 +5,7 @@
 //   CONDITIONAL_GO -> custom-software scope, or anything that needs a human look
 //   (wait)         -> not enough text yet and more pages are still being read
 // Full-document reading, chunks and embeddings are left to GO / CONDITIONAL_GO tenders.
-export const QUICK_VERSION = "QUICK_SCREEN_20261029_1";
+export const QUICK_VERSION = "QUICK_SCREEN_20261030_1";
 
 const norm = (s) => String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
 const MIN_TEXT_CHARS = 6000; // roughly 2-3 pages of real text before the first AI call
@@ -256,7 +256,7 @@ export function validateQuick(raw, sources, rules, tender) {
       const cap = Number(r.parameters?.max_payable_emd) || 500000;
       if (!(pay > cap)) problems.push("payable EMD not above cap");
       if (!cited.some((e) => inrAmounts(e.quote).some((a) => near(a, pay)))) problems.push("EMD quote does not contain the payable amount");
-    } else if (!docEvidence.some((e) => e.rule_code === rule) && !cited.some((e) => byRef.get(e.ref)?.kind === "LISTING" && norm(e.quote) === norm(tender.title))) {
+    } else if (!docEvidence.some((e) => e.rule_code === rule) && !cited.some((e) => byRef.get(e.ref)?.kind === "LISTING" && (norm(e.quote) === norm(tender.title) || norm(e.quote).length >= 25))) {
       problems.push("scope exclusion needs a document quote or the full listing title");
     }
     if (problems.length) decision = "NEED_MORE";

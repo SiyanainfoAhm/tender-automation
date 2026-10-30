@@ -74,3 +74,12 @@ test('corrigendum is read first, listing mirrors last',()=>{
  const s=buildSources({title:'t'},[{document_id:'a',file_name:'a.pdf',text:'hello',complete:true,pages:1,total:1}]);
  assert.equal(s[1].coverage,'complete document');
 });
+
+test('title-only NO_GO accepts a verified 25+ char listing quote, not short or invented ones', () => {
+ const t={title:'procurement of 4g lte poc two way radio nationwide ptt walkie talkie with simcard wifi gps 110001 : office x open tender'};
+ const s=[{ref:'L',kind:'LISTING',full:t.title,text:t.title}];
+ const ask=(quote)=>validateQuick({decision:'NO_GO',rule_code:'HARDWARE',evidence:[{ref:'L',quote,rule_code:'HARDWARE'}]},s,rules,t).decision;
+ assert.equal(ask('procurement of 4g lte poc two way radio'),'NO_GO');
+ assert.equal(ask('two way radio'),'NEED_MORE');
+ assert.equal(ask('development of a custom web portal app'),'NEED_MORE');
+});
