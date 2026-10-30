@@ -5,7 +5,9 @@
 --    Reader also takes the tenders closing soonest first.
 -- 2. V2 step 3: 12 at a time (was 4), and tenders whose text just arrived go first.
 -- 3. Scanned tender files on VERIFY tenders get OCR (every minute, 3 tenders, max 40 pages/file);
---    V2 holds such a tender until OCR finishes (same 2-day / 6-hour limits as the quick screen).
+--    V2 holds such a tender until OCR finishes, only while it has < 6000 chars of readable text
+--    (same 2-day / 6-hour limits as the quick screen). A file counts as handled once it has any
+--    extracted text or a finished OCR attempt.
 -- 4. Document extraction cron: 4 parallel workers (was 2).
 
 -- 1 ---------------------------------------------------------------------------------------------
@@ -120,10 +122,11 @@ begin
        and exists (select 1 from public.agenttender_document_ingestion_jobs j
                    where j.tender_id = q.tender_id and j.status = 'EMPTY' and coalesce(j.last_error,'') ilike '%OCR_REQUIRED%'
                      and not exists (select 1 from public.agenttender_document_extractions e
-                                     where e.document_id = j.document_id and e.extraction_status = 'SUCCESS'
-                                       and length(coalesce(e.extracted_text,'')) > 200)
+                                     where e.document_id = j.document_id and e.extraction_status = 'SUCCESS')
                      and not exists (select 1 from public.agenttender_tender_ocr_operations o
-                                     where o.document_id = j.document_id and o.status = 'FAILED')))
+                                     where o.document_id = j.document_id and o.status in ('SUCCEEDED','FAILED')))
+       and coalesce((select sum(length(e2.extracted_text)) from public.agenttender_document_extractions e2
+                     where e2.tender_id = q.tender_id and e2.extraction_status = 'SUCCESS'), 0) < 6000)
  ),
  candidates as (
    select e.e_tender, e.rn as c_rn
@@ -178,10 +181,9 @@ BEGIN
       AND EXISTS (SELECT 1 FROM public.agenttender_document_ingestion_jobs j
                   WHERE j.tender_id = t.id AND j.status = 'EMPTY' AND coalesce(j.last_error,'') ILIKE '%OCR_REQUIRED%'
                     AND NOT EXISTS (SELECT 1 FROM public.agenttender_document_extractions e
-                                    WHERE e.document_id = j.document_id AND e.extraction_status = 'SUCCESS'
-                                      AND length(coalesce(e.extracted_text,'')) > 200)
+                                    WHERE e.document_id = j.document_id AND e.extraction_status = 'SUCCESS')
                     AND NOT EXISTS (SELECT 1 FROM public.agenttender_tender_ocr_operations o
-                                    WHERE o.document_id = j.document_id AND o.status IN ('FAILED','SUBMITTING')))
+                                    WHERE o.document_id = j.document_id AND o.status IN ('SUCCEEDED','FAILED','SUBMITTING')))
     ORDER BY t.closing_date NULLS LAST
     LIMIT greatest(p_limit, 1)
   LOOP
