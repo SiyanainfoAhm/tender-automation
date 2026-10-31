@@ -139,9 +139,14 @@ Deno.serve(async(req)=>{
     if(!["VERIFY","REVIEW"].includes(current?.qualification_status)&&!(corrective&&current?.qualification_status==="CONDITIONAL_GO"))throw Error("TENDER_STATUS_CHANGED_BEFORE_AI");
    }
    if(step===2){
+    // Re-listed copy of a tender already being pursued: DUPLICATE now, no AI, no document work.
+    const {data:dup,error:dupError}=await db.rpc("agenttender_orch_v2_duplicate_commit",{p_tender:id,p_lease:job.lease_token});
+    if(dupError)throw dupError;
     // Obvious non-fit by title: NO_GO now, no AI, no document work.
-    const ts=titleScreen(t);
-    if(ts){
+    const ts=dup?.applied===true?null:titleScreen(t);
+    if(dup?.applied===true){
+     result={quick_screen:true,duplicate:true,decision:"DUPLICATE",commit:dup,reason:dup.reason};ok=true;
+    }else if(ts){
      const {data:commit,error:commitError}=await db.rpc("agenttender_orch_v2_quick_commit",{p_tender:id,p_lease:job.lease_token,p_decision:"NO_GO",p_reason:ts.reason,p_assessment:{quick_version:ts.version,rule_code:ts.rule_code,evidence:[{ref:"L",quote:t.title,rule_code:ts.rule_code}],title_screen:ts}});
      if(commitError)throw commitError;
      result={quick_screen:true,title_screen:true,decision:"NO_GO",commit,reason:ts.reason};ok=true;
